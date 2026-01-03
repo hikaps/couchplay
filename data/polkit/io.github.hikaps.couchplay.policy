@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 CouchPlay Contributors -->
+<policyconfig>
+  <vendor>CouchPlay</vendor>
+  <vendor_url>https://github.com/hikaps/couchplay</vendor_url>
+  <icon_name>io.github.hikaps.couchplay</icon_name>
+
+  <action id="io.github.hikaps.couchplay.change-device-owner">
+    <description>Change input device ownership</description>
+    <description xml:lang="en">Change ownership of input devices for split-screen gaming</description>
+    <message>Authentication is required to assign input devices to players</message>
+    <message xml:lang="en">Authentication is required to assign input devices to players</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
+  </action>
+
+  <action id="io.github.hikaps.couchplay.create-user">
+    <description>Create a new user account</description>
+    <description xml:lang="en">Create a new Linux user account for split-screen gaming</description>
+    <message>Authentication is required to create a new user account for CouchPlay</message>
+    <message xml:lang="en">Authentication is required to create a new user account for CouchPlay</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.hikaps.couchplay.configure-audio">
+    <description>Configure audio for users</description>
+    <description xml:lang="en">Configure PipeWire audio routing for split-screen gaming</description>
+    <message>Authentication is required to configure audio settings</message>
+    <message xml:lang="en">Authentication is required to configure audio settings</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
+  </action>
+
+  <action id="io.github.hikaps.couchplay.manage-session">
+    <description>Manage CouchPlay gaming sessions</description>
+    <description xml:lang="en">Start, stop, and configure split-screen gaming sessions</description>
+    <message>Authentication is required to manage gaming sessions</message>
+    <message xml:lang="en">Authentication is required to manage gaming sessions</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+</policyconfig>
