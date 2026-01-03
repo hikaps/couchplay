@@ -51,6 +51,10 @@ Kirigami.ApplicationWindow {
         id: gameLibrary
     }
 
+    MonitorManager {
+        id: monitorManager
+    }
+
     globalDrawer: Kirigami.GlobalDrawer {
         id: drawer
         title: i18nc("@title", "CouchPlay")
@@ -100,6 +104,14 @@ Kirigami.ApplicationWindow {
                 }
             },
             Kirigami.Action {
+                icon.name: "view-split-left-right"
+                text: i18nc("@action:button", "Layout")
+                onTriggered: {
+                    pageStack.clear()
+                    pageStack.push(layoutPage)
+                }
+            },
+            Kirigami.Action {
                 icon.name: "configure"
                 text: i18nc("@action:button", "Settings")
                 onTriggered: {
@@ -139,7 +151,9 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: layoutPage
-        LayoutPage {}
+        LayoutPage {
+            monitorManager: monitorManager
+        }
     }
 
     Component {
