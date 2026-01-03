@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 CouchPlay Contributors -->
+<component type="desktop-application">
+  <id>io.github.hikaps.couchplay</id>
+  
+  <name>CouchPlay</name>
+  <summary>Split-screen gaming with gamescope</summary>
+  
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  
+  <developer id="io.github.hikaps">
+    <name>hikaps</name>
+  </developer>
+  
+  <description>
+    <p>
+      CouchPlay enables local split-screen multiplayer gaming on Linux by running 
+      multiple gamescope instances simultaneously. Each player gets their own 
+      isolated Steam instance with dedicated input devices.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Run 2-4 simultaneous gamescope/Steam instances</li>
+      <li>Automatic input device detection and assignment</li>
+      <li>Flexible screen layout configuration (split horizontally, vertically, or custom)</li>
+      <li>Per-user Steam configurations and save games</li>
+      <li>Save and load session profiles for quick setup</li>
+      <li>Create desktop shortcuts for one-click game launching</li>
+    </ul>
+    <p>
+      Perfect for couch gaming with friends and family on a single PC with 
+      multiple controllers.
+    </p>
+  </description>
+  
+  <launchable type="desktop-id">io.github.hikaps.couchplay.desktop</launchable>
+  
+  <url type="homepage">https://github.com/hikaps/couchplay</url>
+  <url type="bugtracker">https://github.com/hikaps/couchplay/issues</url>
+  <url type="vcs-browser">https://github.com/hikaps/couchplay</url>
+  
+  <content_rating type="oars-1.1" />
+  
+  <branding>
+    <color type="primary" scheme_preference="light">#3daee9</color>
+    <color type="primary" scheme_preference="dark">#1d99f3</color>
+  </branding>
+  
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main session setup screen</caption>
+      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/screenshots/session-setup.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Device assignment interface</caption>
+      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/screenshots/device-assignment.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Layout configuration</caption>
+      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/screenshots/layout-config.png</image>
+    </screenshot>
+  </screenshots>
+  
+  <releases>
+    <release version="0.1.0" date="2025-01-03">
+      <description>
+        <p>Initial release</p>
+        <ul>
+          <li>Basic session management</li>
+          <li>Input device detection and assignment</li>
+          <li>Monitor layout configuration</li>
+          <li>Profile save/load functionality</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+  
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </recommends>
+  
+  <supports>
+    <control>gamepad</control>
+  </supports>
+  
+  <keywords>
+    <keyword>split-screen</keyword>
+    <keyword>multiplayer</keyword>
+    <keyword>gamescope</keyword>
+    <keyword>steam</keyword>
+    <keyword>gaming</keyword>
+    <keyword>couch</keyword>
+    <keyword>local</keyword>
+    <keyword>controller</keyword>
+  </keywords>
+  
+  <provides>
+    <binary>couchplay</binary>
+  </provides>
+</component>

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=CouchPlay
+GenericName=Split-Screen Gaming
+Comment=Run multiple gamescope instances for local multiplayer gaming
+Exec=couchplay
+Icon=io.github.hikaps.couchplay
+Terminal=false
+Type=Application
+Categories=Game;Qt;KDE;
+Keywords=split-screen;multiplayer;gamescope;steam;gaming;couch;
+StartupNotify=true
+StartupWMClass=couchplay
+X-GNOME-UsesNotifications=true

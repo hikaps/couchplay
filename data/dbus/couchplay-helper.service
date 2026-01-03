@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2025 CouchPlay Contributors
+
+[Unit]
+Description=CouchPlay Privileged Helper Daemon
+Documentation=https://github.com/hikaps/couchplay
+
+[Service]
+Type=dbus
+BusName=io.github.hikaps.CouchPlayHelper
+ExecStart=/usr/libexec/couchplay-helper
+User=root
+Group=root
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+
+# Allow access to input devices
+ReadWritePaths=/dev/input
+# Allow access to user home directories for PipeWire config
+ReadWritePaths=/home
+
+[Install]
+WantedBy=multi-user.target
