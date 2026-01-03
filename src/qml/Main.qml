@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import io.github.hikaps.couchplay 1.0
 
 import "pages"
 
@@ -14,6 +15,11 @@ Kirigami.ApplicationWindow {
     title: i18nc("@title:window", "CouchPlay")
     minimumWidth: Kirigami.Units.gridUnit * 40
     minimumHeight: Kirigami.Units.gridUnit * 30
+
+    // Backend managers
+    DeviceManager {
+        id: deviceManager
+    }
 
     globalDrawer: Kirigami.GlobalDrawer {
         id: drawer
@@ -88,7 +94,9 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: deviceAssignmentPage
-        DeviceAssignmentPage {}
+        DeviceAssignmentPage {
+            deviceManager: deviceManager
+        }
     }
 
     Component {

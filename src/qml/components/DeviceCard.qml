@@ -15,21 +15,34 @@ import org.kde.kirigami as Kirigami
 Kirigami.AbstractCard {
     id: root
 
-    required property string deviceName
-    required property string devicePath
-    required property string deviceType // "keyboard", "mouse", "controller"
-    property int assignedTo: -1 // -1 = unassigned, 0+ = player index
+    required property var device
+    property int instanceCount: 2
+    property bool showAssignButtons: true
+    property bool showIdentifyButton: true
     property bool isDragging: false
 
-    signal assignmentChanged(string devicePath, int playerIndex)
+    signal assignmentRequested(int eventNumber, int playerIndex)
+    signal identifyRequested(int eventNumber)
     signal clicked()
 
-    implicitWidth: 280
-    implicitHeight: 80
+    // Convenience properties
+    readonly property string deviceName: device?.name ?? ""
+    readonly property string devicePath: device?.path ?? ""
+    readonly property string deviceType: device?.type ?? "other"
+    readonly property int eventNumber: device?.eventNumber ?? -1
+    readonly property bool isAssigned: device?.assigned ?? false
+    readonly property int assignedTo: device?.assignedInstance ?? -1
+    readonly property bool isVirtual: device?.isVirtual ?? false
+
+    implicitWidth: 320
+    implicitHeight: 72
+
+    opacity: root.isDragging ? 0.5 : 1.0
 
     contentItem: RowLayout {
         spacing: Kirigami.Units.smallSpacing
 
+        // Device type icon
         Kirigami.Icon {
             source: {
                 switch (root.deviceType) {
@@ -41,16 +54,41 @@ Kirigami.AbstractCard {
             }
             Layout.preferredWidth: Kirigami.Units.iconSizes.medium
             Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+            
+            // Dim virtual devices
+            opacity: root.isVirtual ? 0.5 : 1.0
         }
 
+        // Device info
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 2
 
-            QQC2.Label {
-                text: root.deviceName
-                elide: Text.ElideRight
-                Layout.fillWidth: true
+            RowLayout {
+                spacing: Kirigami.Units.smallSpacing
+                
+                QQC2.Label {
+                    text: root.deviceName
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                    font.weight: root.isAssigned ? Font.Bold : Font.Normal
+                }
+                
+                // Virtual device indicator
+                Kirigami.Icon {
+                    source: "virtual-reality"
+                    visible: root.isVirtual
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                    opacity: 0.5
+                    
+                    QQC2.ToolTip.visible: virtualHover.containsMouse
+                    QQC2.ToolTip.text: qsTr("Virtual device")
+                    
+                    HoverHandler {
+                        id: virtualHover
+                    }
+                }
             }
 
             QQC2.Label {
@@ -62,16 +100,56 @@ Kirigami.AbstractCard {
             }
         }
 
+        // Assignment chip (when assigned)
         Kirigami.Chip {
-            text: root.assignedTo >= 0 ? qsTr("Player %1").arg(root.assignedTo + 1) : qsTr("Unassigned")
+            visible: root.isAssigned
+            text: qsTr("Player %1").arg(root.assignedTo + 1)
             checkable: false
-            closable: root.assignedTo >= 0
-            onClicked: root.clicked()
-            onRemoved: root.assignmentChanged(root.devicePath, -1)
+            closable: true
+            
+            icon.name: "user-identity"
+            
+            onRemoved: root.assignmentRequested(root.eventNumber, -1)
+        }
+
+        // Quick assign buttons (when not assigned)
+        Row {
+            visible: !root.isAssigned && root.showAssignButtons
+            spacing: Kirigami.Units.smallSpacing
+
+            Repeater {
+                model: root.instanceCount
+
+                QQC2.Button {
+                    text: (index + 1).toString()
+                    flat: true
+                    implicitWidth: height
+                    
+                    QQC2.ToolTip.visible: hovered
+                    QQC2.ToolTip.text: qsTr("Assign to Player %1").arg(index + 1)
+                    
+                    onClicked: root.assignmentRequested(root.eventNumber, index)
+                }
+            }
+        }
+
+        // Identify button (for controllers)
+        QQC2.Button {
+            visible: root.showIdentifyButton && root.deviceType === "controller"
+            icon.name: "flashlight-on"
+            flat: true
+            
+            QQC2.ToolTip.visible: hovered
+            QQC2.ToolTip.text: qsTr("Identify (vibrate)")
+            
+            onClicked: root.identifyRequested(root.eventNumber)
         }
     }
 
+    // Drag support
     Drag.active: dragArea.drag.active
+    Drag.keys: ["application/x-couchplay-device"]
+    Drag.mimeData: { "text/plain": root.eventNumber.toString() }
     Drag.hotSpot.x: width / 2
     Drag.hotSpot.y: height / 2
 
@@ -79,8 +157,61 @@ Kirigami.AbstractCard {
         id: dragArea
         anchors.fill: parent
         drag.target: root.isDragging ? root : undefined
+        
         onClicked: root.clicked()
-        onPressAndHold: root.isDragging = true
-        onReleased: root.isDragging = false
+        
+        onPressAndHold: {
+            root.isDragging = true
+            root.grabToImage(function(result) {
+                root.Drag.imageSource = result.url
+            })
+        }
+        
+        onReleased: {
+            root.isDragging = false
+            root.Drag.drop()
+        }
     }
+
+    // Visual feedback states
+    states: [
+        State {
+            name: "dragging"
+            when: root.isDragging
+            PropertyChanges {
+                target: root
+                opacity: 0.5
+                scale: 1.05
+            }
+        },
+        State {
+            name: "assigned"
+            when: root.isAssigned && !root.isDragging
+            PropertyChanges {
+                target: root
+                // Could add visual distinction for assigned devices
+            }
+        }
+    ]
+
+    transitions: [
+        Transition {
+            from: "*"
+            to: "dragging"
+            NumberAnimation {
+                properties: "opacity,scale"
+                duration: 150
+                easing.type: Easing.OutQuad
+            }
+        },
+        Transition {
+            from: "dragging"
+            to: "*"
+            NumberAnimation {
+                properties: "opacity,scale"
+                duration: 150
+                easing.type: Easing.InQuad
+            }
+        }
+    ]
 }
