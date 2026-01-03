@@ -47,6 +47,10 @@ Kirigami.ApplicationWindow {
         id: userManager
     }
 
+    GameLibrary {
+        id: gameLibrary
+    }
+
     globalDrawer: Kirigami.GlobalDrawer {
         id: drawer
         title: i18nc("@title", "CouchPlay")
@@ -148,7 +152,9 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: gamesPage
-        GamesPage {}
+        GamesPage {
+            gameLibrary: gameLibrary
+        }
     }
 
     Component {
