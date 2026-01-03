@@ -32,6 +32,8 @@ target_sources(couchplay PRIVATE
     core/DeviceManager.h
     core/SessionManager.cpp
     core/SessionManager.h
+    core/SessionRunner.cpp
+    core/SessionRunner.h
     core/GamescopeInstance.cpp
     core/GamescopeInstance.h
     core/UserManager.cpp

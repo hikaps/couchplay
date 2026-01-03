@@ -21,6 +21,28 @@ Kirigami.ApplicationWindow {
         id: deviceManager
     }
 
+    SessionManager {
+        id: sessionManager
+    }
+
+    SessionRunner {
+        id: sessionRunner
+        sessionManager: sessionManager
+        deviceManager: deviceManager
+
+        onErrorOccurred: (message) => {
+            applicationWindow().showPassiveNotification(message, "long")
+        }
+        onSessionStarted: {
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "Session started with %1 instances", runningInstanceCount))
+        }
+        onSessionStopped: {
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "Session stopped"))
+        }
+    }
+
     globalDrawer: Kirigami.GlobalDrawer {
         id: drawer
         title: i18nc("@title", "CouchPlay")
@@ -89,7 +111,11 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: sessionSetupPage
-        SessionSetupPage {}
+        SessionSetupPage {
+            sessionManager: sessionManager
+            sessionRunner: sessionRunner
+            deviceManager: deviceManager
+        }
     }
 
     Component {

@@ -13,6 +13,7 @@
 
 #include "core/DeviceManager.h"
 #include "core/SessionManager.h"
+#include "core/SessionRunner.h"
 #include "core/GamescopeInstance.h"
 #include "core/UserManager.h"
 #include "core/MonitorManager.h"
@@ -45,6 +46,7 @@ int main(int argc, char *argv[])
     // Register QML types
     qmlRegisterType<DeviceManager>("io.github.hikaps.couchplay", 1, 0, "DeviceManager");
     qmlRegisterType<SessionManager>("io.github.hikaps.couchplay", 1, 0, "SessionManager");
+    qmlRegisterType<SessionRunner>("io.github.hikaps.couchplay", 1, 0, "SessionRunner");
     qmlRegisterType<GamescopeInstance>("io.github.hikaps.couchplay", 1, 0, "GamescopeInstance");
     qmlRegisterType<UserManager>("io.github.hikaps.couchplay", 1, 0, "UserManager");
     qmlRegisterType<MonitorManager>("io.github.hikaps.couchplay", 1, 0, "MonitorManager");

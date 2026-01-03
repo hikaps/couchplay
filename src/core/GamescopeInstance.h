@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// SPDX-FileCopyrightText: 2024 hikaps
+// SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #pragma once
 
 #include <QObject>
 #include <QProcess>
 #include <QString>
+#include <QStringList>
 #include <QList>
+#include <QRect>
 #include <qqmlintegration.h>
 
 struct InstanceConfig;
 
 /**
  * @brief Manages a single gamescope instance and its child Steam process
+ * 
+ * Handles starting gamescope with appropriate arguments for:
+ * - Resolution (internal and output)
+ * - Window positioning for split-screen layouts
+ * - Input device isolation
+ * - Secondary user execution via sudo
+ * - PipeWire audio forwarding
  */
 class GamescopeInstance : public QObject
 {
@@ -22,6 +31,8 @@ class GamescopeInstance : public QObject
     Q_PROPERTY(bool running READ isRunning NOTIFY runningChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(qint64 pid READ pid NOTIFY runningChanged)
+    Q_PROPERTY(QString username READ username NOTIFY configChanged)
+    Q_PROPERTY(QRect windowGeometry READ windowGeometry NOTIFY configChanged)
 
 public:
     explicit GamescopeInstance(QObject *parent = nullptr);
@@ -29,41 +40,77 @@ public:
 
     /**
      * @brief Start the gamescope instance
-     * @param config Instance configuration
+     * @param config Instance configuration containing:
+     *   - username: Linux user to run as (empty = current user)
+     *   - internalWidth/Height: Game render resolution
+     *   - outputWidth/Height: Window size
+     *   - refreshRate: Target refresh rate
+     *   - scalingMode: fit, stretch, integer, etc.
+     *   - filterMode: linear, nearest, FSR, NIS
+     *   - monitor: Monitor index for multi-monitor
+     *   - positionX/Y: Window position for split-screen
+     *   - devicePaths: List of /dev/input/eventN paths for input isolation
+     *   - gameCommand: Steam app ID or command to launch
      * @param index Instance index (0 = primary, 1+ = secondary)
      * @return true if started successfully
      */
     Q_INVOKABLE bool start(const QVariantMap &config, int index);
 
     /**
-     * @brief Stop the gamescope instance
+     * @brief Stop the gamescope instance gracefully
+     * @param timeoutMs Timeout before force kill (default 5000ms)
      */
-    Q_INVOKABLE void stop();
+    Q_INVOKABLE void stop(int timeoutMs = 5000);
+
+    /**
+     * @brief Force kill the gamescope instance
+     */
+    Q_INVOKABLE void kill();
 
     /**
      * @brief Check if instance is running
      */
     bool isRunning() const;
 
+    // Property getters
     int index() const { return m_index; }
     qint64 pid() const { return m_process ? m_process->processId() : 0; }
     QString status() const { return m_status; }
+    QString username() const { return m_username; }
+    QRect windowGeometry() const { return m_windowGeometry; }
 
     /**
-     * @brief Build gamescope command line arguments
+     * @brief Build gamescope command line arguments from config
+     * @param config Configuration map
+     * @return List of command line arguments
      */
     static QStringList buildGamescopeArgs(const QVariantMap &config);
 
     /**
-     * @brief Build the full command for secondary user (using run-as or sudo)
+     * @brief Build environment variables for the instance
+     * @param config Configuration map
+     * @param isPrimary Whether this is the primary instance
+     * @return Environment variable assignments as strings
      */
-    static QString buildSecondaryUserCommand(const QString &username, 
+    static QStringList buildEnvironment(const QVariantMap &config, bool isPrimary);
+
+    /**
+     * @brief Build the full command for secondary user execution
+     * @param username Target username
+     * @param environment Environment variables
+     * @param gamescopeArgs Gamescope arguments
+     * @param steamArgs Steam arguments
+     * @return Full shell command string
+     */
+    static QString buildSecondaryUserCommand(const QString &username,
+                                              const QStringList &environment,
                                               const QStringList &gamescopeArgs,
                                               const QString &steamArgs);
 
 Q_SIGNALS:
     void runningChanged();
     void statusChanged();
+    void configChanged();
     void started();
     void stopped();
     void errorOccurred(const QString &message);
@@ -77,8 +124,12 @@ private Q_SLOTS:
     void onReadyReadStandardError();
 
 private:
+    void setStatus(const QString &status);
+
     QProcess *m_process = nullptr;
     int m_index = -1;
     QString m_status;
+    QString m_username;
+    QRect m_windowGeometry;
     bool m_isPrimary = true;
 };

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// SPDX-FileCopyrightText: 2024 hikaps
+// SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 import QtQuick
 import QtQuick.Layouts
@@ -11,21 +11,97 @@ Kirigami.ScrollablePage {
 
     title: i18nc("@title", "New Session")
 
-    property int instanceCount: 2
-    property string layoutMode: "horizontal"
+    // References to backend managers (from Main.qml)
+    required property var sessionManager
+    required property var sessionRunner
+    required property var deviceManager
+
+    // Sync with session manager
+    property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
+    property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
+
+    onLayoutModeChanged: {
+        if (sessionManager) {
+            sessionManager.currentLayout = layoutMode
+        }
+    }
+
+    onInstanceCountChanged: {
+        if (sessionManager && sessionManager.instanceCount !== instanceCount) {
+            sessionManager.instanceCount = instanceCount
+        }
+    }
 
     actions: [
         Kirigami.Action {
+            icon.name: "media-playback-start"
+            text: sessionRunner && sessionRunner.running 
+                ? i18nc("@action:button", "Stop Session")
+                : i18nc("@action:button", "Start Session")
+            onTriggered: {
+                if (sessionRunner.running) {
+                    sessionRunner.stop()
+                } else {
+                    sessionRunner.start()
+                }
+            }
+        },
+        Kirigami.Action {
             icon.name: "go-next"
-            text: i18nc("@action:button", "Next: Assign Devices")
+            text: i18nc("@action:button", "Assign Devices")
             onTriggered: {
                 applicationWindow().pageStack.push(deviceAssignmentPage)
             }
+        },
+        Kirigami.Action {
+            icon.name: "document-save"
+            text: i18nc("@action:button", "Save Profile")
+            onTriggered: saveProfileDialog.open()
         }
     ]
 
+    // Save profile dialog
+    Kirigami.PromptDialog {
+        id: saveProfileDialog
+        title: i18nc("@title:dialog", "Save Profile")
+        subtitle: i18nc("@info", "Enter a name for this session profile")
+        standardButtons: Kirigami.Dialog.Save | Kirigami.Dialog.Cancel
+
+        Controls.TextField {
+            id: profileNameField
+            placeholderText: i18nc("@info:placeholder", "Profile name")
+            Layout.fillWidth: true
+        }
+
+        onAccepted: {
+            if (profileNameField.text.trim() !== "") {
+                sessionManager.saveProfile(profileNameField.text.trim())
+                applicationWindow().showPassiveNotification(
+                    i18nc("@info", "Profile saved: %1", profileNameField.text))
+                profileNameField.text = ""
+            }
+        }
+    }
+
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
+
+        // Running session status
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: sessionRunner && sessionRunner.running
+            type: Kirigami.MessageType.Positive
+            text: i18nc("@info", "Session running: %1 instance(s) active", 
+                       sessionRunner ? sessionRunner.runningInstanceCount : 0)
+            
+            actions: [
+                Kirigami.Action {
+                    text: i18nc("@action:button", "Stop")
+                    icon.name: "media-playback-stop"
+                    onTriggered: sessionRunner.stop()
+                }
+            ]
+        }
 
         // Layout Selection
         Kirigami.Heading {
@@ -40,225 +116,71 @@ Kirigami.ScrollablePage {
             opacity: 0.7
         }
 
+        // Player count selector
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.Label {
+                text: i18nc("@label", "Number of players:")
+            }
+
+            Controls.SpinBox {
+                id: playerCountSpin
+                from: 2
+                to: 4
+                value: root.instanceCount
+                onValueModified: root.instanceCount = value
+            }
+        }
+
         RowLayout {
             spacing: Kirigami.Units.largeSpacing
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.smallSpacing
 
             // Horizontal split
-            Kirigami.Card {
+            LayoutCard {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 10
-
-                highlighted: layoutMode === "horizontal"
-
-                contentItem: ColumnLayout {
-                    spacing: Kirigami.Units.smallSpacing
-
-                    // Visual representation
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Kirigami.Units.gridUnit * 4
-                        color: "transparent"
-                        border.color: Kirigami.Theme.textColor
-                        border.width: 1
-                        radius: 4
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.margins: 2
-                            spacing: 2
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                color: Kirigami.Theme.highlightColor
-                                opacity: 0.5
-                                radius: 2
-
-                                Controls.Label {
-                                    anchors.centerIn: parent
-                                    text: "1"
-                                    font.bold: true
-                                }
-                            }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                color: Kirigami.Theme.positiveBackgroundColor
-                                opacity: 0.5
-                                radius: 2
-
-                                Controls.Label {
-                                    anchors.centerIn: parent
-                                    text: "2"
-                                    font.bold: true
-                                }
-                            }
-                        }
-                    }
-
-                    Controls.Label {
-                        text: i18nc("@option", "Side by Side")
-                        font.bold: true
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-
-                    Controls.Label {
-                        text: i18nc("@info", "Split screen horizontally")
-                        Layout.alignment: Qt.AlignHCenter
-                        opacity: 0.7
-                    }
-                }
-
+                layoutType: "horizontal"
+                selected: layoutMode === "horizontal"
+                title: i18nc("@option", "Side by Side")
+                description: i18nc("@info", "Split screen horizontally")
+                instanceCount: root.instanceCount
                 onClicked: layoutMode = "horizontal"
             }
 
             // Vertical split
-            Kirigami.Card {
+            LayoutCard {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 10
-
-                highlighted: layoutMode === "vertical"
-
-                contentItem: ColumnLayout {
-                    spacing: Kirigami.Units.smallSpacing
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Kirigami.Units.gridUnit * 4
-                        color: "transparent"
-                        border.color: Kirigami.Theme.textColor
-                        border.width: 1
-                        radius: 4
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 2
-                            spacing: 2
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                color: Kirigami.Theme.highlightColor
-                                opacity: 0.5
-                                radius: 2
-
-                                Controls.Label {
-                                    anchors.centerIn: parent
-                                    text: "1"
-                                    font.bold: true
-                                }
-                            }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                color: Kirigami.Theme.positiveBackgroundColor
-                                opacity: 0.5
-                                radius: 2
-
-                                Controls.Label {
-                                    anchors.centerIn: parent
-                                    text: "2"
-                                    font.bold: true
-                                }
-                            }
-                        }
-                    }
-
-                    Controls.Label {
-                        text: i18nc("@option", "Top and Bottom")
-                        font.bold: true
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-
-                    Controls.Label {
-                        text: i18nc("@info", "Split screen vertically")
-                        Layout.alignment: Qt.AlignHCenter
-                        opacity: 0.7
-                    }
-                }
-
+                layoutType: "vertical"
+                selected: layoutMode === "vertical"
+                title: i18nc("@option", "Top and Bottom")
+                description: i18nc("@info", "Split screen vertically")
+                instanceCount: root.instanceCount
                 onClicked: layoutMode = "vertical"
             }
 
-            // Multi-monitor
-            Kirigami.Card {
+            // Grid (for 3-4 players)
+            LayoutCard {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 10
+                layoutType: "grid"
+                selected: layoutMode === "grid"
+                title: i18nc("@option", "Grid")
+                description: i18nc("@info", "2x2 grid layout")
+                instanceCount: root.instanceCount
+                visible: root.instanceCount > 2
+                onClicked: layoutMode = "grid"
+            }
 
-                highlighted: layoutMode === "multi-monitor"
-
-                contentItem: ColumnLayout {
-                    spacing: Kirigami.Units.smallSpacing
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Kirigami.Units.gridUnit * 4
-                        spacing: Kirigami.Units.smallSpacing
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            color: "transparent"
-                            border.color: Kirigami.Theme.textColor
-                            border.width: 1
-                            radius: 4
-
-                            Rectangle {
-                                anchors.fill: parent
-                                anchors.margins: 2
-                                color: Kirigami.Theme.highlightColor
-                                opacity: 0.5
-                                radius: 2
-
-                                Controls.Label {
-                                    anchors.centerIn: parent
-                                    text: "1"
-                                    font.bold: true
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            color: "transparent"
-                            border.color: Kirigami.Theme.textColor
-                            border.width: 1
-                            radius: 4
-
-                            Rectangle {
-                                anchors.fill: parent
-                                anchors.margins: 2
-                                color: Kirigami.Theme.positiveBackgroundColor
-                                opacity: 0.5
-                                radius: 2
-
-                                Controls.Label {
-                                    anchors.centerIn: parent
-                                    text: "2"
-                                    font.bold: true
-                                }
-                            }
-                        }
-                    }
-
-                    Controls.Label {
-                        text: i18nc("@option", "Multi-Monitor")
-                        font.bold: true
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-
-                    Controls.Label {
-                        text: i18nc("@info", "One instance per monitor")
-                        Layout.alignment: Qt.AlignHCenter
-                        opacity: 0.7
-                    }
-                }
-
+            // Multi-monitor
+            LayoutCard {
+                Layout.fillWidth: true
+                layoutType: "multi-monitor"
+                selected: layoutMode === "multi-monitor"
+                title: i18nc("@option", "Multi-Monitor")
+                description: i18nc("@info", "One instance per monitor")
+                instanceCount: root.instanceCount
                 onClicked: layoutMode = "multi-monitor"
             }
         }
@@ -271,39 +193,54 @@ Kirigami.ScrollablePage {
         }
 
         Repeater {
-            model: instanceCount
+            model: root.instanceCount
 
             delegate: Kirigami.Card {
+                id: instanceCard
                 Layout.fillWidth: true
 
+                required property int index
+
                 header: Kirigami.Heading {
-                    text: i18nc("@title", "Instance %1", index + 1)
+                    text: i18nc("@title", "Player %1", instanceCard.index + 1)
                     level: 3
                     padding: Kirigami.Units.smallSpacing
                 }
 
                 contentItem: Kirigami.FormLayout {
-                    Controls.ComboBox {
-                        Kirigami.FormData.label: i18nc("@label", "User:")
-                        model: ["Current User", "player2"]
-                        Layout.fillWidth: true
-                    }
+                    // Get current config for this instance
+                    property var config: sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
 
                     Controls.ComboBox {
-                        Kirigami.FormData.label: i18nc("@label", "Monitor:")
-                        model: ["Primary Monitor", "Secondary Monitor"]
+                        id: userCombo
+                        Kirigami.FormData.label: i18nc("@label", "User:")
+                        model: instanceCard.index === 0 
+                            ? [i18nc("@item", "Current User")]
+                            : [i18nc("@item", "Current User"), "player2", "player3", "player4"]
+                        currentIndex: 0
                         Layout.fillWidth: true
+                        
+                        onCurrentTextChanged: {
+                            if (sessionManager) {
+                                let username = currentIndex === 0 ? "" : currentText
+                                sessionManager.setInstanceUser(instanceCard.index, username)
+                            }
+                        }
                     }
 
                     RowLayout {
-                        Kirigami.FormData.label: i18nc("@label", "Resolution:")
+                        Kirigami.FormData.label: i18nc("@label", "Game Resolution:")
                         spacing: Kirigami.Units.smallSpacing
 
                         Controls.SpinBox {
+                            id: resWidthSpin
                             from: 640
                             to: 3840
-                            value: 1920
+                            value: parent.parent.config.internalWidth || 1920
                             stepSize: 10
+                            editable: true
+                            
+                            onValueModified: updateResolution()
                         }
 
                         Controls.Label {
@@ -311,19 +248,271 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.SpinBox {
+                            id: resHeightSpin
                             from: 480
                             to: 2160
-                            value: 1080
+                            value: parent.parent.config.internalHeight || 1080
                             stepSize: 10
+                            editable: true
+                            
+                            onValueModified: updateResolution()
+                        }
+
+                        function updateResolution() {
+                            if (sessionManager) {
+                                // For split-screen, output size is calculated by SessionRunner
+                                sessionManager.setInstanceResolution(
+                                    instanceCard.index,
+                                    resWidthSpin.value, resHeightSpin.value,
+                                    resWidthSpin.value, resHeightSpin.value
+                                )
+                            }
                         }
                     }
 
                     Controls.SpinBox {
+                        id: refreshSpin
                         Kirigami.FormData.label: i18nc("@label", "Refresh Rate:")
                         from: 30
                         to: 240
-                        value: 60
+                        value: parent.config.refreshRate || 60
                         textFromValue: function(value) { return value + " Hz" }
+                        valueFromText: function(text) { return parseInt(text) }
+                        
+                        onValueModified: {
+                            if (sessionManager) {
+                                let config = sessionManager.getInstanceConfig(instanceCard.index)
+                                config.refreshRate = value
+                                sessionManager.setInstanceConfig(instanceCard.index, config)
+                            }
+                        }
+                    }
+
+                    Controls.ComboBox {
+                        Kirigami.FormData.label: i18nc("@label", "Scaling:")
+                        model: ["fit", "stretch", "integer", "auto"]
+                        currentIndex: 0
+                        Layout.fillWidth: true
+                    }
+
+                    // Show assigned devices
+                    RowLayout {
+                        Kirigami.FormData.label: i18nc("@label", "Devices:")
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Controls.Label {
+                            text: {
+                                if (!deviceManager) return i18nc("@info", "None assigned")
+                                let paths = deviceManager.getDevicePathsForInstance(instanceCard.index)
+                                if (paths.length === 0) return i18nc("@info", "None assigned")
+                                return i18ncp("@info", "%1 device", "%1 devices", paths.length)
+                            }
+                            opacity: 0.7
+                        }
+
+                        Controls.Button {
+                            text: i18nc("@action:button", "Assign...")
+                            flat: true
+                            onClicked: applicationWindow().pageStack.push(deviceAssignmentPage)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Quick actions
+        Kirigami.Separator {
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.largeSpacing
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.Button {
+                text: i18nc("@action:button", "Auto-Assign Controllers")
+                icon.name: "input-gamepad"
+                onClicked: {
+                    if (deviceManager) {
+                        deviceManager.instanceCount = root.instanceCount
+                        let count = deviceManager.autoAssignControllers()
+                        applicationWindow().showPassiveNotification(
+                            i18ncp("@info", "Assigned %1 controller", "Assigned %1 controllers", count))
+                    }
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Controls.Button {
+                text: sessionRunner && sessionRunner.running 
+                    ? i18nc("@action:button", "Stop Session")
+                    : i18nc("@action:button", "Start Session")
+                icon.name: sessionRunner && sessionRunner.running 
+                    ? "media-playback-stop" 
+                    : "media-playback-start"
+                highlighted: true
+                onClicked: {
+                    if (sessionRunner.running) {
+                        sessionRunner.stop()
+                    } else {
+                        sessionRunner.start()
+                    }
+                }
+            }
+        }
+    }
+
+    // Layout card component for visual selection
+    component LayoutCard: Kirigami.Card {
+        id: layoutCard
+
+        required property string layoutType
+        required property bool selected
+        required property string title
+        required property string description
+        required property int instanceCount
+
+        Layout.preferredHeight: Kirigami.Units.gridUnit * 10
+        highlighted: selected
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+
+            // Visual representation
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 4
+                color: "transparent"
+                border.color: Kirigami.Theme.textColor
+                border.width: 1
+                radius: 4
+
+                // Dynamic layout visualization
+                Loader {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    sourceComponent: {
+                        switch (layoutCard.layoutType) {
+                            case "horizontal": return horizontalLayout
+                            case "vertical": return verticalLayout
+                            case "grid": return gridLayout
+                            case "multi-monitor": return multiMonitorLayout
+                            default: return horizontalLayout
+                        }
+                    }
+                }
+            }
+
+            Controls.Label {
+                text: layoutCard.title
+                font.bold: true
+                Layout.alignment: Qt.AlignHCenter
+            }
+
+            Controls.Label {
+                text: layoutCard.description
+                Layout.alignment: Qt.AlignHCenter
+                opacity: 0.7
+            }
+        }
+    }
+
+    // Layout visualization components
+    Component {
+        id: horizontalLayout
+        RowLayout {
+            spacing: 2
+            Repeater {
+                model: root.instanceCount
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
+                    opacity: 0.5
+                    radius: 2
+                    Controls.Label {
+                        anchors.centerIn: parent
+                        text: (index + 1).toString()
+                        font.bold: true
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: verticalLayout
+        ColumnLayout {
+            spacing: 2
+            Repeater {
+                model: root.instanceCount
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
+                    opacity: 0.5
+                    radius: 2
+                    Controls.Label {
+                        anchors.centerIn: parent
+                        text: (index + 1).toString()
+                        font.bold: true
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: gridLayout
+        GridLayout {
+            columns: 2
+            rows: 2
+            rowSpacing: 2
+            columnSpacing: 2
+            Repeater {
+                model: Math.min(root.instanceCount, 4)
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
+                    opacity: 0.5
+                    radius: 2
+                    Controls.Label {
+                        anchors.centerIn: parent
+                        text: (index + 1).toString()
+                        font.bold: true
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: multiMonitorLayout
+        RowLayout {
+            spacing: Kirigami.Units.smallSpacing
+            Repeater {
+                model: root.instanceCount
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: "transparent"
+                    border.color: Kirigami.Theme.textColor
+                    border.width: 1
+                    radius: 4
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
+                        opacity: 0.5
+                        radius: 2
+                        Controls.Label {
+                            anchors.centerIn: parent
+                            text: (index + 1).toString()
+                            font.bold: true
+                        }
                     }
                 }
             }
