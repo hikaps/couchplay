@@ -106,7 +106,11 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: homePage
-        HomePage {}
+        HomePage {
+            sessionManager: sessionManager
+            sessionRunner: sessionRunner
+            deviceManager: deviceManager
+        }
     }
 
     Component {
@@ -132,7 +136,10 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: profilesPage
-        ProfilesPage {}
+        ProfilesPage {
+            sessionManager: sessionManager
+            sessionRunner: sessionRunner
+        }
     }
 
     Component {
