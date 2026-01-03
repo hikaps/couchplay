@@ -43,6 +43,10 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    UserManager {
+        id: userManager
+    }
+
     globalDrawer: Kirigami.GlobalDrawer {
         id: drawer
         title: i18nc("@title", "CouchPlay")
@@ -149,7 +153,9 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: usersPage
-        UsersPage {}
+        UsersPage {
+            userManager: userManager
+        }
     }
 
     Component {
