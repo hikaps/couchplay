@@ -30,11 +30,21 @@ public:
     /**
      * @brief Add a game to the library
      * @param name Display name
-     * @param command Launch command (steam://rungameid/XXX or executable path)
+     * @param executablePath Path to game executable (.exe for Windows games, binary for native)
+     * @param protonPath Path to Proton installation (required for Windows games)
+     * @param prefixPath Path to Wine/Proton prefix directory
      * @param iconPath Optional icon path
+     * @param steamAppId Steam App ID (for Steam launch mode)
+     * @param launchMode Launch mode: "direct", "steam", "legendary", "custom"
      * @return true if added successfully
      */
-    Q_INVOKABLE bool addGame(const QString &name, const QString &command, const QString &iconPath = QString());
+    Q_INVOKABLE bool addGame(const QString &name, 
+                             const QString &executablePath, 
+                             const QString &protonPath = QString(),
+                             const QString &prefixPath = QString(),
+                             const QString &iconPath = QString(),
+                             const QString &steamAppId = QString(),
+                             const QString &launchMode = QStringLiteral("direct"));
 
     /**
      * @brief Remove a game from the library
@@ -64,8 +74,12 @@ private:
 
     struct GameInfo {
         QString name;
-        QString command;
+        QString executablePath;  // Path to .exe or native binary
+        QString protonPath;      // Path to Proton (empty for native games)
+        QString prefixPath;      // Wine/Proton prefix directory
         QString iconPath;
+        QString steamAppId;      // Steam App ID (e.g., "1293160" for It Takes Two)
+        QString launchMode;      // "direct", "steam", "legendary", "custom"
     };
 
     QList<GameInfo> m_games;

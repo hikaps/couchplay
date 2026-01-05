@@ -52,9 +52,35 @@ void GameLibrary::loadGames()
         QJsonObject obj = val.toObject();
         GameInfo game;
         game.name = obj[QStringLiteral("name")].toString();
-        game.command = obj[QStringLiteral("command")].toString();
+        game.executablePath = obj[QStringLiteral("executablePath")].toString();
+        game.protonPath = obj[QStringLiteral("protonPath")].toString();
+        game.prefixPath = obj[QStringLiteral("prefixPath")].toString();
         game.iconPath = obj[QStringLiteral("iconPath")].toString();
-        m_games.append(game);
+        game.steamAppId = obj[QStringLiteral("steamAppId")].toString();
+        game.launchMode = obj[QStringLiteral("launchMode")].toString();
+        
+        // Default launch mode if not specified
+        if (game.launchMode.isEmpty()) {
+            game.launchMode = QStringLiteral("direct");
+        }
+        
+        // Migration: if old "command" field exists, try to use it as executablePath
+        if (game.executablePath.isEmpty() && obj.contains(QStringLiteral("command"))) {
+            QString oldCommand = obj[QStringLiteral("command")].toString();
+            // Skip steam:// URLs - they won't work with direct launching
+            if (!oldCommand.startsWith(QStringLiteral("steam://"))) {
+                game.executablePath = oldCommand;
+            }
+        }
+        
+        // For Steam mode, we only need name and steamAppId
+        // For direct mode, we need executablePath
+        bool isValidSteamGame = (game.launchMode == QStringLiteral("steam") && !game.steamAppId.isEmpty());
+        bool isValidDirectGame = (!game.executablePath.isEmpty());
+        
+        if (!game.name.isEmpty() && (isValidSteamGame || isValidDirectGame)) {
+            m_games.append(game);
+        }
     }
 }
 
@@ -64,8 +90,12 @@ void GameLibrary::saveGames()
     for (const auto &game : m_games) {
         QJsonObject obj;
         obj[QStringLiteral("name")] = game.name;
-        obj[QStringLiteral("command")] = game.command;
+        obj[QStringLiteral("executablePath")] = game.executablePath;
+        obj[QStringLiteral("protonPath")] = game.protonPath;
+        obj[QStringLiteral("prefixPath")] = game.prefixPath;
         obj[QStringLiteral("iconPath")] = game.iconPath;
+        obj[QStringLiteral("steamAppId")] = game.steamAppId;
+        obj[QStringLiteral("launchMode")] = game.launchMode;
         array.append(obj);
     }
 
@@ -81,10 +111,20 @@ void GameLibrary::saveGames()
     }
 }
 
-bool GameLibrary::addGame(const QString &name, const QString &command, const QString &iconPath)
+bool GameLibrary::addGame(const QString &name, 
+                          const QString &executablePath, 
+                          const QString &protonPath,
+                          const QString &prefixPath,
+                          const QString &iconPath,
+                          const QString &steamAppId,
+                          const QString &launchMode)
 {
-    if (name.isEmpty() || command.isEmpty()) {
-        Q_EMIT errorOccurred(QStringLiteral("Name and command are required"));
+    // For Steam mode, we need steamAppId; for direct mode, we need executablePath
+    bool isValidSteamGame = (launchMode == QStringLiteral("steam") && !steamAppId.isEmpty());
+    bool isValidDirectGame = (launchMode != QStringLiteral("steam") && !executablePath.isEmpty());
+    
+    if (name.isEmpty() || (!isValidSteamGame && !isValidDirectGame)) {
+        Q_EMIT errorOccurred(QStringLiteral("Name and either executable path or Steam App ID are required"));
         return false;
     }
 
@@ -98,8 +138,12 @@ bool GameLibrary::addGame(const QString &name, const QString &command, const QSt
 
     GameInfo game;
     game.name = name;
-    game.command = command;
+    game.executablePath = executablePath;
+    game.protonPath = protonPath;
+    game.prefixPath = prefixPath;
     game.iconPath = iconPath;
+    game.steamAppId = steamAppId;
+    game.launchMode = launchMode.isEmpty() ? QStringLiteral("direct") : launchMode;
     m_games.append(game);
 
     saveGames();
@@ -125,17 +169,17 @@ bool GameLibrary::removeGame(const QString &name)
 bool GameLibrary::createDesktopShortcut(const QString &gameName, const QString &profileName)
 {
     // Find the game
-    QString gameCommand;
+    QString executablePath;
     QString iconPath;
     for (const auto &game : m_games) {
         if (game.name == gameName) {
-            gameCommand = game.command;
+            executablePath = game.executablePath;
             iconPath = game.iconPath;
             break;
         }
     }
 
-    if (gameCommand.isEmpty()) {
+    if (executablePath.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Game not found"));
         return false;
     }
@@ -156,7 +200,7 @@ bool GameLibrary::createDesktopShortcut(const QString &gameName, const QString &
         "Type=Application\n"
         "Categories=Game;\n"
         "Terminal=false\n"
-    ).arg(gameName, profileName, gameCommand, 
+    ).arg(gameName, profileName, gameName,  // Use game name as identifier, not path
           iconPath.isEmpty() ? QStringLiteral("io.github.hikaps.couchplay") : iconPath);
 
     QFile file(desktopPath);
@@ -237,8 +281,12 @@ QVariantList GameLibrary::gamesAsVariant() const
     for (const auto &game : m_games) {
         QVariantMap map;
         map[QStringLiteral("name")] = game.name;
-        map[QStringLiteral("command")] = game.command;
+        map[QStringLiteral("executablePath")] = game.executablePath;
+        map[QStringLiteral("protonPath")] = game.protonPath;
+        map[QStringLiteral("prefixPath")] = game.prefixPath;
         map[QStringLiteral("iconPath")] = game.iconPath;
+        map[QStringLiteral("steamAppId")] = game.steamAppId;
+        map[QStringLiteral("launchMode")] = game.launchMode;
         list.append(map);
     }
     return list;

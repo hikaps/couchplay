@@ -52,6 +52,11 @@ private Q_SLOTS:
     void testIndexProperty();
     void testUsernameProperty();
     void testWindowGeometryProperty();
+    
+    // Launch mode tests
+    void testSteamLaunchMode();
+    void testSteamLaunchModeNoAppId();
+    void testSteamModeIsDefault();
 
 private:
     GamescopeInstance *m_instance = nullptr;
@@ -238,18 +243,10 @@ void TestGamescopeInstance::testBuildEnvPrimary()
     QVariantMap config;
     QStringList env = GamescopeInstance::buildEnvironment(config, true);
     
-    // Primary instance should NOT have PULSE_SERVER (uses local PipeWire)
-    bool hasPulseServer = false;
-    for (const QString &var : env) {
-        if (var.startsWith(QStringLiteral("PULSE_SERVER="))) {
-            hasPulseServer = true;
-            break;
-        }
-    }
-    QVERIFY(!hasPulseServer);
-    
-    // Note: SDL_VIDEODRIVER is no longer set since gamescope handles its own backend
-    // Secondary users use --backend wayland with ACL-granted access to Wayland socket
+    // Should have essential env vars for Vulkan games
+    QVERIFY(!env.isEmpty());
+    QVERIFY(env.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
+    QVERIFY(env.contains(QStringLiteral("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0")));
 }
 
 void TestGamescopeInstance::testBuildEnvSecondary()
@@ -257,9 +254,9 @@ void TestGamescopeInstance::testBuildEnvSecondary()
     QVariantMap config;
     QStringList env = GamescopeInstance::buildEnvironment(config, false);
     
-    // With machinectl shell, each user has their own PipeWire session
-    // so buildEnvironment now returns empty (no PULSE_SERVER forwarding needed)
-    QVERIFY(env.isEmpty());
+    // Both primary and secondary get the same essential env vars
+    QVERIFY(!env.isEmpty());
+    QVERIFY(env.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
 }
 
 void TestGamescopeInstance::testBuildEnvCustomPulseServer()
@@ -269,9 +266,20 @@ void TestGamescopeInstance::testBuildEnvCustomPulseServer()
     
     QStringList env = GamescopeInstance::buildEnvironment(config, false);
     
-    // With machinectl shell, PULSE_SERVER config is ignored
-    // Each user has their own PipeWire session
-    QVERIFY(env.isEmpty());
+    // pulseServer config is no longer used (each user has own PipeWire session)
+    // but we still get the base env vars
+    QVERIFY(!env.isEmpty());
+    QVERIFY(env.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
+    
+    // PULSE_SERVER should NOT be in the env
+    bool hasPulseServer = false;
+    for (const QString &var : env) {
+        if (var.startsWith(QStringLiteral("PULSE_SERVER="))) {
+            hasPulseServer = true;
+            break;
+        }
+    }
+    QVERIFY(!hasPulseServer);
 }
 
 // ============ buildSecondaryUserCommand Tests ============
@@ -281,19 +289,17 @@ void TestGamescopeInstance::testBuildSecondaryCommandBasic()
     QString username = QStringLiteral("player2");
     QStringList environment;
     QStringList gamescopeArgs = {QStringLiteral("-e"), QStringLiteral("-b")};
-    QString steamArgs = QStringLiteral("-gamepadui");
+    QString gameCommand = QStringLiteral("\"/path/to/game.exe\"");
     
     QString command = GamescopeInstance::buildSecondaryUserCommand(
-        username, environment, gamescopeArgs, steamArgs);
+        username, environment, gamescopeArgs, gameCommand);
     
     // Should contain username
     QVERIFY(command.contains(QStringLiteral("player2")));
     // Should contain gamescope
     QVERIFY(command.contains(QStringLiteral("gamescope")));
-    // Should contain steam
-    QVERIFY(command.contains(QStringLiteral("steam")));
-    // Should contain gamepadui
-    QVERIFY(command.contains(QStringLiteral("-gamepadui")));
+    // Should contain game command
+    QVERIFY(command.contains(QStringLiteral("game.exe")));
     // Should use pkexec, sudo, or machinectl for privilege escalation
     QVERIFY(command.contains(QStringLiteral("pkexec")) || 
             command.contains(QStringLiteral("sudo")) || 
@@ -303,15 +309,13 @@ void TestGamescopeInstance::testBuildSecondaryCommandBasic()
 void TestGamescopeInstance::testBuildSecondaryCommandWithEnv()
 {
     QString username = QStringLiteral("player2");
-    // With machinectl shell, each user has their own PipeWire session
-    // so PULSE_SERVER is intentionally filtered out from the command
-    // Instead, test that WAYLAND_DISPLAY is set to an absolute path
-    QStringList environment = {QStringLiteral("PULSE_SERVER=tcp:127.0.0.1:4713")};
+    // Test that environment variables are passed through
+    QStringList environment = {QStringLiteral("ENABLE_GAMESCOPE_WSI=1")};
     QStringList gamescopeArgs;
-    QString steamArgs;
+    QString gameCommand = QStringLiteral("\"/path/to/game\"");
     
     QString command = GamescopeInstance::buildSecondaryUserCommand(
-        username, environment, gamescopeArgs, steamArgs);
+        username, environment, gamescopeArgs, gameCommand);
     
     // Should use machinectl shell for the user's session
     QVERIFY(command.contains(QStringLiteral("machinectl shell player2@")) ||
@@ -320,8 +324,8 @@ void TestGamescopeInstance::testBuildSecondaryCommandWithEnv()
     // Should contain WAYLAND_DISPLAY with absolute path to primary's socket
     QVERIFY(command.contains(QStringLiteral("WAYLAND_DISPLAY=/run/user/")));
     
-    // PULSE_SERVER should be filtered out (each user has own PipeWire)
-    QVERIFY(!command.contains(QStringLiteral("PULSE_SERVER=")));
+    // Should contain the env var we passed
+    QVERIFY(command.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
 }
 
 void TestGamescopeInstance::testBuildSecondaryCommandWithArgs()
@@ -333,16 +337,16 @@ void TestGamescopeInstance::testBuildSecondaryCommandWithArgs()
         QStringLiteral("-h"), QStringLiteral("1080"),
         QStringLiteral("-W"), QStringLiteral("960")
     };
-    QString steamArgs = QStringLiteral("-gamepadui -applaunch 730");
+    QString gameCommand = QStringLiteral("\"/path/to/proton\" run \"/path/to/game.exe\"");
     
     QString command = GamescopeInstance::buildSecondaryUserCommand(
-        username, environment, gamescopeArgs, steamArgs);
+        username, environment, gamescopeArgs, gameCommand);
     
     // Should contain gamescope args
     QVERIFY(command.contains(QStringLiteral("-w 1920")));
     QVERIFY(command.contains(QStringLiteral("-W 960")));
-    // Should contain steam args
-    QVERIFY(command.contains(QStringLiteral("-applaunch 730")));
+    // Should contain game command
+    QVERIFY(command.contains(QStringLiteral("game.exe")));
 }
 
 // ============ Instance State Tests ============
@@ -374,6 +378,7 @@ void TestGamescopeInstance::testDoubleStartPrevention()
     QVariantMap config;
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
+    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");  // Use a real executable
     
     // First start will attempt to run (may fail if gamescope not installed)
     // We're mainly testing that the method is callable
@@ -388,6 +393,7 @@ void TestGamescopeInstance::testDoubleStartPrevention()
 void TestGamescopeInstance::testIndexProperty()
 {
     QVariantMap config;
+    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");
     m_instance->start(config, 5);
     QCOMPARE(m_instance->index(), 5);
     m_instance->stop();
@@ -397,6 +403,7 @@ void TestGamescopeInstance::testUsernameProperty()
 {
     QVariantMap config;
     config[QStringLiteral("username")] = QStringLiteral("testuser");
+    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");
     m_instance->start(config, 0);
     QCOMPARE(m_instance->username(), QStringLiteral("testuser"));
     m_instance->stop();
@@ -409,6 +416,7 @@ void TestGamescopeInstance::testWindowGeometryProperty()
     config[QStringLiteral("positionY")] = 200;
     config[QStringLiteral("outputWidth")] = 800;
     config[QStringLiteral("outputHeight")] = 600;
+    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");
     
     m_instance->start(config, 0);
     
@@ -417,6 +425,96 @@ void TestGamescopeInstance::testWindowGeometryProperty()
     QCOMPARE(geometry.y(), 200);
     QCOMPARE(geometry.width(), 800);
     QCOMPARE(geometry.height(), 600);
+    
+    m_instance->stop();
+}
+
+// ============ Launch Mode Tests ============
+
+void TestGamescopeInstance::testSteamLaunchMode()
+{
+    // Test that Steam launch mode builds proper command with steamAppId
+    // We can't actually start the process, but we can verify the config is accepted
+    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
+    
+    QVariantMap config;
+    config[QStringLiteral("launchMode")] = QStringLiteral("steam");
+    config[QStringLiteral("steamAppId")] = QStringLiteral("1426210");  // It Takes Two
+    config[QStringLiteral("internalWidth")] = 1920;
+    config[QStringLiteral("internalHeight")] = 1080;
+    
+    // This will try to start gamescope (may fail if not installed)
+    // but it should not emit "Steam App ID is required" error
+    m_instance->start(config, 0);
+    
+    // Check that we didn't get the "Steam App ID required" error
+    bool hasAppIdError = false;
+    for (int i = 0; i < errorSpy.count(); ++i) {
+        QString error = errorSpy.at(i).first().toString();
+        if (error.contains(QStringLiteral("Steam App ID is required"))) {
+            hasAppIdError = true;
+        }
+    }
+    QVERIFY(!hasAppIdError);
+    
+    m_instance->stop();
+}
+
+void TestGamescopeInstance::testSteamLaunchModeNoAppId()
+{
+    // Test that Steam launch mode WITHOUT steamAppId is valid (launches Big Picture)
+    // This allows players to select games inside Steam
+    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
+    
+    QVariantMap config;
+    config[QStringLiteral("launchMode")] = QStringLiteral("steam");
+    // No steamAppId set - this is valid, launches Steam Big Picture
+    config[QStringLiteral("internalWidth")] = 1920;
+    config[QStringLiteral("internalHeight")] = 1080;
+    
+    m_instance->start(config, 0);
+    
+    // Check that we didn't get any launch mode related errors
+    // (may still get "gamescope not found" in test environment, which is expected)
+    bool hasLaunchModeError = false;
+    for (int i = 0; i < errorSpy.count(); ++i) {
+        QString error = errorSpy.at(i).first().toString();
+        if (error.contains(QStringLiteral("Steam App ID")) ||
+            error.contains(QStringLiteral("executable")) ||
+            error.contains(QStringLiteral("launch mode"))) {
+            hasLaunchModeError = true;
+        }
+    }
+    QVERIFY(!hasLaunchModeError);
+    
+    m_instance->stop();
+}
+
+void TestGamescopeInstance::testSteamModeIsDefault()
+{
+    // Test that steam launch mode is the default (not direct mode)
+    // When no launchMode is set, it defaults to Steam Big Picture
+    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
+    
+    QVariantMap config;
+    // No launchMode set - should default to "steam"
+    // No executablePath set - this is fine for Steam mode
+    config[QStringLiteral("internalWidth")] = 1920;
+    config[QStringLiteral("internalHeight")] = 1080;
+    
+    m_instance->start(config, 0);
+    
+    // Check that we didn't get "No executable path specified" error
+    // (which would indicate direct mode was the default)
+    // May still get "gamescope not found" in test environment
+    bool hasExecutableError = false;
+    for (int i = 0; i < errorSpy.count(); ++i) {
+        QString error = errorSpy.at(i).first().toString();
+        if (error.contains(QStringLiteral("executable"))) {
+            hasExecutableError = true;
+        }
+    }
+    QVERIFY(!hasExecutableError);
     
     m_instance->stop();
 }

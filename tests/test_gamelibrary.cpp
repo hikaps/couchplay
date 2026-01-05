@@ -54,6 +54,11 @@ private Q_SLOTS:
     // Steam games tests
     void testGetSteamGamesNoSteam();
     void testParseSteamManifest();
+    
+    // Launch mode tests
+    void testAddGameSteamMode();
+    void testAddGameSteamModeNoAppId();
+    void testGamesAsVariantWithLaunchMode();
 
 private:
     QTemporaryDir *m_tempDir = nullptr;
@@ -124,7 +129,7 @@ void TestGameLibrary::testAddGame()
     QSignalSpy gamesChangedSpy(&library, &GameLibrary::gamesChanged);
     QSignalSpy errorSpy(&library, &GameLibrary::errorOccurred);
     
-    bool result = library.addGame(QStringLiteral("Test Game"), QStringLiteral("steam://rungameid/12345"));
+    bool result = library.addGame(QStringLiteral("Test Game"), QStringLiteral("/path/to/game.exe"));
     
     QVERIFY(result);
     QCOMPARE(gamesChangedSpy.count(), 1);
@@ -135,7 +140,7 @@ void TestGameLibrary::testAddGame()
     
     QVariantMap game = games.first().toMap();
     QCOMPARE(game[QStringLiteral("name")].toString(), QStringLiteral("Test Game"));
-    QCOMPARE(game[QStringLiteral("command")].toString(), QStringLiteral("steam://rungameid/12345"));
+    QCOMPARE(game[QStringLiteral("executablePath")].toString(), QStringLiteral("/path/to/game.exe"));
     QVERIFY(game[QStringLiteral("iconPath")].toString().isEmpty());
 }
 
@@ -146,6 +151,8 @@ void TestGameLibrary::testAddGameWithIcon()
     bool result = library.addGame(
         QStringLiteral("Test Game"),
         QStringLiteral("/usr/bin/game"),
+        QString(),  // protonPath
+        QString(),  // prefixPath
         QStringLiteral("/path/to/icon.png")
     );
     
@@ -163,11 +170,11 @@ void TestGameLibrary::testAddGameEmptyName()
     GameLibrary library;
     QSignalSpy errorSpy(&library, &GameLibrary::errorOccurred);
     
-    bool result = library.addGame(QString(), QStringLiteral("steam://rungameid/12345"));
+    bool result = library.addGame(QString(), QStringLiteral("/path/to/game"));
     
     QVERIFY(!result);
     QCOMPARE(errorSpy.count(), 1);
-    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Name and command are required"));
+    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Name and either executable path or Steam App ID are required"));
     QCOMPARE(library.gamesAsVariant().size(), 0);
 }
 
@@ -180,7 +187,7 @@ void TestGameLibrary::testAddGameEmptyCommand()
     
     QVERIFY(!result);
     QCOMPARE(errorSpy.count(), 1);
-    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Name and command are required"));
+    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Name and either executable path or Steam App ID are required"));
     QCOMPARE(library.gamesAsVariant().size(), 0);
 }
 
@@ -190,10 +197,10 @@ void TestGameLibrary::testAddGameDuplicate()
     QSignalSpy errorSpy(&library, &GameLibrary::errorOccurred);
     
     // Add first game
-    QVERIFY(library.addGame(QStringLiteral("Test Game"), QStringLiteral("command1")));
+    QVERIFY(library.addGame(QStringLiteral("Test Game"), QStringLiteral("/path/to/game1")));
     
     // Try to add duplicate
-    bool result = library.addGame(QStringLiteral("Test Game"), QStringLiteral("command2"));
+    bool result = library.addGame(QStringLiteral("Test Game"), QStringLiteral("/path/to/game2"));
     
     QVERIFY(!result);
     QCOMPARE(errorSpy.count(), 1);
@@ -208,8 +215,8 @@ void TestGameLibrary::testAddGameDuplicate()
 void TestGameLibrary::testRemoveGame()
 {
     GameLibrary library;
-    library.addGame(QStringLiteral("Game 1"), QStringLiteral("cmd1"));
-    library.addGame(QStringLiteral("Game 2"), QStringLiteral("cmd2"));
+    library.addGame(QStringLiteral("Game 1"), QStringLiteral("/path/to/game1"));
+    library.addGame(QStringLiteral("Game 2"), QStringLiteral("/path/to/game2"));
     
     QSignalSpy gamesChangedSpy(&library, &GameLibrary::gamesChanged);
     
@@ -226,7 +233,7 @@ void TestGameLibrary::testRemoveGame()
 void TestGameLibrary::testRemoveGameNotFound()
 {
     GameLibrary library;
-    library.addGame(QStringLiteral("Game 1"), QStringLiteral("cmd1"));
+    library.addGame(QStringLiteral("Game 1"), QStringLiteral("/path/to/game1"));
     
     QSignalSpy errorSpy(&library, &GameLibrary::errorOccurred);
     
@@ -245,8 +252,8 @@ void TestGameLibrary::testRemoveGameNotFound()
 void TestGameLibrary::testGamesAsVariant()
 {
     GameLibrary library;
-    library.addGame(QStringLiteral("Game A"), QStringLiteral("cmdA"), QStringLiteral("iconA"));
-    library.addGame(QStringLiteral("Game B"), QStringLiteral("cmdB"));
+    library.addGame(QStringLiteral("Game A"), QStringLiteral("/path/to/gameA"), QString(), QString(), QStringLiteral("iconA"));
+    library.addGame(QStringLiteral("Game B"), QStringLiteral("/path/to/gameB"));
     
     QVariantList games = library.gamesAsVariant();
     
@@ -254,19 +261,19 @@ void TestGameLibrary::testGamesAsVariant()
     
     QVariantMap gameA = games[0].toMap();
     QCOMPARE(gameA[QStringLiteral("name")].toString(), QStringLiteral("Game A"));
-    QCOMPARE(gameA[QStringLiteral("command")].toString(), QStringLiteral("cmdA"));
+    QCOMPARE(gameA[QStringLiteral("executablePath")].toString(), QStringLiteral("/path/to/gameA"));
     QCOMPARE(gameA[QStringLiteral("iconPath")].toString(), QStringLiteral("iconA"));
     
     QVariantMap gameB = games[1].toMap();
     QCOMPARE(gameB[QStringLiteral("name")].toString(), QStringLiteral("Game B"));
-    QCOMPARE(gameB[QStringLiteral("command")].toString(), QStringLiteral("cmdB"));
+    QCOMPARE(gameB[QStringLiteral("executablePath")].toString(), QStringLiteral("/path/to/gameB"));
     QVERIFY(gameB[QStringLiteral("iconPath")].toString().isEmpty());
 }
 
 void TestGameLibrary::testGamesProperty()
 {
     GameLibrary library;
-    library.addGame(QStringLiteral("Test"), QStringLiteral("cmd"));
+    library.addGame(QStringLiteral("Test"), QStringLiteral("/path/to/test"));
     
     // Access via QML property (which calls gamesAsVariant internally)
     QVariant gamesVariant = library.property("games");
@@ -283,8 +290,8 @@ void TestGameLibrary::testSaveLoadGames()
     // Add games with first library instance
     {
         GameLibrary library;
-        library.addGame(QStringLiteral("Saved Game 1"), QStringLiteral("cmd1"), QStringLiteral("icon1"));
-        library.addGame(QStringLiteral("Saved Game 2"), QStringLiteral("cmd2"));
+        library.addGame(QStringLiteral("Saved Game 1"), QStringLiteral("/path/to/game1"), QString(), QString(), QStringLiteral("icon1"));
+        library.addGame(QStringLiteral("Saved Game 2"), QStringLiteral("/path/to/game2"));
     }
     
     // Create new library instance - should load saved games
@@ -296,12 +303,12 @@ void TestGameLibrary::testSaveLoadGames()
         
         QVariantMap game1 = games[0].toMap();
         QCOMPARE(game1[QStringLiteral("name")].toString(), QStringLiteral("Saved Game 1"));
-        QCOMPARE(game1[QStringLiteral("command")].toString(), QStringLiteral("cmd1"));
+        QCOMPARE(game1[QStringLiteral("executablePath")].toString(), QStringLiteral("/path/to/game1"));
         QCOMPARE(game1[QStringLiteral("iconPath")].toString(), QStringLiteral("icon1"));
         
         QVariantMap game2 = games[1].toMap();
         QCOMPARE(game2[QStringLiteral("name")].toString(), QStringLiteral("Saved Game 2"));
-        QCOMPARE(game2[QStringLiteral("command")].toString(), QStringLiteral("cmd2"));
+        QCOMPARE(game2[QStringLiteral("executablePath")].toString(), QStringLiteral("/path/to/game2"));
     }
 }
 
@@ -341,7 +348,7 @@ void TestGameLibrary::testLoadInvalidJson()
 void TestGameLibrary::testCreateDesktopShortcut()
 {
     GameLibrary library;
-    library.addGame(QStringLiteral("My Game"), QStringLiteral("steam://rungameid/12345"));
+    library.addGame(QStringLiteral("My Game"), QStringLiteral("/path/to/mygame.exe"));
     
     bool result = library.createDesktopShortcut(QStringLiteral("My Game"), QStringLiteral("2Player"));
     
@@ -364,7 +371,7 @@ void TestGameLibrary::testCreateDesktopShortcut()
     
     QVERIFY(content.contains(QStringLiteral("[Desktop Entry]")));
     QVERIFY(content.contains(QStringLiteral("Name=CouchPlay: My Game (2Player)")));
-    QVERIFY(content.contains(QStringLiteral("Exec=couchplay --profile \"2Player\" --game \"steam://rungameid/12345\"")));
+    QVERIFY(content.contains(QStringLiteral("Exec=couchplay --profile \"2Player\" --game \"My Game\"")));
     QVERIFY(content.contains(QStringLiteral("Type=Application")));
     QVERIFY(content.contains(QStringLiteral("Icon=io.github.hikaps.couchplay")));
 }
@@ -384,7 +391,7 @@ void TestGameLibrary::testCreateDesktopShortcutGameNotFound()
 void TestGameLibrary::testCreateDesktopShortcutWithIcon()
 {
     GameLibrary library;
-    library.addGame(QStringLiteral("Custom Game"), QStringLiteral("cmd"), QStringLiteral("/custom/icon.png"));
+    library.addGame(QStringLiteral("Custom Game"), QStringLiteral("/path/to/game"), QString(), QString(), QStringLiteral("/custom/icon.png"));
     
     bool result = library.createDesktopShortcut(QStringLiteral("Custom Game"), QStringLiteral("Profile"));
     
@@ -406,7 +413,7 @@ void TestGameLibrary::testCreateDesktopShortcutWithIcon()
 void TestGameLibrary::testRefresh()
 {
     GameLibrary library;
-    library.addGame(QStringLiteral("Initial Game"), QStringLiteral("cmd"));
+    library.addGame(QStringLiteral("Initial Game"), QStringLiteral("/path/to/initial"));
     
     QCOMPARE(library.gamesAsVariant().size(), 1);
     
@@ -418,13 +425,17 @@ void TestGameLibrary::testRefresh()
     QJsonArray array;
     QJsonObject game1;
     game1[QStringLiteral("name")] = QStringLiteral("Game 1");
-    game1[QStringLiteral("command")] = QStringLiteral("cmd1");
+    game1[QStringLiteral("executablePath")] = QStringLiteral("/path/to/game1");
+    game1[QStringLiteral("protonPath")] = QString();
+    game1[QStringLiteral("prefixPath")] = QString();
     game1[QStringLiteral("iconPath")] = QString();
     array.append(game1);
     
     QJsonObject game2;
     game2[QStringLiteral("name")] = QStringLiteral("Game 2");
-    game2[QStringLiteral("command")] = QStringLiteral("cmd2");
+    game2[QStringLiteral("executablePath")] = QStringLiteral("/path/to/game2");
+    game2[QStringLiteral("protonPath")] = QString();
+    game2[QStringLiteral("prefixPath")] = QString();
     game2[QStringLiteral("iconPath")] = QString();
     array.append(game2);
     
@@ -499,6 +510,96 @@ void TestGameLibrary::createSteamManifest(const QString &path, const QString &ap
         file.write(content.toUtf8());
         file.close();
     }
+}
+
+// ============ Launch Mode Tests ============
+
+void TestGameLibrary::testAddGameSteamMode()
+{
+    GameLibrary library;
+    QSignalSpy gamesChangedSpy(&library, &GameLibrary::gamesChanged);
+    QSignalSpy errorSpy(&library, &GameLibrary::errorOccurred);
+    
+    // Add game with Steam launch mode
+    bool result = library.addGame(
+        QStringLiteral("It Takes Two"),
+        QString(),  // executablePath - not needed for Steam mode
+        QString(),  // protonPath
+        QString(),  // prefixPath
+        QString(),  // iconPath
+        QStringLiteral("1426210"),  // steamAppId
+        QStringLiteral("steam")     // launchMode
+    );
+    
+    QVERIFY(result);
+    QCOMPARE(gamesChangedSpy.count(), 1);
+    QCOMPARE(errorSpy.count(), 0);
+    
+    QVariantList games = library.gamesAsVariant();
+    QCOMPARE(games.size(), 1);
+    
+    QVariantMap game = games.first().toMap();
+    QCOMPARE(game[QStringLiteral("name")].toString(), QStringLiteral("It Takes Two"));
+    QCOMPARE(game[QStringLiteral("steamAppId")].toString(), QStringLiteral("1426210"));
+    QCOMPARE(game[QStringLiteral("launchMode")].toString(), QStringLiteral("steam"));
+    QVERIFY(game[QStringLiteral("executablePath")].toString().isEmpty());
+}
+
+void TestGameLibrary::testAddGameSteamModeNoAppId()
+{
+    GameLibrary library;
+    QSignalSpy errorSpy(&library, &GameLibrary::errorOccurred);
+    
+    // Try to add Steam mode game without App ID - should fail
+    bool result = library.addGame(
+        QStringLiteral("Test Game"),
+        QString(),  // executablePath
+        QString(),  // protonPath
+        QString(),  // prefixPath
+        QString(),  // iconPath
+        QString(),  // steamAppId - missing!
+        QStringLiteral("steam")
+    );
+    
+    QVERIFY(!result);
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(library.gamesAsVariant().size(), 0);
+}
+
+void TestGameLibrary::testGamesAsVariantWithLaunchMode()
+{
+    GameLibrary library;
+    
+    // Add a direct mode game
+    library.addGame(
+        QStringLiteral("Direct Game"),
+        QStringLiteral("/path/to/game.exe"),
+        QString(), QString(), QString(),
+        QString(),  // no steamAppId
+        QStringLiteral("direct")
+    );
+    
+    // Add a Steam mode game
+    library.addGame(
+        QStringLiteral("Steam Game"),
+        QString(),
+        QString(), QString(), QString(),
+        QStringLiteral("12345"),
+        QStringLiteral("steam")
+    );
+    
+    QVariantList games = library.gamesAsVariant();
+    QCOMPARE(games.size(), 2);
+    
+    QVariantMap directGame = games[0].toMap();
+    QCOMPARE(directGame[QStringLiteral("launchMode")].toString(), QStringLiteral("direct"));
+    QCOMPARE(directGame[QStringLiteral("executablePath")].toString(), QStringLiteral("/path/to/game.exe"));
+    QVERIFY(directGame[QStringLiteral("steamAppId")].toString().isEmpty());
+    
+    QVariantMap steamGame = games[1].toMap();
+    QCOMPARE(steamGame[QStringLiteral("launchMode")].toString(), QStringLiteral("steam"));
+    QCOMPARE(steamGame[QStringLiteral("steamAppId")].toString(), QStringLiteral("12345"));
+    QVERIFY(steamGame[QStringLiteral("executablePath")].toString().isEmpty());
 }
 
 QTEST_MAIN(TestGameLibrary)

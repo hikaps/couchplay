@@ -15,14 +15,14 @@
 struct InstanceConfig;
 
 /**
- * @brief Manages a single gamescope instance and its child Steam process
+ * @brief Manages a single gamescope instance running a game
  * 
  * Handles starting gamescope with appropriate arguments for:
  * - Resolution (internal and output)
  * - Window positioning for split-screen layouts
  * - Input device isolation
- * - Secondary user execution via sudo
- * - PipeWire audio forwarding
+ * - Secondary user execution via machinectl
+ * - Direct Proton/Wine game launching
  */
 class GamescopeInstance : public QObject
 {
@@ -51,7 +51,10 @@ public:
      *   - monitor: Monitor index for multi-monitor
      *   - positionX/Y: Window position for split-screen
      *   - devicePaths: List of /dev/input/eventN paths for input isolation
-     *   - gameCommand: Steam app ID or command to launch
+     *   - executablePath: Path to game executable (.exe or native binary)
+     *   - protonPath: Path to Proton installation (for Windows games)
+     *   - prefixPath: Path to Wine/Proton prefix (WINEPREFIX/STEAM_COMPAT_DATA_PATH)
+     *   - workingDirectory: Working directory for the game (optional)
      * @param index Instance index (0 = primary, 1+ = secondary)
      * @return true if started successfully
      */
@@ -100,15 +103,13 @@ public:
      * @param username Target username
      * @param environment Environment variables
      * @param gamescopeArgs Gamescope arguments
-     * @param steamArgs Steam arguments
-     * @param xauthPath Path to temporary xauth file for X11 authentication
+     * @param gameCommand Full game launch command (Proton + exe or native binary)
      * @return Full shell command string
      */
     static QString buildSecondaryUserCommand(const QString &username,
                                               const QStringList &environment,
                                               const QStringList &gamescopeArgs,
-                                              const QString &steamArgs,
-                                              const QString &xauthPath = QString());
+                                              const QString &gameCommand);
 
 Q_SIGNALS:
     void runningChanged();

@@ -30,6 +30,8 @@ struct InstanceConfig {
     Q_PROPERTY(QString filterMode MEMBER filterMode)
     Q_PROPERTY(QList<int> devices MEMBER devices)
     Q_PROPERTY(QString gameCommand MEMBER gameCommand)
+    Q_PROPERTY(QString steamAppId MEMBER steamAppId)
+    Q_PROPERTY(QString launchMode MEMBER launchMode)
 
 public:
     QString username;
@@ -43,6 +45,8 @@ public:
     QString filterMode = QStringLiteral("linear");
     QList<int> devices;
     QString gameCommand;
+    QString steamAppId;                              // Steam App ID for Steam launch mode
+    QString launchMode = QStringLiteral("direct");   // "direct", "steam", "legendary", "custom"
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)

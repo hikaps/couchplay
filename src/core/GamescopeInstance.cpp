@@ -9,6 +9,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QTemporaryFile>
@@ -52,23 +53,85 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     // Build environment
     QStringList envVars = buildEnvironment(config, m_isPrimary);
 
-    // Steam arguments
-    QString steamArgs = QStringLiteral("-gamepadui");
-    QString gameCommand = config.value(QStringLiteral("gameCommand")).toString();
-    if (!gameCommand.isEmpty()) {
-        // Check if it's a Steam app ID or a command
-        bool isAppId = false;
-        gameCommand.toUInt(&isAppId);
-        if (isAppId) {
-            steamArgs += QStringLiteral(" -applaunch ") + gameCommand;
-        } else if (gameCommand.startsWith(QStringLiteral("steam://"))) {
-            // Steam URL, will be handled separately
-            steamArgs += QStringLiteral(" ") + gameCommand;
+    // Get launch mode and game configuration
+    // Default to "steam" mode - players select games inside Steam Big Picture
+    QString launchMode = config.value(QStringLiteral("launchMode"), QStringLiteral("steam")).toString();
+    QString steamAppId = config.value(QStringLiteral("steamAppId")).toString();
+    QString executablePath = config.value(QStringLiteral("executablePath")).toString();
+    QString protonPath = config.value(QStringLiteral("protonPath")).toString();
+    QString prefixPath = config.value(QStringLiteral("prefixPath")).toString();
+    QString workingDirectory = config.value(QStringLiteral("workingDirectory")).toString();
+    
+    QString gameCommand;
+    
+    if (launchMode == QStringLiteral("steam")) {
+        // Steam launch mode - launch Steam Big Picture, optionally with a specific game
+        // -tenfoot launches Steam in Big Picture mode (better for controllers)
+        if (steamAppId.isEmpty()) {
+            // Just launch Steam Big Picture - player will select game inside Steam
+            gameCommand = QStringLiteral("steam -tenfoot");
+            qDebug() << "Instance" << m_index << "launching Steam Big Picture";
         } else {
-            steamArgs += QStringLiteral(" -applaunch ") + gameCommand;
+            // Launch specific game via Steam
+            gameCommand = QStringLiteral("steam -tenfoot steam://rungameid/%1").arg(steamAppId);
+            qDebug() << "Instance" << m_index << "launching Steam game" << steamAppId;
         }
+    } else if (launchMode == QStringLiteral("direct")) {
+        // Direct launch mode - launch executable directly (with Proton if needed)
+        if (executablePath.isEmpty()) {
+            Q_EMIT errorOccurred(QStringLiteral("No executable path specified"));
+            return false;
+        }
+        
+        // Check if executable exists
+        if (!QFile::exists(executablePath)) {
+            Q_EMIT errorOccurred(QStringLiteral("Executable not found: %1").arg(executablePath));
+            return false;
+        }
+        
+        // Determine if this is a Windows game (needs Proton) or native
+        bool isWindowsGame = executablePath.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive);
+        
+        if (isWindowsGame) {
+            // Windows game - use Proton
+            if (protonPath.isEmpty()) {
+                Q_EMIT errorOccurred(QStringLiteral("Proton path required for Windows games"));
+                return false;
+            }
+            if (!QFile::exists(protonPath)) {
+                Q_EMIT errorOccurred(QStringLiteral("Proton not found: %1").arg(protonPath));
+                return false;
+            }
+            
+            // Default prefix if not specified
+            if (prefixPath.isEmpty()) {
+                prefixPath = QDir::homePath() + QStringLiteral("/.couchplay/prefixes/default");
+                QDir().mkpath(prefixPath);
+            }
+            
+            // Add Proton environment variables
+            envVars << QStringLiteral("STEAM_COMPAT_DATA_PATH=%1").arg(prefixPath);
+            envVars << QStringLiteral("STEAM_COMPAT_CLIENT_INSTALL_PATH=%1/.local/share/Steam").arg(QDir::homePath());
+            
+            // Build Proton command: proton run /path/to/game.exe
+            gameCommand = QStringLiteral("\"%1\" run \"%2\"").arg(protonPath, executablePath);
+        } else {
+            // Native Linux game - run directly
+            gameCommand = QStringLiteral("\"%1\"").arg(executablePath);
+        }
+        
+        qDebug() << "Instance" << m_index << "using direct launch mode";
+    } else {
+        // Unknown launch mode - default to Steam
+        gameCommand = QStringLiteral("steam -tenfoot");
+        qDebug() << "Instance" << m_index << "unknown launch mode, defaulting to Steam Big Picture";
     }
-
+    
+    // Verify we have a command to run
+    if (gameCommand.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("No game command configured"));
+        return false;
+    }
 
     // Create process
     m_process = new QProcess(this);
@@ -98,9 +161,11 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
             return false;
         }
         
-        // Add steam command after --
-        gamescopeArgs << QStringLiteral("--") << QStringLiteral("/usr/bin/steam");
-        gamescopeArgs << steamArgs.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        // Add game command after --
+        gamescopeArgs << QStringLiteral("--");
+        
+        // For Proton, we need to run through bash to handle the command properly
+        gamescopeArgs << QStringLiteral("/bin/bash") << QStringLiteral("-c") << gameCommand;
 
         // Set up environment
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -111,6 +176,14 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
             }
         }
         m_process->setProcessEnvironment(env);
+        
+        // Set working directory if specified
+        if (!workingDirectory.isEmpty() && QDir(workingDirectory).exists()) {
+            m_process->setWorkingDirectory(workingDirectory);
+        } else if (!executablePath.isEmpty()) {
+            // Default to executable's directory
+            m_process->setWorkingDirectory(QFileInfo(executablePath).absolutePath());
+        }
 
         setStatus(QStringLiteral("Starting..."));
         m_process->start(program, gamescopeArgs);
@@ -130,7 +203,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         }
         
         // Build the machinectl shell command
-        QString command = buildSecondaryUserCommand(m_username, envVars, gamescopeArgs, steamArgs);
+        QString command = buildSecondaryUserCommand(m_username, envVars, gamescopeArgs, gameCommand);
 
         qDebug() << "Starting secondary instance as" << m_username;
 
@@ -296,20 +369,25 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config, bool 
     Q_UNUSED(config)
     Q_UNUSED(isPrimary)
     
-    // With machinectl shell, each user has their own proper systemd session
-    // including their own PipeWire instance, so we don't need to forward audio
-    // The environment is handled by the user's session
-    return {};
+    QStringList envVars;
+    
+    // Enable Gamescope WSI layer - critical for Vulkan games to work inside gamescope
+    envVars << QStringLiteral("ENABLE_GAMESCOPE_WSI=1");
+    
+    // Prevent games from minimizing when losing focus
+    envVars << QStringLiteral("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0");
+    
+    // Mesa threading for better performance
+    envVars << QStringLiteral("mesa_glthread=true");
+    
+    return envVars;
 }
 
 QString GamescopeInstance::buildSecondaryUserCommand(const QString &username,
                                                        const QStringList &environment,
                                                        const QStringList &gamescopeArgs,
-                                                       const QString &steamArgs,
-                                                       const QString &xauthPath)
+                                                       const QString &gameCommand)
 {
-    Q_UNUSED(xauthPath)  // No longer used - machinectl handles sessions properly
-    
     // Build environment string for the secondary user
     // We need to set WAYLAND_DISPLAY to an absolute path pointing to the primary user's socket
     QString envStr;
@@ -328,18 +406,15 @@ QString GamescopeInstance::buildSecondaryUserCommand(const QString &username,
     }
     
     // Add any other environment variables from buildEnvironment()
-    // (but filter out PULSE_SERVER - each user has their own PipeWire session)
     for (const QString &var : environment) {
-        if (!var.startsWith(QStringLiteral("PULSE_SERVER="))) {
-            envStr += var + QStringLiteral(" ");
-        }
+        envStr += var + QStringLiteral(" ");
     }
 
     // Build the gamescope command
-    // Log file helps capture errors from gamescope/steam for debugging
+    // Log file helps capture errors for debugging
     QString logFile = QStringLiteral("/tmp/couchplay-%1.log").arg(username);
-    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /usr/bin/steam %2 2>&1 | tee %3")
-                               .arg(gamescopeArgs.join(QLatin1Char(' ')), steamArgs, logFile);
+    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /bin/bash -c '%2' 2>&1 | tee %3")
+                               .arg(gamescopeArgs.join(QLatin1Char(' ')), gameCommand, logFile);
 
     QString command;
 

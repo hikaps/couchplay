@@ -114,6 +114,8 @@ bool SessionRunner::start()
         config[QStringLiteral("scalingMode")] = instConfig.scalingMode;
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
         config[QStringLiteral("gameCommand")] = instConfig.gameCommand;
+        config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
+        config[QStringLiteral("launchMode")] = instConfig.launchMode;
         config[QStringLiteral("borderless")] = m_borderlessWindows;
         
         // Mark secondary users so gamescope uses appropriate backend

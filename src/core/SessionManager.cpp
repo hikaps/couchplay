@@ -111,6 +111,8 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("scalingMode", inst.scalingMode);
         instGroup.writeEntry("filterMode", inst.filterMode);
         instGroup.writeEntry("gameCommand", inst.gameCommand);
+        instGroup.writeEntry("steamAppId", inst.steamAppId);
+        instGroup.writeEntry("launchMode", inst.launchMode);
 
         // Convert devices to string list
         QStringList deviceStrings;
@@ -165,6 +167,8 @@ bool SessionManager::loadProfile(const QString &name)
         inst.scalingMode = instGroup.readEntry("scalingMode", QStringLiteral("fit"));
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
         inst.gameCommand = instGroup.readEntry("gameCommand", QString());
+        inst.steamAppId = instGroup.readEntry("steamAppId", QString());
+        inst.launchMode = instGroup.readEntry("launchMode", QStringLiteral("direct"));
 
         // Read devices
         QStringList deviceStrings = instGroup.readEntry("devices", QStringList());
@@ -258,6 +262,8 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("scalingMode")] = inst.scalingMode;
     map[QStringLiteral("filterMode")] = inst.filterMode;
     map[QStringLiteral("gameCommand")] = inst.gameCommand;
+    map[QStringLiteral("steamAppId")] = inst.steamAppId;
+    map[QStringLiteral("launchMode")] = inst.launchMode;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -296,6 +302,10 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.filterMode = config[QStringLiteral("filterMode")].toString();
     if (config.contains(QStringLiteral("gameCommand")))
         inst.gameCommand = config[QStringLiteral("gameCommand")].toString();
+    if (config.contains(QStringLiteral("steamAppId")))
+        inst.steamAppId = config[QStringLiteral("steamAppId")].toString();
+    if (config.contains(QStringLiteral("launchMode")))
+        inst.launchMode = config[QStringLiteral("launchMode")].toString();
 
     Q_EMIT instancesChanged();
 }
