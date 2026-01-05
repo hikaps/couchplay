@@ -46,7 +46,7 @@ public:
     QList<int> devices;
     QString gameCommand;
     QString steamAppId;                              // Steam App ID for Steam launch mode
-    QString launchMode = QStringLiteral("direct");   // "direct", "steam", "legendary", "custom"
+    QString launchMode = QStringLiteral("steam");    // "steam", "direct", "legendary", "custom"
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)

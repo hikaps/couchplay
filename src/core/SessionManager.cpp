@@ -168,7 +168,7 @@ bool SessionManager::loadProfile(const QString &name)
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
         inst.gameCommand = instGroup.readEntry("gameCommand", QString());
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
-        inst.launchMode = instGroup.readEntry("launchMode", QStringLiteral("direct"));
+        inst.launchMode = instGroup.readEntry("launchMode", QStringLiteral("steam"));
 
         // Read devices
         QStringList deviceStrings = instGroup.readEntry("devices", QStringList());
