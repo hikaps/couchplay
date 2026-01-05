@@ -1,0 +1,423 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2025 CouchPlay Contributors
+
+#include <QTest>
+#include <QSignalSpy>
+#include <QTemporaryFile>
+#include <QTemporaryDir>
+
+#include "DeviceManager.h"
+
+// Helper macro for QVariantMap key access with proper QString conversion
+#define KEY(x) QStringLiteral(x)
+
+class TestDeviceManager : public QObject
+{
+    Q_OBJECT
+
+private Q_SLOTS:
+    void initTestCase();
+    void cleanupTestCase();
+
+    // Basic functionality tests
+    void testInitialization();
+    void testRefresh();
+    void testDeviceAssignment();
+    void testUnassignAll();
+    void testAutoAssignControllers();
+    void testGetDevicesForInstance();
+    void testGetDevicePathsForInstance();
+    void testIdentifyDevice();
+    void testGetDevice();
+    
+    // Property tests
+    void testShowVirtualDevices();
+    void testShowInternalDevices();
+    void testHotplugEnabled();
+    void testInstanceCount();
+    
+    // Filtering tests
+    void testDeviceFiltering();
+    void testControllersProperty();
+    void testKeyboardsProperty();
+    void testMiceProperty();
+    void testVisibleDevicesProperty();
+    
+    // Signal tests
+    void testDevicesChangedSignal();
+    void testDeviceAssignedSignal();
+    void testInstanceCountChangedSignal();
+
+private:
+    DeviceManager *m_deviceManager = nullptr;
+};
+
+void TestDeviceManager::initTestCase()
+{
+    m_deviceManager = new DeviceManager(this);
+}
+
+void TestDeviceManager::cleanupTestCase()
+{
+    delete m_deviceManager;
+    m_deviceManager = nullptr;
+}
+
+void TestDeviceManager::testInitialization()
+{
+    // DeviceManager should initialize with sensible defaults
+    QVERIFY(m_deviceManager != nullptr);
+    QCOMPARE(m_deviceManager->instanceCount(), 2);
+    QCOMPARE(m_deviceManager->showVirtualDevices(), false);
+    QCOMPARE(m_deviceManager->showInternalDevices(), false);
+    QCOMPARE(m_deviceManager->hotplugEnabled(), true);
+}
+
+void TestDeviceManager::testRefresh()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::devicesChanged);
+    m_deviceManager->refresh();
+    
+    // Refresh should emit devicesChanged signal
+    QCOMPARE(spy.count(), 1);
+}
+
+void TestDeviceManager::testDeviceAssignment()
+{
+    // Try to assign a non-existent device (should return false)
+    bool result = m_deviceManager->assignDevice(-1, 0);
+    QCOMPARE(result, false);
+    
+    // If there are devices, try to assign one
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (!devices.isEmpty()) {
+        QVariantMap device = devices.first().toMap();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        
+        // Assign to instance 0
+        result = m_deviceManager->assignDevice(eventNumber, 0);
+        QCOMPARE(result, true);
+        
+        // Check that device is now assigned
+        QVariantMap updatedDevice = m_deviceManager->getDevice(eventNumber);
+        QCOMPARE(updatedDevice.value(KEY("assigned")).toBool(), true);
+        QCOMPARE(updatedDevice.value(KEY("assignedInstance")).toInt(), 0);
+        
+        // Unassign (assign to -1)
+        result = m_deviceManager->assignDevice(eventNumber, -1);
+        QCOMPARE(result, true);
+        
+        // Check that device is now unassigned
+        updatedDevice = m_deviceManager->getDevice(eventNumber);
+        QCOMPARE(updatedDevice.value(KEY("assigned")).toBool(), false);
+        QCOMPARE(updatedDevice.value(KEY("assignedInstance")).toInt(), -1);
+    }
+}
+
+void TestDeviceManager::testUnassignAll()
+{
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    
+    // Assign some devices first
+    for (int i = 0; i < qMin(devices.size(), 2); ++i) {
+        QVariantMap device = devices.at(i).toMap();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        m_deviceManager->assignDevice(eventNumber, i);
+    }
+    
+    // Unassign all
+    m_deviceManager->unassignAll();
+    
+    // Check that no devices are assigned
+    devices = m_deviceManager->devicesAsVariant();
+    for (const QVariant &v : devices) {
+        QVariantMap device = v.toMap();
+        QCOMPARE(device.value(KEY("assigned")).toBool(), false);
+        QCOMPARE(device.value(KEY("assignedInstance")).toInt(), -1);
+    }
+}
+
+void TestDeviceManager::testAutoAssignControllers()
+{
+    // First unassign all
+    m_deviceManager->unassignAll();
+    
+    // Auto-assign controllers
+    int count = m_deviceManager->autoAssignControllers();
+    
+    // Count should be >= 0 and <= instanceCount
+    QVERIFY(count >= 0);
+    QVERIFY(count <= m_deviceManager->instanceCount());
+    
+    // Each assigned controller should have a unique instance
+    QVariantList controllers = m_deviceManager->controllersAsVariant();
+    QSet<int> assignedInstances;
+    for (const QVariant &v : controllers) {
+        QVariantMap controller = v.toMap();
+        if (controller.value(KEY("assigned")).toBool()) {
+            int instance = controller.value(KEY("assignedInstance")).toInt();
+            QVERIFY(!assignedInstances.contains(instance));
+            assignedInstances.insert(instance);
+        }
+    }
+}
+
+void TestDeviceManager::testGetDevicesForInstance()
+{
+    m_deviceManager->unassignAll();
+    
+    // Assign a few devices to instance 0
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    int assignedCount = 0;
+    for (int i = 0; i < qMin(devices.size(), 3); ++i) {
+        QVariantMap device = devices.at(i).toMap();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        if (m_deviceManager->assignDevice(eventNumber, 0)) {
+            assignedCount++;
+        }
+    }
+    
+    // Get devices for instance 0
+    QList<int> instanceDevices = m_deviceManager->getDevicesForInstance(0);
+    QCOMPARE(instanceDevices.size(), assignedCount);
+    
+    // Get devices for unassigned instance
+    QList<int> emptyList = m_deviceManager->getDevicesForInstance(1);
+    QCOMPARE(emptyList.size(), 0);
+}
+
+void TestDeviceManager::testGetDevicePathsForInstance()
+{
+    m_deviceManager->unassignAll();
+    
+    // Assign some devices
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    for (int i = 0; i < qMin(devices.size(), 2); ++i) {
+        QVariantMap device = devices.at(i).toMap();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        m_deviceManager->assignDevice(eventNumber, 0);
+    }
+    
+    // Get paths for instance 0
+    QStringList paths = m_deviceManager->getDevicePathsForInstance(0);
+    
+    // Each path should start with /dev/input/event
+    for (const QString &path : paths) {
+        QVERIFY(path.startsWith(QStringLiteral("/dev/input/event")));
+    }
+}
+
+void TestDeviceManager::testIdentifyDevice()
+{
+    // Just test that this doesn't crash (actual rumble requires hardware)
+    QVariantList controllers = m_deviceManager->controllersAsVariant();
+    if (!controllers.isEmpty()) {
+        QVariantMap controller = controllers.first().toMap();
+        int eventNumber = controller.value(KEY("eventNumber")).toInt();
+        m_deviceManager->identifyDevice(eventNumber);
+    }
+    QVERIFY(true);
+}
+
+void TestDeviceManager::testGetDevice()
+{
+    // Test getting a non-existent device
+    QVariantMap noDevice = m_deviceManager->getDevice(-1);
+    QVERIFY(noDevice.isEmpty());
+    
+    // Test getting an existing device
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (!devices.isEmpty()) {
+        QVariantMap device = devices.first().toMap();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        
+        QVariantMap retrievedDevice = m_deviceManager->getDevice(eventNumber);
+        QVERIFY(!retrievedDevice.isEmpty());
+        QCOMPARE(retrievedDevice.value(KEY("eventNumber")).toInt(), eventNumber);
+        QVERIFY(retrievedDevice.contains(KEY("name")));
+        QVERIFY(retrievedDevice.contains(KEY("type")));
+        QVERIFY(retrievedDevice.contains(KEY("path")));
+    }
+}
+
+void TestDeviceManager::testShowVirtualDevices()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::showVirtualDevicesChanged);
+    
+    bool initial = m_deviceManager->showVirtualDevices();
+    m_deviceManager->setShowVirtualDevices(!initial);
+    
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(m_deviceManager->showVirtualDevices(), !initial);
+    
+    // Reset to initial value
+    m_deviceManager->setShowVirtualDevices(initial);
+}
+
+void TestDeviceManager::testShowInternalDevices()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::showInternalDevicesChanged);
+    
+    bool initial = m_deviceManager->showInternalDevices();
+    m_deviceManager->setShowInternalDevices(!initial);
+    
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(m_deviceManager->showInternalDevices(), !initial);
+    
+    // Reset to initial value
+    m_deviceManager->setShowInternalDevices(initial);
+}
+
+void TestDeviceManager::testHotplugEnabled()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::hotplugEnabledChanged);
+    
+    bool initial = m_deviceManager->hotplugEnabled();
+    m_deviceManager->setHotplugEnabled(!initial);
+    
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(m_deviceManager->hotplugEnabled(), !initial);
+    
+    // Reset to initial value
+    m_deviceManager->setHotplugEnabled(initial);
+}
+
+void TestDeviceManager::testInstanceCount()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::instanceCountChanged);
+    
+    int initial = m_deviceManager->instanceCount();
+    m_deviceManager->setInstanceCount(3);
+    
+    if (initial != 3) {
+        QCOMPARE(spy.count(), 1);
+    }
+    QCOMPARE(m_deviceManager->instanceCount(), 3);
+    
+    // Test bounds (should be clamped to 1-4)
+    m_deviceManager->setInstanceCount(0);
+    QVERIFY(m_deviceManager->instanceCount() > 0);
+    
+    m_deviceManager->setInstanceCount(5);
+    QVERIFY(m_deviceManager->instanceCount() <= 4);
+    
+    // Reset to initial value
+    m_deviceManager->setInstanceCount(initial);
+}
+
+void TestDeviceManager::testDeviceFiltering()
+{
+    // When showVirtualDevices is false, virtual devices should be filtered
+    m_deviceManager->setShowVirtualDevices(false);
+    
+    QVariantList visible = m_deviceManager->visibleDevicesAsVariant();
+    for (const QVariant &v : visible) {
+        QVariantMap device = v.toMap();
+        QCOMPARE(device.value(KEY("isVirtual")).toBool(), false);
+    }
+    
+    // When showInternalDevices is false, internal devices should be filtered
+    m_deviceManager->setShowInternalDevices(false);
+    
+    visible = m_deviceManager->visibleDevicesAsVariant();
+    for (const QVariant &v : visible) {
+        QVariantMap device = v.toMap();
+        QCOMPARE(device.value(KEY("isInternal")).toBool(), false);
+    }
+}
+
+void TestDeviceManager::testControllersProperty()
+{
+    QVariantList controllers = m_deviceManager->controllersAsVariant();
+    
+    // All items should be of type "controller"
+    for (const QVariant &v : controllers) {
+        QVariantMap controller = v.toMap();
+        QCOMPARE(controller.value(KEY("type")).toString(), QStringLiteral("controller"));
+    }
+}
+
+void TestDeviceManager::testKeyboardsProperty()
+{
+    QVariantList keyboards = m_deviceManager->keyboardsAsVariant();
+    
+    // All items should be of type "keyboard"
+    for (const QVariant &v : keyboards) {
+        QVariantMap keyboard = v.toMap();
+        QCOMPARE(keyboard.value(KEY("type")).toString(), QStringLiteral("keyboard"));
+    }
+}
+
+void TestDeviceManager::testMiceProperty()
+{
+    QVariantList mice = m_deviceManager->miceAsVariant();
+    
+    // All items should be of type "mouse"
+    for (const QVariant &v : mice) {
+        QVariantMap mouse = v.toMap();
+        QCOMPARE(mouse.value(KEY("type")).toString(), QStringLiteral("mouse"));
+    }
+}
+
+void TestDeviceManager::testVisibleDevicesProperty()
+{
+    // Visible devices should not include "other" type
+    QVariantList visible = m_deviceManager->visibleDevicesAsVariant();
+    
+    for (const QVariant &v : visible) {
+        QVariantMap device = v.toMap();
+        QVERIFY(device.value(KEY("type")).toString() != QStringLiteral("other"));
+    }
+}
+
+void TestDeviceManager::testDevicesChangedSignal()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::devicesChanged);
+    
+    // Toggle showVirtualDevices (should emit devicesChanged)
+    bool initial = m_deviceManager->showVirtualDevices();
+    m_deviceManager->setShowVirtualDevices(!initial);
+    
+    QVERIFY(spy.count() >= 1);
+    
+    // Reset
+    m_deviceManager->setShowVirtualDevices(initial);
+}
+
+void TestDeviceManager::testDeviceAssignedSignal()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::deviceAssigned);
+    
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (!devices.isEmpty()) {
+        QVariantMap device = devices.first().toMap();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        
+        m_deviceManager->assignDevice(eventNumber, 0);
+        
+        QCOMPARE(spy.count(), 1);
+        QList<QVariant> args = spy.takeFirst();
+        QCOMPARE(args.at(0).toInt(), eventNumber);
+        QCOMPARE(args.at(1).toInt(), 0);
+        
+        // Unassign
+        m_deviceManager->assignDevice(eventNumber, -1);
+    }
+}
+
+void TestDeviceManager::testInstanceCountChangedSignal()
+{
+    QSignalSpy spy(m_deviceManager, &DeviceManager::instanceCountChanged);
+    
+    int initial = m_deviceManager->instanceCount();
+    int newValue = (initial == 2) ? 3 : 2;
+    
+    m_deviceManager->setInstanceCount(newValue);
+    QCOMPARE(spy.count(), 1);
+    
+    // Reset
+    m_deviceManager->setInstanceCount(initial);
+}
+
+QTEST_MAIN(TestDeviceManager)
+#include "test_devicemanager.moc"

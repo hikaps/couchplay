@@ -55,6 +55,12 @@ ecm_find_qmlmodule(org.kde.kirigami REQUIRED)
 add_subdirectory(src)
 add_subdirectory(helper)
 
+# Enable testing
+option(BUILD_TESTING "Build the testing tree." ON)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
+
 # Install desktop file
 install(PROGRAMS io.github.hikaps.couchplay.desktop
     DESTINATION ${KDE_INSTALL_APPDIR}
