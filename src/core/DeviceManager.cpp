@@ -131,17 +131,28 @@ void DeviceManager::parseDevices()
 {
     QFile file(QStringLiteral("/proc/bus/input/devices"));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "DeviceManager: Failed to open /proc/bus/input/devices";
         Q_EMIT errorOccurred(QStringLiteral("Failed to open /proc/bus/input/devices"));
         return;
     }
+    
+    // Read entire file content (procfs files report size 0, so we must read all)
+    QByteArray content = file.readAll();
+    file.close();
+    
+    if (content.isEmpty()) {
+        qWarning() << "DeviceManager: /proc/bus/input/devices is empty";
+        return;
+    }
 
-    QTextStream stream(&file);
+    QTextStream stream(&content);
     QString currentName;
     QString currentHandlers;
     QString currentPhys;
     QString currentVendor;
     QString currentProduct;
     int currentEventNumber = -1;
+    int lineCount = 0;
 
     static const QRegularExpression nameRegex(QStringLiteral("^N: Name=\"(.*)\"$"));
     static const QRegularExpression handlersRegex(QStringLiteral("^H: Handlers=(.*)$"));
@@ -151,6 +162,7 @@ void DeviceManager::parseDevices()
 
     while (!stream.atEnd()) {
         QString line = stream.readLine();
+        lineCount++;
 
         if (line.isEmpty()) {
             // End of device block - create device if we have valid data
@@ -234,8 +246,6 @@ void DeviceManager::parseDevices()
 
         m_devices.append(device);
     }
-
-    file.close();
     
     qDebug() << "DeviceManager: Found" << m_devices.size() << "input devices";
 }

@@ -21,13 +21,14 @@ Kirigami.ScrollablePage {
         Kirigami.Action {
             text: i18nc("@action:button", "Refresh")
             icon.name: "view-refresh"
-            onTriggered: deviceManager.refresh()
+            onTriggered: deviceManager?.refresh()
         },
         Kirigami.Action {
             text: i18nc("@action:button", "Auto-Assign")
             icon.name: "distribute-horizontal"
             tooltip: i18nc("@info:tooltip", "Automatically assign one controller per player")
             onTriggered: {
+                if (!deviceManager) return
                 let count = deviceManager.autoAssignControllers()
                 if (count > 0) {
                     applicationWindow().showPassiveNotification(
@@ -41,7 +42,7 @@ Kirigami.ScrollablePage {
         Kirigami.Action {
             text: i18nc("@action:button", "Clear All")
             icon.name: "edit-clear-all"
-            onTriggered: deviceManager.unassignAll()
+            onTriggered: deviceManager?.unassignAll()
         }
     ]
 
@@ -60,7 +61,7 @@ Kirigami.ScrollablePage {
                 value: root.instanceCount
                 onValueChanged: {
                     root.instanceCount = value
-                    deviceManager.instanceCount = value
+                    if (deviceManager) deviceManager.instanceCount = value
                 }
             }
 
@@ -68,8 +69,8 @@ Kirigami.ScrollablePage {
 
             QQC2.CheckBox {
                 text: i18nc("@option:check", "Show virtual devices")
-                checked: deviceManager.showVirtualDevices
-                onToggled: deviceManager.showVirtualDevices = checked
+                checked: deviceManager?.showVirtualDevices ?? false
+                onToggled: { if (deviceManager) deviceManager.showVirtualDevices = checked }
             }
         }
     }
@@ -93,18 +94,20 @@ Kirigami.ScrollablePage {
             Repeater {
                 model: root.instanceCount
 
-                PlayerDropZone {
+                delegate: PlayerDropZone {
+                    id: dropZoneDelegate
                     Layout.fillWidth: true
                     Layout.preferredHeight: 200
                     
-                    playerIndex: index
-                    assignedDevices: deviceManager.visibleDevices.filter(d => d.assignedInstance === index)
+                    required property int index
+                    playerIndex: dropZoneDelegate.index
+                    assignedDevices: (deviceManager?.visibleDevices ?? []).filter(d => d.assignedInstance === dropZoneDelegate.playerIndex)
                     
                     onDeviceDropped: (eventNumber) => {
-                        deviceManager.assignDevice(eventNumber, index)
+                        deviceManager?.assignDevice(eventNumber, dropZoneDelegate.playerIndex)
                     }
                     onDeviceRemoved: (eventNumber) => {
-                        deviceManager.assignDevice(eventNumber, -1)
+                        deviceManager?.assignDevice(eventNumber, -1)
                     }
                 }
             }
@@ -126,15 +129,15 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
 
             QQC2.TabButton {
-                text: i18nc("@title:tab", "Controllers (%1)", deviceManager.controllers.length)
+                text: "Controllers (" + (deviceManager?.controllers?.length ?? 0) + ")"
                 icon.name: "input-gamepad"
             }
             QQC2.TabButton {
-                text: i18nc("@title:tab", "Keyboards (%1)", deviceManager.keyboards.length)
+                text: "Keyboards (" + (deviceManager?.keyboards?.length ?? 0) + ")"
                 icon.name: "input-keyboard"
             }
             QQC2.TabButton {
-                text: i18nc("@title:tab", "Mice (%1)", deviceManager.mice.length)
+                text: "Mice (" + (deviceManager?.mice?.length ?? 0) + ")"
                 icon.name: "input-mouse"
             }
         }
@@ -145,24 +148,24 @@ Kirigami.ScrollablePage {
 
             // Controllers list
             DeviceList {
-                deviceModel: deviceManager.controllers
+                deviceModel: deviceManager?.controllers ?? []
                 deviceType: "controller"
                 instanceCount: root.instanceCount
                 onAssignDevice: (eventNumber, instanceIndex) => {
-                    deviceManager.assignDevice(eventNumber, instanceIndex)
+                    deviceManager?.assignDevice(eventNumber, instanceIndex)
                 }
                 onIdentifyDevice: (eventNumber) => {
-                    deviceManager.identifyDevice(eventNumber)
+                    deviceManager?.identifyDevice(eventNumber)
                 }
             }
 
             // Keyboards list
             DeviceList {
-                deviceModel: deviceManager.keyboards
+                deviceModel: deviceManager?.keyboards ?? []
                 deviceType: "keyboard"
                 instanceCount: root.instanceCount
                 onAssignDevice: (eventNumber, instanceIndex) => {
-                    deviceManager.assignDevice(eventNumber, instanceIndex)
+                    deviceManager?.assignDevice(eventNumber, instanceIndex)
                 }
                 onIdentifyDevice: (eventNumber) => {
                     // Keyboards don't support identification
@@ -171,11 +174,11 @@ Kirigami.ScrollablePage {
 
             // Mice list
             DeviceList {
-                deviceModel: deviceManager.mice
+                deviceModel: deviceManager?.mice ?? []
                 deviceType: "mouse"
                 instanceCount: root.instanceCount
                 onAssignDevice: (eventNumber, instanceIndex) => {
-                    deviceManager.assignDevice(eventNumber, instanceIndex)
+                    deviceManager?.assignDevice(eventNumber, instanceIndex)
                 }
                 onIdentifyDevice: (eventNumber) => {
                     // Mice don't support identification
@@ -186,7 +189,7 @@ Kirigami.ScrollablePage {
         // Empty state
         Kirigami.PlaceholderMessage {
             Layout.fillWidth: true
-            visible: deviceManager.visibleDevices.length === 0
+            visible: (deviceManager?.visibleDevices?.length ?? 0) === 0
             text: i18nc("@info", "No input devices found")
             explanation: i18nc("@info", "Connect controllers, keyboards, or mice to see them here.")
             icon.name: "input-gamepad"
@@ -194,7 +197,7 @@ Kirigami.ScrollablePage {
             helpfulAction: Kirigami.Action {
                 text: i18nc("@action:button", "Refresh Devices")
                 icon.name: "view-refresh"
-                onTriggered: deviceManager.refresh()
+                onTriggered: deviceManager?.refresh()
             }
         }
     }
@@ -300,9 +303,10 @@ Kirigami.ScrollablePage {
         Repeater {
             model: deviceListRoot.deviceModel
 
-            DraggableDeviceCard {
+            delegate: DraggableDeviceCard {
                 Layout.fillWidth: true
                 
+                required property var modelData
                 device: modelData
                 instanceCount: deviceListRoot.instanceCount
                 
@@ -349,12 +353,16 @@ Kirigami.ScrollablePage {
         signal identify(int eventNumber)
 
         property bool isDragging: false
+        
+        // Guard against undefined device
+        visible: deviceCard.device !== undefined && deviceCard.device !== null
 
         contentItem: RowLayout {
             spacing: Kirigami.Units.smallSpacing
 
             Kirigami.Icon {
                 source: {
+                    if (!deviceCard.device) return "input-gamepad"
                     switch (deviceCard.device.type) {
                         case "controller": return "input-gamepad"
                         case "keyboard": return "input-keyboard"
@@ -371,13 +379,13 @@ Kirigami.ScrollablePage {
                 spacing: 0
 
                 QQC2.Label {
-                    text: deviceCard.device.name
+                    text: deviceCard.device?.name ?? ""
                     elide: Text.ElideRight
                     Layout.fillWidth: true
                 }
 
                 QQC2.Label {
-                    text: deviceCard.device.path
+                    text: deviceCard.device?.path ?? ""
                     font: Kirigami.Theme.smallFont
                     opacity: 0.7
                     elide: Text.ElideMiddle
@@ -387,10 +395,14 @@ Kirigami.ScrollablePage {
 
             // Assignment indicator
             Kirigami.Chip {
-                visible: deviceCard.device.assigned
-                text: i18nc("@info", "Player %1", deviceCard.device.assignedInstance + 1)
+                visible: deviceCard.device?.assigned ?? false
+                text: i18nc("@info", "Player %1", (deviceCard.device?.assignedInstance ?? 0) + 1)
                 closable: true
-                onRemoved: deviceCard.assign(deviceCard.device.eventNumber, -1)
+                onRemoved: {
+                    if (deviceCard.device) {
+                        deviceCard.assign(deviceCard.device.eventNumber, -1)
+                    }
+                }
             }
 
             // Quick assign buttons
@@ -398,14 +410,19 @@ Kirigami.ScrollablePage {
                 model: deviceCard.instanceCount
                 
                 QQC2.Button {
+                    required property int index
                     text: (index + 1).toString()
-                    visible: !deviceCard.device.assigned
+                    visible: !(deviceCard.device?.assigned ?? true)
                     flat: true
                     
                     QQC2.ToolTip.visible: hovered
                     QQC2.ToolTip.text: i18nc("@info:tooltip", "Assign to Player %1", index + 1)
                     
-                    onClicked: deviceCard.assign(deviceCard.device.eventNumber, index)
+                    onClicked: {
+                        if (deviceCard.device) {
+                            deviceCard.assign(deviceCard.device.eventNumber, index)
+                        }
+                    }
                 }
             }
 
@@ -413,31 +430,33 @@ Kirigami.ScrollablePage {
             QQC2.Button {
                 icon.name: "flashlight-on"
                 flat: true
-                visible: deviceCard.device.type === "controller"
+                visible: deviceCard.device?.type === "controller"
                 
                 QQC2.ToolTip.visible: hovered
                 QQC2.ToolTip.text: i18nc("@info:tooltip", "Identify (vibrate controller)")
                 
-                onClicked: deviceCard.identify(deviceCard.device.eventNumber)
+                onClicked: {
+                    if (deviceCard.device) {
+                        deviceCard.identify(deviceCard.device.eventNumber)
+                    }
+                }
             }
         }
 
         // Drag support
         Drag.active: dragArea.drag.active
         Drag.keys: ["application/x-couchplay-device"]
-        Drag.mimeData: { "text/plain": deviceCard.device.eventNumber.toString() }
+        Drag.mimeData: { "text/plain": (deviceCard.device?.eventNumber ?? 0).toString() }
         Drag.dragType: Drag.Automatic
         
         MouseArea {
             id: dragArea
             anchors.fill: parent
+            z: -1  // Place behind contentItem so buttons receive clicks
             drag.target: deviceCard.isDragging ? deviceCard : undefined
             
             onPressed: {
                 deviceCard.isDragging = true
-                deviceCard.grabToImage(function(result) {
-                    deviceCard.Drag.imageSource = result.url
-                })
             }
             onReleased: {
                 deviceCard.isDragging = false

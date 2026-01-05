@@ -14,19 +14,6 @@ static const QString INTERFACE_NAME = QStringLiteral("io.github.hikaps.CouchPlay
 CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
     : QObject(parent)
 {
-    checkAvailability();
-}
-
-CouchPlayHelperClient::~CouchPlayHelperClient()
-{
-    // Restore all devices on destruction
-    if (m_available) {
-        restoreAllDevices();
-    }
-}
-
-void CouchPlayHelperClient::checkAvailability()
-{
     m_interface = new QDBusInterface(
         SERVICE_NAME,
         OBJECT_PATH,
@@ -35,19 +22,42 @@ void CouchPlayHelperClient::checkAvailability()
         this
     );
 
+    if (!m_interface->isValid()) {
+        qWarning() << "CouchPlay helper interface not valid:" << m_interface->lastError().message();
+        qWarning() << "Run install-helper.sh to set it up.";
+        m_available = false;
+        return;
+    }
+
+    // Verify we can actually call a method
+    QDBusReply<QString> reply = m_interface->call(QStringLiteral("Version"));
+    if (reply.isValid()) {
+        qWarning() << "CouchPlay helper connected, version:" << reply.value();
+        m_available = true;
+    } else {
+        qWarning() << "CouchPlay helper call failed:" << reply.error().message();
+        m_available = false;
+    }
+}
+
+CouchPlayHelperClient::~CouchPlayHelperClient()
+{
+    if (m_available) {
+        restoreAllDevices();
+    }
+}
+
+void CouchPlayHelperClient::checkAvailability()
+{
     bool wasAvailable = m_available;
-    m_available = m_interface->isValid();
+    m_available = m_interface && m_interface->isValid();
 
     if (m_available != wasAvailable) {
         Q_EMIT availabilityChanged();
     }
-
-    if (!m_available) {
-        qWarning() << "CouchPlay helper is not available. Run install-helper.sh to set it up.";
-    }
 }
 
-bool CouchPlayHelperClient::setDeviceOwner(const QString &devicePath, int uid, int gid)
+bool CouchPlayHelperClient::setDeviceOwner(const QString &devicePath, int uid)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -55,10 +65,9 @@ bool CouchPlayHelperClient::setDeviceOwner(const QString &devicePath, int uid, i
     }
 
     QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("SetDeviceOwner"),
+        QStringLiteral("ChangeDeviceOwner"),
         devicePath,
-        static_cast<uint>(uid),
-        static_cast<uint>(gid)
+        static_cast<uint>(uid)
     );
 
     if (!reply.isValid()) {
@@ -76,7 +85,7 @@ bool CouchPlayHelperClient::restoreDeviceOwner(const QString &devicePath)
     }
 
     QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("RestoreDeviceOwner"),
+        QStringLiteral("ResetDeviceOwner"),
         devicePath
     );
 
@@ -94,7 +103,7 @@ void CouchPlayHelperClient::restoreAllDevices()
         return;
     }
 
-    m_interface->call(QStringLiteral("RestoreAllDevices"));
+    m_interface->call(QStringLiteral("ResetAllDevices"));
 }
 
 bool CouchPlayHelperClient::createUser(const QString &username)
@@ -104,9 +113,14 @@ bool CouchPlayHelperClient::createUser(const QString &username)
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
+    // The helper expects username and fullName parameters
+    // Use a default fullName based on the username
+    QString fullName = QStringLiteral("CouchPlay Player (%1)").arg(username);
+
+    QDBusReply<uint> reply = m_interface->call(
         QStringLiteral("CreateUser"),
-        username
+        username,
+        fullName
     );
 
     if (!reply.isValid()) {
@@ -114,5 +128,6 @@ bool CouchPlayHelperClient::createUser(const QString &username)
         return false;
     }
 
-    return reply.value();
+    // CreateUser returns the UID of the new user, or 0 on failure
+    return reply.value() > 0;
 }

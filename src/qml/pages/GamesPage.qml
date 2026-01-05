@@ -17,12 +17,13 @@ Kirigami.ScrollablePage {
         Kirigami.Action {
             icon.name: "view-refresh"
             text: i18nc("@action:button", "Refresh")
-            onTriggered: gameLibrary.refresh()
+            onTriggered: gameLibrary?.refresh()
         },
         Kirigami.Action {
             icon.name: "steam"
             text: i18nc("@action:button", "Import from Steam")
             onTriggered: {
+                if (!gameLibrary) return
                 steamGames = gameLibrary.getSteamGames()
                 if (steamGames.length === 0) {
                     applicationWindow().showPassiveNotification(
@@ -45,7 +46,7 @@ Kirigami.ScrollablePage {
     ]
 
     Connections {
-        target: gameLibrary
+        target: gameLibrary ?? null
         function onErrorOccurred(message) {
             applicationWindow().showPassiveNotification(message, "long")
         }
@@ -79,7 +80,7 @@ Kirigami.ScrollablePage {
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             text: {
-                const count = gameLibrary.games.length
+                const count = gameLibrary?.games?.length ?? 0
                 if (count === 0) {
                     return i18nc("@info", "No games in library. Import from Steam or add games manually.")
                 } else if (count === 1) {
@@ -88,7 +89,7 @@ Kirigami.ScrollablePage {
                     return i18nc("@info", "%1 games in library", count)
                 }
             }
-            type: gameLibrary.games.length === 0 ? Kirigami.MessageType.Information : Kirigami.MessageType.Positive
+            type: (gameLibrary?.games?.length ?? 0) === 0 ? Kirigami.MessageType.Information : Kirigami.MessageType.Positive
             visible: true
         }
 
@@ -98,10 +99,10 @@ Kirigami.ScrollablePage {
             columns: root.width > Kirigami.Units.gridUnit * 50 ? 3 : (root.width > Kirigami.Units.gridUnit * 30 ? 2 : 1)
             columnSpacing: Kirigami.Units.largeSpacing
             rowSpacing: Kirigami.Units.largeSpacing
-            visible: gameLibrary.games.length > 0
+            visible: (gameLibrary?.games?.length ?? 0) > 0
 
             Repeater {
-                model: gameLibrary.games
+                model: gameLibrary?.games ?? []
 
                 delegate: Kirigami.Card {
                     Layout.fillWidth: true
@@ -163,7 +164,7 @@ Kirigami.ScrollablePage {
         Kirigami.PlaceholderMessage {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: gameLibrary.games.length === 0
+            visible: (gameLibrary?.games?.length ?? 0) === 0
             icon.name: "applications-games"
             text: i18nc("@info:placeholder", "No Games in Library")
             explanation: i18nc("@info", "Add games to quickly launch them in split-screen sessions.")
@@ -172,6 +173,7 @@ Kirigami.ScrollablePage {
                 icon.name: "steam"
                 text: i18nc("@action:button", "Import from Steam")
                 onTriggered: {
+                    if (!gameLibrary) return
                     steamGames = gameLibrary.getSteamGames()
                     if (steamGames.length === 0) {
                         applicationWindow().showPassiveNotification(
@@ -186,7 +188,7 @@ Kirigami.ScrollablePage {
         // Tips section
         Kirigami.Card {
             Layout.fillWidth: true
-            visible: gameLibrary.games.length > 0
+            visible: (gameLibrary?.games?.length ?? 0) > 0
 
             header: Kirigami.Heading {
                 text: i18nc("@title", "Tips")
@@ -241,7 +243,7 @@ Kirigami.ScrollablePage {
         standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel
         
         onAccepted: {
-            gameLibrary.removeGame(deleteGameName)
+            gameLibrary?.removeGame(deleteGameName)
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Game removed from library"))
         }
@@ -265,7 +267,7 @@ Kirigami.ScrollablePage {
                 icon.name: "list-add"
                 enabled: gameNameField.text.length > 0 && gameCommandField.text.length > 0
                 onTriggered: {
-                    if (gameLibrary.addGame(gameNameField.text, gameCommandField.text, gameIconField.text)) {
+                    if (gameLibrary?.addGame(gameNameField.text, gameCommandField.text, gameIconField.text)) {
                         addGameDialog.close()
                         applicationWindow().showPassiveNotification(
                             i18nc("@info", "Game '%1' added to library", gameNameField.text))
@@ -351,7 +353,7 @@ Kirigami.ScrollablePage {
                     for (let i = 0; i < steamGames.length; i++) {
                         const game = steamGames[i]
                         if (importSteamDialog.selectedGames[game.appId]) {
-                            if (gameLibrary.addGame(game.name, game.command, "")) {
+                            if (gameLibrary?.addGame(game.name, game.command, "")) {
                                 imported++
                             }
                         }

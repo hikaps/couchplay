@@ -11,12 +11,13 @@ Kirigami.ScrollablePage {
     title: i18nc("@title", "Users")
 
     required property var userManager
+    required property var helperClient
 
     actions: [
         Kirigami.Action {
             icon.name: "view-refresh"
             text: i18nc("@action:button", "Refresh")
-            onTriggered: userManager.refresh()
+            onTriggered: userManager?.refresh()
         },
         Kirigami.Action {
             icon.name: "list-add"
@@ -30,11 +31,18 @@ Kirigami.ScrollablePage {
     ]
 
     Connections {
-        target: userManager
+        target: userManager ?? null
         function onUserCreated(username) {
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "User '%1' created successfully", username))
         }
+        function onErrorOccurred(message) {
+            applicationWindow().showPassiveNotification(message, "long")
+        }
+    }
+
+    Connections {
+        target: helperClient ?? null
         function onErrorOccurred(message) {
             applicationWindow().showPassiveNotification(message, "long")
         }
@@ -61,24 +69,32 @@ Kirigami.ScrollablePage {
             }
         }
 
+        // Helper status message
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            text: i18nc("@info", "The CouchPlay Helper service is not available. User creation is disabled. Please run: sudo ./scripts/install-helper.sh install")
+            type: Kirigami.MessageType.Error
+            visible: !(helperClient?.available ?? false)
+        }
+
         // User count summary
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             text: {
-                const count = userManager.users.length
+                const count = userManager?.users?.length ?? 0
                 if (count === 1) {
                     return i18nc("@info", "Only 1 user available. Add more users to enable split-screen multiplayer.")
                 } else {
                     return i18nc("@info", "%1 users available for split-screen sessions.", count)
                 }
             }
-            type: userManager.users.length < 2 ? Kirigami.MessageType.Warning : Kirigami.MessageType.Positive
+            type: (userManager?.users?.length ?? 0) < 2 ? Kirigami.MessageType.Warning : Kirigami.MessageType.Positive
             visible: true
         }
 
         // User list
         Repeater {
-            model: userManager.users
+            model: userManager?.users ?? []
 
             delegate: Kirigami.Card {
                 Layout.fillWidth: true
@@ -148,7 +164,7 @@ Kirigami.ScrollablePage {
         // Empty state
         Kirigami.PlaceholderMessage {
             Layout.fillWidth: true
-            visible: userManager.users.length === 0
+            visible: (userManager?.users?.length ?? 0) === 0
             icon.name: "user"
             text: i18nc("@info:placeholder", "No Users Found")
             explanation: i18nc("@info", "Unable to detect user accounts. This is unexpected.")
@@ -156,7 +172,7 @@ Kirigami.ScrollablePage {
             helpfulAction: Kirigami.Action {
                 icon.name: "view-refresh"
                 text: i18nc("@action:button", "Refresh")
-                onTriggered: userManager.refresh()
+                onTriggered: userManager?.refresh()
             }
         }
 
@@ -268,10 +284,18 @@ Kirigami.ScrollablePage {
             Kirigami.Action {
                 text: i18nc("@action:button", "Create User")
                 icon.name: "list-add-user"
-                enabled: usernameField.text.length > 0 && userManager.isValidUsername(usernameField.text) && !userManager.userExists(usernameField.text)
+                enabled: usernameField.text.length > 0 && userManager.isValidUsername(usernameField.text) && !userManager.userExists(usernameField.text) && (helperClient?.available ?? false)
                 onTriggered: {
-                    if (userManager.createUser(usernameField.text)) {
-                        addUserDialog.close()
+                    if (helperClient && helperClient.available) {
+                        if (helperClient.createUser(usernameField.text)) {
+                            applicationWindow().showPassiveNotification(
+                                i18nc("@info", "User '%1' created successfully", usernameField.text))
+                            userManager.refresh()
+                            addUserDialog.close()
+                        }
+                    } else {
+                        applicationWindow().showPassiveNotification(
+                            i18nc("@info", "Helper service not available. Please run install-helper.sh"), "long")
                     }
                 }
             }

@@ -197,6 +197,13 @@ bool SessionManager::deleteProfile(const QString &name)
         return false;
     }
 
+    // Clear current profile name if we just deleted the current profile
+    if (m_currentProfile.name == name) {
+        m_currentProfile.name = QString();
+        m_currentProfile.filePath = QString();
+        Q_EMIT currentProfileChanged();
+    }
+
     refreshProfiles();
     return true;
 }
@@ -211,8 +218,12 @@ void SessionManager::setCurrentLayout(const QString &layout)
 
 void SessionManager::setInstanceCount(int count)
 {
-    if (count < 1) count = 1;
+    if (count < 2) count = 2; // Minimum 2 for split-screen
     if (count > 4) count = 4; // Max 4 for now
+
+    if (m_currentProfile.instances.size() == count) {
+        return; // No change
+    }
 
     while (m_currentProfile.instances.size() < count) {
         InstanceConfig config;
@@ -353,4 +364,42 @@ QVariantList SessionManager::instancesAsVariant() const
         list.append(getInstanceConfig(i));
     }
     return list;
+}
+
+void SessionManager::recalculateOutputResolutions(int screenWidth, int screenHeight)
+{
+    int count = m_currentProfile.instances.size();
+    if (count < 1) {
+        return;
+    }
+
+    QString layout = m_currentProfile.layout;
+
+    for (int i = 0; i < count; ++i) {
+        InstanceConfig &inst = m_currentProfile.instances[i];
+
+        if (layout == QStringLiteral("horizontal")) {
+            inst.outputWidth = screenWidth / count;
+            inst.outputHeight = screenHeight;
+        } else if (layout == QStringLiteral("vertical")) {
+            inst.outputWidth = screenWidth;
+            inst.outputHeight = screenHeight / count;
+        } else if (layout == QStringLiteral("grid")) {
+            int cols = (count <= 2) ? count : 2;
+            int rows = (count + cols - 1) / cols;
+            inst.outputWidth = screenWidth / cols;
+            inst.outputHeight = screenHeight / rows;
+        } else {
+            // multi-monitor or unknown: use full resolution
+            inst.outputWidth = screenWidth;
+            inst.outputHeight = screenHeight;
+        }
+
+        // Also set internal resolution to match output by default
+        // This avoids unnecessary scaling and gives best performance
+        inst.internalWidth = inst.outputWidth;
+        inst.internalHeight = inst.outputHeight;
+    }
+
+    Q_EMIT instancesChanged();
 }

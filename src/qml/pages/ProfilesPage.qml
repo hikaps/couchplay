@@ -26,13 +26,13 @@ Kirigami.ScrollablePage {
             icon.name: "list-add"
             text: i18nc("@action:button", "New Profile")
             onTriggered: {
-                applicationWindow().pageStack.push(sessionSetupPage)
+                applicationWindow().pushSessionSetupPage()
             }
         },
         Kirigami.Action {
             icon.name: "view-refresh"
             text: i18nc("@action:button", "Refresh")
-            onTriggered: sessionManager.refreshProfiles()
+            onTriggered: sessionManager?.refreshProfiles()
         }
     ]
 
@@ -46,7 +46,7 @@ Kirigami.ScrollablePage {
         property string profileName: ""
 
         onAccepted: {
-            if (sessionManager.deleteProfile(profileName)) {
+            if (sessionManager?.deleteProfile(profileName)) {
                 applicationWindow().showPassiveNotification(
                     i18nc("@info", "Profile deleted: %1", profileName))
             }
@@ -56,7 +56,7 @@ Kirigami.ScrollablePage {
     // Main content
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
-        visible: sessionManager && sessionManager.savedProfiles.length > 0
+        visible: (sessionManager?.savedProfiles?.length ?? 0) > 0
 
         // Profile grid
         GridLayout {
@@ -69,23 +69,27 @@ Kirigami.ScrollablePage {
                 model: sessionManager ? sessionManager.savedProfiles : []
 
                 delegate: ProfileCard {
+                    id: profileDelegate
                     Layout.fillWidth: true
                     Layout.preferredHeight: Kirigami.Units.gridUnit * 10
 
+                    required property var modelData
+                    required property int index
+
                     profile: modelData
-                    isCurrentProfile: sessionManager && sessionManager.currentProfileName === modelData.name
+                    isCurrentProfile: sessionManager && modelData && sessionManager.currentProfileName === modelData.name
 
                     onLoadProfile: {
-                        if (sessionManager.loadProfile(modelData.name)) {
+                        if (modelData && sessionManager?.loadProfile(modelData.name)) {
                             applicationWindow().showPassiveNotification(
                                 i18nc("@info", "Loaded profile: %1", modelData.name))
-                            applicationWindow().pageStack.push(sessionSetupPage)
+                            applicationWindow().pushSessionSetupPage()
                         }
                     }
 
                     onLaunchProfile: {
-                        if (sessionManager.loadProfile(modelData.name)) {
-                            if (sessionRunner.start()) {
+                        if (modelData && sessionManager?.loadProfile(modelData.name)) {
+                            if (sessionRunner?.start()) {
                                 applicationWindow().showPassiveNotification(
                                     i18nc("@info", "Starting session: %1", modelData.name))
                             }
@@ -93,8 +97,10 @@ Kirigami.ScrollablePage {
                     }
 
                     onDeleteProfile: {
-                        deleteDialog.profileName = modelData.name
-                        deleteDialog.open()
+                        if (modelData) {
+                            deleteDialog.profileName = modelData.name
+                            deleteDialog.open()
+                        }
                     }
                 }
             }
@@ -104,7 +110,7 @@ Kirigami.ScrollablePage {
     // Empty state
     Kirigami.PlaceholderMessage {
         anchors.centerIn: parent
-        visible: !sessionManager || sessionManager.savedProfiles.length === 0
+        visible: (sessionManager?.savedProfiles?.length ?? 0) === 0
         width: parent.width - Kirigami.Units.gridUnit * 4
 
         text: i18nc("@info", "No Saved Profiles")
@@ -115,7 +121,7 @@ Kirigami.ScrollablePage {
             icon.name: "list-add"
             text: i18nc("@action:button", "Create New Session")
             onTriggered: {
-                applicationWindow().pageStack.push(sessionSetupPage)
+                applicationWindow().pushSessionSetupPage()
             }
         }
     }
@@ -132,7 +138,7 @@ Kirigami.ScrollablePage {
         signal deleteProfile()
 
         banner {
-            title: profile.name
+            title: profile?.name ?? ""
             titleIcon: "bookmark"
         }
 
@@ -142,10 +148,12 @@ Kirigami.ScrollablePage {
             // Layout info
             RowLayout {
                 spacing: Kirigami.Units.smallSpacing
+                visible: profile !== undefined
 
                 Kirigami.Icon {
                     source: {
-                        switch (profile.layout) {
+                        const layout = profile?.layout ?? "horizontal"
+                        switch (layout) {
                             case "horizontal": return "view-split-left-right"
                             case "vertical": return "view-split-top-bottom"
                             case "grid": return "view-grid"
@@ -159,12 +167,13 @@ Kirigami.ScrollablePage {
 
                 Controls.Label {
                     text: {
-                        switch (profile.layout) {
+                        const layout = profile?.layout ?? "horizontal"
+                        switch (layout) {
                             case "horizontal": return i18nc("@info", "Side by Side")
                             case "vertical": return i18nc("@info", "Top and Bottom")
                             case "grid": return i18nc("@info", "Grid")
                             case "multi-monitor": return i18nc("@info", "Multi-Monitor")
-                            default: return profile.layout
+                            default: return layout
                         }
                     }
                     opacity: 0.7

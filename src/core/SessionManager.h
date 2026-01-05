@@ -97,6 +97,7 @@ public:
     Q_INVOKABLE void setInstanceResolution(int index, int internalW, int internalH, int outputW, int outputH);
     Q_INVOKABLE void setInstanceDevices(int index, const QList<int> &devices);
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
+    Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
 
     // Property getters/setters
     QString currentProfileName() const { return m_currentProfile.name; }

@@ -10,6 +10,9 @@ Kirigami.ScrollablePage {
     id: root
     title: i18nc("@title", "Settings")
 
+    // Reference to session runner for settings that affect it
+    property var sessionRunner: null
+
     property bool helperInstalled: false
     property bool helperRunning: false
 
@@ -20,6 +23,7 @@ Kirigami.ScrollablePage {
     property string scalingMode: "fit"
     property string filterMode: "linear"
     property bool steamIntegration: true
+    property bool borderlessWindows: false  // Default: show window decorations for resizing
 
     actions: [
         Kirigami.Action {
@@ -44,6 +48,7 @@ Kirigami.ScrollablePage {
         // General Settings Section
         Kirigami.FormLayout {
             Layout.fillWidth: true
+            wideMode: false
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -87,6 +92,7 @@ Kirigami.ScrollablePage {
         // Gamescope Settings Section
         Kirigami.FormLayout {
             Layout.fillWidth: true
+            wideMode: false
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -143,11 +149,28 @@ Kirigami.ScrollablePage {
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }
+
+            Controls.CheckBox {
+                id: borderlessCheck
+                Kirigami.FormData.label: i18nc("@option:check", "Borderless windows:")
+                checked: root.sessionRunner ? root.sessionRunner.borderlessWindows : root.borderlessWindows
+                onToggled: {
+                    root.borderlessWindows = checked
+                    if (root.sessionRunner) {
+                        root.sessionRunner.borderlessWindows = checked
+                    }
+                }
+
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Use borderless windows without decorations. Disable for resizable windows with title bars.")
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.delay: 1000
+            }
         }
 
         // Audio Settings Section
         Kirigami.FormLayout {
             Layout.fillWidth: true
+            wideMode: false
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -187,6 +210,7 @@ Kirigami.ScrollablePage {
         // Helper Service Section
         Kirigami.FormLayout {
             Layout.fillWidth: true
+            wideMode: false
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -255,6 +279,7 @@ Kirigami.ScrollablePage {
         Kirigami.FormLayout {
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.largeSpacing
+            wideMode: false
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -413,6 +438,7 @@ Kirigami.ScrollablePage {
             root.scalingMode = "fit"
             root.filterMode = "linear"
             root.steamIntegration = true
+            root.borderlessWindows = false
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Settings reset to defaults"))
         }

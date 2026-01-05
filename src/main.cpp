@@ -43,16 +43,7 @@ int main(int argc, char *argv[])
         QQuickStyle::setStyle(QStringLiteral("org.kde.desktop"));
     }
 
-    // Register QML types
-    qmlRegisterType<DeviceManager>("io.github.hikaps.couchplay", 1, 0, "DeviceManager");
-    qmlRegisterType<SessionManager>("io.github.hikaps.couchplay", 1, 0, "SessionManager");
-    qmlRegisterType<SessionRunner>("io.github.hikaps.couchplay", 1, 0, "SessionRunner");
-    qmlRegisterType<GamescopeInstance>("io.github.hikaps.couchplay", 1, 0, "GamescopeInstance");
-    qmlRegisterType<UserManager>("io.github.hikaps.couchplay", 1, 0, "UserManager");
-    qmlRegisterType<MonitorManager>("io.github.hikaps.couchplay", 1, 0, "MonitorManager");
-    qmlRegisterType<GameLibrary>("io.github.hikaps.couchplay", 1, 0, "GameLibrary");
-    qmlRegisterType<AudioManager>("io.github.hikaps.couchplay", 1, 0, "AudioManager");
-    qmlRegisterType<CouchPlayHelperClient>("io.github.hikaps.couchplay", 1, 0, "HelperClient");
+    // QML types are registered via QML_ELEMENT macro in headers
 
     // Create QML engine
     QQmlApplicationEngine engine;

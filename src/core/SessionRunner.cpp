@@ -46,6 +46,14 @@ void SessionRunner::setDeviceManager(DeviceManager *manager)
     }
 }
 
+void SessionRunner::setBorderlessWindows(bool borderless)
+{
+    if (m_borderlessWindows != borderless) {
+        m_borderlessWindows = borderless;
+        Q_EMIT borderlessWindowsChanged();
+    }
+}
+
 bool SessionRunner::start()
 {
     if (!m_sessionManager) {
@@ -106,6 +114,11 @@ bool SessionRunner::start()
         config[QStringLiteral("scalingMode")] = instConfig.scalingMode;
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
         config[QStringLiteral("gameCommand")] = instConfig.gameCommand;
+        config[QStringLiteral("borderless")] = m_borderlessWindows;
+        
+        // Mark secondary users so gamescope uses appropriate backend
+        bool isSecondaryUser = (i > 0) && !instConfig.username.isEmpty();
+        config[QStringLiteral("isSecondaryUser")] = isSecondaryUser;
 
         // Get device paths for this instance
         if (m_deviceManager) {

@@ -15,20 +15,53 @@ Kirigami.ScrollablePage {
     required property var sessionManager
     required property var sessionRunner
     required property var deviceManager
+    required property var monitorManager
 
     // Sync with session manager
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
 
+    // Helper function to get primary monitor size
+    function getPrimaryMonitorSize() {
+        if (!monitorManager) return { width: 1920, height: 1080 }
+        let monitors = monitorManager.monitors
+        for (let i = 0; i < monitors.length; i++) {
+            if (monitors[i].primary) {
+                return { width: monitors[i].width, height: monitors[i].height }
+            }
+        }
+        // Fallback to first monitor or default
+        if (monitors.length > 0) {
+            return { width: monitors[0].width, height: monitors[0].height }
+        }
+        return { width: 1920, height: 1080 }
+    }
+
     onLayoutModeChanged: {
         if (sessionManager) {
             sessionManager.currentLayout = layoutMode
+            // Recalculate output resolutions based on screen size
+            let screenSize = getPrimaryMonitorSize()
+            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+            // Show feedback to user
+            let layoutName = ""
+            switch (layoutMode) {
+                case "horizontal": layoutName = i18nc("@info", "Side by Side"); break
+                case "vertical": layoutName = i18nc("@info", "Top and Bottom"); break
+                case "grid": layoutName = i18nc("@info", "Grid"); break
+                case "multi-monitor": layoutName = i18nc("@info", "Multi-Monitor"); break
+            }
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "Layout: %1", layoutName))
         }
     }
 
     onInstanceCountChanged: {
         if (sessionManager && sessionManager.instanceCount !== instanceCount) {
             sessionManager.instanceCount = instanceCount
+            // Recalculate output resolutions when instance count changes
+            let screenSize = getPrimaryMonitorSize()
+            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
         }
     }
 
@@ -50,7 +83,7 @@ Kirigami.ScrollablePage {
             icon.name: "go-next"
             text: i18nc("@action:button", "Assign Devices")
             onTriggered: {
-                applicationWindow().pageStack.push(deviceAssignmentPage)
+                applicationWindow().pushDeviceAssignmentPage()
             }
         },
         Kirigami.Action {
@@ -64,12 +97,15 @@ Kirigami.ScrollablePage {
     Kirigami.PromptDialog {
         id: saveProfileDialog
         title: i18nc("@title:dialog", "Save Profile")
-        subtitle: i18nc("@info", "Enter a name for this session profile")
+        subtitle: sessionManager?.currentProfileName 
+            ? i18nc("@info", "Save changes to '%1' or enter a new name", sessionManager.currentProfileName)
+            : i18nc("@info", "Enter a name for this session profile")
         standardButtons: Kirigami.Dialog.Save | Kirigami.Dialog.Cancel
 
         Controls.TextField {
             id: profileNameField
             placeholderText: i18nc("@info:placeholder", "Profile name")
+            text: sessionManager?.currentProfileName ?? ""
             Layout.fillWidth: true
         }
 
@@ -78,8 +114,12 @@ Kirigami.ScrollablePage {
                 sessionManager.saveProfile(profileNameField.text.trim())
                 applicationWindow().showPassiveNotification(
                     i18nc("@info", "Profile saved: %1", profileNameField.text))
-                profileNameField.text = ""
             }
+        }
+        
+        onOpened: {
+            // Pre-fill with current profile name when editing
+            profileNameField.text = sessionManager?.currentProfileName ?? ""
         }
     }
 
@@ -89,7 +129,7 @@ Kirigami.ScrollablePage {
         // Running session status
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            visible: sessionRunner && sessionRunner.running
+            visible: sessionRunner?.running ?? false
             type: Kirigami.MessageType.Positive
             text: i18nc("@info", "Session running: %1 instance(s) active", 
                        sessionRunner ? sessionRunner.runningInstanceCount : 0)
@@ -200,6 +240,16 @@ Kirigami.ScrollablePage {
                 Layout.fillWidth: true
 
                 required property int index
+                
+                // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
+                readonly property string labelUser: i18nc("@label", "User:")
+                readonly property string labelResolution: i18nc("@label", "Game Resolution:")
+                readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
+                readonly property string labelScaling: i18nc("@label", "Scaling:")
+                readonly property string labelDevices: i18nc("@label", "Devices:")
+                readonly property string textCurrentUser: i18nc("@item", "Current User")
+                readonly property string textNoneAssigned: i18nc("@info", "None assigned")
+                readonly property string textAssign: i18nc("@action:button", "Assign...")
 
                 header: Kirigami.Heading {
                     text: i18nc("@title", "Player %1", instanceCard.index + 1)
@@ -208,15 +258,29 @@ Kirigami.ScrollablePage {
                 }
 
                 contentItem: Kirigami.FormLayout {
+                    // Prevent binding loop on wideMode
+                    wideMode: false
+                    
                     // Get current config for this instance
                     property var config: sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
 
+                    // Update spinboxes when config changes (e.g., after layout recalculation)
+                    Connections {
+                        target: sessionManager
+                        function onInstancesChanged() {
+                            let cfg = sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
+                            resWidthSpin.value = cfg.internalWidth || 1920
+                            resHeightSpin.value = cfg.internalHeight || 1080
+                            refreshSpin.value = cfg.refreshRate || 60
+                        }
+                    }
+
                     Controls.ComboBox {
                         id: userCombo
-                        Kirigami.FormData.label: i18nc("@label", "User:")
+                        Kirigami.FormData.label: instanceCard.labelUser
                         model: instanceCard.index === 0 
-                            ? [i18nc("@item", "Current User")]
-                            : [i18nc("@item", "Current User"), "player2", "player3", "player4"]
+                            ? [instanceCard.textCurrentUser]
+                            : [instanceCard.textCurrentUser, "player2", "player3", "player4"]
                         currentIndex: 0
                         Layout.fillWidth: true
                         
@@ -229,7 +293,7 @@ Kirigami.ScrollablePage {
                     }
 
                     RowLayout {
-                        Kirigami.FormData.label: i18nc("@label", "Game Resolution:")
+                        Kirigami.FormData.label: instanceCard.labelResolution
                         spacing: Kirigami.Units.smallSpacing
 
                         Controls.SpinBox {
@@ -272,7 +336,7 @@ Kirigami.ScrollablePage {
 
                     Controls.SpinBox {
                         id: refreshSpin
-                        Kirigami.FormData.label: i18nc("@label", "Refresh Rate:")
+                        Kirigami.FormData.label: instanceCard.labelRefreshRate
                         from: 30
                         to: 240
                         value: parent.config.refreshRate || 60
@@ -289,7 +353,7 @@ Kirigami.ScrollablePage {
                     }
 
                     Controls.ComboBox {
-                        Kirigami.FormData.label: i18nc("@label", "Scaling:")
+                        Kirigami.FormData.label: instanceCard.labelScaling
                         model: ["fit", "stretch", "integer", "auto"]
                         currentIndex: 0
                         Layout.fillWidth: true
@@ -297,23 +361,25 @@ Kirigami.ScrollablePage {
 
                     // Show assigned devices
                     RowLayout {
-                        Kirigami.FormData.label: i18nc("@label", "Devices:")
+                        Kirigami.FormData.label: instanceCard.labelDevices
                         spacing: Kirigami.Units.smallSpacing
 
                         Controls.Label {
                             text: {
-                                if (!deviceManager) return i18nc("@info", "None assigned")
+                                if (!deviceManager) return instanceCard.textNoneAssigned
                                 let paths = deviceManager.getDevicePathsForInstance(instanceCard.index)
-                                if (paths.length === 0) return i18nc("@info", "None assigned")
-                                return i18ncp("@info", "%1 device", "%1 devices", paths.length)
+                                if (paths.length === 0) return instanceCard.textNoneAssigned
+                                return paths.length === 1 
+                                    ? (paths.length + " device")
+                                    : (paths.length + " devices")
                             }
                             opacity: 0.7
                         }
 
                         Controls.Button {
-                            text: i18nc("@action:button", "Assign...")
+                            text: instanceCard.textAssign
                             flat: true
-                            onClicked: applicationWindow().pageStack.push(deviceAssignmentPage)
+                            onClicked: applicationWindow().pushDeviceAssignmentPage()
                         }
                     }
                 }

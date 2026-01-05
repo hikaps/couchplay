@@ -29,7 +29,7 @@ public:
     /**
      * @brief Set device ownership for a specific user
      */
-    Q_INVOKABLE bool setDeviceOwner(const QString &devicePath, int uid, int gid);
+    Q_INVOKABLE bool setDeviceOwner(const QString &devicePath, int uid);
 
     /**
      * @brief Restore device ownership to root:input

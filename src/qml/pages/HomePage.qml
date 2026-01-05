@@ -55,7 +55,7 @@ Kirigami.ScrollablePage {
 
                 // Session status indicator
                 Kirigami.Chip {
-                    visible: sessionRunner && sessionRunner.running
+                    visible: sessionRunner?.running ?? false
                     text: i18nc("@info", "%1 instances running", sessionRunner ? sessionRunner.runningInstanceCount : 0)
                     icon.name: "media-playback-start"
                     closable: true
@@ -71,7 +71,7 @@ Kirigami.ScrollablePage {
         // Active session banner
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            visible: sessionRunner && sessionRunner.running
+            visible: sessionRunner?.running ?? false
             type: Kirigami.MessageType.Positive
             text: i18nc("@info", "Session is running: %1", sessionRunner ? sessionRunner.status : "")
             
@@ -79,7 +79,7 @@ Kirigami.ScrollablePage {
                 Kirigami.Action {
                     text: i18nc("@action:button", "View Session")
                     icon.name: "view-visible"
-                    onTriggered: applicationWindow().pageStack.push(sessionSetupPage)
+                    onTriggered: applicationWindow().pushSessionSetupPage()
                 },
                 Kirigami.Action {
                     text: i18nc("@action:button", "Stop")
@@ -109,7 +109,7 @@ Kirigami.ScrollablePage {
                         sessionManager.newSession()
                     }
                     applicationWindow().pageStack.clear()
-                    applicationWindow().pageStack.push(sessionSetupPage)
+                    applicationWindow().pushSessionSetupPage()
                 }
             }
 
@@ -121,7 +121,7 @@ Kirigami.ScrollablePage {
                 badgeCount: sessionManager ? sessionManager.savedProfiles.length : 0
                 onClicked: {
                     applicationWindow().pageStack.clear()
-                    applicationWindow().pageStack.push(profilesPage)
+                    applicationWindow().pushProfilesPage()
                 }
             }
 
@@ -133,7 +133,7 @@ Kirigami.ScrollablePage {
                 badgeCount: deviceManager ? deviceManager.controllers.length : 0
                 onClicked: {
                     applicationWindow().pageStack.clear()
-                    applicationWindow().pageStack.push(deviceAssignmentPage)
+                    applicationWindow().pushDeviceAssignmentPage()
                 }
             }
         }
@@ -151,7 +151,7 @@ Kirigami.ScrollablePage {
             columns: Math.max(1, Math.floor(root.width / (Kirigami.Units.gridUnit * 16)))
             rowSpacing: Kirigami.Units.smallSpacing
             columnSpacing: Kirigami.Units.smallSpacing
-            visible: sessionManager && sessionManager.savedProfiles.length > 0
+            visible: (sessionManager?.savedProfiles?.length ?? 0) > 0
 
             Repeater {
                 // Show up to 4 recent profiles
@@ -221,27 +221,26 @@ Kirigami.ScrollablePage {
             explanation: i18nc("@info", "Create a new session and save it as a profile for quick access.")
             icon.name: "bookmark"
             Layout.fillWidth: true
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 6
 
             helpfulAction: Kirigami.Action {
                 icon.name: "list-add"
                 text: i18nc("@action:button", "Create New Session")
                 onTriggered: {
                     applicationWindow().pageStack.clear()
-                    applicationWindow().pageStack.push(sessionSetupPage)
+                    applicationWindow().pushSessionSetupPage()
                 }
             }
         }
 
         // View all profiles link
         Controls.Button {
-            visible: sessionManager && sessionManager.savedProfiles.length > 4
+            visible: (sessionManager?.savedProfiles?.length ?? 0) > 4
             text: i18nc("@action:button", "View all %1 profiles...", sessionManager ? sessionManager.savedProfiles.length : 0)
             flat: true
             Layout.alignment: Qt.AlignRight
             onClicked: {
                 applicationWindow().pageStack.clear()
-                applicationWindow().pageStack.push(profilesPage)
+                applicationWindow().pushProfilesPage()
             }
         }
 
@@ -330,7 +329,7 @@ Kirigami.ScrollablePage {
                 Controls.Button {
                     text: i18nc("@action:button", "Setup")
                     flat: true
-                    onClicked: applicationWindow().pageStack.push(settingsPage)
+                    onClicked: applicationWindow().pushSettingsPage()
                 }
             }
         }
@@ -377,7 +376,6 @@ Kirigami.ScrollablePage {
                         anchors.centerIn: parent
                         text: actionCard.badgeCount.toString()
                         color: Kirigami.Theme.highlightedTextColor
-                        font.bold: true
                         font: Kirigami.Theme.smallFont
                     }
                 }

@@ -37,6 +37,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(int runningInstanceCount READ runningInstanceCount NOTIFY runningInstanceCountChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
+    Q_PROPERTY(bool borderlessWindows READ borderlessWindows WRITE setBorderlessWindows NOTIFY borderlessWindowsChanged)
     
     // Dependencies
     Q_PROPERTY(SessionManager* sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
@@ -90,6 +91,9 @@ public:
     DeviceManager* deviceManager() const { return m_deviceManager; }
     void setDeviceManager(DeviceManager *manager);
 
+    bool borderlessWindows() const { return m_borderlessWindows; }
+    void setBorderlessWindows(bool borderless);
+
     /**
      * @brief Calculate window geometries for a given layout
      * @param layout Layout type: "horizontal", "vertical", "multi-monitor", "grid"
@@ -108,6 +112,7 @@ Q_SIGNALS:
     void instancesChanged();
     void sessionManagerChanged();
     void deviceManagerChanged();
+    void borderlessWindowsChanged();
     void errorOccurred(const QString &message);
     void sessionStarted();
     void sessionStopped();
@@ -132,4 +137,5 @@ private:
     CouchPlayHelperClient *m_helperClient = nullptr;
     QString m_status;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
+    bool m_borderlessWindows = false; // Default to decorated windows
 };

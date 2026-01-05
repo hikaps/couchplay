@@ -47,6 +47,10 @@ Kirigami.ApplicationWindow {
         id: userManager
     }
 
+    CouchPlayHelperClient {
+        id: helperClient
+    }
+
     GameLibrary {
         id: gameLibrary
     }
@@ -68,7 +72,11 @@ Kirigami.ApplicationWindow {
                 text: i18nc("@action:button", "Home")
                 onTriggered: {
                     pageStack.clear()
-                    pageStack.push(homePage)
+                    pageStack.push(homePage, {
+                        sessionManager: sessionManager,
+                        sessionRunner: sessionRunner,
+                        deviceManager: deviceManager
+                    })
                 }
             },
             Kirigami.Action {
@@ -76,7 +84,12 @@ Kirigami.ApplicationWindow {
                 text: i18nc("@action:button", "New Session")
                 onTriggered: {
                     pageStack.clear()
-                    pageStack.push(sessionSetupPage)
+                    pageStack.push(sessionSetupPage, {
+                        sessionManager: sessionManager,
+                        sessionRunner: sessionRunner,
+                        deviceManager: deviceManager,
+                        monitorManager: monitorManager
+                    })
                 }
             },
             Kirigami.Action {
@@ -84,7 +97,10 @@ Kirigami.ApplicationWindow {
                 text: i18nc("@action:button", "Profiles")
                 onTriggered: {
                     pageStack.clear()
-                    pageStack.push(profilesPage)
+                    pageStack.push(profilesPage, {
+                        sessionManager: sessionManager,
+                        sessionRunner: sessionRunner
+                    })
                 }
             },
             Kirigami.Action {
@@ -92,7 +108,9 @@ Kirigami.ApplicationWindow {
                 text: i18nc("@action:button", "Games")
                 onTriggered: {
                     pageStack.clear()
-                    pageStack.push(gamesPage)
+                    pageStack.push(gamesPage, {
+                        gameLibrary: gameLibrary
+                    })
                 }
             },
             Kirigami.Action {
@@ -100,7 +118,10 @@ Kirigami.ApplicationWindow {
                 text: i18nc("@action:button", "Users")
                 onTriggered: {
                     pageStack.clear()
-                    pageStack.push(usersPage)
+                    pageStack.push(usersPage, {
+                        userManager: userManager,
+                        helperClient: helperClient
+                    })
                 }
             },
             Kirigami.Action {
@@ -108,7 +129,9 @@ Kirigami.ApplicationWindow {
                 text: i18nc("@action:button", "Layout")
                 onTriggered: {
                     pageStack.clear()
-                    pageStack.push(layoutPage)
+                    pageStack.push(layoutPage, {
+                        monitorManager: monitorManager
+                    })
                 }
             },
             Kirigami.Action {
@@ -116,70 +139,114 @@ Kirigami.ApplicationWindow {
                 text: i18nc("@action:button", "Settings")
                 onTriggered: {
                     pageStack.clear()
-                    pageStack.push(settingsPage)
+                    pageStack.push(settingsPage, {
+                        sessionRunner: sessionRunner
+                    })
                 }
             }
         ]
     }
 
-    pageStack.initialPage: homePage
+    pageStack.initialPage: HomePage {
+        sessionManager: sessionManager
+        sessionRunner: sessionRunner
+        deviceManager: deviceManager
+    }
 
+    // Page components - properties must be passed via pageStack.push()
     Component {
         id: homePage
-        HomePage {
-            sessionManager: sessionManager
-            sessionRunner: sessionRunner
-            deviceManager: deviceManager
-        }
+        HomePage {}
     }
 
     Component {
         id: sessionSetupPage
-        SessionSetupPage {
-            sessionManager: sessionManager
-            sessionRunner: sessionRunner
-            deviceManager: deviceManager
-        }
+        SessionSetupPage {}
     }
 
     Component {
         id: deviceAssignmentPage
-        DeviceAssignmentPage {
-            deviceManager: deviceManager
-        }
+        DeviceAssignmentPage {}
     }
 
     Component {
         id: layoutPage
-        LayoutPage {
-            monitorManager: monitorManager
-        }
+        LayoutPage {}
     }
 
     Component {
         id: profilesPage
-        ProfilesPage {
-            sessionManager: sessionManager
-            sessionRunner: sessionRunner
-        }
+        ProfilesPage {}
     }
 
     Component {
         id: gamesPage
-        GamesPage {
-            gameLibrary: gameLibrary
-        }
+        GamesPage {}
     }
 
     Component {
         id: usersPage
-        UsersPage {
-            userManager: userManager
-        }
+        UsersPage {}
     }
 
     Component {
         id: settingsPage
         SettingsPage {}
+    }
+
+    // Helper functions to push pages with required properties
+    function pushHomePage() {
+        pageStack.push(homePage, {
+            sessionManager: sessionManager,
+            sessionRunner: sessionRunner,
+            deviceManager: deviceManager
+        })
+    }
+
+    function pushSessionSetupPage() {
+        pageStack.push(sessionSetupPage, {
+            sessionManager: sessionManager,
+            sessionRunner: sessionRunner,
+            deviceManager: deviceManager,
+            monitorManager: monitorManager
+        })
+    }
+
+    function pushDeviceAssignmentPage() {
+        pageStack.push(deviceAssignmentPage, {
+            deviceManager: deviceManager
+        })
+    }
+
+    function pushProfilesPage() {
+        pageStack.push(profilesPage, {
+            sessionManager: sessionManager,
+            sessionRunner: sessionRunner
+        })
+    }
+
+    function pushGamesPage() {
+        pageStack.push(gamesPage, {
+            gameLibrary: gameLibrary
+        })
+    }
+
+    function pushUsersPage() {
+        pageStack.push(usersPage, {
+            userManager: userManager,
+            helperClient: helperClient
+        })
+    }
+
+    function pushLayoutPage() {
+        pageStack.push(layoutPage, {
+            monitorManager: monitorManager
+        })
+    }
+
+    function pushSettingsPage() {
+        pageStack.push(settingsPage, {
+            sessionRunner: sessionRunner
+        })
     }
 }
