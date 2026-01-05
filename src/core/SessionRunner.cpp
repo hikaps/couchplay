@@ -10,6 +10,7 @@
 #include <QDebug>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QSet>
 
 SessionRunner::SessionRunner(QObject *parent)
     : QObject(parent)
@@ -79,6 +80,20 @@ bool SessionRunner::start()
         Q_EMIT errorOccurred(QStringLiteral("No instances configured"));
         setStatus(QStringLiteral("Error"));
         return false;
+    }
+
+    // Check for duplicate users - Steam can't run multiple instances under same user
+    QSet<QString> usedUsers;
+    for (int i = 0; i < instanceCount; ++i) {
+        const QString &username = profile.instances[i].username;
+        if (!username.isEmpty()) {
+            if (usedUsers.contains(username)) {
+                Q_EMIT errorOccurred(QStringLiteral("User '%1' is assigned to multiple instances. Each instance needs a unique user.").arg(username));
+                setStatus(QStringLiteral("Error"));
+                return false;
+            }
+            usedUsers.insert(username);
+        }
     }
 
     // Calculate window layouts

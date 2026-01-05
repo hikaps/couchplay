@@ -413,3 +413,17 @@ void SessionManager::recalculateOutputResolutions(int screenWidth, int screenHei
 
     Q_EMIT instancesChanged();
 }
+
+QStringList SessionManager::getAssignedUsers(int excludeIndex) const
+{
+    QStringList assigned;
+    for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
+        if (i != excludeIndex) {
+            const QString &user = m_currentProfile.instances[i].username;
+            if (!user.isEmpty() && !assigned.contains(user)) {
+                assigned.append(user);
+            }
+        }
+    }
+    return assigned;
+}

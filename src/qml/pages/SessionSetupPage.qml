@@ -16,6 +16,7 @@ Kirigami.ScrollablePage {
     required property var sessionRunner
     required property var deviceManager
     required property var monitorManager
+    required property var userManager
 
     // Sync with session manager
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
@@ -264,7 +265,7 @@ Kirigami.ScrollablePage {
                     // Get current config for this instance
                     property var config: sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
 
-                    // Update spinboxes when config changes (e.g., after layout recalculation)
+                    // Update controls when config changes (e.g., after profile load)
                     Connections {
                         target: sessionManager
                         function onInstancesChanged() {
@@ -272,21 +273,55 @@ Kirigami.ScrollablePage {
                             resWidthSpin.value = cfg.internalWidth || 1920
                             resHeightSpin.value = cfg.internalHeight || 1080
                             refreshSpin.value = cfg.refreshRate || 60
+                            userCombo.updateFromConfig()
                         }
                     }
 
                     Controls.ComboBox {
                         id: userCombo
                         Kirigami.FormData.label: instanceCard.labelUser
-                        model: instanceCard.index === 0 
-                            ? [instanceCard.textCurrentUser]
-                            : [instanceCard.textCurrentUser, "player2", "player3", "player4"]
-                        currentIndex: 0
                         Layout.fillWidth: true
                         
-                        onCurrentTextChanged: {
-                            if (sessionManager) {
-                                let username = currentIndex === 0 ? "" : currentText
+                        // Build model: Current User + available secondary users (filtered)
+                        property var availableUsers: {
+                            // Primary instance (index 0) only gets current user
+                            if (instanceCard.index === 0) {
+                                return [instanceCard.textCurrentUser]
+                            }
+                            
+                            let users = [instanceCard.textCurrentUser]
+                            let assigned = sessionManager ? sessionManager.getAssignedUsers(instanceCard.index) : []
+                            let allUsers = userManager ? userManager.users : []
+                            
+                            for (let i = 0; i < allUsers.length; i++) {
+                                let user = allUsers[i]
+                                // Only add if not already assigned to another instance
+                                if (assigned.indexOf(user.username) === -1) {
+                                    users.push(user.username)
+                                }
+                            }
+                            return users
+                        }
+                        
+                        model: availableUsers
+                        
+                        // Initialize from config when component is ready
+                        Component.onCompleted: updateFromConfig()
+                        
+                        function updateFromConfig() {
+                            let cfg = sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
+                            let savedUser = cfg.username || ""
+                            if (savedUser === "") {
+                                currentIndex = 0
+                            } else {
+                                let idx = availableUsers.indexOf(savedUser)
+                                currentIndex = idx >= 0 ? idx : 0
+                            }
+                        }
+                        
+                        onCurrentIndexChanged: {
+                            if (sessionManager && currentIndex >= 0) {
+                                let username = currentIndex === 0 ? "" : availableUsers[currentIndex]
                                 sessionManager.setInstanceUser(instanceCard.index, username)
                             }
                         }

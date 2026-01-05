@@ -208,7 +208,8 @@ Kirigami.ApplicationWindow {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
             deviceManager: deviceManager,
-            monitorManager: monitorManager
+            monitorManager: monitorManager,
+            userManager: userManager
         })
     }
 

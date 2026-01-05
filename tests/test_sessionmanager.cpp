@@ -44,6 +44,9 @@ private Q_SLOTS:
     void testInstanceCountChangedSignal();
     void testCurrentLayoutChangedSignal();
     void testProfilesChangedSignal();
+    
+    // User assignment tests
+    void testGetAssignedUsers();
 
 private:
     SessionManager *m_sessionManager = nullptr;
@@ -322,6 +325,39 @@ void TestSessionManager::testProfilesChangedSignal()
     
     m_sessionManager->deleteProfile(QStringLiteral("SignalTestProfile"));
     QCOMPARE(spy.count(), 2);
+}
+
+void TestSessionManager::testGetAssignedUsers()
+{
+    m_sessionManager->newSession();
+    m_sessionManager->setInstanceCount(3);
+    
+    // Set users for instances
+    m_sessionManager->setInstanceUser(0, QString());  // Primary user (empty string)
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstanceUser(2, QStringLiteral("player3"));
+    
+    // Get assigned users excluding index 0 - should return player2 and player3
+    QStringList assigned = m_sessionManager->getAssignedUsers(0);
+    QCOMPARE(assigned.size(), 2);
+    QVERIFY(assigned.contains(QStringLiteral("player2")));
+    QVERIFY(assigned.contains(QStringLiteral("player3")));
+    
+    // Get assigned users excluding index 1 - should return only player3
+    assigned = m_sessionManager->getAssignedUsers(1);
+    QCOMPARE(assigned.size(), 1);
+    QVERIFY(assigned.contains(QStringLiteral("player3")));
+    
+    // Get assigned users excluding index 2 - should return only player2
+    assigned = m_sessionManager->getAssignedUsers(2);
+    QCOMPARE(assigned.size(), 1);
+    QVERIFY(assigned.contains(QStringLiteral("player2")));
+    
+    // Empty usernames should not be included
+    m_sessionManager->setInstanceUser(1, QString());
+    assigned = m_sessionManager->getAssignedUsers(0);
+    QCOMPARE(assigned.size(), 1);
+    QVERIFY(assigned.contains(QStringLiteral("player3")));
 }
 
 QTEST_MAIN(TestSessionManager)
