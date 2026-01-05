@@ -67,6 +67,8 @@ target_link_libraries(couchplay PRIVATE
 # Include directories
 target_include_directories(couchplay PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/dbus
     ${CMAKE_CURRENT_BINARY_DIR}
 )
 

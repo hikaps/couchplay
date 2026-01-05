@@ -26,11 +26,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Installation paths
-LIBEXEC_DIR="/usr/libexec"
-DBUS_SYSTEM_DIR="/usr/share/dbus-1/system.d"
-DBUS_SERVICE_DIR="/usr/share/dbus-1/system-services"
-SYSTEMD_DIR="/usr/lib/systemd/system"
-POLKIT_DIR="/usr/share/polkit-1/actions"
+# Use /usr/local for immutable distros (Fedora Silverblue/Kinoite/Bazzite)
+# On traditional distros, these can be changed to /usr paths
+LIBEXEC_DIR="/usr/local/libexec"
+DBUS_SYSTEM_DIR="/etc/dbus-1/system.d"
+DBUS_SERVICE_DIR="/usr/local/share/dbus-1/system-services"
+SYSTEMD_DIR="/etc/systemd/system"
+POLKIT_DIR="/usr/local/share/polkit-1/actions"
 
 # Source paths (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,8 +63,8 @@ check_root() {
 }
 
 check_binary() {
-    if [[ ! -f "${BUILD_DIR}/helper/${HELPER_BINARY}" ]]; then
-        print_error "Helper binary not found at ${BUILD_DIR}/helper/${HELPER_BINARY}"
+    if [[ ! -f "${BUILD_DIR}/bin/${HELPER_BINARY}" ]]; then
+        print_error "Helper binary not found at ${BUILD_DIR}/bin/${HELPER_BINARY}"
         print_info "Please build the project first:"
         echo "    mkdir -p build && cd build"
         echo "    cmake .."
@@ -79,7 +81,7 @@ install_helper() {
 
     # Install binary
     print_info "Installing binary to ${LIBEXEC_DIR}/"
-    install -Dm755 "${BUILD_DIR}/helper/${HELPER_BINARY}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
+    install -Dm755 "${BUILD_DIR}/bin/${HELPER_BINARY}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
 
     # Install D-Bus configuration
     print_info "Installing D-Bus configuration..."

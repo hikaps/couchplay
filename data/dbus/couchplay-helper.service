@@ -8,26 +8,30 @@ Documentation=https://github.com/hikaps/couchplay
 [Service]
 Type=dbus
 BusName=io.github.hikaps.CouchPlayHelper
-ExecStart=/usr/libexec/couchplay-helper
+ExecStart=/usr/local/libexec/couchplay-helper
 User=root
 Group=root
 
-# Security hardening
+# Security hardening - relaxed for user creation
+# NOTE: User creation requires write access to /etc and /home, so we use minimal restrictions
 NoNewPrivileges=false
-ProtectSystem=strict
-ProtectHome=read-only
+ProtectSystem=false
+ProtectHome=false
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictRealtime=true
-RestrictSUIDSGID=true
+RestrictSUIDSGID=false
 MemoryDenyWriteExecute=true
 
 # Allow access to input devices
 ReadWritePaths=/dev/input
 # Allow access to user home directories for PipeWire config
 ReadWritePaths=/home
+ReadWritePaths=/var/home
+# Allow access to /etc for user creation (useradd needs to modify passwd, group, shadow)
+ReadWritePaths=/etc
 
 [Install]
 WantedBy=multi-user.target

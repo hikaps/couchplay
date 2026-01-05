@@ -9,6 +9,7 @@
 #include <QStringList>
 #include <QList>
 #include <QRect>
+#include <QVariantMap>
 #include <qqmlintegration.h>
 
 struct InstanceConfig;
@@ -100,12 +101,14 @@ public:
      * @param environment Environment variables
      * @param gamescopeArgs Gamescope arguments
      * @param steamArgs Steam arguments
+     * @param xauthPath Path to temporary xauth file for X11 authentication
      * @return Full shell command string
      */
     static QString buildSecondaryUserCommand(const QString &username,
                                               const QStringList &environment,
                                               const QStringList &gamescopeArgs,
-                                              const QString &steamArgs);
+                                              const QString &steamArgs,
+                                              const QString &xauthPath = QString());
 
 Q_SIGNALS:
     void runningChanged();
@@ -125,6 +128,28 @@ private Q_SLOTS:
 
 private:
     void setStatus(const QString &status);
+    
+    /**
+     * @brief Set up Wayland socket access for a secondary user via helper service
+     * Calls the D-Bus helper to grant the secondary user permission to access
+     * the primary user's Wayland socket via ACLs
+     * @param username Target username
+     * @return true if ACLs were set successfully
+     */
+    bool setupWaylandAccessForUser(const QString &username);
+    
+    /**
+     * @brief Fallback method to set up Wayland access directly
+     * Used when the helper service is not available
+     * @param username Target username
+     * @return true if ACLs were set successfully
+     */
+    bool setupWaylandAccessFallback(const QString &username);
+    
+    /**
+     * @brief Clean up Wayland socket ACLs for a secondary user
+     */
+    void cleanupWaylandAccess();
 
     QProcess *m_process = nullptr;
     int m_index = -1;
@@ -132,4 +157,5 @@ private:
     QString m_username;
     QRect m_windowGeometry;
     bool m_isPrimary = true;
+    bool m_waylandAclSet = false;  // Track if we set up Wayland ACLs
 };

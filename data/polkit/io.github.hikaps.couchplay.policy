@@ -34,19 +34,6 @@
     </defaults>
   </action>
 
-  <action id="io.github.hikaps.couchplay.configure-audio">
-    <description>Configure audio for users</description>
-    <description xml:lang="en">Configure PipeWire audio routing for split-screen gaming</description>
-    <message>Authentication is required to configure audio settings</message>
-    <message xml:lang="en">Authentication is required to configure audio settings</message>
-    <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
-    </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
-  </action>
-
   <action id="io.github.hikaps.couchplay.manage-session">
     <description>Manage CouchPlay gaming sessions</description>
     <description xml:lang="en">Start, stop, and configure split-screen gaming sessions</description>
@@ -57,6 +44,46 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>yes</allow_active>
     </defaults>
+  </action>
+
+  <action id="io.github.hikaps.couchplay.run-as-user">
+    <description>Run game session as another user</description>
+    <description xml:lang="en">Run a gamescope/Steam session as another Linux user for split-screen gaming</description>
+    <message>Authentication is required to start a gaming session as another user</message>
+    <message xml:lang="en">Authentication is required to start a gaming session as another user</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <!-- Allow GUI applications (passes DISPLAY and XAUTHORITY) -->
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <action id="io.github.hikaps.couchplay.enable-linger">
+    <description>Enable systemd linger for a user</description>
+    <description xml:lang="en">Enable systemd linger so user sessions persist for split-screen gaming</description>
+    <message>Authentication is required to enable session persistence</message>
+    <message xml:lang="en">Authentication is required to enable session persistence</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.create-user</annotate>
+  </action>
+
+  <action id="io.github.hikaps.couchplay.setup-wayland-access">
+    <description>Set up Wayland display access</description>
+    <description xml:lang="en">Grant secondary users access to the primary user's Wayland display for split-screen gaming</description>
+    <message>Authentication is required to set up display access</message>
+    <message xml:lang="en">Authentication is required to set up display access</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
   </action>
 
 </policyconfig>

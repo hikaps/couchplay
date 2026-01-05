@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <pwd.h>
+#include <grp.h>
 
 // Version of the helper daemon
 static const QString HELPER_VERSION = QStringLiteral("0.1.0");
@@ -21,19 +22,18 @@ static const QString HELPER_VERSION = QStringLiteral("0.1.0");
 // PolicyKit actions
 static const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couchplay.change-device-owner");
 static const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couchplay.create-user");
-static const QString ACTION_CONFIGURE_AUDIO = QStringLiteral("io.github.hikaps.couchplay.configure-audio");
+static const QString ACTION_ENABLE_LINGER = QStringLiteral("io.github.hikaps.couchplay.enable-linger");
+static const QString ACTION_WAYLAND_ACCESS = QStringLiteral("io.github.hikaps.couchplay.setup-wayland-access");
 
 CouchPlayHelper::CouchPlayHelper(QObject *parent)
     : QObject(parent)
 {
-    qDebug() << "CouchPlayHelper daemon started, version" << HELPER_VERSION;
 }
 
 CouchPlayHelper::~CouchPlayHelper()
 {
     // Clean up: reset all modified devices on shutdown
     if (!m_modifiedDevices.isEmpty()) {
-        qDebug() << "Cleaning up" << m_modifiedDevices.size() << "modified devices";
         ResetAllDevices();
     }
 }
@@ -75,7 +75,6 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
         m_modifiedDevices.append(devicePath);
     }
 
-    qDebug() << "Changed ownership of" << devicePath << "to UID" << uid;
     return true;
 }
 
@@ -112,7 +111,6 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
     }
 
     m_modifiedDevices.removeAll(devicePath);
-    qDebug() << "Reset ownership of" << devicePath << "to root";
     return true;
 }
 
@@ -129,7 +127,6 @@ int CouchPlayHelper::ResetAllDevices()
         }
     }
     
-    qDebug() << "Reset" << successCount << "devices to root ownership";
     return successCount;
 }
 
@@ -150,7 +147,7 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     }
 
     // Check if user already exists
-    if (UserExists(username)) {
+    if (userExists(username)) {
         sendErrorReply(QDBusError::Failed, 
             QStringLiteral("User '%1' already exists").arg(username));
         return 0;
@@ -161,9 +158,14 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     QStringList args;
     args << QStringLiteral("-m")  // Create home directory
          << QStringLiteral("-c") << fullName
-         << QStringLiteral("-s") << QStringLiteral("/bin/bash")
-         << QStringLiteral("-G") << QStringLiteral("audio,video,input,games")
-         << username;
+         << QStringLiteral("-s") << QStringLiteral("/bin/bash");
+    
+    // Add supplementary groups that exist on the system
+    // On immutable distros like Bazzite, only 'input' group typically exists
+    // We use a simple approach: try to add input group only, which is required for gamepad access
+    args << QStringLiteral("-G") << QStringLiteral("input");
+    
+    args << username;
 
     process.start(QStringLiteral("useradd"), args);
     process.waitForFinished(30000);
@@ -176,74 +178,224 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     }
 
     // Get the new user's UID
-    uint uid = GetUserUid(username);
+    uint uid = getUserUid(username);
     if (uid == 0) {
         sendErrorReply(QDBusError::Failed, 
             QStringLiteral("User created but could not retrieve UID"));
         return 0;
     }
 
-    qDebug() << "Created user" << username << "with UID" << uid;
+    // Enable linger for the new user so their systemd user session starts at boot
+    // This is required for machinectl shell to work properly
+    QProcess lingerProcess;
+    lingerProcess.start(QStringLiteral("loginctl"), 
+        {QStringLiteral("enable-linger"), username});
+    lingerProcess.waitForFinished(30000);
+
+    if (lingerProcess.exitCode() != 0) {
+        qWarning() << "Failed to enable linger for" << username 
+                   << ":" << QString::fromLocal8Bit(lingerProcess.readAllStandardError());
+        // Don't fail user creation, just warn - linger can be enabled later
+    } else {
+        qDebug() << "Enabled linger for new user" << username;
+    }
+
     return uid;
 }
 
-bool CouchPlayHelper::UserExists(const QString &username)
+bool CouchPlayHelper::userExists(const QString &username)
 {
     struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
     return pw != nullptr;
 }
 
-uint CouchPlayHelper::GetUserUid(const QString &username)
+uint CouchPlayHelper::getUserUid(const QString &username)
 {
     struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
     return pw ? pw->pw_uid : 0;
 }
 
-bool CouchPlayHelper::ConfigurePipeWireForUser(uint uid)
+bool CouchPlayHelper::EnableLinger(const QString &username)
 {
-    if (!checkAuthorization(ACTION_CONFIGURE_AUDIO)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to configure audio"));
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
         return false;
     }
 
-    struct passwd *pw = getpwuid(uid);
+    if (!checkAuthorization(ACTION_ENABLE_LINGER)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to enable linger"));
+        return false;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // Enable linger via loginctl
+    QProcess process;
+    process.start(QStringLiteral("loginctl"), 
+        {QStringLiteral("enable-linger"), username});
+    process.waitForFinished(30000);
+
+    if (process.exitCode() != 0) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to enable linger: %1")
+                .arg(QString::fromLocal8Bit(process.readAllStandardError())));
+        return false;
+    }
+
+    qDebug() << "Enabled linger for user" << username;
+    return true;
+}
+
+bool CouchPlayHelper::IsLingerEnabled(const QString &username)
+{
+    // Check if linger file exists in /var/lib/systemd/linger/
+    QString lingerFile = QStringLiteral("/var/lib/systemd/linger/%1").arg(username);
+    return QFile::exists(lingerFile);
+}
+
+bool CouchPlayHelper::SetupWaylandAccess(const QString &username, uint primaryUid)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_WAYLAND_ACCESS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to set up Wayland access"));
+        return false;
+    }
+
+    // Check if secondary user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // Verify primary user exists
+    struct passwd *pw = getpwuid(primaryUid);
     if (!pw) {
         sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User with UID %1 does not exist").arg(uid));
+            QStringLiteral("Primary user with UID %1 does not exist").arg(primaryUid));
         return false;
     }
 
-    QString homeDir = QString::fromLocal8Bit(pw->pw_dir);
-    QString pipewireConfigDir = homeDir + QStringLiteral("/.config/pipewire/pipewire.conf.d");
+    // Build paths
+    QString runtimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
+    QString waylandSocket = runtimeDir + QStringLiteral("/wayland-0");
 
-    // Create config directory
-    QProcess::execute(QStringLiteral("mkdir"), {QStringLiteral("-p"), pipewireConfigDir});
-    
-    // Create a basic PipeWire config for multi-user audio
-    // This is a placeholder - actual config would be more sophisticated
-    QString configPath = pipewireConfigDir + QStringLiteral("/10-couchplay.conf");
-    QFile configFile(configPath);
-    
-    if (configFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        // Basic config allowing audio playback
-        configFile.write("# CouchPlay PipeWire configuration\n");
-        configFile.write("# Allows audio output for split-screen gaming\n");
-        configFile.write("context.properties = {\n");
-        configFile.write("    default.clock.allowed-rates = [ 44100 48000 ]\n");
-        configFile.write("}\n");
-        configFile.close();
-        
-        // Fix ownership
-        chown(configPath.toLocal8Bit().constData(), uid, pw->pw_gid);
-        
-        qDebug() << "Configured PipeWire for user" << pw->pw_name;
-        return true;
+    // Check if runtime dir exists
+    if (!QFile::exists(runtimeDir)) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Runtime directory %1 does not exist").arg(runtimeDir));
+        return false;
     }
 
-    sendErrorReply(QDBusError::Failed, 
-        QStringLiteral("Failed to write PipeWire configuration"));
-    return false;
+    // Check if Wayland socket exists
+    if (!QFile::exists(waylandSocket)) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Wayland socket %1 does not exist").arg(waylandSocket));
+        return false;
+    }
+
+    // Grant execute (traverse) permission on XDG_RUNTIME_DIR
+    QProcess setfaclDir;
+    setfaclDir.start(QStringLiteral("setfacl"), 
+        {QStringLiteral("-m"), QStringLiteral("u:%1:x").arg(username), runtimeDir});
+    setfaclDir.waitForFinished(5000);
+
+    if (setfaclDir.exitCode() != 0) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to set ACL on runtime dir: %1")
+                .arg(QString::fromLocal8Bit(setfaclDir.readAllStandardError())));
+        return false;
+    }
+
+    // Grant read/write permission on the Wayland socket
+    QProcess setfaclSocket;
+    setfaclSocket.start(QStringLiteral("setfacl"), 
+        {QStringLiteral("-m"), QStringLiteral("u:%1:rw").arg(username), waylandSocket});
+    setfaclSocket.waitForFinished(5000);
+
+    if (setfaclSocket.exitCode() != 0) {
+        // Clean up directory ACL on failure
+        QProcess::execute(QStringLiteral("setfacl"), 
+            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), runtimeDir});
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to set ACL on Wayland socket: %1")
+                .arg(QString::fromLocal8Bit(setfaclSocket.readAllStandardError())));
+        return false;
+    }
+
+    qDebug() << "Set up Wayland access for" << username << "to" << waylandSocket;
+    return true;
+}
+
+bool CouchPlayHelper::RemoveWaylandAccess(const QString &username, uint primaryUid)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_WAYLAND_ACCESS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to remove Wayland access"));
+        return false;
+    }
+
+    // Build paths
+    QString runtimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
+    QString waylandSocket = runtimeDir + QStringLiteral("/wayland-0");
+
+    bool success = true;
+
+    // Remove ACL from Wayland socket (if it exists)
+    if (QFile::exists(waylandSocket)) {
+        QProcess removeFaclSocket;
+        removeFaclSocket.start(QStringLiteral("setfacl"), 
+            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), waylandSocket});
+        removeFaclSocket.waitForFinished(5000);
+        if (removeFaclSocket.exitCode() != 0) {
+            qWarning() << "Failed to remove ACL from Wayland socket:" 
+                       << QString::fromLocal8Bit(removeFaclSocket.readAllStandardError());
+            success = false;
+        }
+    }
+
+    // Remove ACL from runtime directory (if it exists)
+    if (QFile::exists(runtimeDir)) {
+        QProcess removeFaclDir;
+        removeFaclDir.start(QStringLiteral("setfacl"), 
+            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), runtimeDir});
+        removeFaclDir.waitForFinished(5000);
+        if (removeFaclDir.exitCode() != 0) {
+            qWarning() << "Failed to remove ACL from runtime dir:" 
+                       << QString::fromLocal8Bit(removeFaclDir.readAllStandardError());
+            success = false;
+        }
+    }
+
+    if (success) {
+        qDebug() << "Removed Wayland access for" << username << "from" << waylandSocket;
+    }
+    return success;
 }
 
 QString CouchPlayHelper::Version()
