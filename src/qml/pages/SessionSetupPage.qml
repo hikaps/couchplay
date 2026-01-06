@@ -323,6 +323,11 @@ Kirigami.ScrollablePage {
                             let savedUser = cfg.username || ""
                             let idx = userList.indexOf(savedUser)
                             currentIndex = idx >= 0 ? idx : 0
+                            
+                            // Initialize the username in SessionManager if we have a valid selection
+                            if (sessionManager && userList.length > 0 && currentIndex >= 0) {
+                                sessionManager.setInstanceUser(instanceCard.index, userList[currentIndex])
+                            }
                         }
                         
                         // Only update on actual user interaction (not programmatic changes)

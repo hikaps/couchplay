@@ -5,6 +5,7 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
@@ -340,6 +341,35 @@ bool CouchPlayHelper::SetupWaylandAccess(const QString &username, uint primaryUi
         return false;
     }
 
+    // Grant read permission on any xauth files in the runtime directory
+    // These are needed for X11/XWayland authentication
+    QDir dir(runtimeDir);
+    QStringList xauthFiles = dir.entryList({QStringLiteral("xauth_*")}, QDir::Files);
+    for (const QString &xauthFile : xauthFiles) {
+        QString xauthPath = runtimeDir + QStringLiteral("/") + xauthFile;
+        QProcess setfaclXauth;
+        setfaclXauth.start(QStringLiteral("setfacl"), 
+            {QStringLiteral("-m"), QStringLiteral("u:%1:r").arg(username), xauthPath});
+        setfaclXauth.waitForFinished(5000);
+        if (setfaclXauth.exitCode() == 0) {
+            qDebug() << "Set ACL on xauth file" << xauthPath << "for" << username;
+        } else {
+            qWarning() << "Failed to set ACL on xauth file" << xauthPath;
+        }
+    }
+
+    // Also grant read on PipeWire socket for audio
+    QString pipewireSocket = runtimeDir + QStringLiteral("/pipewire-0");
+    if (QFile::exists(pipewireSocket)) {
+        QProcess setfaclPipewire;
+        setfaclPipewire.start(QStringLiteral("setfacl"), 
+            {QStringLiteral("-m"), QStringLiteral("u:%1:rw").arg(username), pipewireSocket});
+        setfaclPipewire.waitForFinished(5000);
+        if (setfaclPipewire.exitCode() == 0) {
+            qDebug() << "Set ACL on PipeWire socket for" << username;
+        }
+    }
+
     qDebug() << "Set up Wayland access for" << username << "to" << waylandSocket;
     return true;
 }
@@ -377,6 +407,28 @@ bool CouchPlayHelper::RemoveWaylandAccess(const QString &username, uint primaryU
                        << QString::fromLocal8Bit(removeFaclSocket.readAllStandardError());
             success = false;
         }
+    }
+
+    // Remove ACL from xauth files (if any exist)
+    QDir dir(runtimeDir);
+    QStringList xauthFiles = dir.entryList({QStringLiteral("xauth_*")}, QDir::Files);
+    for (const QString &xauthFile : xauthFiles) {
+        QString xauthPath = runtimeDir + QStringLiteral("/") + xauthFile;
+        QProcess removeFaclXauth;
+        removeFaclXauth.start(QStringLiteral("setfacl"), 
+            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), xauthPath});
+        removeFaclXauth.waitForFinished(5000);
+        // Don't fail overall if xauth cleanup fails - file may have been removed
+    }
+
+    // Remove ACL from PipeWire socket (if it exists)
+    QString pipewireSocket = runtimeDir + QStringLiteral("/pipewire-0");
+    if (QFile::exists(pipewireSocket)) {
+        QProcess removeFaclPipewire;
+        removeFaclPipewire.start(QStringLiteral("setfacl"), 
+            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), pipewireSocket});
+        removeFaclPipewire.waitForFinished(5000);
+        // Don't fail overall if pipewire cleanup fails
     }
 
     // Remove ACL from runtime directory (if it exists)

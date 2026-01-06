@@ -147,8 +147,13 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     // Get current username to determine if this is really a "primary" path
     // (running as the current user) vs "secondary" path (running as a different user)
     QString currentUser = QString::fromLocal8Bit(qgetenv("USER"));
+    bool useSecondaryPath = !m_isPrimary && !m_username.isEmpty() && m_username != currentUser;
     
-    if (m_isPrimary || m_username.isEmpty() || m_username == currentUser) {
+    qDebug() << "Instance" << m_index << "starting:"
+             << "user=" << m_username
+             << "path=" << (useSecondaryPath ? "secondary" : "primary");
+    
+    if (!useSecondaryPath) {
         // Primary instance - run directly with modified environment
         QString program = QStandardPaths::findExecutable(QStringLiteral("gamescope"));
         if (program.isEmpty()) {
@@ -203,6 +208,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         // Set up Wayland socket access for the secondary user via helper service
         // This requires root, so we call the D-Bus helper
         if (!setupWaylandAccessForUser(m_username)) {
+            qWarning() << "Instance" << m_index << "failed to set up Wayland access for" << m_username;
             Q_EMIT errorOccurred(QStringLiteral("Failed to set up Wayland access for %1").arg(m_username));
             // Continue anyway - might still work if ACLs were already set
         }
@@ -210,7 +216,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         // Build the machinectl shell command
         QString command = buildSecondaryUserCommand(m_username, envVars, gamescopeArgs, gameCommand);
 
-        qDebug() << "Starting secondary instance as" << m_username;
+        qDebug() << "Instance" << m_index << "starting as" << m_username;
 
         setStatus(QStringLiteral("Starting as %1...").arg(m_username));
         m_process->start(QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
@@ -298,13 +304,8 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
         args << QStringLiteral("-b");
     }
 
-    // For secondary users, we need to specify a backend that doesn't require
-    // a seat/session. The wayland backend works for nested window mode on Wayland.
-    bool isSecondaryUser = config.value(QStringLiteral("isSecondaryUser"), false).toBool();
-    if (isSecondaryUser) {
-        // Wayland backend doesn't require libseat/logind session
-        args << QStringLiteral("--backend") << QStringLiteral("wayland");
-    }
+    // Note: Don't pass --backend flag - let gamescope auto-detect
+    // It will use wayland backend when WAYLAND_DISPLAY is set
 
     // Internal resolution (game renders at this)
     int internalW = config.value(QStringLiteral("internalWidth"), 1920).toInt();
@@ -393,50 +394,91 @@ QString GamescopeInstance::buildSecondaryUserCommand(const QString &username,
                                                        const QStringList &gamescopeArgs,
                                                        const QString &gameCommand)
 {
-    // Build environment string for the secondary user
-    // We need to set WAYLAND_DISPLAY to an absolute path pointing to the primary user's socket
-    QString envStr;
+    // Build environment exports for the secondary user
+    // Key insight: Let the secondary user use their OWN XDG_RUNTIME_DIR
+    // (so gamescope can create lockfiles there), but point WAYLAND_DISPLAY
+    // to the primary user's Wayland socket as an absolute path.
+    
+    QStringList exports;
     
     // Get the primary user's UID for the Wayland socket path
     uid_t primaryUid = getuid();
-    QString primaryWaylandSocket = QStringLiteral("/run/user/%1/wayland-0").arg(primaryUid);
+    QString primaryRuntimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
+    QString primaryWaylandSocket = primaryRuntimeDir + QStringLiteral("/wayland-0");
     
     // Set WAYLAND_DISPLAY to the absolute path of the primary user's Wayland socket
-    envStr += QStringLiteral("WAYLAND_DISPLAY=%1 ").arg(primaryWaylandSocket);
+    // The secondary user has ACL access to this socket (set up by helper)
+    exports << QStringLiteral("export WAYLAND_DISPLAY=%1").arg(primaryWaylandSocket);
     
     // Set DISPLAY for XWayland compatibility
     QString display = QString::fromLocal8Bit(qgetenv("DISPLAY"));
     if (!display.isEmpty()) {
-        envStr += QStringLiteral("DISPLAY=%1 ").arg(display);
+        exports << QStringLiteral("export DISPLAY=%1").arg(display);
     }
+    
+    // Set XAUTHORITY - needed for X11/XWayland authentication
+    // The secondary user needs access to the primary user's Xauthority file
+    QString xauthority = QString::fromLocal8Bit(qgetenv("XAUTHORITY"));
+    if (xauthority.isEmpty()) {
+        // Default XAUTHORITY location
+        xauthority = QDir::homePath() + QStringLiteral("/.Xauthority");
+    }
+    if (QFile::exists(xauthority)) {
+        exports << QStringLiteral("export XAUTHORITY=%1").arg(xauthority);
+    }
+    
+    // NOTE: We do NOT override XDG_RUNTIME_DIR here!
+    // The secondary user should use their own runtime dir (e.g., /run/user/1001)
+    // so gamescope can create its lockfiles and sockets there.
+    // Only the Wayland socket connection goes to the primary user's socket.
+    
+    // For audio, point to the primary user's PipeWire socket
+    // PipeWire uses PIPEWIRE_RUNTIME_DIR if set, otherwise XDG_RUNTIME_DIR
+    exports << QStringLiteral("export PIPEWIRE_RUNTIME_DIR=%1").arg(primaryRuntimeDir);
     
     // Add any other environment variables from buildEnvironment()
     for (const QString &var : environment) {
-        envStr += var + QStringLiteral(" ");
+        exports << QStringLiteral("export %1").arg(var);
     }
 
     // Build the gamescope command
     // Log file helps capture errors for debugging
     QString logFile = QStringLiteral("/tmp/couchplay-%1.log").arg(username);
-    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /bin/bash -c '%2' 2>&1 | tee %3")
-                               .arg(gamescopeArgs.join(QLatin1Char(' ')), gameCommand, logFile);
+    
+    // Escape the game command for embedding in double quotes inside bash -c
+    // We need to escape: double quotes, dollar signs, and backticks
+    QString gameCommandForBash = gameCommand;
+    gameCommandForBash.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    gameCommandForBash.replace(QLatin1Char('$'), QStringLiteral("\\$"));
+    gameCommandForBash.replace(QLatin1Char('`'), QStringLiteral("\\`"));
+    
+    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /bin/bash -c \"%2\" 2>&1 | tee %3")
+                               .arg(gamescopeArgs.join(QLatin1Char(' ')), gameCommandForBash, logFile);
 
     QString command;
 
+    // Build the full command with exports followed by gamescope
+    QString exportStr = exports.join(QStringLiteral("; "));
+    
+    // Escape the entire gamescopeCmd for embedding in single quotes
+    // Replace ' with '\'' (end quote, escaped quote, start quote)
+    QString escapedGamescopeCmd = gamescopeCmd;
+    escapedGamescopeCmd.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+
     // Use machinectl shell to run in the user's systemd session
     // This requires linger to be enabled for the user (done by CreateUser)
-    // The user's session must exist in /run/user/<uid>/
+    // The user's session provides their own XDG_RUNTIME_DIR at /run/user/<uid>/
     if (QFile::exists(QStringLiteral("/usr/bin/machinectl"))) {
         // machinectl shell runs the command within the user's systemd user session
-        // The session has proper XDG_RUNTIME_DIR, PipeWire, etc.
-        // We just need to set WAYLAND_DISPLAY to access the primary's display
-        command = QStringLiteral("machinectl shell %1@ /bin/bash -c '%2 %3'")
-                      .arg(username, envStr, gamescopeCmd);
+        // We use 'export VAR=value; export VAR2=value2; command' syntax
+        // to properly set environment variables for bash -c
+        command = QStringLiteral("machinectl shell %1@ /bin/bash -c '%2; %3'")
+                      .arg(username, exportStr, escapedGamescopeCmd);
     } else {
         // Fallback: pkexec with runuser (original approach)
         // This is less reliable but might work on non-systemd systems
-        command = QStringLiteral("pkexec /usr/bin/runuser -u %1 -w DISPLAY,WAYLAND_DISPLAY -- env %2 %3")
-                      .arg(username, envStr, gamescopeCmd);
+        command = QStringLiteral("pkexec /usr/bin/runuser -u %1 -- /bin/bash -c '%2; %3'")
+                      .arg(username, exportStr, escapedGamescopeCmd);
     }
 
     return command;
@@ -461,18 +503,17 @@ void GamescopeInstance::onProcessFinished(int exitCode, QProcess::ExitStatus exi
     }
 
     // Log process exit for debugging
-    qWarning() << "Instance" << m_index << "finished with exit code" << exitCode 
-               << "status:" << statusStr;
+    qDebug() << "Instance" << m_index << "finished:" << statusStr;
     
-    // Capture any remaining output
+    // Capture any remaining output for debugging
     if (m_process) {
         QByteArray stdErr = m_process->readAllStandardError();
         QByteArray stdOut = m_process->readAllStandardOutput();
         if (!stdErr.isEmpty()) {
-            qWarning() << "Instance" << m_index << "stderr:" << QString::fromUtf8(stdErr).left(500);
+            qDebug() << "Instance" << m_index << "stderr:" << QString::fromUtf8(stdErr).left(500);
         }
         if (!stdOut.isEmpty()) {
-            qWarning() << "Instance" << m_index << "stdout:" << QString::fromUtf8(stdOut).left(500);
+            qDebug() << "Instance" << m_index << "stdout:" << QString::fromUtf8(stdOut).left(500);
         }
     }
 
