@@ -39,11 +39,18 @@ void SessionManager::newSession()
     m_currentProfile.name = QString();
     m_currentProfile.layout = QStringLiteral("horizontal");
 
+    // Get current username for primary instance
+    QString currentUser = QString::fromLocal8Bit(qgetenv("USER"));
+
     // Default: 2 instances
     m_currentProfile.instances.clear();
     for (int i = 0; i < 2; ++i) {
         InstanceConfig config;
         config.monitor = 0;
+        // Instance 0 (primary) runs as the current user
+        if (i == 0) {
+            config.username = currentUser;
+        }
         m_currentProfile.instances.append(config);
     }
 

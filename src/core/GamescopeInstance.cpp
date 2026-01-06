@@ -67,13 +67,14 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     if (launchMode == QStringLiteral("steam")) {
         // Steam launch mode - launch Steam Big Picture, optionally with a specific game
         // -tenfoot launches Steam in Big Picture mode (better for controllers)
+        // -steamdeck enables Steam Deck compatibility for proper Proton prefix handling
         if (steamAppId.isEmpty()) {
             // Just launch Steam Big Picture - player will select game inside Steam
-            gameCommand = QStringLiteral("steam -tenfoot");
+            gameCommand = QStringLiteral("steam -tenfoot -steamdeck");
             qDebug() << "Instance" << m_index << "launching Steam Big Picture";
         } else {
             // Launch specific game via Steam
-            gameCommand = QStringLiteral("steam -tenfoot steam://rungameid/%1").arg(steamAppId);
+            gameCommand = QStringLiteral("steam -tenfoot -steamdeck steam://rungameid/%1").arg(steamAppId);
             qDebug() << "Instance" << m_index << "launching Steam game" << steamAppId;
         }
     } else if (launchMode == QStringLiteral("direct")) {
@@ -123,7 +124,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         qDebug() << "Instance" << m_index << "using direct launch mode";
     } else {
         // Unknown launch mode - default to Steam
-        gameCommand = QStringLiteral("steam -tenfoot");
+        gameCommand = QStringLiteral("steam -tenfoot -steamdeck");
         qDebug() << "Instance" << m_index << "unknown launch mode, defaulting to Steam Big Picture";
     }
     
@@ -143,7 +144,11 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     connect(m_process, &QProcess::readyReadStandardOutput, this, &GamescopeInstance::onReadyReadStandardOutput);
     connect(m_process, &QProcess::readyReadStandardError, this, &GamescopeInstance::onReadyReadStandardError);
 
-    if (m_isPrimary || m_username.isEmpty()) {
+    // Get current username to determine if this is really a "primary" path
+    // (running as the current user) vs "secondary" path (running as a different user)
+    QString currentUser = QString::fromLocal8Bit(qgetenv("USER"));
+    
+    if (m_isPrimary || m_username.isEmpty() || m_username == currentUser) {
         // Primary instance - run directly with modified environment
         QString program = QStandardPaths::findExecutable(QStringLiteral("gamescope"));
         if (program.isEmpty()) {

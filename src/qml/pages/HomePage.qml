@@ -15,6 +15,7 @@ Kirigami.ScrollablePage {
     required property var sessionManager
     required property var sessionRunner
     required property var deviceManager
+    required property var helperClient
 
     // Refresh on page load
     Component.onCompleted: {
@@ -315,18 +316,19 @@ Kirigami.ScrollablePage {
                 spacing: Kirigami.Units.smallSpacing
 
                 Kirigami.Icon {
-                    source: "emblem-information-symbolic"
-                    color: Kirigami.Theme.neutralTextColor
+                    source: (helperClient?.available ?? false) ? "emblem-ok-symbolic" : "emblem-warning-symbolic"
+                    color: (helperClient?.available ?? false) ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
                     Layout.preferredWidth: Kirigami.Units.iconSizes.small
                     Layout.preferredHeight: Kirigami.Units.iconSizes.small
                 }
 
                 Controls.Label {
-                    text: i18nc("@info", "Not configured")
-                    color: Kirigami.Theme.neutralTextColor
+                    text: (helperClient?.available ?? false) ? i18nc("@info", "Connected") : i18nc("@info", "Not configured")
+                    color: (helperClient?.available ?? false) ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
                 }
 
                 Controls.Button {
+                    visible: !(helperClient?.available ?? false)
                     text: i18nc("@action:button", "Setup")
                     flat: true
                     onClicked: applicationWindow().pushSettingsPage()

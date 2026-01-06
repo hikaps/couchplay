@@ -13,8 +13,8 @@ Kirigami.ScrollablePage {
     // Reference to session runner for settings that affect it
     property var sessionRunner: null
 
-    property bool helperInstalled: false
-    property bool helperRunning: false
+    // Reference to helper client for status display
+    required property var helperClient
 
     // Settings values (would be persisted via QSettings in production)
     property bool hidePanels: true
@@ -222,38 +222,21 @@ Kirigami.ScrollablePage {
                 spacing: Kirigami.Units.smallSpacing
 
                 Kirigami.Icon {
-                    source: root.helperInstalled ? 
-                        (root.helperRunning ? "dialog-ok-apply" : "dialog-warning") : 
-                        "dialog-error"
+                    source: (helperClient?.available ?? false) ? "dialog-ok-apply" : "dialog-error"
                     Layout.preferredWidth: Kirigami.Units.iconSizes.small
                     Layout.preferredHeight: Kirigami.Units.iconSizes.small
                 }
 
                 Controls.Label {
-                    text: {
-                        if (!root.helperInstalled) {
-                            return i18nc("@info", "Not installed")
-                        } else if (root.helperRunning) {
-                            return i18nc("@info", "Running")
-                        } else {
-                            return i18nc("@info", "Installed but not running")
-                        }
-                    }
-                    color: {
-                        if (!root.helperInstalled) {
-                            return Kirigami.Theme.negativeTextColor
-                        } else if (root.helperRunning) {
-                            return Kirigami.Theme.positiveTextColor
-                        } else {
-                            return Kirigami.Theme.neutralTextColor
-                        }
-                    }
+                    text: (helperClient?.available ?? false) ? i18nc("@info", "Connected") : i18nc("@info", "Not available")
+                    color: (helperClient?.available ?? false) ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
                 }
             }
 
             Controls.Button {
+                visible: !(helperClient?.available ?? false)
                 Kirigami.FormData.label: " "
-                text: root.helperInstalled ? i18nc("@action:button", "Reinstall Helper") : i18nc("@action:button", "Install Helper")
+                text: i18nc("@action:button", "Install Helper")
                 icon.name: "run-install"
                 onClicked: installHelperDialog.open()
             }
@@ -264,7 +247,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             text: i18nc("@info", "The CouchPlay Helper is a privileged system service required for creating users and managing device permissions. It uses PolicyKit for secure authorization.")
             type: Kirigami.MessageType.Information
-            visible: !root.helperInstalled
+            visible: !(helperClient?.available ?? false)
             
             actions: [
                 Kirigami.Action {

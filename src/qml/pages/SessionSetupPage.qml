@@ -248,7 +248,7 @@ Kirigami.ScrollablePage {
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelDevices: i18nc("@label", "Devices:")
-                readonly property string textCurrentUser: i18nc("@item", "Current User")
+
                 readonly property string textNoneAssigned: i18nc("@info", "None assigned")
                 readonly property string textAssign: i18nc("@action:button", "Assign...")
 
@@ -273,7 +273,12 @@ Kirigami.ScrollablePage {
                             resWidthSpin.value = cfg.internalWidth || 1920
                             resHeightSpin.value = cfg.internalHeight || 1080
                             refreshSpin.value = cfg.refreshRate || 60
-                            userCombo.updateFromConfig()
+                            // Update user combo selection from config
+                            let savedUser = cfg.username || ""
+                            let idx = userCombo.userList.indexOf(savedUser)
+                            if (idx >= 0) {
+                                userCombo.currentIndex = idx
+                            }
                         }
                     }
 
@@ -282,49 +287,60 @@ Kirigami.ScrollablePage {
                         Kirigami.FormData.label: instanceCard.labelUser
                         Layout.fillWidth: true
                         
-                        // Build model: Current User + available secondary users (filtered)
-                        property var availableUsers: {
-                            // Primary instance (index 0) only gets current user
+                        // Current user's username (for filtering)
+                        readonly property string currentUsername: userManager ? userManager.currentUser : ""
+                        
+                        // Build simple user list - no dynamic filtering to avoid binding loops
+                        // Instance 0: current user only
+                        // Instance 1+: all secondary users (validation happens at session start)
+                        readonly property var userList: {
                             if (instanceCard.index === 0) {
-                                return [instanceCard.textCurrentUser]
+                                return currentUsername ? [currentUsername] : []
                             }
                             
-                            let users = [instanceCard.textCurrentUser]
-                            let assigned = sessionManager ? sessionManager.getAssignedUsers(instanceCard.index) : []
+                            // Secondary instances: show all non-current users
+                            let users = []
                             let allUsers = userManager ? userManager.users : []
-                            
                             for (let i = 0; i < allUsers.length; i++) {
                                 let user = allUsers[i]
-                                // Only add if not already assigned to another instance
-                                if (assigned.indexOf(user.username) === -1) {
+                                if (user.username !== currentUsername) {
                                     users.push(user.username)
                                 }
                             }
                             return users
                         }
                         
-                        model: availableUsers
+                        model: userList
                         
-                        // Initialize from config when component is ready
-                        Component.onCompleted: updateFromConfig()
+                        // Show placeholder when no users available
+                        displayText: userList.length === 0 
+                            ? i18nc("@info", "No users available") 
+                            : (currentIndex >= 0 && currentIndex < userList.length ? userList[currentIndex] : "")
                         
-                        function updateFromConfig() {
+                        // Set initial selection from config
+                        Component.onCompleted: {
                             let cfg = sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
                             let savedUser = cfg.username || ""
-                            if (savedUser === "") {
-                                currentIndex = 0
-                            } else {
-                                let idx = availableUsers.indexOf(savedUser)
-                                currentIndex = idx >= 0 ? idx : 0
-                            }
+                            let idx = userList.indexOf(savedUser)
+                            currentIndex = idx >= 0 ? idx : 0
                         }
                         
-                        onCurrentIndexChanged: {
-                            if (sessionManager && currentIndex >= 0) {
-                                let username = currentIndex === 0 ? "" : availableUsers[currentIndex]
-                                sessionManager.setInstanceUser(instanceCard.index, username)
+                        // Only update on actual user interaction (not programmatic changes)
+                        onActivated: function(index) {
+                            if (sessionManager && index >= 0 && index < userList.length) {
+                                sessionManager.setInstanceUser(instanceCard.index, userList[index])
                             }
                         }
+                    }
+                    
+                    // Warning when no secondary users available
+                    Controls.Label {
+                        visible: instanceCard.index > 0 && userCombo.userList.length === 0
+                        text: i18nc("@info", "Create a user in Settings to enable this instance")
+                        color: Kirigami.Theme.neutralTextColor
+                        font.italic: true
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
                     }
 
                     RowLayout {

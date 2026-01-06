@@ -75,7 +75,8 @@ Kirigami.ApplicationWindow {
                     pageStack.push(homePage, {
                         sessionManager: sessionManager,
                         sessionRunner: sessionRunner,
-                        deviceManager: deviceManager
+                        deviceManager: deviceManager,
+                        helperClient: helperClient
                     })
                 }
             },
@@ -88,7 +89,8 @@ Kirigami.ApplicationWindow {
                         sessionManager: sessionManager,
                         sessionRunner: sessionRunner,
                         deviceManager: deviceManager,
-                        monitorManager: monitorManager
+                        monitorManager: monitorManager,
+                        userManager: userManager
                     })
                 }
             },
@@ -140,7 +142,8 @@ Kirigami.ApplicationWindow {
                 onTriggered: {
                     pageStack.clear()
                     pageStack.push(settingsPage, {
-                        sessionRunner: sessionRunner
+                        sessionRunner: sessionRunner,
+                        helperClient: helperClient
                     })
                 }
             }
@@ -151,6 +154,7 @@ Kirigami.ApplicationWindow {
         sessionManager: sessionManager
         sessionRunner: sessionRunner
         deviceManager: deviceManager
+        helperClient: helperClient
     }
 
     // Page components - properties must be passed via pageStack.push()
@@ -199,7 +203,8 @@ Kirigami.ApplicationWindow {
         pageStack.push(homePage, {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
-            deviceManager: deviceManager
+            deviceManager: deviceManager,
+            helperClient: helperClient
         })
     }
 
@@ -247,7 +252,8 @@ Kirigami.ApplicationWindow {
 
     function pushSettingsPage() {
         pageStack.push(settingsPage, {
-            sessionRunner: sessionRunner
+            sessionRunner: sessionRunner,
+            helperClient: helperClient
         })
     }
 }
