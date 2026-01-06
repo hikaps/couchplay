@@ -1,0 +1,20 @@
+# Build output
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Qt Creator
+*.pro.user
+*.qmlproject.user
+CMakeLists.txt.user
+
+# Compiled files
+*.o
+*.moc
+moc_*.cpp
+qrc_*.cpp

@@ -5,6 +5,8 @@
 
 #include <QObject>
 #include <QDBusContext>
+#include <QMap>
+#include <QProcess>
 #include <QString>
 #include <QStringList>
 
@@ -118,6 +120,42 @@ public Q_SLOTS:
      */
     QString Version();
 
+    /**
+     * Launch a gamescope instance as a secondary user
+     * 
+     * This method handles all the complexity of running gamescope as a different user:
+     * - Sets up Wayland socket ACLs
+     * - Spawns the process via machinectl shell
+     * - Returns the PID for tracking
+     * 
+     * @param username Secondary user to run as
+     * @param primaryUid UID of primary user (for Wayland socket access)
+     * @param gamescopeArgs Gamescope command-line arguments
+     * @param gameCommand Command to run inside gamescope (e.g., "steam -tenfoot")
+     * @param environment Additional environment variables (VAR=value format)
+     * @return PID of launched process, or 0 on failure
+     */
+    qint64 LaunchInstance(const QString &username, uint primaryUid,
+                          const QStringList &gamescopeArgs,
+                          const QString &gameCommand,
+                          const QStringList &environment);
+
+    /**
+     * Stop a launched instance
+     * 
+     * @param pid Process ID to stop
+     * @return true if the process was successfully signaled
+     */
+    bool StopInstance(qint64 pid);
+
+    /**
+     * Kill a launched instance forcefully
+     * 
+     * @param pid Process ID to kill
+     * @return true if the process was successfully signaled
+     */
+    bool KillInstance(qint64 pid);
+
 private:
     bool checkAuthorization(const QString &action);
     bool isValidDevicePath(const QString &path);
@@ -125,6 +163,11 @@ private:
     // Internal helpers (not exposed via D-Bus)
     bool userExists(const QString &username);
     uint getUserUid(const QString &username);
+    QString buildInstanceCommand(const QString &username, uint primaryUid,
+                                  const QStringList &gamescopeArgs,
+                                  const QString &gameCommand,
+                                  const QStringList &environment);
 
     QStringList m_modifiedDevices;
+    QMap<qint64, QProcess *> m_launchedProcesses;  // PID -> QProcess
 };

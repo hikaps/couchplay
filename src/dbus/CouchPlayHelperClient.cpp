@@ -131,3 +131,70 @@ bool CouchPlayHelperClient::createUser(const QString &username)
     // CreateUser returns the UID of the new user, or 0 on failure
     return reply.value() > 0;
 }
+
+qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint primaryUid,
+                                              const QStringList &gamescopeArgs,
+                                              const QString &gameCommand,
+                                              const QStringList &environment)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return 0;
+    }
+
+    QDBusReply<qint64> reply = m_interface->call(
+        QStringLiteral("LaunchInstance"),
+        username,
+        primaryUid,
+        gamescopeArgs,
+        gameCommand,
+        environment
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return 0;
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::stopInstance(qint64 pid)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("StopInstance"),
+        pid
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::killInstance(qint64 pid)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("KillInstance"),
+        pid
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}

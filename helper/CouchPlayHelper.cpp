@@ -14,6 +14,7 @@
 
 #include <unistd.h>
 #include <sys/stat.h>
+#include <signal.h>
 #include <pwd.h>
 #include <grp.h>
 
@@ -25,6 +26,7 @@ static const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couc
 static const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couchplay.create-user");
 static const QString ACTION_ENABLE_LINGER = QStringLiteral("io.github.hikaps.couchplay.enable-linger");
 static const QString ACTION_WAYLAND_ACCESS = QStringLiteral("io.github.hikaps.couchplay.setup-wayland-access");
+static const QString ACTION_LAUNCH_INSTANCE = QStringLiteral("io.github.hikaps.couchplay.launch-instance");
 
 CouchPlayHelper::CouchPlayHelper(QObject *parent)
     : QObject(parent)
@@ -33,6 +35,20 @@ CouchPlayHelper::CouchPlayHelper(QObject *parent)
 
 CouchPlayHelper::~CouchPlayHelper()
 {
+    // Clean up: stop all launched processes
+    for (auto it = m_launchedProcesses.begin(); it != m_launchedProcesses.end(); ++it) {
+        QProcess *process = it.value();
+        if (process && process->state() != QProcess::NotRunning) {
+            process->terminate();
+            process->waitForFinished(3000);
+            if (process->state() != QProcess::NotRunning) {
+                process->kill();
+            }
+        }
+        delete process;
+    }
+    m_launchedProcesses.clear();
+
     // Clean up: reset all modified devices on shutdown
     if (!m_modifiedDevices.isEmpty()) {
         ResetAllDevices();
@@ -493,4 +509,214 @@ bool CouchPlayHelper::isValidDevicePath(const QString &path)
 
     // Must be a character device (input devices are char devices)
     return S_ISCHR(st.st_mode);
+}
+
+qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint primaryUid,
+                                        const QStringList &gamescopeArgs,
+                                        const QString &gameCommand,
+                                        const QStringList &environment)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return 0;
+    }
+
+    if (!checkAuthorization(ACTION_LAUNCH_INSTANCE)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to launch instances"));
+        return 0;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return 0;
+    }
+
+    // Verify primary user exists
+    struct passwd *pw = getpwuid(primaryUid);
+    if (!pw) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Primary user with UID %1 does not exist").arg(primaryUid));
+        return 0;
+    }
+
+    // Set up Wayland access for the secondary user first
+    // Call our own method - it will set up ACLs on the Wayland socket
+    if (!SetupWaylandAccess(username, primaryUid)) {
+        // SetupWaylandAccess already sends error reply
+        qWarning() << "Failed to set up Wayland access for" << username;
+        // Continue anyway - might work if ACLs were already set
+    }
+
+    // Build the command to execute
+    QString command = buildInstanceCommand(username, primaryUid, gamescopeArgs, 
+                                            gameCommand, environment);
+    
+    qDebug() << "LaunchInstance: Spawning for user" << username;
+    qDebug() << "LaunchInstance: Command:" << command.left(200) << "...";
+
+    // Create and start the process
+    QProcess *process = new QProcess(this);
+    
+    // Connect to finished signal to clean up
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, process](int exitCode, QProcess::ExitStatus exitStatus) {
+        qint64 pid = process->processId();
+        qDebug() << "LaunchInstance: Process" << pid << "finished with code" << exitCode
+                 << (exitStatus == QProcess::CrashExit ? "(crashed)" : "");
+        
+        // Clean up from our tracking map
+        m_launchedProcesses.remove(pid);
+        process->deleteLater();
+    });
+
+    // Start the process
+    process->start(QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
+    
+    if (!process->waitForStarted(5000)) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to start process: %1").arg(process->errorString()));
+        delete process;
+        return 0;
+    }
+
+    qint64 pid = process->processId();
+    m_launchedProcesses.insert(pid, process);
+    
+    qDebug() << "LaunchInstance: Started process with PID" << pid << "for user" << username;
+    return pid;
+}
+
+bool CouchPlayHelper::StopInstance(qint64 pid)
+{
+    if (!checkAuthorization(ACTION_LAUNCH_INSTANCE)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to stop instances"));
+        return false;
+    }
+
+    if (pid <= 0) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid PID"));
+        return false;
+    }
+
+    // Check if we have this process
+    if (m_launchedProcesses.contains(pid)) {
+        QProcess *process = m_launchedProcesses.value(pid);
+        if (process && process->state() != QProcess::NotRunning) {
+            process->terminate();
+            qDebug() << "StopInstance: Sent SIGTERM to PID" << pid;
+            return true;
+        }
+    }
+
+    // Process not in our map - try to signal it directly
+    // This allows stopping processes that might have been launched before a restart
+    if (::kill(static_cast<pid_t>(pid), SIGTERM) == 0) {
+        qDebug() << "StopInstance: Sent SIGTERM to external PID" << pid;
+        return true;
+    }
+
+    sendErrorReply(QDBusError::Failed, 
+        QStringLiteral("Failed to stop process %1: %2")
+            .arg(pid).arg(QString::fromLocal8Bit(strerror(errno))));
+    return false;
+}
+
+bool CouchPlayHelper::KillInstance(qint64 pid)
+{
+    if (!checkAuthorization(ACTION_LAUNCH_INSTANCE)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to kill instances"));
+        return false;
+    }
+
+    if (pid <= 0) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid PID"));
+        return false;
+    }
+
+    // Check if we have this process
+    if (m_launchedProcesses.contains(pid)) {
+        QProcess *process = m_launchedProcesses.value(pid);
+        if (process && process->state() != QProcess::NotRunning) {
+            process->kill();
+            qDebug() << "KillInstance: Sent SIGKILL to PID" << pid;
+            return true;
+        }
+    }
+
+    // Process not in our map - try to signal it directly
+    if (::kill(static_cast<pid_t>(pid), SIGKILL) == 0) {
+        qDebug() << "KillInstance: Sent SIGKILL to external PID" << pid;
+        return true;
+    }
+
+    sendErrorReply(QDBusError::Failed, 
+        QStringLiteral("Failed to kill process %1: %2")
+            .arg(pid).arg(QString::fromLocal8Bit(strerror(errno))));
+    return false;
+}
+
+QString CouchPlayHelper::buildInstanceCommand(const QString &username, uint primaryUid,
+                                               const QStringList &gamescopeArgs,
+                                               const QString &gameCommand,
+                                               const QStringList &environment)
+{
+    // Build environment exports for the secondary user
+    // Key insight: Let the secondary user use their OWN XDG_RUNTIME_DIR
+    // (so gamescope can create lockfiles there), but point WAYLAND_DISPLAY
+    // to the primary user's Wayland socket as an absolute path.
+    
+    QStringList exports;
+    
+    // Primary user's runtime directory for Wayland socket
+    QString primaryRuntimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
+    QString primaryWaylandSocket = primaryRuntimeDir + QStringLiteral("/wayland-0");
+    
+    // Set WAYLAND_DISPLAY to the absolute path of the primary user's Wayland socket
+    // The secondary user has ACL access to this socket (set up by SetupWaylandAccess)
+    exports << QStringLiteral("export WAYLAND_DISPLAY=%1").arg(primaryWaylandSocket);
+    
+    // For audio, point to the primary user's PipeWire socket
+    // PipeWire uses PIPEWIRE_RUNTIME_DIR if set, otherwise XDG_RUNTIME_DIR
+    exports << QStringLiteral("export PIPEWIRE_RUNTIME_DIR=%1").arg(primaryRuntimeDir);
+    
+    // Add any additional environment variables from the caller
+    for (const QString &var : environment) {
+        exports << QStringLiteral("export %1").arg(var);
+    }
+
+    // Build the gamescope command with logging
+    QString logFile = QStringLiteral("/tmp/couchplay-%1.log").arg(username);
+    
+    // Escape the game command for embedding in bash -c
+    QString gameCommandForBash = gameCommand;
+    gameCommandForBash.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    gameCommandForBash.replace(QLatin1Char('$'), QStringLiteral("\\$"));
+    gameCommandForBash.replace(QLatin1Char('`'), QStringLiteral("\\`"));
+    
+    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /bin/bash -c \"%2\" 2>&1 | tee %3")
+                               .arg(gamescopeArgs.join(QLatin1Char(' ')), gameCommandForBash, logFile);
+
+    // Escape the entire gamescopeCmd for embedding in single quotes
+    QString escapedGamescopeCmd = gamescopeCmd;
+    escapedGamescopeCmd.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+
+    // Join exports with semicolons
+    QString exportStr = exports.join(QStringLiteral("; "));
+
+    // Use machinectl shell to run in the user's systemd session
+    // This requires linger to be enabled for the user (done by CreateUser)
+    QString command = QStringLiteral("machinectl shell %1@ /bin/bash -c '%2; %3'")
+                          .arg(username, exportStr, escapedGamescopeCmd);
+
+    return command;
 }

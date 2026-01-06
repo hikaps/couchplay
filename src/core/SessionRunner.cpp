@@ -132,10 +132,6 @@ bool SessionRunner::start()
         config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
         config[QStringLiteral("launchMode")] = instConfig.launchMode;
         config[QStringLiteral("borderless")] = m_borderlessWindows;
-        
-        // Mark secondary users so gamescope uses appropriate backend
-        bool isSecondaryUser = (i > 0) && !instConfig.username.isEmpty();
-        config[QStringLiteral("isSecondaryUser")] = isSecondaryUser;
 
         // Get device paths for this instance
         if (m_deviceManager) {

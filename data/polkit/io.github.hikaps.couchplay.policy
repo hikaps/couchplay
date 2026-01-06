@@ -86,4 +86,17 @@
     <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
   </action>
 
+  <action id="io.github.hikaps.couchplay.launch-instance">
+    <description>Launch a gamescope instance as another user</description>
+    <description xml:lang="en">Launch a gamescope/Steam instance running as a secondary user for split-screen gaming</description>
+    <message>Authentication is required to launch a gaming instance</message>
+    <message xml:lang="en">Authentication is required to launch a gaming instance</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.setup-wayland-access</annotate>
+  </action>
+
 </policyconfig>

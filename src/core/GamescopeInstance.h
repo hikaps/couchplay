@@ -78,7 +78,7 @@ public:
 
     // Property getters
     int index() const { return m_index; }
-    qint64 pid() const { return m_process ? m_process->processId() : 0; }
+    qint64 pid() const { return m_helperPid > 0 ? m_helperPid : (m_process ? m_process->processId() : 0); }
     QString status() const { return m_status; }
     QString username() const { return m_username; }
     QRect windowGeometry() const { return m_windowGeometry; }
@@ -159,4 +159,5 @@ private:
     QRect m_windowGeometry;
     bool m_isPrimary = true;
     bool m_waylandAclSet = false;  // Track if we set up Wayland ACLs
+    qint64 m_helperPid = 0;        // PID from helper service (for secondary user instances)
 };

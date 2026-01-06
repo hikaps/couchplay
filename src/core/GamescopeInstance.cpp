@@ -30,7 +30,7 @@ GamescopeInstance::~GamescopeInstance()
 
 bool GamescopeInstance::start(const QVariantMap &config, int index)
 {
-    if (m_process && m_process->state() != QProcess::NotRunning) {
+    if (m_helperPid > 0 || (m_process && m_process->state() != QProcess::NotRunning)) {
         Q_EMIT errorOccurred(QStringLiteral("Instance already running"));
         return false;
     }
@@ -202,24 +202,64 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
             qWarning() << "Instance" << m_index << "failed to start:" << m_process->errorString();
         }
     } else {
-        // Secondary instance - run as different user via machinectl shell
-        // machinectl uses systemd user sessions, which provides proper isolation
+        // Secondary instance - run as different user via helper service
+        // The helper handles all the complexity of machinectl, environment setup, etc.
         
-        // Set up Wayland socket access for the secondary user via helper service
-        // This requires root, so we call the D-Bus helper
-        if (!setupWaylandAccessForUser(m_username)) {
-            qWarning() << "Instance" << m_index << "failed to set up Wayland access for" << m_username;
-            Q_EMIT errorOccurred(QStringLiteral("Failed to set up Wayland access for %1").arg(m_username));
-            // Continue anyway - might still work if ACLs were already set
+        qDebug() << "Instance" << m_index << "starting as" << m_username << "via helper service";
+        
+        // Use the D-Bus helper to launch the instance
+        QDBusInterface helper(
+            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+            QDBusConnection::systemBus()
+        );
+        
+        if (!helper.isValid()) {
+            qWarning() << "Instance" << m_index << "helper service not available, falling back to direct launch";
+            
+            // Fallback: try the old method (build command and run via bash)
+            if (!setupWaylandAccessForUser(m_username)) {
+                qWarning() << "Instance" << m_index << "failed to set up Wayland access for" << m_username;
+                Q_EMIT errorOccurred(QStringLiteral("Failed to set up Wayland access for %1").arg(m_username));
+            }
+            
+            QString command = buildSecondaryUserCommand(m_username, envVars, gamescopeArgs, gameCommand);
+            setStatus(QStringLiteral("Starting as %1...").arg(m_username));
+            m_process->start(QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
+        } else {
+            // Use the helper service to launch the instance
+            uid_t primaryUid = getuid();
+            
+            QDBusReply<qint64> reply = helper.call(
+                QStringLiteral("LaunchInstance"),
+                m_username,
+                static_cast<uint>(primaryUid),
+                gamescopeArgs,
+                gameCommand,
+                envVars
+            );
+            
+            if (!reply.isValid()) {
+                qWarning() << "Instance" << m_index << "helper LaunchInstance failed:" << reply.error().message();
+                Q_EMIT errorOccurred(QStringLiteral("Failed to launch instance: %1").arg(reply.error().message()));
+                return false;
+            }
+            
+            m_helperPid = reply.value();
+            if (m_helperPid == 0) {
+                qWarning() << "Instance" << m_index << "helper returned PID 0";
+                Q_EMIT errorOccurred(QStringLiteral("Helper service failed to launch instance"));
+                return false;
+            }
+            
+            qDebug() << "Instance" << m_index << "launched via helper with PID" << m_helperPid;
+            setStatus(QStringLiteral("Running as %1").arg(m_username));
+            
+            // We don't have a QProcess for helper-launched instances, so signal running immediately
+            Q_EMIT runningChanged();
+            Q_EMIT started();
         }
-        
-        // Build the machinectl shell command
-        QString command = buildSecondaryUserCommand(m_username, envVars, gamescopeArgs, gameCommand);
-
-        qDebug() << "Instance" << m_index << "starting as" << m_username;
-
-        setStatus(QStringLiteral("Starting as %1...").arg(m_username));
-        m_process->start(QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
     }
 
     return true;
@@ -227,6 +267,35 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
 
 void GamescopeInstance::stop(int timeoutMs)
 {
+    // Handle helper-launched instances
+    if (m_helperPid > 0) {
+        setStatus(QStringLiteral("Stopping..."));
+        
+        QDBusInterface helper(
+            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+            QDBusConnection::systemBus()
+        );
+        
+        if (helper.isValid()) {
+            QDBusReply<bool> reply = helper.call(QStringLiteral("StopInstance"), m_helperPid);
+            if (!reply.isValid() || !reply.value()) {
+                qWarning() << "Instance" << m_index << "helper StopInstance failed, trying KillInstance";
+                helper.call(QStringLiteral("KillInstance"), m_helperPid);
+            }
+        }
+        
+        // Clean up Wayland ACLs for secondary user
+        cleanupWaylandAccess();
+        
+        m_helperPid = 0;
+        setStatus(QStringLiteral("Stopped"));
+        Q_EMIT runningChanged();
+        Q_EMIT stopped();
+        return;
+    }
+
     if (!m_process) {
         return;
     }
@@ -256,6 +325,31 @@ void GamescopeInstance::stop(int timeoutMs)
 
 void GamescopeInstance::kill()
 {
+    // Handle helper-launched instances
+    if (m_helperPid > 0) {
+        setStatus(QStringLiteral("Killing..."));
+        
+        QDBusInterface helper(
+            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+            QDBusConnection::systemBus()
+        );
+        
+        if (helper.isValid()) {
+            helper.call(QStringLiteral("KillInstance"), m_helperPid);
+        }
+        
+        // Clean up Wayland ACLs for secondary user
+        cleanupWaylandAccess();
+        
+        m_helperPid = 0;
+        setStatus(QStringLiteral("Killed"));
+        Q_EMIT runningChanged();
+        Q_EMIT stopped();
+        return;
+    }
+
     if (!m_process) {
         return;
     }
@@ -279,6 +373,10 @@ void GamescopeInstance::kill()
 
 bool GamescopeInstance::isRunning() const
 {
+    // Check helper-launched instances
+    if (m_helperPid > 0) {
+        return true;  // Assume running if we have a PID (we can't easily check)
+    }
     return m_process && m_process->state() == QProcess::Running;
 }
 

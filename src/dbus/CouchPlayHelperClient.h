@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QDBusInterface>
 #include <QString>
+#include <QStringList>
 #include <qqmlintegration.h>
 
 /**
@@ -45,6 +46,34 @@ public:
      * @brief Create a new user account
      */
     Q_INVOKABLE bool createUser(const QString &username);
+
+    /**
+     * @brief Launch a gamescope instance as a secondary user
+     * @param username Secondary user to run as
+     * @param primaryUid UID of primary user (for Wayland socket access)
+     * @param gamescopeArgs Gamescope command-line arguments
+     * @param gameCommand Command to run inside gamescope
+     * @param environment Additional environment variables (VAR=value format)
+     * @return PID of launched process, or 0 on failure
+     */
+    Q_INVOKABLE qint64 launchInstance(const QString &username, uint primaryUid,
+                                       const QStringList &gamescopeArgs,
+                                       const QString &gameCommand,
+                                       const QStringList &environment);
+
+    /**
+     * @brief Stop a launched instance gracefully (SIGTERM)
+     * @param pid Process ID to stop
+     * @return true if successfully signaled
+     */
+    Q_INVOKABLE bool stopInstance(qint64 pid);
+
+    /**
+     * @brief Kill a launched instance forcefully (SIGKILL)
+     * @param pid Process ID to kill
+     * @return true if successfully signaled
+     */
+    Q_INVOKABLE bool killInstance(qint64 pid);
 
     /**
      * @brief Check helper availability
