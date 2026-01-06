@@ -183,8 +183,12 @@ void TestGamescopeInstance::testBuildArgsPosition()
 
 void TestGamescopeInstance::testBuildArgsInputDevices()
 {
-    // Create a temporary file to simulate a device path
-    // Since we can't create real device files, test with a file that exists
+    // Input device isolation is NOT done via gamescope flags.
+    // Gamescope has no --input-device flag, and --grab only grabs keyboard.
+    // Instead, isolation is achieved by changing device ownership (chown/chmod 600)
+    // so each user can only read devices they own.
+    // This test verifies we DON'T pass invalid gamescope flags.
+    
     QVariantMap config;
     QVariantList devices;
     devices << QStringLiteral("/dev/null"); // Use /dev/null as a stand-in
@@ -192,12 +196,11 @@ void TestGamescopeInstance::testBuildArgsInputDevices()
     
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
     
-    int inputIdx = args.indexOf(QStringLiteral("--input-device"));
-    QVERIFY(inputIdx >= 0);
-    QCOMPARE(args[inputIdx + 1], QStringLiteral("/dev/null"));
+    // Should NOT contain --input-device (not a valid gamescope flag)
+    QVERIFY(!args.contains(QStringLiteral("--input-device")));
     
-    // Should also have --grab when devices are specified
-    QVERIFY(args.contains(QStringLiteral("--grab")));
+    // Should NOT contain --grab (only grabs keyboard, not useful for gamepad isolation)
+    QVERIFY(!args.contains(QStringLiteral("--grab")));
 }
 
 void TestGamescopeInstance::testBuildArgsFullConfig()
@@ -232,8 +235,9 @@ void TestGamescopeInstance::testBuildArgsFullConfig()
     QVERIFY(args.contains(QStringLiteral("-F")));
     // NOTE: --position is disabled due to gamescope version compatibility
     QVERIFY(!args.contains(QStringLiteral("--position")));
-    QVERIFY(args.contains(QStringLiteral("--input-device")));
-    QVERIFY(args.contains(QStringLiteral("--grab")));
+    // NOTE: Input device isolation is done via ownership, not gamescope flags
+    QVERIFY(!args.contains(QStringLiteral("--input-device")));
+    QVERIFY(!args.contains(QStringLiteral("--grab")));
 }
 
 // ============ buildEnvironment Tests ============

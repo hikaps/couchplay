@@ -451,19 +451,11 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
         args << QStringLiteral("--prefer-output") << monitorName;
     }
 
-    // Input device isolation - critical for split-screen
-    QVariantList devicePaths = config.value(QStringLiteral("devicePaths")).toList();
-    for (const QVariant &path : devicePaths) {
-        QString devicePath = path.toString();
-        if (!devicePath.isEmpty() && QFile::exists(devicePath)) {
-            args << QStringLiteral("--input-device") << devicePath;
-        }
-    }
-
-    // If we have input devices, enable grab mode
-    if (!devicePaths.isEmpty()) {
-        args << QStringLiteral("--grab");
-    }
+    // NOTE: Input device isolation is handled via device ownership (chown/chmod),
+    // NOT via gamescope flags. The --input-device flag doesn't exist in gamescope,
+    // and --grab only grabs the keyboard, not gamepads/controllers.
+    // Device isolation works because each user can only read devices they own.
+    // See helper's ChangeDeviceOwner() method.
 
     return args;
 }
