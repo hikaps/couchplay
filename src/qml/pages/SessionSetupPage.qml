@@ -270,8 +270,6 @@ Kirigami.ScrollablePage {
                         target: sessionManager
                         function onInstancesChanged() {
                             let cfg = sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
-                            resWidthSpin.value = cfg.internalWidth || 1920
-                            resHeightSpin.value = cfg.internalHeight || 1080
                             refreshSpin.value = cfg.refreshRate || 60
                             // Update user combo selection from config
                             let savedUser = cfg.username || ""
@@ -348,46 +346,37 @@ Kirigami.ScrollablePage {
                         Layout.fillWidth: true
                     }
 
-                    RowLayout {
+                    // Resolution is auto-calculated from monitor size and layout
+                    Controls.Label {
                         Kirigami.FormData.label: instanceCard.labelResolution
-                        spacing: Kirigami.Units.smallSpacing
-
-                        Controls.SpinBox {
-                            id: resWidthSpin
-                            from: 640
-                            to: 3840
-                            value: parent.parent.config.internalWidth || 1920
-                            stepSize: 10
-                            editable: true
+                        text: {
+                            // Get screen size and calculate based on layout
+                            let screen = Qt.application.screens[0]
+                            if (!screen) return "1920 x 1080"
                             
-                            onValueModified: updateResolution()
-                        }
-
-                        Controls.Label {
-                            text: "x"
-                        }
-
-                        Controls.SpinBox {
-                            id: resHeightSpin
-                            from: 480
-                            to: 2160
-                            value: parent.parent.config.internalHeight || 1080
-                            stepSize: 10
-                            editable: true
+                            let screenW = screen.width
+                            let screenH = screen.height
+                            let count = sessionManager ? sessionManager.instanceCount : 2
+                            let layout = sessionManager ? sessionManager.currentLayout : "side-by-side"
                             
-                            onValueModified: updateResolution()
-                        }
-
-                        function updateResolution() {
-                            if (sessionManager) {
-                                // For split-screen, output size is calculated by SessionRunner
-                                sessionManager.setInstanceResolution(
-                                    instanceCard.index,
-                                    resWidthSpin.value, resHeightSpin.value,
-                                    resWidthSpin.value, resHeightSpin.value
-                                )
+                            let w = screenW
+                            let h = screenH
+                            
+                            if (layout === "side-by-side") {
+                                w = Math.floor(screenW / count)
+                            } else if (layout === "stacked") {
+                                h = Math.floor(screenH / count)
+                            } else if (layout === "grid") {
+                                let cols = Math.ceil(Math.sqrt(count))
+                                let rows = Math.ceil(count / cols)
+                                w = Math.floor(screenW / cols)
+                                h = Math.floor(screenH / rows)
                             }
+                            // fullscreen: each instance uses full screen (overlapping)
+                            
+                            return w + " x " + h
                         }
+                        opacity: 0.8
                     }
 
                     Controls.SpinBox {

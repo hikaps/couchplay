@@ -10,10 +10,13 @@
 #include <QRect>
 #include <qqmlintegration.h>
 
+class QAction;
+
 class GamescopeInstance;
 class DeviceManager;
 class SessionManager;
 class CouchPlayHelperClient;
+class WindowManager;
 
 /**
  * @brief Orchestrates running a complete split-screen gaming session
@@ -123,6 +126,8 @@ private Q_SLOTS:
     void onInstanceStarted();
     void onInstanceStopped();
     void onInstanceError(const QString &message);
+    void onWindowPositioned(int requestId, const QString &windowId);
+    void onWindowPositioningTimeout(int requestId);
 
 private:
     void setStatus(const QString &status);
@@ -130,12 +135,17 @@ private:
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
     QRect getScreenGeometry() const;
+    void positionInstanceWindow(GamescopeInstance *instance);
+    void setupGlobalShortcut();
 
     QList<GamescopeInstance*> m_instances;
     SessionManager *m_sessionManager = nullptr;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
+    WindowManager *m_windowManager = nullptr;
+    QAction *m_stopAction = nullptr;
     QString m_status;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
+    QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
     bool m_borderlessWindows = false; // Default to decorated windows
 };

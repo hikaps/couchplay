@@ -5,17 +5,32 @@
 #include "GamescopeInstance.h"
 #include "SessionManager.h"
 #include "DeviceManager.h"
+#include "WindowManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 
+#include <QAction>
 #include <QDebug>
-#include <QScreen>
 #include <QGuiApplication>
+#include <QScreen>
 #include <QSet>
+
+#include <KGlobalAccel>
+#include <KLocalizedString>
 
 SessionRunner::SessionRunner(QObject *parent)
     : QObject(parent)
+    , m_windowManager(new WindowManager(this))
 {
     setStatus(QStringLiteral("Ready"));
+    
+    // Set up global shortcut for stopping session
+    setupGlobalShortcut();
+    
+    // Connect to window positioning signals
+    connect(m_windowManager, &WindowManager::gamescopeWindowPositioned,
+            this, &SessionRunner::onWindowPositioned);
+    connect(m_windowManager, &WindowManager::positioningTimedOut,
+            this, &SessionRunner::onWindowPositioningTimeout);
 }
 
 SessionRunner::~SessionRunner()
@@ -119,8 +134,11 @@ bool SessionRunner::start()
         QVariantMap config;
         config[QStringLiteral("username")] = instConfig.username;
         config[QStringLiteral("monitor")] = instConfig.monitor;
-        config[QStringLiteral("internalWidth")] = instConfig.internalWidth;
-        config[QStringLiteral("internalHeight")] = instConfig.internalHeight;
+        
+        // Derive resolution from layout - internal resolution matches output resolution
+        // This ensures games render at the correct size for their window
+        config[QStringLiteral("internalWidth")] = layouts[i].width();
+        config[QStringLiteral("internalHeight")] = layouts[i].height();
         config[QStringLiteral("outputWidth")] = layouts[i].width();
         config[QStringLiteral("outputHeight")] = layouts[i].height();
         config[QStringLiteral("positionX")] = layouts[i].x();
@@ -237,10 +255,16 @@ QVariantList SessionRunner::instancesAsVariant() const
 
 void SessionRunner::cleanupInstances()
 {
+    // Cancel any pending window positioning requests
+    if (m_windowManager) {
+        m_windowManager->cancelAllRequests();
+    }
+    
     for (auto *instance : m_instances) {
         instance->deleteLater();
     }
     m_instances.clear();
+    m_positionedWindowIds.clear(); // Clear tracked window IDs for next session
 }
 
 bool SessionRunner::setupDeviceOwnership()
@@ -365,6 +389,9 @@ void SessionRunner::onInstanceStarted()
 {
     auto *instance = qobject_cast<GamescopeInstance*>(sender());
     if (instance) {
+        // Position the window after a short delay to allow it to appear
+        positionInstanceWindow(instance);
+        
         Q_EMIT instanceStarted(instance->index());
         Q_EMIT instancesChanged();
         Q_EMIT runningInstanceCountChanged();
@@ -399,4 +426,67 @@ void SessionRunner::onInstanceError(const QString &message)
         fullMessage = message;
     }
     Q_EMIT errorOccurred(fullMessage);
+}
+
+void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
+{
+    if (!instance || !m_windowManager || !m_windowManager->isAvailable()) {
+        qDebug() << "SessionRunner: Window positioning not available";
+        return;
+    }
+
+    QRect targetGeometry = instance->windowGeometry();
+    int instanceIndex = instance->index();
+    
+    qDebug() << "SessionRunner: Queueing position request for instance" << instanceIndex 
+             << "geometry:" << targetGeometry
+             << "excluding" << m_positionedWindowIds.size() << "already-positioned windows";
+
+    // Queue a position request - the WindowManager will find and position
+    // the next gamescope window that appears (excluding already-positioned ones)
+    m_windowManager->queuePositionRequest(
+        instanceIndex,
+        targetGeometry,
+        m_positionedWindowIds,
+        60000  // 60 second timeout for Steam login on secondary instances
+    );
+}
+
+void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
+{
+    qDebug() << "SessionRunner: Instance" << requestId << "window positioned:" << windowId;
+    
+    // Track this window so it's excluded from future positioning
+    if (!m_positionedWindowIds.contains(windowId)) {
+        m_positionedWindowIds.append(windowId);
+    }
+}
+
+void SessionRunner::onWindowPositioningTimeout(int requestId)
+{
+    qWarning() << "SessionRunner: Failed to position window for instance" << requestId 
+               << "after timeout";
+    Q_EMIT errorOccurred(QStringLiteral("Failed to position window for instance %1").arg(requestId));
+}
+
+void SessionRunner::setupGlobalShortcut()
+{
+    m_stopAction = new QAction(this);
+    m_stopAction->setObjectName(QStringLiteral("stop-couchplay-session"));
+    m_stopAction->setText(i18nc("@action", "Stop CouchPlay Session"));
+    m_stopAction->setProperty("componentName", QStringLiteral("couchplay"));
+    
+    // Only stop if session is actually running
+    connect(m_stopAction, &QAction::triggered, this, [this]() {
+        if (isRunning()) {
+            qDebug() << "SessionRunner: Stop session triggered via global shortcut";
+            stop();
+        }
+    });
+    
+    // Set default shortcut: Meta+Shift+Escape
+    KGlobalAccel::setGlobalShortcut(m_stopAction, 
+        QList<QKeySequence>() << QKeySequence(Qt::META | Qt::SHIFT | Qt::Key_Escape));
+    
+    qDebug() << "SessionRunner: Global shortcut registered (Meta+Shift+Escape)";
 }

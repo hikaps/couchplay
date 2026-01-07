@@ -242,6 +242,44 @@ Kirigami.ScrollablePage {
             }
         }
 
+        // Keyboard Shortcuts Section
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            wideMode: false
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Keyboard Shortcuts")
+            }
+
+            RowLayout {
+                Kirigami.FormData.label: i18nc("@label", "Stop session:")
+                spacing: Kirigami.Units.smallSpacing
+
+                Controls.Label {
+                    text: "Meta+Shift+Escape"
+                    font.family: "monospace"
+                }
+
+                Controls.Button {
+                    text: i18nc("@action:button", "Configure...")
+                    icon.name: "configure-shortcuts"
+                    onClicked: {
+                        // Open KDE Global Shortcuts settings for couchplay
+                        Qt.openUrlExternally("systemsettings://kcm_keys?search=couchplay")
+                    }
+                }
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: " "
+                text: i18nc("@info", "You can also use Alt+Tab to switch away from gamescope windows.")
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                Layout.fillWidth: true
+            }
+        }
+
         // Helper info card
         Kirigami.InlineMessage {
             Layout.fillWidth: true

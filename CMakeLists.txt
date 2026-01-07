@@ -46,6 +46,7 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     Config
     IconThemes
     QQC2DesktopStyle
+    GlobalAccel
 )
 
 # Find QML modules at runtime

@@ -44,6 +44,8 @@ target_sources(couchplay PRIVATE
     core/GameLibrary.h
     core/AudioManager.cpp
     core/AudioManager.h
+    core/WindowManager.cpp
+    core/WindowManager.h
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )
@@ -62,6 +64,7 @@ target_link_libraries(couchplay PRIVATE
     KF6::ConfigCore
     KF6::ConfigGui
     KF6::IconThemes
+    KF6::GlobalAccel
 )
 
 # Include directories
