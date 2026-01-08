@@ -17,6 +17,8 @@
 #include <KGlobalAccel>
 #include <KLocalizedString>
 
+#include <pwd.h>
+
 SessionRunner::SessionRunner(QObject *parent)
     : QObject(parent)
     , m_windowManager(new WindowManager(this))
@@ -59,6 +61,14 @@ void SessionRunner::setDeviceManager(DeviceManager *manager)
     if (m_deviceManager != manager) {
         m_deviceManager = manager;
         Q_EMIT deviceManagerChanged();
+    }
+}
+
+void SessionRunner::setHelperClient(CouchPlayHelperClient *client)
+{
+    if (m_helperClient != client) {
+        m_helperClient = client;
+        Q_EMIT helperClientChanged();
     }
 }
 
@@ -270,31 +280,59 @@ void SessionRunner::cleanupInstances()
 bool SessionRunner::setupDeviceOwnership()
 {
     if (!m_deviceManager || !m_helperClient) {
+        qDebug() << "SessionRunner: Skipping device ownership setup (no helper or device manager)";
         return true; // No helper, skip ownership setup
     }
 
-    // Get all device paths that need ownership changes
+    if (!m_helperClient->isAvailable()) {
+        qWarning() << "SessionRunner: Helper not available, skipping device ownership setup";
+        return true;
+    }
+
+    // Clear previous ownership tracking
     m_ownedDevicePaths.clear();
 
-    // For each instance, get its assigned devices
-    if (m_sessionManager) {
-        const auto &profile = m_sessionManager->currentProfile();
-        for (int i = 0; i < profile.instances.size(); ++i) {
-            QStringList paths = m_deviceManager->getDevicePathsForInstance(i);
-            for (const QString &path : paths) {
+    // For each instance, get its assigned devices and set ownership
+    if (!m_sessionManager) {
+        return true;
+    }
+
+    const auto &profile = m_sessionManager->currentProfile();
+    
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        const QString &username = profile.instances[i].username;
+        
+        if (username.isEmpty()) {
+            qDebug() << "SessionRunner: Instance" << i << "has no assigned user, skipping device ownership";
+            continue;
+        }
+        
+        // Get UID for this user
+        struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+        if (!pw) {
+            qWarning() << "SessionRunner: User" << username << "not found, skipping device ownership for instance" << i;
+            continue;
+        }
+        int uid = static_cast<int>(pw->pw_uid);
+        
+        // Get device paths assigned to this instance
+        QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
+        
+        for (const QString &path : devicePaths) {
+            qDebug() << "SessionRunner: Setting ownership of" << path << "to user" << username << "(uid" << uid << ")";
+            
+            if (m_helperClient->setDeviceOwner(path, uid)) {
                 if (!m_ownedDevicePaths.contains(path)) {
                     m_ownedDevicePaths.append(path);
                 }
+            } else {
+                qWarning() << "SessionRunner: Failed to set ownership of" << path;
+                Q_EMIT errorOccurred(QStringLiteral("Failed to set device ownership for %1").arg(path));
             }
         }
     }
 
-    // TODO: Call helper to change device ownership
-    // This requires the polkit helper to be running
-    // for (const QString &path : m_ownedDevicePaths) {
-    //     m_helperClient->setDeviceOwner(path, targetUid, targetGid);
-    // }
-
+    qDebug() << "SessionRunner: Set ownership on" << m_ownedDevicePaths.size() << "devices";
     return true;
 }
 
@@ -304,9 +342,17 @@ void SessionRunner::restoreDeviceOwnership()
         return;
     }
 
-    // TODO: Call helper to restore device ownership
-    // m_helperClient->restoreAllDevices();
+    if (!m_helperClient->isAvailable()) {
+        qWarning() << "SessionRunner: Helper not available, cannot restore device ownership";
+        m_ownedDevicePaths.clear();
+        return;
+    }
 
+    qDebug() << "SessionRunner: Restoring ownership on" << m_ownedDevicePaths.size() << "devices";
+    
+    // Use restoreAllDevices() which resets all modified devices tracked by the helper
+    m_helperClient->restoreAllDevices();
+    
     m_ownedDevicePaths.clear();
 }
 

@@ -87,6 +87,15 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
         return false;
     }
 
+    // Set permissions to 0600 (owner read/write only) for input isolation
+    // This ensures only the assigned user can read the device, not the group
+    if (chmod(devicePath.toLocal8Bit().constData(), 0600) != 0) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to set permissions on %1: %2")
+                .arg(devicePath, QString::fromLocal8Bit(strerror(errno))));
+        return false;
+    }
+
     // Track this device for cleanup
     if (!m_modifiedDevices.contains(devicePath)) {
         m_modifiedDevices.append(devicePath);
@@ -120,10 +129,21 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
         return false;
     }
 
-    // Reset to root:root
-    if (chown(devicePath.toLocal8Bit().constData(), 0, 0) != 0) {
+    // Get the 'input' group GID for proper reset
+    struct group *inputGroup = getgrnam("input");
+    gid_t inputGid = inputGroup ? inputGroup->gr_gid : 0;
+
+    // Reset to root:input (or root:root if input group doesn't exist)
+    if (chown(devicePath.toLocal8Bit().constData(), 0, inputGid) != 0) {
         sendErrorReply(QDBusError::Failed, 
             QStringLiteral("Failed to reset ownership of %1").arg(devicePath));
+        return false;
+    }
+
+    // Restore permissions to 0660 (owner and group read/write)
+    if (chmod(devicePath.toLocal8Bit().constData(), 0660) != 0) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to reset permissions on %1").arg(devicePath));
         return false;
     }
 
@@ -136,9 +156,15 @@ int CouchPlayHelper::ResetAllDevices()
     int successCount = 0;
     QStringList devices = m_modifiedDevices; // Copy since we modify during iteration
     
+    // Get the 'input' group GID for proper reset
+    struct group *inputGroup = getgrnam("input");
+    gid_t inputGid = inputGroup ? inputGroup->gr_gid : 0;
+    
     for (const QString &path : devices) {
         // Direct reset without auth check for cleanup scenarios
-        if (chown(path.toLocal8Bit().constData(), 0, 0) == 0) {
+        // Reset to root:input with 0660 permissions
+        if (chown(path.toLocal8Bit().constData(), 0, inputGid) == 0 &&
+            chmod(path.toLocal8Bit().constData(), 0660) == 0) {
             successCount++;
             m_modifiedDevices.removeAll(path);
         }

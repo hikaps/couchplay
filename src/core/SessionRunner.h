@@ -10,12 +10,13 @@
 #include <QRect>
 #include <qqmlintegration.h>
 
+#include "../dbus/CouchPlayHelperClient.h"
+
 class QAction;
 
 class GamescopeInstance;
 class DeviceManager;
 class SessionManager;
-class CouchPlayHelperClient;
 class WindowManager;
 
 /**
@@ -45,6 +46,7 @@ class SessionRunner : public QObject
     // Dependencies
     Q_PROPERTY(SessionManager* sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
     Q_PROPERTY(DeviceManager* deviceManager READ deviceManager WRITE setDeviceManager NOTIFY deviceManagerChanged)
+    Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -94,6 +96,9 @@ public:
     DeviceManager* deviceManager() const { return m_deviceManager; }
     void setDeviceManager(DeviceManager *manager);
 
+    CouchPlayHelperClient* helperClient() const { return m_helperClient; }
+    void setHelperClient(CouchPlayHelperClient *client);
+
     bool borderlessWindows() const { return m_borderlessWindows; }
     void setBorderlessWindows(bool borderless);
 
@@ -115,6 +120,7 @@ Q_SIGNALS:
     void instancesChanged();
     void sessionManagerChanged();
     void deviceManagerChanged();
+    void helperClientChanged();
     void borderlessWindowsChanged();
     void errorOccurred(const QString &message);
     void sessionStarted();

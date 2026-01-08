@@ -398,6 +398,8 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
             win.frameGeometry = {x: targetX, y: targetY, width: targetW, height: targetH};
             // Remove decorations for cleaner positioning
             win.noBorder = true;
+            // Keep above other windows (including panels) for immersive gaming
+            win.keepAbove = true;
             // Hide from taskbar/pager but keep in Alt+Tab for emergency access
             win.skipTaskbar = true;
             win.skipPager = true;

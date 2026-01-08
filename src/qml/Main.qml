@@ -29,6 +29,7 @@ Kirigami.ApplicationWindow {
         id: sessionRunner
         sessionManager: sessionManager
         deviceManager: deviceManager
+        helperClient: helperClient
 
         onErrorOccurred: (message) => {
             applicationWindow().showPassiveNotification(message, "long")
