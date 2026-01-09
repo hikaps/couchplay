@@ -253,3 +253,46 @@ connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished)
         this, &MyClass::onProcessFinished);
 connect(m_process, &QProcess::errorOccurred, this, &MyClass::onProcessError);
 ```
+
+## Branch Documentation
+
+When working on feature branches, check `docs/branches/<branch-name>/` for:
+
+- **`PLAN.md`** - Detailed implementation plan, design decisions, task breakdown, and requirements
+- **`PROGRESS.md`** - Current progress, completed tasks, blockers, and session logs
+
+### Guidelines
+
+1. **Before starting work on a branch**, read the PLAN.md and PROGRESS.md to understand:
+   - Design decisions already made
+   - Tasks completed and remaining
+   - Any blockers or dependencies
+
+2. **When making significant decisions**, document them in PLAN.md:
+   - What was decided
+   - Why (rationale)
+   - Any alternatives considered
+
+3. **After completing tasks**, update PROGRESS.md:
+   - Mark tasks as complete
+   - Note any issues encountered
+   - Add session log entry with date
+
+4. **When encountering blockers**, document in PROGRESS.md:
+   - What is blocked
+   - Why (dependency, technical issue, etc.)
+   - What needs to happen to unblock
+
+### Branch Naming Convention
+
+Feature branches follow the pattern: `feature/<feature-name>`
+
+The corresponding docs folder uses the same name: `docs/branches/feature-<feature-name>/`
+
+### Current Feature Branches
+
+| Branch | Description | Status |
+|--------|-------------|--------|
+| `feature/systemd-run` | Replace machinectl with systemd-run | Not started |
+| `feature/launch-presets` | Preset system for launch commands | Not started |
+| `feature/equal-users` | Eliminate primary user concept | Blocked by systemd-run |
