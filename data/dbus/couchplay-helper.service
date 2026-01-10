@@ -12,15 +12,16 @@ ExecStart=/usr/local/libexec/couchplay-helper
 User=root
 Group=root
 
-# Security hardening - relaxed for user creation
+# Security hardening - relaxed for user creation and systemd-run
 # NOTE: User creation requires write access to /etc and /home, so we use minimal restrictions
+# NOTE: ProtectControlGroups must be false to allow systemd-run to create transient units
 NoNewPrivileges=false
 ProtectSystem=false
 ProtectHome=false
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
-ProtectControlGroups=true
+ProtectControlGroups=false
 RestrictRealtime=true
 RestrictSUIDSGID=false
 MemoryDenyWriteExecute=true

@@ -12,6 +12,7 @@ add_executable(couchplay-helper
 target_link_libraries(couchplay-helper PRIVATE
     Qt6::Core
     Qt6::DBus
+    KF6::CoreAddons
 )
 
 # Install to libexec

@@ -203,7 +203,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         }
     } else {
         // Secondary instance - run as different user via helper service
-        // The helper handles all the complexity of machinectl, environment setup, etc.
+        // The helper handles all the complexity of systemd-run, environment setup, etc.
         
         qDebug() << "Instance" << m_index << "starting as" << m_username << "via helper service";
         
@@ -229,15 +229,41 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
             m_process->start(QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
         } else {
             // Use the helper service to launch the instance
-            uid_t primaryUid = getuid();
+            uid_t compositorUid = getuid();
+            
+            // Build list of shared directories that the secondary user needs access to
+            // This includes Steam library, Proton prefixes, game directories, etc.
+            QStringList sharedDirectories;
+            
+            // Add Steam library paths
+            QString steamDir = QDir::homePath() + QStringLiteral("/.local/share/Steam");
+            if (QDir(steamDir).exists()) {
+                sharedDirectories << steamDir;
+            }
+            
+            // Add Proton prefix path if specified
+            QString prefixPath = config.value(QStringLiteral("prefixPath")).toString();
+            if (!prefixPath.isEmpty() && QDir(prefixPath).exists()) {
+                sharedDirectories << prefixPath;
+            }
+            
+            // Add executable's directory if in direct launch mode
+            if (!executablePath.isEmpty()) {
+                QString execDir = QFileInfo(executablePath).absolutePath();
+                if (QDir(execDir).exists()) {
+                    sharedDirectories << execDir;
+                }
+            }
             
             QDBusReply<qint64> reply = helper.call(
                 QStringLiteral("LaunchInstance"),
                 m_username,
-                static_cast<uint>(primaryUid),
+                static_cast<uint>(compositorUid),
                 gamescopeArgs,
                 gameCommand,
-                envVars
+                envVars,
+                sharedDirectories,
+                workingDirectory
             );
             
             if (!reply.isValid()) {

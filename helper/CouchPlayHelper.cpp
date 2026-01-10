@@ -8,15 +8,20 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLoggingCategory>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QDebug>
+
+#include <KShell>
 
 #include <unistd.h>
 #include <sys/stat.h>
 #include <signal.h>
 #include <pwd.h>
 #include <grp.h>
+
+Q_LOGGING_CATEGORY(lcHelper, "couchplay.helper")
 
 // Version of the helper daemon
 static const QString HELPER_VERSION = QStringLiteral("0.1.0");
@@ -258,6 +263,12 @@ uint CouchPlayHelper::getUserUid(const QString &username)
     return pw ? pw->pw_uid : 0;
 }
 
+uint CouchPlayHelper::getUserGid(const QString &username)
+{
+    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+    return pw ? pw->pw_gid : 0;
+}
+
 bool CouchPlayHelper::EnableLinger(const QString &username)
 {
     // Validate username
@@ -492,6 +503,108 @@ bool CouchPlayHelper::RemoveWaylandAccess(const QString &username, uint primaryU
     return success;
 }
 
+bool CouchPlayHelper::SetupDirectoryAccess(const QString &username, const QString &directoryPath)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        qCWarning(lcHelper) << "SetupDirectoryAccess: Invalid username format:" << username;
+        return false;
+    }
+
+    // Validate directory path
+    if (directoryPath.isEmpty() || !directoryPath.startsWith(QLatin1Char('/'))) {
+        qCWarning(lcHelper) << "SetupDirectoryAccess: Invalid directory path:" << directoryPath;
+        return false;
+    }
+
+    // Check for path traversal attempts
+    if (directoryPath.contains(QStringLiteral(".."))) {
+        qCWarning(lcHelper) << "SetupDirectoryAccess: Path contains '..':" << directoryPath;
+        return false;
+    }
+
+    // Build list of directories to set ACLs on (from target up to /home or /)
+    QStringList dirsToSetAcl;
+    QString currentPath = directoryPath;
+    
+    // Normalize path - remove trailing slash
+    while (currentPath.endsWith(QLatin1Char('/')) && currentPath.length() > 1) {
+        currentPath.chop(1);
+    }
+    
+    // Walk up the directory tree
+    while (!currentPath.isEmpty() && currentPath != QStringLiteral("/")) {
+        dirsToSetAcl.prepend(currentPath);
+        
+        // Stop at /home to avoid modifying system directories
+        if (currentPath == QStringLiteral("/home")) {
+            break;
+        }
+        
+        // Move to parent directory
+        int lastSlash = currentPath.lastIndexOf(QLatin1Char('/'));
+        if (lastSlash <= 0) {
+            break;
+        }
+        currentPath = currentPath.left(lastSlash);
+    }
+
+    if (dirsToSetAcl.isEmpty()) {
+        qCWarning(lcHelper) << "SetupDirectoryAccess: No directories to set ACLs on";
+        return false;
+    }
+
+    qCDebug(lcHelper) << "SetupDirectoryAccess: Setting ACLs for" << username 
+                      << "on" << dirsToSetAcl.size() << "directories";
+
+    // Set ACLs on each directory in the chain
+    bool allSuccess = true;
+    for (const QString &dir : dirsToSetAcl) {
+        if (!QFile::exists(dir)) {
+            qCWarning(lcHelper) << "SetupDirectoryAccess: Directory does not exist:" << dir;
+            continue;
+        }
+
+        // Grant read and execute permission (traverse + read directory contents)
+        QProcess setfacl;
+        setfacl.start(QStringLiteral("setfacl"),
+            {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username), dir});
+        setfacl.waitForFinished(5000);
+
+        if (setfacl.exitCode() != 0) {
+            qCWarning(lcHelper) << "SetupDirectoryAccess: Failed to set ACL on" << dir << ":"
+                                << QString::fromLocal8Bit(setfacl.readAllStandardError());
+            allSuccess = false;
+        } else {
+            qCDebug(lcHelper) << "SetupDirectoryAccess: Set ACL on" << dir << "for" << username;
+        }
+    }
+
+    // Also set recursive ACLs on the target directory
+    QString targetDir = directoryPath;
+    while (targetDir.endsWith(QLatin1Char('/')) && targetDir.length() > 1) {
+        targetDir.chop(1);
+    }
+    
+    if (QFile::exists(targetDir)) {
+        QProcess setfaclRecursive;
+        setfaclRecursive.start(QStringLiteral("setfacl"),
+            {QStringLiteral("-R"), QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username), targetDir});
+        setfaclRecursive.waitForFinished(30000);  // Longer timeout for recursive operation
+
+        if (setfaclRecursive.exitCode() != 0) {
+            qCWarning(lcHelper) << "SetupDirectoryAccess: Failed to set recursive ACL on" << targetDir << ":"
+                                << QString::fromLocal8Bit(setfaclRecursive.readAllStandardError());
+            allSuccess = false;
+        } else {
+            qCDebug(lcHelper) << "SetupDirectoryAccess: Set recursive ACL on" << targetDir << "for" << username;
+        }
+    }
+
+    return allSuccess;
+}
+
 QString CouchPlayHelper::Version()
 {
     return HELPER_VERSION;
@@ -537,10 +650,12 @@ bool CouchPlayHelper::isValidDevicePath(const QString &path)
     return S_ISCHR(st.st_mode);
 }
 
-qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint primaryUid,
+qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint compositorUid,
                                         const QStringList &gamescopeArgs,
                                         const QString &gameCommand,
-                                        const QStringList &environment)
+                                        const QStringList &environment,
+                                        const QStringList &sharedDirectories,
+                                        const QString &workingDirectory)
 {
     // Validate username
     static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
@@ -563,46 +678,98 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint primaryUid,
         return 0;
     }
 
-    // Verify primary user exists
-    struct passwd *pw = getpwuid(primaryUid);
+    // Verify compositor user exists
+    struct passwd *pw = getpwuid(compositorUid);
     if (!pw) {
         sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Primary user with UID %1 does not exist").arg(primaryUid));
+            QStringLiteral("Compositor user with UID %1 does not exist").arg(compositorUid));
         return 0;
     }
 
-    // Set up Wayland access for the secondary user first
-    // Call our own method - it will set up ACLs on the Wayland socket
-    if (!SetupWaylandAccess(username, primaryUid)) {
-        // SetupWaylandAccess already sends error reply
-        qWarning() << "Failed to set up Wayland access for" << username;
+    // Set up Wayland access for the user first
+    if (!SetupWaylandAccess(username, compositorUid)) {
+        qCWarning(lcHelper) << "Failed to set up Wayland access for" << username;
         // Continue anyway - might work if ACLs were already set
     }
 
-    // Build the command to execute
-    QString command = buildInstanceCommand(username, primaryUid, gamescopeArgs, 
-                                            gameCommand, environment);
+    // Set up directory access for shared directories via ACLs
+    for (const QString &dir : sharedDirectories) {
+        if (!dir.isEmpty() && QFile::exists(dir)) {
+            if (!SetupDirectoryAccess(username, dir)) {
+                qCWarning(lcHelper) << "Failed to set up directory access for" << username << "to" << dir;
+                // Continue anyway - some directories may already be accessible
+            }
+        }
+    }
+
+    // Also set up ACL access to the working directory if specified
+    if (!workingDirectory.isEmpty() && QDir(workingDirectory).exists()) {
+        if (!SetupDirectoryAccess(username, workingDirectory)) {
+            qCWarning(lcHelper) << "Failed to set up working directory access for" << username << "to" << workingDirectory;
+        }
+    }
+
+    // Create the tmp directory for the user
+    uint userUid = getUserUid(username);
+    QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
+    QString userTmpDir = userRuntimeDir + QStringLiteral("/tmp");
+    QDir().mkpath(userTmpDir);
     
-    qDebug() << "LaunchInstance: Spawning for user" << username;
-    qDebug() << "LaunchInstance: Command:" << command.left(200) << "...";
+    // Set ownership of the tmp directory to the user
+    uint userGid = getUserGid(username);
+    chown(userTmpDir.toLocal8Bit().constData(), userUid, userGid);
+
+    // Build environment and command for runuser
+    QString compositorRuntimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
+    QString userHome = QStringLiteral("/home/%1").arg(username);
+    QString workDir = workingDirectory.isEmpty() ? userHome : workingDirectory;
+    
+    // Build environment variables
+    QStringList envVars;
+    envVars << QStringLiteral("WAYLAND_DISPLAY=%1/wayland-0").arg(compositorRuntimeDir);
+    envVars << QStringLiteral("PIPEWIRE_RUNTIME_DIR=%1").arg(compositorRuntimeDir);
+    envVars << QStringLiteral("XDG_RUNTIME_DIR=%1").arg(userRuntimeDir);
+    envVars << QStringLiteral("TMPDIR=%1").arg(userTmpDir);
+    envVars << QStringLiteral("TMP=%1").arg(userTmpDir);
+    envVars << QStringLiteral("TEMP=%1").arg(userTmpDir);
+    envVars << QStringLiteral("HOME=%1").arg(userHome);
+    envVars.append(environment);
+    
+    // Build the command arguments for runuser
+    // runuser -u <username> -- /usr/bin/env VAR=val ... /usr/bin/bwrap ... /usr/bin/gamescope ...
+    QStringList args;
+    args << QStringLiteral("-u") << username;
+    args << QStringLiteral("--");
+    
+    // Use /usr/bin/env to set environment variables
+    args << QStringLiteral("/usr/bin/env");
+    args.append(envVars);
+    
+    // bwrap for /tmp isolation
+    args << QStringLiteral("/usr/bin/bwrap");
+    args << QStringLiteral("--dev-bind") << QStringLiteral("/") << QStringLiteral("/");
+    args << QStringLiteral("--tmpfs") << QStringLiteral("/tmp");
+    args << QStringLiteral("--chdir") << workDir;
+    
+    // gamescope with arguments
+    args << QStringLiteral("/usr/bin/gamescope");
+    args.append(gamescopeArgs);
+    args << QStringLiteral("--");
+    
+    // bash -c "command"
+    args << QStringLiteral("/bin/bash");
+    args << QStringLiteral("-c");
+    args << gameCommand;
+    
+    qCDebug(lcHelper) << "LaunchInstance: Spawning for user" << username;
+    qCDebug(lcHelper) << "LaunchInstance: runuser" << args.join(QStringLiteral(" ")).left(400) << "...";
 
     // Create and start the process
     QProcess *process = new QProcess(this);
-    
-    // Connect to finished signal to clean up
-    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process](int exitCode, QProcess::ExitStatus exitStatus) {
-        qint64 pid = process->processId();
-        qDebug() << "LaunchInstance: Process" << pid << "finished with code" << exitCode
-                 << (exitStatus == QProcess::CrashExit ? "(crashed)" : "");
-        
-        // Clean up from our tracking map
-        m_launchedProcesses.remove(pid);
-        process->deleteLater();
-    });
+    process->setWorkingDirectory(workDir);
 
-    // Start the process
-    process->start(QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
+    // Start runuser with the argument list
+    process->start(QStringLiteral("/usr/sbin/runuser"), args);
     
     if (!process->waitForStarted(5000)) {
         sendErrorReply(QDBusError::Failed, 
@@ -611,10 +778,32 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint primaryUid,
         return 0;
     }
 
+    // Get PID immediately after starting
     qint64 pid = process->processId();
     m_launchedProcesses.insert(pid, process);
     
-    qDebug() << "LaunchInstance: Started process with PID" << pid << "for user" << username;
+    // Connect to finished signal to clean up
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, process, pid, username](int exitCode, QProcess::ExitStatus exitStatus) {
+        QString stdoutStr = QString::fromLocal8Bit(process->readAllStandardOutput());
+        QString stderrStr = QString::fromLocal8Bit(process->readAllStandardError());
+        
+        qCDebug(lcHelper) << "LaunchInstance: Process" << pid << "for user" << username
+                          << "finished with code" << exitCode
+                          << (exitStatus == QProcess::CrashExit ? "(crashed)" : "");
+        if (!stdoutStr.isEmpty()) {
+            qCDebug(lcHelper) << "LaunchInstance stdout:" << stdoutStr.left(2000);
+        }
+        if (!stderrStr.isEmpty()) {
+            qCDebug(lcHelper) << "LaunchInstance stderr:" << stderrStr.left(2000);
+        }
+        
+        // Clean up from our tracking map
+        m_launchedProcesses.remove(pid);
+        process->deleteLater();
+    });
+    
+    qCDebug(lcHelper) << "LaunchInstance: Started process with PID" << pid << "for user" << username;
     return pid;
 }
 
@@ -632,20 +821,10 @@ bool CouchPlayHelper::StopInstance(qint64 pid)
         return false;
     }
 
-    // Check if we have this process
-    if (m_launchedProcesses.contains(pid)) {
-        QProcess *process = m_launchedProcesses.value(pid);
-        if (process && process->state() != QProcess::NotRunning) {
-            process->terminate();
-            qDebug() << "StopInstance: Sent SIGTERM to PID" << pid;
-            return true;
-        }
-    }
-
-    // Process not in our map - try to signal it directly
-    // This allows stopping processes that might have been launched before a restart
+    // Always signal the PID directly - more reliable than tracking QProcess pointers
     if (::kill(static_cast<pid_t>(pid), SIGTERM) == 0) {
-        qDebug() << "StopInstance: Sent SIGTERM to external PID" << pid;
+        qCDebug(lcHelper) << "StopInstance: Sent SIGTERM to PID" << pid;
+        m_launchedProcesses.remove(pid);
         return true;
     }
 
@@ -669,19 +848,10 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
         return false;
     }
 
-    // Check if we have this process
-    if (m_launchedProcesses.contains(pid)) {
-        QProcess *process = m_launchedProcesses.value(pid);
-        if (process && process->state() != QProcess::NotRunning) {
-            process->kill();
-            qDebug() << "KillInstance: Sent SIGKILL to PID" << pid;
-            return true;
-        }
-    }
-
-    // Process not in our map - try to signal it directly
+    // Always signal the PID directly
     if (::kill(static_cast<pid_t>(pid), SIGKILL) == 0) {
-        qDebug() << "KillInstance: Sent SIGKILL to external PID" << pid;
+        qCDebug(lcHelper) << "KillInstance: Sent SIGKILL to PID" << pid;
+        m_launchedProcesses.remove(pid);
         return true;
     }
 
@@ -689,60 +859,4 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
         QStringLiteral("Failed to kill process %1: %2")
             .arg(pid).arg(QString::fromLocal8Bit(strerror(errno))));
     return false;
-}
-
-QString CouchPlayHelper::buildInstanceCommand(const QString &username, uint primaryUid,
-                                               const QStringList &gamescopeArgs,
-                                               const QString &gameCommand,
-                                               const QStringList &environment)
-{
-    // Build environment exports for the secondary user
-    // Key insight: Let the secondary user use their OWN XDG_RUNTIME_DIR
-    // (so gamescope can create lockfiles there), but point WAYLAND_DISPLAY
-    // to the primary user's Wayland socket as an absolute path.
-    
-    QStringList exports;
-    
-    // Primary user's runtime directory for Wayland socket
-    QString primaryRuntimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
-    QString primaryWaylandSocket = primaryRuntimeDir + QStringLiteral("/wayland-0");
-    
-    // Set WAYLAND_DISPLAY to the absolute path of the primary user's Wayland socket
-    // The secondary user has ACL access to this socket (set up by SetupWaylandAccess)
-    exports << QStringLiteral("export WAYLAND_DISPLAY=%1").arg(primaryWaylandSocket);
-    
-    // For audio, point to the primary user's PipeWire socket
-    // PipeWire uses PIPEWIRE_RUNTIME_DIR if set, otherwise XDG_RUNTIME_DIR
-    exports << QStringLiteral("export PIPEWIRE_RUNTIME_DIR=%1").arg(primaryRuntimeDir);
-    
-    // Add any additional environment variables from the caller
-    for (const QString &var : environment) {
-        exports << QStringLiteral("export %1").arg(var);
-    }
-
-    // Build the gamescope command with logging
-    QString logFile = QStringLiteral("/tmp/couchplay-%1.log").arg(username);
-    
-    // Escape the game command for embedding in bash -c
-    QString gameCommandForBash = gameCommand;
-    gameCommandForBash.replace(QLatin1Char('"'), QStringLiteral("\\\""));
-    gameCommandForBash.replace(QLatin1Char('$'), QStringLiteral("\\$"));
-    gameCommandForBash.replace(QLatin1Char('`'), QStringLiteral("\\`"));
-    
-    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /bin/bash -c \"%2\" 2>&1 | tee %3")
-                               .arg(gamescopeArgs.join(QLatin1Char(' ')), gameCommandForBash, logFile);
-
-    // Escape the entire gamescopeCmd for embedding in single quotes
-    QString escapedGamescopeCmd = gamescopeCmd;
-    escapedGamescopeCmd.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
-
-    // Join exports with semicolons
-    QString exportStr = exports.join(QStringLiteral("; "));
-
-    // Use machinectl shell to run in the user's systemd session
-    // This requires linger to be enabled for the user (done by CreateUser)
-    QString command = QStringLiteral("machinectl shell %1@ /bin/bash -c '%2; %3'")
-                          .arg(username, exportStr, escapedGamescopeCmd);
-
-    return command;
 }

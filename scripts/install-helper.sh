@@ -113,7 +113,7 @@ install_helper() {
     # Enable and start service
     print_info "Enabling and starting service..."
     systemctl enable couchplay-helper.service
-    systemctl start couchplay-helper.service
+    systemctl restart couchplay-helper.service
 
     print_info "Installation complete!"
     echo ""

@@ -50,16 +50,20 @@ public:
     /**
      * @brief Launch a gamescope instance as a secondary user
      * @param username Secondary user to run as
-     * @param primaryUid UID of primary user (for Wayland socket access)
+     * @param compositorUid UID of compositor user (for Wayland socket access)
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Command to run inside gamescope
      * @param environment Additional environment variables (VAR=value format)
+     * @param sharedDirectories List of directories to grant read access to
+     * @param workingDirectory Optional working directory for the process
      * @return PID of launched process, or 0 on failure
      */
-    Q_INVOKABLE qint64 launchInstance(const QString &username, uint primaryUid,
+    Q_INVOKABLE qint64 launchInstance(const QString &username, uint compositorUid,
                                        const QStringList &gamescopeArgs,
                                        const QString &gameCommand,
-                                       const QStringList &environment);
+                                       const QStringList &environment,
+                                       const QStringList &sharedDirectories = {},
+                                       const QString &workingDirectory = {});
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)

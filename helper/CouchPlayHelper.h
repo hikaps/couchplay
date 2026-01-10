@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QDBusContext>
 #include <QMap>
+#include <QPointer>
 #include <QProcess>
 #include <QString>
 #include <QStringList>
@@ -79,6 +80,19 @@ public Q_SLOTS:
     bool RemoveWaylandAccess(const QString &username, uint primaryUid);
 
     /**
+     * Set up directory access for a secondary user via ACLs
+     * 
+     * Grants read and execute permission on the specified directory and all
+     * parent directories up to /home (or filesystem root). This allows the
+     * secondary user to traverse and read files in paths owned by other users.
+     * 
+     * @param username Secondary username to grant access to
+     * @param directoryPath Absolute path to the directory
+     * @return true if successful
+     */
+    bool SetupDirectoryAccess(const QString &username, const QString &directoryPath);
+
+    /**
      * Change ownership of a device to a specific user
      * Used for input device isolation between instances
      * 
@@ -125,20 +139,25 @@ public Q_SLOTS:
      * 
      * This method handles all the complexity of running gamescope as a different user:
      * - Sets up Wayland socket ACLs
-     * - Spawns the process via machinectl shell
+     * - Sets up directory access ACLs for shared directories
+     * - Spawns the process via systemd-run
      * - Returns the PID for tracking
      * 
      * @param username Secondary user to run as
-     * @param primaryUid UID of primary user (for Wayland socket access)
+     * @param compositorUid UID of compositor user (for Wayland socket access)
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Command to run inside gamescope (e.g., "steam -tenfoot")
      * @param environment Additional environment variables (VAR=value format)
+     * @param sharedDirectories List of directories to grant read access to
+     * @param workingDirectory Optional working directory for the process
      * @return PID of launched process, or 0 on failure
      */
-    qint64 LaunchInstance(const QString &username, uint primaryUid,
+    qint64 LaunchInstance(const QString &username, uint compositorUid,
                           const QStringList &gamescopeArgs,
                           const QString &gameCommand,
-                          const QStringList &environment);
+                          const QStringList &environment,
+                          const QStringList &sharedDirectories,
+                          const QString &workingDirectory);
 
     /**
      * Stop a launched instance
@@ -163,11 +182,8 @@ private:
     // Internal helpers (not exposed via D-Bus)
     bool userExists(const QString &username);
     uint getUserUid(const QString &username);
-    QString buildInstanceCommand(const QString &username, uint primaryUid,
-                                  const QStringList &gamescopeArgs,
-                                  const QString &gameCommand,
-                                  const QStringList &environment);
+    uint getUserGid(const QString &username);
 
     QStringList m_modifiedDevices;
-    QMap<qint64, QProcess *> m_launchedProcesses;  // PID -> QProcess
+    QMap<qint64, QPointer<QProcess>> m_launchedProcesses;  // PID -> QProcess
 };

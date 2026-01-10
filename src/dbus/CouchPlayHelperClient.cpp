@@ -132,10 +132,12 @@ bool CouchPlayHelperClient::createUser(const QString &username)
     return reply.value() > 0;
 }
 
-qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint primaryUid,
+qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compositorUid,
                                               const QStringList &gamescopeArgs,
                                               const QString &gameCommand,
-                                              const QStringList &environment)
+                                              const QStringList &environment,
+                                              const QStringList &sharedDirectories,
+                                              const QString &workingDirectory)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -145,10 +147,12 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint prima
     QDBusReply<qint64> reply = m_interface->call(
         QStringLiteral("LaunchInstance"),
         username,
-        primaryUid,
+        compositorUid,
         gamescopeArgs,
         gameCommand,
-        environment
+        environment,
+        sharedDirectories,
+        workingDirectory
     );
 
     if (!reply.isValid()) {

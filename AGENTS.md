@@ -288,11 +288,3 @@ When working on feature branches, check `docs/branches/<branch-name>/` for:
 Feature branches follow the pattern: `feature/<feature-name>`
 
 The corresponding docs folder uses the same name: `docs/branches/feature-<feature-name>/`
-
-### Current Feature Branches
-
-| Branch | Description | Status |
-|--------|-------------|--------|
-| `feature/systemd-run` | Replace machinectl with systemd-run | Not started |
-| `feature/launch-presets` | Preset system for launch commands | Not started |
-| `feature/equal-users` | Eliminate primary user concept | Blocked by systemd-run |
