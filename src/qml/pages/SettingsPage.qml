@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import io.github.hikaps.couchplay 1.0
 
 Kirigami.ScrollablePage {
     id: root
@@ -18,6 +19,17 @@ Kirigami.ScrollablePage {
 
     // Computed property to avoid repeating condition
     property bool helperAvailable: helperClient?.available ?? false
+
+    // Reference to preset manager (optional, will use internal if not provided)
+    property var presetManager: null
+
+    // Internal preset manager if not provided externally
+    PresetManager {
+        id: internalPresetManager
+    }
+
+    // Use provided preset manager or internal one
+    readonly property var activePresetManager: root.presetManager ?? internalPresetManager
 
     // Settings values (would be persisted via QSettings in production)
     property bool hidePanels: true
@@ -157,6 +169,86 @@ Kirigami.ScrollablePage {
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Use borderless windows without decorations. Disable for resizable windows with title bars.")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
+            }
+        }
+
+        // Launch Presets Section
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            wideMode: false
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Launch Presets")
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: i18nc("@label", "Available presets:")
+                text: i18nc("@info", "%1 presets configured", activePresetManager.presets.length)
+                opacity: 0.7
+            }
+
+            // List of current presets
+            Repeater {
+                model: activePresetManager.presets
+
+                delegate: RowLayout {
+                    Kirigami.FormData.label: index === 0 ? " " : ""
+                    spacing: Kirigami.Units.smallSpacing
+                    Layout.fillWidth: true
+
+                    Kirigami.Icon {
+                        source: modelData.iconName || "application-x-executable"
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                    }
+
+                    Controls.Label {
+                        text: modelData.name
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                    }
+
+                    Kirigami.Chip {
+                        visible: modelData.isBuiltin
+                        text: i18nc("@info", "Builtin")
+                        closable: false
+                        checkable: false
+                    }
+
+                    Kirigami.Chip {
+                        visible: modelData.steamIntegration
+                        text: i18nc("@info", "Steam")
+                        icon.name: "steam"
+                        closable: false
+                        checkable: false
+                    }
+
+                    Controls.Button {
+                        visible: !modelData.isBuiltin
+                        icon.name: "edit-delete"
+                        display: Controls.AbstractButton.IconOnly
+                        Controls.ToolTip.text: i18nc("@info:tooltip", "Remove preset")
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.delay: 1000
+                        onClicked: {
+                            deletePresetDialog.presetId = modelData.id
+                            deletePresetDialog.presetName = modelData.name
+                            deletePresetDialog.open()
+                        }
+                    }
+                }
+            }
+
+            // Add preset button
+            Controls.Button {
+                Kirigami.FormData.label: " "
+                text: i18nc("@action:button", "Add from Application...")
+                icon.name: "list-add"
+                onClicked: {
+                    activePresetManager.scanApplications()
+                    addPresetDialog.open()
+                }
             }
         }
 
@@ -492,6 +584,135 @@ Kirigami.ScrollablePage {
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
                 text: i18nc("@info", "This will install a D-Bus system service and PolicyKit rules for secure privilege escalation.")
+                type: Kirigami.MessageType.Information
+                visible: true
+            }
+        }
+    }
+
+    // Delete preset confirmation dialog
+    Kirigami.PromptDialog {
+        id: deletePresetDialog
+        title: i18nc("@title:dialog", "Remove Preset")
+        subtitle: i18nc("@info", "Remove the preset \"%1\"?", deletePresetDialog.presetName)
+        standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel
+
+        property string presetId: ""
+        property string presetName: ""
+
+        onAccepted: {
+            if (activePresetManager.removeCustomPreset(presetId)) {
+                applicationWindow().showPassiveNotification(
+                    i18nc("@info", "Preset removed"))
+            } else {
+                applicationWindow().showPassiveNotification(
+                    i18nc("@info", "Failed to remove preset"), "long")
+            }
+        }
+    }
+
+    // Add preset from application dialog
+    Kirigami.Dialog {
+        id: addPresetDialog
+        title: i18nc("@title:dialog", "Add Preset from Application")
+        standardButtons: Kirigami.Dialog.Close
+        preferredWidth: Kirigami.Units.gridUnit * 30
+        preferredHeight: Kirigami.Units.gridUnit * 25
+
+        ColumnLayout {
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.TextField {
+                id: appSearchField
+                Layout.fillWidth: true
+                placeholderText: i18nc("@info:placeholder", "Search applications...")
+                onTextChanged: appListView.filterText = text.toLowerCase()
+            }
+
+            Controls.ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 15
+
+                ListView {
+                    id: appListView
+                    clip: true
+
+                    property string filterText: ""
+
+                    model: {
+                        if (filterText === "") {
+                            return activePresetManager.availableApplications
+                        }
+                        return activePresetManager.availableApplications.filter(function(app) {
+                            return app.name.toLowerCase().includes(filterText)
+                        })
+                    }
+
+                    delegate: Controls.ItemDelegate {
+                        width: appListView.width
+                        highlighted: ListView.isCurrentItem
+
+                        contentItem: RowLayout {
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Kirigami.Icon {
+                                source: modelData.iconName || "application-x-executable"
+                                Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                                Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+
+                                Controls.Label {
+                                    text: modelData.name
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                }
+
+                                Controls.Label {
+                                    text: modelData.command
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideMiddle
+                                    opacity: 0.7
+                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                }
+                            }
+
+                            Controls.Button {
+                                text: i18nc("@action:button", "Add")
+                                icon.name: "list-add"
+                                onClicked: {
+                                    let id = activePresetManager.addPresetFromDesktopFile(modelData.desktopFilePath)
+                                    if (id !== "") {
+                                        applicationWindow().showPassiveNotification(
+                                            i18nc("@info", "Added preset: %1", modelData.name))
+                                        addPresetDialog.close()
+                                    } else {
+                                        applicationWindow().showPassiveNotification(
+                                            i18nc("@info", "Failed to add preset"), "long")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Kirigami.PlaceholderMessage {
+                        anchors.centerIn: parent
+                        visible: appListView.count === 0
+                        text: appSearchField.text !== ""
+                              ? i18nc("@info", "No applications match your search")
+                              : i18nc("@info", "No applications found")
+                        icon.name: "application-x-executable"
+                    }
+                }
+            }
+
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                text: i18nc("@info", "Select an installed application to add as a launch preset. You can then select it when configuring session instances.")
                 type: Kirigami.MessageType.Information
                 visible: true
             }

@@ -31,7 +31,7 @@ struct InstanceConfig {
     Q_PROPERTY(QList<int> devices MEMBER devices)
     Q_PROPERTY(QString gameCommand MEMBER gameCommand)
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
-    Q_PROPERTY(QString launchMode MEMBER launchMode)
+    Q_PROPERTY(QString presetId MEMBER presetId)
 
 public:
     QString username;
@@ -46,7 +46,7 @@ public:
     QList<int> devices;
     QString gameCommand;
     QString steamAppId;                              // Steam App ID for Steam launch mode
-    QString launchMode = QStringLiteral("steam");    // "steam", "direct", "legendary", "custom"
+    QString presetId = QStringLiteral("steam");      // ID of the launch preset to use
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)
@@ -101,6 +101,7 @@ public:
     Q_INVOKABLE void setInstanceResolution(int index, int internalW, int internalH, int outputW, int outputH);
     Q_INVOKABLE void setInstanceDevices(int index, const QList<int> &devices);
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
+    Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;
 

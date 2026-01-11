@@ -350,92 +350,94 @@ void TestGamescopeInstance::testWindowGeometryProperty()
     m_instance->stop();
 }
 
-// ============ Launch Mode Tests ============
+// ============ Preset Tests ============
 
 void TestGamescopeInstance::testSteamLaunchMode()
 {
-    // Test that Steam launch mode builds proper command with steamAppId
+    // Test that Steam preset builds proper command with steamAppId
     // We can't actually start the process, but we can verify the config is accepted
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
     
     QVariantMap config;
-    config[QStringLiteral("launchMode")] = QStringLiteral("steam");
+    config[QStringLiteral("presetId")] = QStringLiteral("steam");
+    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
+    config[QStringLiteral("steamIntegration")] = true;
     config[QStringLiteral("steamAppId")] = QStringLiteral("1426210");  // It Takes Two
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
     
     // This will try to start gamescope (may fail if not installed)
-    // but it should not emit "Steam App ID is required" error
     m_instance->start(config, 0);
     
-    // Check that we didn't get the "Steam App ID required" error
-    bool hasAppIdError = false;
+    // Check that we didn't get any preset-related errors
+    bool hasPresetError = false;
     for (int i = 0; i < errorSpy.count(); ++i) {
         QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("Steam App ID is required"))) {
-            hasAppIdError = true;
+        if (error.contains(QStringLiteral("preset")) || 
+            error.contains(QStringLiteral("No game command"))) {
+            hasPresetError = true;
         }
     }
-    QVERIFY(!hasAppIdError);
+    QVERIFY(!hasPresetError);
     
     m_instance->stop();
 }
 
 void TestGamescopeInstance::testSteamLaunchModeNoAppId()
 {
-    // Test that Steam launch mode WITHOUT steamAppId is valid (launches Big Picture)
+    // Test that Steam preset WITHOUT steamAppId is valid (launches Big Picture)
     // This allows players to select games inside Steam
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
     
     QVariantMap config;
-    config[QStringLiteral("launchMode")] = QStringLiteral("steam");
+    config[QStringLiteral("presetId")] = QStringLiteral("steam");
+    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
+    config[QStringLiteral("steamIntegration")] = true;
     // No steamAppId set - this is valid, launches Steam Big Picture
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
     
     m_instance->start(config, 0);
     
-    // Check that we didn't get any launch mode related errors
+    // Check that we didn't get any preset-related errors
     // (may still get "gamescope not found" in test environment, which is expected)
-    bool hasLaunchModeError = false;
+    bool hasPresetError = false;
     for (int i = 0; i < errorSpy.count(); ++i) {
         QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("Steam App ID")) ||
-            error.contains(QStringLiteral("executable")) ||
-            error.contains(QStringLiteral("launch mode"))) {
-            hasLaunchModeError = true;
+        if (error.contains(QStringLiteral("preset")) ||
+            error.contains(QStringLiteral("No game command"))) {
+            hasPresetError = true;
         }
     }
-    QVERIFY(!hasLaunchModeError);
+    QVERIFY(!hasPresetError);
     
     m_instance->stop();
 }
 
 void TestGamescopeInstance::testSteamModeIsDefault()
 {
-    // Test that steam launch mode is the default (not direct mode)
-    // When no launchMode is set, it defaults to Steam Big Picture
+    // Test that Steam is the default when no preset command is provided
+    // The instance should fall back to Steam Big Picture
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
     
     QVariantMap config;
-    // No launchMode set - should default to "steam"
-    // No executablePath set - this is fine for Steam mode
+    // No presetCommand set - should default to "steam -tenfoot -steamdeck"
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
     
     m_instance->start(config, 0);
     
-    // Check that we didn't get "No executable path specified" error
-    // (which would indicate direct mode was the default)
+    // Check that we didn't get "No game command" error
+    // (the fallback should provide a default command)
     // May still get "gamescope not found" in test environment
-    bool hasExecutableError = false;
+    bool hasCommandError = false;
     for (int i = 0; i < errorSpy.count(); ++i) {
         QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("executable"))) {
-            hasExecutableError = true;
+        if (error.contains(QStringLiteral("No game command"))) {
+            hasCommandError = true;
         }
     }
-    QVERIFY(!hasExecutableError);
+    QVERIFY(!hasCommandError);
     
     m_instance->stop();
 }

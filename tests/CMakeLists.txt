@@ -136,3 +136,24 @@ target_link_libraries(test_monitormanager PRIVATE
 )
 
 add_test(NAME MonitorManagerTest COMMAND test_monitormanager)
+
+# PresetManager tests
+add_executable(test_presetmanager
+    test_presetmanager.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/PresetManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/PresetManager.h
+)
+
+target_include_directories(test_presetmanager PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_BINARY_DIR}/src
+)
+
+target_link_libraries(test_presetmanager PRIVATE
+    Qt6::Core
+    Qt6::Test
+    Qt6::Qml
+)
+
+add_test(NAME PresetManagerTest COMMAND test_presetmanager)

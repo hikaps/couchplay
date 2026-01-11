@@ -23,6 +23,7 @@ ecm_add_qml_module(couchplay
         qml/components/LayoutPreview.qml
         qml/components/MonitorSelector.qml
         qml/components/GameCard.qml
+        qml/components/PresetSelector.qml
 )
 
 # C++ sources
@@ -46,6 +47,8 @@ target_sources(couchplay PRIVATE
     core/AudioManager.h
     core/WindowManager.cpp
     core/WindowManager.h
+    core/PresetManager.cpp
+    core/PresetManager.h
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )

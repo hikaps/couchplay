@@ -30,6 +30,7 @@ Kirigami.ApplicationWindow {
         sessionManager: sessionManager
         deviceManager: deviceManager
         helperClient: helperClient
+        presetManager: presetManager
 
         onErrorOccurred: (message) => {
             applicationWindow().showPassiveNotification(message, "long")
@@ -58,6 +59,10 @@ Kirigami.ApplicationWindow {
 
     MonitorManager {
         id: monitorManager
+    }
+
+    PresetManager {
+        id: presetManager
     }
 
     globalDrawer: Kirigami.GlobalDrawer {
@@ -91,7 +96,8 @@ Kirigami.ApplicationWindow {
                         sessionRunner: sessionRunner,
                         deviceManager: deviceManager,
                         monitorManager: monitorManager,
-                        userManager: userManager
+                        userManager: userManager,
+                        presetManager: presetManager
                     })
                 }
             },
@@ -144,7 +150,8 @@ Kirigami.ApplicationWindow {
                     pageStack.clear()
                     pageStack.push(settingsPage, {
                         sessionRunner: sessionRunner,
-                        helperClient: helperClient
+                        helperClient: helperClient,
+                        presetManager: presetManager
                     })
                 }
             }
@@ -215,7 +222,8 @@ Kirigami.ApplicationWindow {
             sessionRunner: sessionRunner,
             deviceManager: deviceManager,
             monitorManager: monitorManager,
-            userManager: userManager
+            userManager: userManager,
+            presetManager: presetManager
         })
     }
 
@@ -254,7 +262,8 @@ Kirigami.ApplicationWindow {
     function pushSettingsPage() {
         pageStack.push(settingsPage, {
             sessionRunner: sessionRunner,
-            helperClient: helperClient
+            helperClient: helperClient,
+            presetManager: presetManager
         })
     }
 }

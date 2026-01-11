@@ -114,7 +114,7 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("filterMode", inst.filterMode);
         instGroup.writeEntry("gameCommand", inst.gameCommand);
         instGroup.writeEntry("steamAppId", inst.steamAppId);
-        instGroup.writeEntry("launchMode", inst.launchMode);
+        instGroup.writeEntry("presetId", inst.presetId);
 
         // Convert devices to string list
         QStringList deviceStrings;
@@ -170,7 +170,7 @@ bool SessionManager::loadProfile(const QString &name)
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
         inst.gameCommand = instGroup.readEntry("gameCommand", QString());
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
-        inst.launchMode = instGroup.readEntry("launchMode", QStringLiteral("steam"));
+        inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
 
         // Read devices
         QStringList deviceStrings = instGroup.readEntry("devices", QStringList());
@@ -265,7 +265,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("filterMode")] = inst.filterMode;
     map[QStringLiteral("gameCommand")] = inst.gameCommand;
     map[QStringLiteral("steamAppId")] = inst.steamAppId;
-    map[QStringLiteral("launchMode")] = inst.launchMode;
+    map[QStringLiteral("presetId")] = inst.presetId;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -306,8 +306,8 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.gameCommand = config[QStringLiteral("gameCommand")].toString();
     if (config.contains(QStringLiteral("steamAppId")))
         inst.steamAppId = config[QStringLiteral("steamAppId")].toString();
-    if (config.contains(QStringLiteral("launchMode")))
-        inst.launchMode = config[QStringLiteral("launchMode")].toString();
+    if (config.contains(QStringLiteral("presetId")))
+        inst.presetId = config[QStringLiteral("presetId")].toString();
 
     Q_EMIT instancesChanged();
 }
@@ -352,6 +352,14 @@ void SessionManager::setInstanceGame(int index, const QString &gameCommand)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].gameCommand = gameCommand;
+        Q_EMIT instancesChanged();
+    }
+}
+
+void SessionManager::setInstancePreset(int index, const QString &presetId)
+{
+    if (index >= 0 && index < m_currentProfile.instances.size()) {
+        m_currentProfile.instances[index].presetId = presetId;
         Q_EMIT instancesChanged();
     }
 }

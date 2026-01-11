@@ -6,6 +6,8 @@ import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 
+import "../components" as Components
+
 Kirigami.ScrollablePage {
     id: root
 
@@ -17,6 +19,7 @@ Kirigami.ScrollablePage {
     required property var deviceManager
     required property var monitorManager
     required property var userManager
+    required property var presetManager
 
     // Sync with session manager
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
@@ -264,6 +267,7 @@ Kirigami.ScrollablePage {
                 
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
                 readonly property string labelUser: i18nc("@label", "User:")
+                readonly property string labelLauncher: i18nc("@label", "Launcher:")
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
@@ -326,6 +330,25 @@ Kirigami.ScrollablePage {
                         Layout.fillWidth: true
                     }
 
+                    // Launch preset selector
+                    Components.PresetSelector {
+                        id: presetSelector
+                        Kirigami.FormData.label: instanceCard.labelLauncher
+                        Layout.fillWidth: true
+                        presetManager: root.presetManager
+                        currentPresetId: {
+                            let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
+                            return config?.presetId ?? "steam"
+                        }
+                        
+                        onPresetSelected: function(presetId) {
+                            if (root.sessionManager) {
+                                root.sessionManager.setInstancePreset(instanceCard.index, presetId)
+                            }
+                        }
+                    }
+
+                    // Resolution is auto-calculated from monitor size and layout
                     Controls.Label {
                         Kirigami.FormData.label: instanceCard.labelResolution
                         text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"

@@ -5,6 +5,7 @@
 #include "GamescopeInstance.h"
 #include "SessionManager.h"
 #include "DeviceManager.h"
+#include "PresetManager.h"
 #include "WindowManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 
@@ -69,6 +70,14 @@ void SessionRunner::setHelperClient(CouchPlayHelperClient *client)
     if (m_helperClient != client) {
         m_helperClient = client;
         Q_EMIT helperClientChanged();
+    }
+}
+
+void SessionRunner::setPresetManager(PresetManager *manager)
+{
+    if (m_presetManager != manager) {
+        m_presetManager = manager;
+        Q_EMIT presetManagerChanged();
     }
 }
 
@@ -158,8 +167,24 @@ bool SessionRunner::start()
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
         config[QStringLiteral("gameCommand")] = instConfig.gameCommand;
         config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
-        config[QStringLiteral("launchMode")] = instConfig.launchMode;
         config[QStringLiteral("borderless")] = m_borderlessWindows;
+
+        // Look up preset and add resolved command/settings
+        if (m_presetManager) {
+            QString presetId = instConfig.presetId;
+            if (presetId.isEmpty()) {
+                presetId = QStringLiteral("steam");  // Default
+            }
+            config[QStringLiteral("presetId")] = presetId;
+            config[QStringLiteral("presetCommand")] = m_presetManager->getCommand(presetId);
+            config[QStringLiteral("presetWorkingDirectory")] = m_presetManager->getWorkingDirectory(presetId);
+            config[QStringLiteral("steamIntegration")] = m_presetManager->getSteamIntegration(presetId);
+        } else {
+            // Fallback if no PresetManager
+            config[QStringLiteral("presetId")] = QStringLiteral("steam");
+            config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
+            config[QStringLiteral("steamIntegration")] = true;
+        }
 
         // Get device paths for this instance
         if (m_deviceManager) {
@@ -280,7 +305,6 @@ void SessionRunner::cleanupInstances()
 bool SessionRunner::setupDeviceOwnership()
 {
     if (!m_deviceManager || !m_helperClient) {
-        qDebug() << "SessionRunner: Skipping device ownership setup (no helper or device manager)";
         return true; // No helper, skip ownership setup
     }
 
@@ -303,7 +327,6 @@ bool SessionRunner::setupDeviceOwnership()
         const QString &username = profile.instances[i].username;
         
         if (username.isEmpty()) {
-            qDebug() << "SessionRunner: Instance" << i << "has no assigned user, skipping device ownership";
             continue;
         }
         
@@ -319,8 +342,6 @@ bool SessionRunner::setupDeviceOwnership()
         QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
         
         for (const QString &path : devicePaths) {
-            qDebug() << "SessionRunner: Setting ownership of" << path << "to user" << username << "(uid" << uid << ")";
-            
             if (m_helperClient->setDeviceOwner(path, uid)) {
                 if (!m_ownedDevicePaths.contains(path)) {
                     m_ownedDevicePaths.append(path);
@@ -332,7 +353,6 @@ bool SessionRunner::setupDeviceOwnership()
         }
     }
 
-    qDebug() << "SessionRunner: Set ownership on" << m_ownedDevicePaths.size() << "devices";
     return true;
 }
 
@@ -348,8 +368,6 @@ void SessionRunner::restoreDeviceOwnership()
         return;
     }
 
-    qDebug() << "SessionRunner: Restoring ownership on" << m_ownedDevicePaths.size() << "devices";
-    
     // Use restoreAllDevices() which resets all modified devices tracked by the helper
     m_helperClient->restoreAllDevices();
     
@@ -477,16 +495,11 @@ void SessionRunner::onInstanceError(const QString &message)
 void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 {
     if (!instance || !m_windowManager || !m_windowManager->isAvailable()) {
-        qDebug() << "SessionRunner: Window positioning not available";
         return;
     }
 
     QRect targetGeometry = instance->windowGeometry();
     int instanceIndex = instance->index();
-    
-    qDebug() << "SessionRunner: Queueing position request for instance" << instanceIndex 
-             << "geometry:" << targetGeometry
-             << "excluding" << m_positionedWindowIds.size() << "already-positioned windows";
 
     // Queue a position request - the WindowManager will find and position
     // the next gamescope window that appears (excluding already-positioned ones)
@@ -500,8 +513,7 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 
 void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
 {
-    qDebug() << "SessionRunner: Instance" << requestId << "window positioned:" << windowId;
-    
+    Q_UNUSED(requestId)
     // Track this window so it's excluded from future positioning
     if (!m_positionedWindowIds.contains(windowId)) {
         m_positionedWindowIds.append(windowId);
@@ -525,7 +537,6 @@ void SessionRunner::setupGlobalShortcut()
     // Only stop if session is actually running
     connect(m_stopAction, &QAction::triggered, this, [this]() {
         if (isRunning()) {
-            qDebug() << "SessionRunner: Stop session triggered via global shortcut";
             stop();
         }
     });
@@ -533,6 +544,4 @@ void SessionRunner::setupGlobalShortcut()
     // Set default shortcut: Meta+Shift+Escape
     KGlobalAccel::setGlobalShortcut(m_stopAction, 
         QList<QKeySequence>() << QKeySequence(Qt::META | Qt::SHIFT | Qt::Key_Escape));
-    
-    qDebug() << "SessionRunner: Global shortcut registered (Meta+Shift+Escape)";
 }

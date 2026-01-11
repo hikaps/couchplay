@@ -18,6 +18,7 @@ class GamescopeInstance;
 class DeviceManager;
 class SessionManager;
 class WindowManager;
+class PresetManager;
 
 /**
  * @brief Orchestrates running a complete split-screen gaming session
@@ -47,6 +48,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(SessionManager* sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
     Q_PROPERTY(DeviceManager* deviceManager READ deviceManager WRITE setDeviceManager NOTIFY deviceManagerChanged)
     Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
+    Q_PROPERTY(PresetManager* presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -99,6 +101,9 @@ public:
     CouchPlayHelperClient* helperClient() const { return m_helperClient; }
     void setHelperClient(CouchPlayHelperClient *client);
 
+    PresetManager* presetManager() const { return m_presetManager; }
+    void setPresetManager(PresetManager *manager);
+
     bool borderlessWindows() const { return m_borderlessWindows; }
     void setBorderlessWindows(bool borderless);
 
@@ -121,6 +126,7 @@ Q_SIGNALS:
     void sessionManagerChanged();
     void deviceManagerChanged();
     void helperClientChanged();
+    void presetManagerChanged();
     void borderlessWindowsChanged();
     void errorOccurred(const QString &message);
     void sessionStarted();
@@ -148,6 +154,7 @@ private:
     SessionManager *m_sessionManager = nullptr;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
+    PresetManager *m_presetManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     QAction *m_stopAction = nullptr;
     QString m_status;
