@@ -348,6 +348,13 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     // Mesa threading for better performance
     envVars << QStringLiteral("mesa_glthread=true");
     
+    // Set desktop environment for XDG portal integration
+    // This enables native file dialogs in Steam and other applications
+    envVars << QStringLiteral("XDG_CURRENT_DESKTOP=KDE");
+    
+    // Force GTK applications to use XDG portals for file dialogs
+    envVars << QStringLiteral("GTK_USE_PORTAL=1");
+    
     return envVars;
 }
 
