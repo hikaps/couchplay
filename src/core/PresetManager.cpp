@@ -359,8 +359,8 @@ QString PresetManager::generateCustomId()
 
 QString PresetManager::configFilePath() const
 {
-    QString configDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    return configDir + QStringLiteral("/couchplay/presets.json");
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    return configDir + QStringLiteral("/presets.json");
 }
 
 void PresetManager::loadCustomPresets()
