@@ -132,7 +132,7 @@ bool CouchPlayHelperClient::createUser(const QString &username)
     return reply.value() > 0;
 }
 
-qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint primaryUid,
+qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compositorUid,
                                               const QStringList &gamescopeArgs,
                                               const QString &gameCommand,
                                               const QStringList &environment)
@@ -145,7 +145,7 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint prima
     QDBusReply<qint64> reply = m_interface->call(
         QStringLiteral("LaunchInstance"),
         username,
-        primaryUid,
+        compositorUid,
         gamescopeArgs,
         gameCommand,
         environment

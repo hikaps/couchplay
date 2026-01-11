@@ -36,7 +36,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     }
 
     m_index = index;
-    m_isPrimary = (index == 0);
     m_username = config.value(QStringLiteral("username")).toString();
 
     // Store window geometry for UI display
@@ -51,7 +50,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     QStringList gamescopeArgs = buildGamescopeArgs(config);
 
     // Build environment
-    QStringList envVars = buildEnvironment(config, m_isPrimary);
+    QStringList envVars = buildEnvironment(config);
 
     // Get launch mode and game configuration
     // Default to "steam" mode - players select games inside Steam Big Picture
@@ -144,123 +143,69 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     connect(m_process, &QProcess::readyReadStandardOutput, this, &GamescopeInstance::onReadyReadStandardOutput);
     connect(m_process, &QProcess::readyReadStandardError, this, &GamescopeInstance::onReadyReadStandardError);
 
-    // Get current username to determine if this is really a "primary" path
-    // (running as the current user) vs "secondary" path (running as a different user)
+    // Get current username to log the launch path
     QString currentUser = QString::fromLocal8Bit(qgetenv("USER"));
-    bool useSecondaryPath = !m_isPrimary && !m_username.isEmpty() && m_username != currentUser;
     
     qDebug() << "Instance" << m_index << "starting:"
              << "user=" << m_username
-             << "path=" << (useSecondaryPath ? "secondary" : "primary");
+             << "(current user=" << currentUser << ")";
     
-    if (!useSecondaryPath) {
-        // Primary instance - run directly with modified environment
-        QString program = QStandardPaths::findExecutable(QStringLiteral("gamescope"));
-        if (program.isEmpty()) {
-            // Fallback to common paths
-            for (const QString &path : {QStringLiteral("/usr/bin/gamescope"), 
-                                         QStringLiteral("/usr/local/bin/gamescope")}) {
-                if (QFile::exists(path)) {
-                    program = path;
-                    break;
-                }
-            }
-        }
-        if (program.isEmpty()) {
-            Q_EMIT errorOccurred(QStringLiteral("gamescope not found - please install gamescope"));
-            return false;
-        }
-        
-        // Add game command after --
-        gamescopeArgs << QStringLiteral("--");
-        
-        // For Proton, we need to run through bash to handle the command properly
-        gamescopeArgs << QStringLiteral("/bin/bash") << QStringLiteral("-c") << gameCommand;
-
-        // Set up environment
-        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        for (const QString &var : envVars) {
-            int eqPos = var.indexOf(QLatin1Char('='));
-            if (eqPos > 0) {
-                env.insert(var.left(eqPos), var.mid(eqPos + 1));
-            }
-        }
-        m_process->setProcessEnvironment(env);
-        
-        // Set working directory if specified
-        if (!workingDirectory.isEmpty() && QDir(workingDirectory).exists()) {
-            m_process->setWorkingDirectory(workingDirectory);
-        } else if (!executablePath.isEmpty()) {
-            // Default to executable's directory
-            m_process->setWorkingDirectory(QFileInfo(executablePath).absolutePath());
-        }
-
-        setStatus(QStringLiteral("Starting..."));
-        m_process->start(program, gamescopeArgs);
-        
-        if (!m_process->waitForStarted(3000)) {
-            qWarning() << "Instance" << m_index << "failed to start:" << m_process->errorString();
-        }
-    } else {
-        // Secondary instance - run as different user via helper service
-        // The helper handles all the complexity of machinectl, environment setup, etc.
-        
-        qDebug() << "Instance" << m_index << "starting as" << m_username << "via helper service";
-        
-        // Use the D-Bus helper to launch the instance
-        QDBusInterface helper(
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QDBusConnection::systemBus()
-        );
-        
-        if (!helper.isValid()) {
-            qWarning() << "Instance" << m_index << "helper service not available, falling back to direct launch";
-            
-            // Fallback: try the old method (build command and run via bash)
-            if (!setupWaylandAccessForUser(m_username)) {
-                qWarning() << "Instance" << m_index << "failed to set up Wayland access for" << m_username;
-                Q_EMIT errorOccurred(QStringLiteral("Failed to set up Wayland access for %1").arg(m_username));
-            }
-            
-            QString command = buildSecondaryUserCommand(m_username, envVars, gamescopeArgs, gameCommand);
-            setStatus(QStringLiteral("Starting as %1...").arg(m_username));
-            m_process->start(QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
-        } else {
-            // Use the helper service to launch the instance
-            uid_t primaryUid = getuid();
-            
-            QDBusReply<qint64> reply = helper.call(
-                QStringLiteral("LaunchInstance"),
-                m_username,
-                static_cast<uint>(primaryUid),
-                gamescopeArgs,
-                gameCommand,
-                envVars
-            );
-            
-            if (!reply.isValid()) {
-                qWarning() << "Instance" << m_index << "helper LaunchInstance failed:" << reply.error().message();
-                Q_EMIT errorOccurred(QStringLiteral("Failed to launch instance: %1").arg(reply.error().message()));
-                return false;
-            }
-            
-            m_helperPid = reply.value();
-            if (m_helperPid == 0) {
-                qWarning() << "Instance" << m_index << "helper returned PID 0";
-                Q_EMIT errorOccurred(QStringLiteral("Helper service failed to launch instance"));
-                return false;
-            }
-            
-            qDebug() << "Instance" << m_index << "launched via helper with PID" << m_helperPid;
-            setStatus(QStringLiteral("Running as %1").arg(m_username));
-            
-            // We don't have a QProcess for helper-launched instances, so signal running immediately
-            Q_EMIT runningChanged();
-            Q_EMIT started();
-        }
+    // All instances go through the D-Bus helper service
+    // This provides uniform handling for all users, including the compositor user
+    qDebug() << "Instance" << m_index << "starting as" << m_username << "via helper service";
+    
+    // Use the D-Bus helper to launch the instance
+    QDBusInterface helper(
+        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+        QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+        QDBusConnection::systemBus()
+    );
+    
+    if (!helper.isValid()) {
+        qWarning() << "Instance" << m_index << "helper service not available";
+        Q_EMIT errorOccurred(QStringLiteral("CouchPlay Helper service is not available. Please run: sudo ./scripts/install-helper.sh install"));
+        m_process->deleteLater();
+        m_process = nullptr;
+        return false;
     }
+    
+    // Use the helper service to launch the instance
+    // compositorUid is the UID of the user running CouchPlay (owns the Wayland socket)
+    uid_t compositorUid = getuid();
+    
+    QDBusReply<qint64> reply = helper.call(
+        QStringLiteral("LaunchInstance"),
+        m_username,
+        static_cast<uint>(compositorUid),
+        gamescopeArgs,
+        gameCommand,
+        envVars
+    );
+    
+    if (!reply.isValid()) {
+        qWarning() << "Instance" << m_index << "helper LaunchInstance failed:" << reply.error().message();
+        Q_EMIT errorOccurred(QStringLiteral("Failed to launch instance: %1").arg(reply.error().message()));
+        m_process->deleteLater();
+        m_process = nullptr;
+        return false;
+    }
+    
+    m_helperPid = reply.value();
+    if (m_helperPid == 0) {
+        qWarning() << "Instance" << m_index << "helper returned PID 0";
+        Q_EMIT errorOccurred(QStringLiteral("Helper service failed to launch instance"));
+        m_process->deleteLater();
+        m_process = nullptr;
+        return false;
+    }
+    
+    qDebug() << "Instance" << m_index << "launched via helper with PID" << m_helperPid;
+    setStatus(QStringLiteral("Running as %1").arg(m_username));
+    
+    // Signal running immediately since helper-launched instances don't use QProcess signals
+    Q_EMIT runningChanged();
+    Q_EMIT started();
 
     return true;
 }
@@ -460,10 +405,9 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     return args;
 }
 
-QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config, bool isPrimary)
+QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
 {
     Q_UNUSED(config)
-    Q_UNUSED(isPrimary)
     
     QStringList envVars;
     
@@ -477,101 +421,6 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config, bool 
     envVars << QStringLiteral("mesa_glthread=true");
     
     return envVars;
-}
-
-QString GamescopeInstance::buildSecondaryUserCommand(const QString &username,
-                                                       const QStringList &environment,
-                                                       const QStringList &gamescopeArgs,
-                                                       const QString &gameCommand)
-{
-    // Build environment exports for the secondary user
-    // Key insight: Let the secondary user use their OWN XDG_RUNTIME_DIR
-    // (so gamescope can create lockfiles there), but point WAYLAND_DISPLAY
-    // to the primary user's Wayland socket as an absolute path.
-    
-    QStringList exports;
-    
-    // Get the primary user's UID for the Wayland socket path
-    uid_t primaryUid = getuid();
-    QString primaryRuntimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
-    QString primaryWaylandSocket = primaryRuntimeDir + QStringLiteral("/wayland-0");
-    
-    // Set WAYLAND_DISPLAY to the absolute path of the primary user's Wayland socket
-    // The secondary user has ACL access to this socket (set up by helper)
-    exports << QStringLiteral("export WAYLAND_DISPLAY=%1").arg(primaryWaylandSocket);
-    
-    // Set DISPLAY for XWayland compatibility
-    QString display = QString::fromLocal8Bit(qgetenv("DISPLAY"));
-    if (!display.isEmpty()) {
-        exports << QStringLiteral("export DISPLAY=%1").arg(display);
-    }
-    
-    // Set XAUTHORITY - needed for X11/XWayland authentication
-    // The secondary user needs access to the primary user's Xauthority file
-    QString xauthority = QString::fromLocal8Bit(qgetenv("XAUTHORITY"));
-    if (xauthority.isEmpty()) {
-        // Default XAUTHORITY location
-        xauthority = QDir::homePath() + QStringLiteral("/.Xauthority");
-    }
-    if (QFile::exists(xauthority)) {
-        exports << QStringLiteral("export XAUTHORITY=%1").arg(xauthority);
-    }
-    
-    // NOTE: We do NOT override XDG_RUNTIME_DIR here!
-    // The secondary user should use their own runtime dir (e.g., /run/user/1001)
-    // so gamescope can create its lockfiles and sockets there.
-    // Only the Wayland socket connection goes to the primary user's socket.
-    
-    // For audio, point to the primary user's PipeWire socket
-    // PipeWire uses PIPEWIRE_RUNTIME_DIR if set, otherwise XDG_RUNTIME_DIR
-    exports << QStringLiteral("export PIPEWIRE_RUNTIME_DIR=%1").arg(primaryRuntimeDir);
-    
-    // Add any other environment variables from buildEnvironment()
-    for (const QString &var : environment) {
-        exports << QStringLiteral("export %1").arg(var);
-    }
-
-    // Build the gamescope command
-    // Log file helps capture errors for debugging
-    QString logFile = QStringLiteral("/tmp/couchplay-%1.log").arg(username);
-    
-    // Escape the game command for embedding in double quotes inside bash -c
-    // We need to escape: double quotes, dollar signs, and backticks
-    QString gameCommandForBash = gameCommand;
-    gameCommandForBash.replace(QLatin1Char('"'), QStringLiteral("\\\""));
-    gameCommandForBash.replace(QLatin1Char('$'), QStringLiteral("\\$"));
-    gameCommandForBash.replace(QLatin1Char('`'), QStringLiteral("\\`"));
-    
-    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /bin/bash -c \"%2\" 2>&1 | tee %3")
-                               .arg(gamescopeArgs.join(QLatin1Char(' ')), gameCommandForBash, logFile);
-
-    QString command;
-
-    // Build the full command with exports followed by gamescope
-    QString exportStr = exports.join(QStringLiteral("; "));
-    
-    // Escape the entire gamescopeCmd for embedding in single quotes
-    // Replace ' with '\'' (end quote, escaped quote, start quote)
-    QString escapedGamescopeCmd = gamescopeCmd;
-    escapedGamescopeCmd.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
-
-    // Use machinectl shell to run in the user's systemd session
-    // This requires linger to be enabled for the user (done by CreateUser)
-    // The user's session provides their own XDG_RUNTIME_DIR at /run/user/<uid>/
-    if (QFile::exists(QStringLiteral("/usr/bin/machinectl"))) {
-        // machinectl shell runs the command within the user's systemd user session
-        // We use 'export VAR=value; export VAR2=value2; command' syntax
-        // to properly set environment variables for bash -c
-        command = QStringLiteral("machinectl shell %1@ /bin/bash -c '%2; %3'")
-                      .arg(username, exportStr, escapedGamescopeCmd);
-    } else {
-        // Fallback: pkexec with runuser (original approach)
-        // This is less reliable but might work on non-systemd systems
-        command = QStringLiteral("pkexec /usr/bin/runuser -u %1 -- /bin/bash -c '%2; %3'")
-                      .arg(username, exportStr, escapedGamescopeCmd);
-    }
-
-    return command;
 }
 
 void GamescopeInstance::onProcessStarted()
@@ -674,12 +523,12 @@ bool GamescopeInstance::setupWaylandAccessForUser(const QString &username)
         return setupWaylandAccessFallback(username);
     }
     
-    // Call SetupWaylandAccess(username, primaryUid)
-    uid_t primaryUid = getuid();
+    // Call SetupWaylandAccess(username, compositorUid)
+    uid_t compositorUid = getuid();
     QDBusReply<bool> reply = helper.call(
         QStringLiteral("SetupWaylandAccess"), 
         username, 
-        static_cast<uint>(primaryUid)
+        static_cast<uint>(compositorUid)
     );
     
     if (!reply.isValid()) {
@@ -761,13 +610,13 @@ void GamescopeInstance::cleanupWaylandAccess()
         QDBusConnection::systemBus()
     );
     
-    uid_t primaryUid = getuid();
+    uid_t compositorUid = getuid();
     
     if (helper.isValid()) {
         QDBusReply<bool> reply = helper.call(
             QStringLiteral("RemoveWaylandAccess"), 
             m_username, 
-            static_cast<uint>(primaryUid)
+            static_cast<uint>(compositorUid)
         );
         
         if (reply.isValid() && reply.value()) {
@@ -779,7 +628,7 @@ void GamescopeInstance::cleanupWaylandAccess()
     }
     
     // Fallback: try direct setfacl (may fail without permissions)
-    QString runtimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
+    QString runtimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
     QString waylandSocket = runtimeDir + QStringLiteral("/wayland-0");
     
     if (QFile::exists(waylandSocket)) {

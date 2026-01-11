@@ -21,7 +21,7 @@ struct InstanceConfig;
  * - Resolution (internal and output)
  * - Window positioning for split-screen layouts
  * - Input device isolation
- * - Secondary user execution via machinectl
+ * - User execution via D-Bus helper service
  * - Direct Proton/Wine game launching
  */
 class GamescopeInstance : public QObject
@@ -93,23 +93,9 @@ public:
     /**
      * @brief Build environment variables for the instance
      * @param config Configuration map
-     * @param isPrimary Whether this is the primary instance
      * @return Environment variable assignments as strings
      */
-    static QStringList buildEnvironment(const QVariantMap &config, bool isPrimary);
-
-    /**
-     * @brief Build the full command for secondary user execution
-     * @param username Target username
-     * @param environment Environment variables
-     * @param gamescopeArgs Gamescope arguments
-     * @param gameCommand Full game launch command (Proton + exe or native binary)
-     * @return Full shell command string
-     */
-    static QString buildSecondaryUserCommand(const QString &username,
-                                              const QStringList &environment,
-                                              const QStringList &gamescopeArgs,
-                                              const QString &gameCommand);
+    static QStringList buildEnvironment(const QVariantMap &config);
 
 Q_SIGNALS:
     void runningChanged();
@@ -131,9 +117,9 @@ private:
     void setStatus(const QString &status);
     
     /**
-     * @brief Set up Wayland socket access for a secondary user via helper service
-     * Calls the D-Bus helper to grant the secondary user permission to access
-     * the primary user's Wayland socket via ACLs
+     * @brief Set up Wayland socket access for a user via helper service
+     * Calls the D-Bus helper to grant the user permission to access
+     * the compositor's Wayland socket via ACLs
      * @param username Target username
      * @return true if ACLs were set successfully
      */
@@ -157,7 +143,6 @@ private:
     QString m_status;
     QString m_username;
     QRect m_windowGeometry;
-    bool m_isPrimary = true;
     bool m_waylandAclSet = false;  // Track if we set up Wayland ACLs
-    qint64 m_helperPid = 0;        // PID from helper service (for secondary user instances)
+    qint64 m_helperPid = 0;        // PID from helper service
 };

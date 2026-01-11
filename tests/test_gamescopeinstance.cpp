@@ -34,14 +34,8 @@ private Q_SLOTS:
     void testBuildArgsFullConfig();
     
     // buildEnvironment tests
-    void testBuildEnvPrimary();
-    void testBuildEnvSecondary();
+    void testBuildEnvBasic();
     void testBuildEnvCustomPulseServer();
-    
-    // buildSecondaryUserCommand tests
-    void testBuildSecondaryCommandBasic();
-    void testBuildSecondaryCommandWithEnv();
-    void testBuildSecondaryCommandWithArgs();
     
     // Instance state tests
     void testInitialState();
@@ -242,10 +236,10 @@ void TestGamescopeInstance::testBuildArgsFullConfig()
 
 // ============ buildEnvironment Tests ============
 
-void TestGamescopeInstance::testBuildEnvPrimary()
+void TestGamescopeInstance::testBuildEnvBasic()
 {
     QVariantMap config;
-    QStringList env = GamescopeInstance::buildEnvironment(config, true);
+    QStringList env = GamescopeInstance::buildEnvironment(config);
     
     // Should have essential env vars for Vulkan games
     QVERIFY(!env.isEmpty());
@@ -253,22 +247,12 @@ void TestGamescopeInstance::testBuildEnvPrimary()
     QVERIFY(env.contains(QStringLiteral("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0")));
 }
 
-void TestGamescopeInstance::testBuildEnvSecondary()
-{
-    QVariantMap config;
-    QStringList env = GamescopeInstance::buildEnvironment(config, false);
-    
-    // Both primary and secondary get the same essential env vars
-    QVERIFY(!env.isEmpty());
-    QVERIFY(env.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
-}
-
 void TestGamescopeInstance::testBuildEnvCustomPulseServer()
 {
     QVariantMap config;
     config[QStringLiteral("pulseServer")] = QStringLiteral("tcp:192.168.1.100:4713");
     
-    QStringList env = GamescopeInstance::buildEnvironment(config, false);
+    QStringList env = GamescopeInstance::buildEnvironment(config);
     
     // pulseServer config is no longer used (each user has own PipeWire session)
     // but we still get the base env vars
@@ -284,73 +268,6 @@ void TestGamescopeInstance::testBuildEnvCustomPulseServer()
         }
     }
     QVERIFY(!hasPulseServer);
-}
-
-// ============ buildSecondaryUserCommand Tests ============
-
-void TestGamescopeInstance::testBuildSecondaryCommandBasic()
-{
-    QString username = QStringLiteral("player2");
-    QStringList environment;
-    QStringList gamescopeArgs = {QStringLiteral("-e"), QStringLiteral("-b")};
-    QString gameCommand = QStringLiteral("\"/path/to/game.exe\"");
-    
-    QString command = GamescopeInstance::buildSecondaryUserCommand(
-        username, environment, gamescopeArgs, gameCommand);
-    
-    // Should contain username
-    QVERIFY(command.contains(QStringLiteral("player2")));
-    // Should contain gamescope
-    QVERIFY(command.contains(QStringLiteral("gamescope")));
-    // Should contain game command
-    QVERIFY(command.contains(QStringLiteral("game.exe")));
-    // Should use pkexec, sudo, or machinectl for privilege escalation
-    QVERIFY(command.contains(QStringLiteral("pkexec")) || 
-            command.contains(QStringLiteral("sudo")) || 
-            command.contains(QStringLiteral("machinectl")));
-}
-
-void TestGamescopeInstance::testBuildSecondaryCommandWithEnv()
-{
-    QString username = QStringLiteral("player2");
-    // Test that environment variables are passed through
-    QStringList environment = {QStringLiteral("ENABLE_GAMESCOPE_WSI=1")};
-    QStringList gamescopeArgs;
-    QString gameCommand = QStringLiteral("\"/path/to/game\"");
-    
-    QString command = GamescopeInstance::buildSecondaryUserCommand(
-        username, environment, gamescopeArgs, gameCommand);
-    
-    // Should use machinectl shell for the user's session
-    QVERIFY(command.contains(QStringLiteral("machinectl shell player2@")) ||
-            command.contains(QStringLiteral("runuser")));  // fallback
-    
-    // Should contain WAYLAND_DISPLAY with absolute path to primary's socket
-    QVERIFY(command.contains(QStringLiteral("WAYLAND_DISPLAY=/run/user/")));
-    
-    // Should contain the env var we passed
-    QVERIFY(command.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
-}
-
-void TestGamescopeInstance::testBuildSecondaryCommandWithArgs()
-{
-    QString username = QStringLiteral("player2");
-    QStringList environment;
-    QStringList gamescopeArgs = {
-        QStringLiteral("-w"), QStringLiteral("1920"),
-        QStringLiteral("-h"), QStringLiteral("1080"),
-        QStringLiteral("-W"), QStringLiteral("960")
-    };
-    QString gameCommand = QStringLiteral("\"/path/to/proton\" run \"/path/to/game.exe\"");
-    
-    QString command = GamescopeInstance::buildSecondaryUserCommand(
-        username, environment, gamescopeArgs, gameCommand);
-    
-    // Should contain gamescope args
-    QVERIFY(command.contains(QStringLiteral("-w 1920")));
-    QVERIFY(command.contains(QStringLiteral("-W 960")));
-    // Should contain game command
-    QVERIFY(command.contains(QStringLiteral("game.exe")));
 }
 
 // ============ Instance State Tests ============

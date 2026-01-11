@@ -141,17 +141,17 @@ Kirigami.ScrollablePage {
 
                         // Status chip
                         Kirigami.Chip {
-                            text: isCurrent ? i18nc("@info", "Current User") : i18nc("@info", "Available")
-                            icon.name: isCurrent ? "dialog-ok-apply" : "user"
+                            text: isCurrent ? i18nc("@info", "Desktop User") : i18nc("@info", "Available")
+                            icon.name: isCurrent ? "user-identity" : "user"
                             closable: false
                             checkable: false
                         }
                     }
 
-                    // Info for current user
+                    // Info for current user (the one running CouchPlay)
                     Controls.Label {
                         visible: isCurrent
-                        text: i18nc("@info", "This is your primary account. Other users will join as Player 2, 3, etc.")
+                        text: i18nc("@info", "This is your current desktop session. You can assign this user to any player slot.")
                         wrapMode: Text.WordWrap
                         opacity: 0.7
                         font.italic: true

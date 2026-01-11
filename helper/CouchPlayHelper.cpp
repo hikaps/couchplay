@@ -305,7 +305,7 @@ bool CouchPlayHelper::IsLingerEnabled(const QString &username)
     return QFile::exists(lingerFile);
 }
 
-bool CouchPlayHelper::SetupWaylandAccess(const QString &username, uint primaryUid)
+bool CouchPlayHelper::SetupWaylandAccess(const QString &username, uint compositorUid)
 {
     // Validate username
     static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
@@ -328,16 +328,16 @@ bool CouchPlayHelper::SetupWaylandAccess(const QString &username, uint primaryUi
         return false;
     }
 
-    // Verify primary user exists
-    struct passwd *pw = getpwuid(primaryUid);
+    // Verify compositor user exists
+    struct passwd *pw = getpwuid(compositorUid);
     if (!pw) {
         sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Primary user with UID %1 does not exist").arg(primaryUid));
+            QStringLiteral("Compositor user with UID %1 does not exist").arg(compositorUid));
         return false;
     }
 
     // Build paths
-    QString runtimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
+    QString runtimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
     QString waylandSocket = runtimeDir + QStringLiteral("/wayland-0");
 
     // Check if runtime dir exists
@@ -416,7 +416,7 @@ bool CouchPlayHelper::SetupWaylandAccess(const QString &username, uint primaryUi
     return true;
 }
 
-bool CouchPlayHelper::RemoveWaylandAccess(const QString &username, uint primaryUid)
+bool CouchPlayHelper::RemoveWaylandAccess(const QString &username, uint compositorUid)
 {
     // Validate username
     static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
@@ -433,7 +433,7 @@ bool CouchPlayHelper::RemoveWaylandAccess(const QString &username, uint primaryU
     }
 
     // Build paths
-    QString runtimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
+    QString runtimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
     QString waylandSocket = runtimeDir + QStringLiteral("/wayland-0");
 
     bool success = true;
@@ -537,7 +537,7 @@ bool CouchPlayHelper::isValidDevicePath(const QString &path)
     return S_ISCHR(st.st_mode);
 }
 
-qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint primaryUid,
+qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint compositorUid,
                                         const QStringList &gamescopeArgs,
                                         const QString &gameCommand,
                                         const QStringList &environment)
@@ -563,24 +563,29 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint primaryUid,
         return 0;
     }
 
-    // Verify primary user exists
-    struct passwd *pw = getpwuid(primaryUid);
+    // Verify compositor user exists
+    struct passwd *pw = getpwuid(compositorUid);
     if (!pw) {
         sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Primary user with UID %1 does not exist").arg(primaryUid));
+            QStringLiteral("Compositor user with UID %1 does not exist").arg(compositorUid));
         return 0;
     }
 
-    // Set up Wayland access for the secondary user first
+    // Set up Wayland access for the user (if different from compositor user)
     // Call our own method - it will set up ACLs on the Wayland socket
-    if (!SetupWaylandAccess(username, primaryUid)) {
-        // SetupWaylandAccess already sends error reply
-        qWarning() << "Failed to set up Wayland access for" << username;
-        // Continue anyway - might work if ACLs were already set
+    uint userUid = getUserUid(username);
+    if (userUid != compositorUid) {
+        if (!SetupWaylandAccess(username, compositorUid)) {
+            // SetupWaylandAccess already sends error reply
+            qWarning() << "Failed to set up Wayland access for" << username;
+            // Continue anyway - might work if ACLs were already set
+        }
+    } else {
+        qDebug() << "User" << username << "is compositor user, skipping Wayland ACL setup";
     }
 
     // Build the command to execute
-    QString command = buildInstanceCommand(username, primaryUid, gamescopeArgs, 
+    QString command = buildInstanceCommand(username, compositorUid, gamescopeArgs, 
                                             gameCommand, environment);
     
     qDebug() << "LaunchInstance: Spawning for user" << username;
@@ -691,29 +696,29 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
     return false;
 }
 
-QString CouchPlayHelper::buildInstanceCommand(const QString &username, uint primaryUid,
+QString CouchPlayHelper::buildInstanceCommand(const QString &username, uint compositorUid,
                                                const QStringList &gamescopeArgs,
                                                const QString &gameCommand,
                                                const QStringList &environment)
 {
-    // Build environment exports for the secondary user
-    // Key insight: Let the secondary user use their OWN XDG_RUNTIME_DIR
+    // Build environment exports for the user
+    // Key insight: Let the user use their OWN XDG_RUNTIME_DIR
     // (so gamescope can create lockfiles there), but point WAYLAND_DISPLAY
-    // to the primary user's Wayland socket as an absolute path.
+    // to the compositor user's Wayland socket as an absolute path.
     
     QStringList exports;
     
-    // Primary user's runtime directory for Wayland socket
-    QString primaryRuntimeDir = QStringLiteral("/run/user/%1").arg(primaryUid);
-    QString primaryWaylandSocket = primaryRuntimeDir + QStringLiteral("/wayland-0");
+    // Compositor user's runtime directory for Wayland socket
+    QString compositorRuntimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
+    QString compositorWaylandSocket = compositorRuntimeDir + QStringLiteral("/wayland-0");
     
-    // Set WAYLAND_DISPLAY to the absolute path of the primary user's Wayland socket
-    // The secondary user has ACL access to this socket (set up by SetupWaylandAccess)
-    exports << QStringLiteral("export WAYLAND_DISPLAY=%1").arg(primaryWaylandSocket);
+    // Set WAYLAND_DISPLAY to the absolute path of the compositor user's Wayland socket
+    // The user has ACL access to this socket (set up by SetupWaylandAccess)
+    exports << QStringLiteral("export WAYLAND_DISPLAY=%1").arg(compositorWaylandSocket);
     
-    // For audio, point to the primary user's PipeWire socket
+    // For audio, point to the compositor user's PipeWire socket
     // PipeWire uses PIPEWIRE_RUNTIME_DIR if set, otherwise XDG_RUNTIME_DIR
-    exports << QStringLiteral("export PIPEWIRE_RUNTIME_DIR=%1").arg(primaryRuntimeDir);
+    exports << QStringLiteral("export PIPEWIRE_RUNTIME_DIR=%1").arg(compositorRuntimeDir);
     
     // Add any additional environment variables from the caller
     for (const QString &var : environment) {

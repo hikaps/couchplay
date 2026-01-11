@@ -145,12 +145,7 @@ Kirigami.ScrollablePage {
                 ]
                 textRole: "text"
                 valueRole: "value"
-                currentIndex: {
-                    for (let i = 0; i < model.length; i++) {
-                        if (model[i].value === root.selectedLayout) return i
-                    }
-                    return 0
-                }
+                currentIndex: Math.max(0, model.findIndex(item => item.value === root.selectedLayout))
                 onCurrentValueChanged: root.selectedLayout = currentValue
 
                 delegate: Controls.ItemDelegate {

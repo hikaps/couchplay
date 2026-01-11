@@ -22,6 +22,26 @@ Kirigami.ScrollablePage {
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
 
+    // Revision counter to force re-evaluation of user filtering when instances change
+    property int instancesRevision: 0
+
+    Connections {
+        target: root.sessionManager
+        function onInstancesChanged() {
+            root.instancesRevision++
+        }
+    }
+
+    // Get available users for a specific instance (excludes users assigned to other instances)
+    function getAvailableUsers(forIndex) {
+        // Reference instancesRevision to create binding dependency
+        void(root.instancesRevision)
+        if (!root.userManager || !root.sessionManager) return []
+        let allUsers = root.userManager.users
+        let assignedToOthers = root.sessionManager.getAssignedUsers(forIndex)
+        return allUsers.filter(user => !assignedToOthers.includes(user.username))
+    }
+
     // Helper function to get primary monitor size
     function getPrimaryMonitorSize() {
         if (!monitorManager) return { width: 1920, height: 1080 }
@@ -261,121 +281,54 @@ Kirigami.ScrollablePage {
                 contentItem: Kirigami.FormLayout {
                     // Prevent binding loop on wideMode
                     wideMode: false
-                    
-                    // Get current config for this instance
-                    property var config: sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
-
-                    // Update controls when config changes (e.g., after profile load)
-                    Connections {
-                        target: sessionManager
-                        function onInstancesChanged() {
-                            let cfg = sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
-                            refreshSpin.value = cfg.refreshRate || 60
-                            // Update user combo selection from config
-                            let savedUser = cfg.username || ""
-                            let idx = userCombo.userList.indexOf(savedUser)
-                            if (idx >= 0) {
-                                userCombo.currentIndex = idx
-                            }
-                        }
-                    }
 
                     Controls.ComboBox {
                         id: userCombo
                         Kirigami.FormData.label: instanceCard.labelUser
                         Layout.fillWidth: true
                         
-                        // Current user's username (for filtering)
-                        readonly property string currentUsername: userManager ? userManager.currentUser : ""
+                        // Filtered model: excludes users already assigned to other instances
+                        model: root.getAvailableUsers(instanceCard.index)
+                        textRole: "username"
+                        valueRole: "username"
                         
-                        // Build simple user list - no dynamic filtering to avoid binding loops
-                        // Instance 0: current user only
-                        // Instance 1+: all secondary users (validation happens at session start)
-                        readonly property var userList: {
-                            if (instanceCard.index === 0) {
-                                return currentUsername ? [currentUsername] : []
+                        // Restore selection after model changes
+                        onModelChanged: {
+                            let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
+                            let currentUsername = config?.username ?? ""
+                            if (currentUsername) {
+                                currentIndex = indexOfValue(currentUsername)
+                            } else {
+                                currentIndex = -1
                             }
-                            
-                            // Secondary instances: show all non-current users
-                            let users = []
-                            let allUsers = userManager ? userManager.users : []
-                            for (let i = 0; i < allUsers.length; i++) {
-                                let user = allUsers[i]
-                                if (user.username !== currentUsername) {
-                                    users.push(user.username)
-                                }
-                            }
-                            return users
                         }
-                        
-                        model: userList
                         
                         // Show placeholder when no users available
-                        displayText: userList.length === 0 
+                        displayText: count === 0 
                             ? i18nc("@info", "No users available") 
-                            : (currentIndex >= 0 && currentIndex < userList.length ? userList[currentIndex] : "")
+                            : (currentIndex >= 0 ? currentText : i18nc("@info", "Select a user..."))
                         
-                        // Set initial selection from config
-                        Component.onCompleted: {
-                            let cfg = sessionManager ? sessionManager.getInstanceConfig(instanceCard.index) : ({})
-                            let savedUser = cfg.username || ""
-                            let idx = userList.indexOf(savedUser)
-                            currentIndex = idx >= 0 ? idx : 0
-                            
-                            // Initialize the username in SessionManager if we have a valid selection
-                            if (sessionManager && userList.length > 0 && currentIndex >= 0) {
-                                sessionManager.setInstanceUser(instanceCard.index, userList[currentIndex])
-                            }
-                        }
-                        
-                        // Only update on actual user interaction (not programmatic changes)
-                        onActivated: function(index) {
-                            if (sessionManager && index >= 0 && index < userList.length) {
-                                sessionManager.setInstanceUser(instanceCard.index, userList[index])
+                        // Update session manager when user selects a different user
+                        onActivated: {
+                            if (root.sessionManager && currentValue) {
+                                root.sessionManager.setInstanceUser(instanceCard.index, currentValue)
                             }
                         }
                     }
                     
-                    // Warning when no secondary users available
+                    // Warning when no user selected
                     Controls.Label {
-                        visible: instanceCard.index > 0 && userCombo.userList.length === 0
-                        text: i18nc("@info", "Create a user in Settings to enable this instance")
+                        visible: userCombo.currentIndex < 0 && userCombo.count > 0
+                        text: i18nc("@info:status", "Please select a user for this instance")
                         color: Kirigami.Theme.neutralTextColor
                         font.italic: true
                         wrapMode: Text.WordWrap
                         Layout.fillWidth: true
                     }
 
-                    // Resolution is auto-calculated from monitor size and layout
                     Controls.Label {
                         Kirigami.FormData.label: instanceCard.labelResolution
-                        text: {
-                            // Get screen size and calculate based on layout
-                            let screen = Qt.application.screens[0]
-                            if (!screen) return "1920 x 1080"
-                            
-                            let screenW = screen.width
-                            let screenH = screen.height
-                            let count = sessionManager ? sessionManager.instanceCount : 2
-                            let layout = sessionManager ? sessionManager.currentLayout : "side-by-side"
-                            
-                            let w = screenW
-                            let h = screenH
-                            
-                            if (layout === "side-by-side") {
-                                w = Math.floor(screenW / count)
-                            } else if (layout === "stacked") {
-                                h = Math.floor(screenH / count)
-                            } else if (layout === "grid") {
-                                let cols = Math.ceil(Math.sqrt(count))
-                                let rows = Math.ceil(count / cols)
-                                w = Math.floor(screenW / cols)
-                                h = Math.floor(screenH / rows)
-                            }
-                            // fullscreen: each instance uses full screen (overlapping)
-                            
-                            return w + " x " + h
-                        }
+                        text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
                         opacity: 0.8
                     }
 
@@ -384,15 +337,15 @@ Kirigami.ScrollablePage {
                         Kirigami.FormData.label: instanceCard.labelRefreshRate
                         from: 30
                         to: 240
-                        value: parent.config.refreshRate || 60
+                        value: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).refreshRate : 60
                         textFromValue: function(value) { return value + " Hz" }
                         valueFromText: function(text) { return parseInt(text) }
                         
                         onValueModified: {
-                            if (sessionManager) {
-                                let config = sessionManager.getInstanceConfig(instanceCard.index)
+                            if (root.sessionManager) {
+                                var config = root.sessionManager.getInstanceConfig(instanceCard.index)
                                 config.refreshRate = value
-                                sessionManager.setInstanceConfig(instanceCard.index, config)
+                                root.sessionManager.setInstanceConfig(instanceCard.index, config)
                             }
                         }
                     }
@@ -411,8 +364,8 @@ Kirigami.ScrollablePage {
 
                         Controls.Label {
                             text: {
-                                if (!deviceManager) return instanceCard.textNoneAssigned
-                                let paths = deviceManager.getDevicePathsForInstance(instanceCard.index)
+                                if (!root.deviceManager) return instanceCard.textNoneAssigned
+                                var paths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
                                 if (paths.length === 0) return instanceCard.textNoneAssigned
                                 return paths.length === 1 
                                     ? (paths.length + " device")

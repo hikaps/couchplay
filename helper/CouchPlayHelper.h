@@ -61,22 +61,22 @@ public Q_SLOTS:
     bool IsLingerEnabled(const QString &username);
 
     /**
-     * Set up Wayland socket access for a secondary user via ACLs
+     * Set up Wayland socket access for a user via ACLs
      * 
-     * @param username Secondary username to grant access to
-     * @param primaryUid UID of the primary user (Wayland socket owner)
+     * @param username Username to grant access to
+     * @param compositorUid UID of the compositor user (Wayland socket owner)
      * @return true if successful
      */
-    bool SetupWaylandAccess(const QString &username, uint primaryUid);
+    bool SetupWaylandAccess(const QString &username, uint compositorUid);
 
     /**
-     * Remove Wayland socket access for a secondary user
+     * Remove Wayland socket access for a user
      * 
-     * @param username Secondary username to revoke access from
-     * @param primaryUid UID of the primary user
+     * @param username Username to revoke access from
+     * @param compositorUid UID of the compositor user
      * @return true if successful
      */
-    bool RemoveWaylandAccess(const QString &username, uint primaryUid);
+    bool RemoveWaylandAccess(const QString &username, uint compositorUid);
 
     /**
      * Change ownership of a device to a specific user
@@ -121,21 +121,21 @@ public Q_SLOTS:
     QString Version();
 
     /**
-     * Launch a gamescope instance as a secondary user
+     * Launch a gamescope instance as a specified user
      * 
-     * This method handles all the complexity of running gamescope as a different user:
-     * - Sets up Wayland socket ACLs
+     * This method handles all the complexity of running gamescope as any user:
+     * - Sets up Wayland socket ACLs (if user differs from compositor user)
      * - Spawns the process via machinectl shell
      * - Returns the PID for tracking
      * 
-     * @param username Secondary user to run as
-     * @param primaryUid UID of primary user (for Wayland socket access)
+     * @param username User to run as
+     * @param compositorUid UID of compositor user (for Wayland socket access)
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Command to run inside gamescope (e.g., "steam -tenfoot")
      * @param environment Additional environment variables (VAR=value format)
      * @return PID of launched process, or 0 on failure
      */
-    qint64 LaunchInstance(const QString &username, uint primaryUid,
+    qint64 LaunchInstance(const QString &username, uint compositorUid,
                           const QStringList &gamescopeArgs,
                           const QString &gameCommand,
                           const QStringList &environment);
@@ -163,7 +163,7 @@ private:
     // Internal helpers (not exposed via D-Bus)
     bool userExists(const QString &username);
     uint getUserUid(const QString &username);
-    QString buildInstanceCommand(const QString &username, uint primaryUid,
+    QString buildInstanceCommand(const QString &username, uint compositorUid,
                                   const QStringList &gamescopeArgs,
                                   const QString &gameCommand,
                                   const QStringList &environment);

@@ -17,6 +17,10 @@ Kirigami.ScrollablePage {
     required property var deviceManager
     required property var helperClient
 
+    // Computed properties to avoid repeating conditions
+    property bool helperAvailable: helperClient?.available ?? false
+    property bool hasControllers: deviceManager && deviceManager.controllers.length > 0
+
     // Refresh on page load
     Component.onCompleted: {
         if (sessionManager) {
@@ -294,10 +298,8 @@ Kirigami.ScrollablePage {
                 spacing: Kirigami.Units.smallSpacing
 
                 Kirigami.Icon {
-                    source: deviceManager && deviceManager.controllers.length > 0 
-                        ? "emblem-ok-symbolic" : "emblem-warning-symbolic"
-                    color: deviceManager && deviceManager.controllers.length > 0 
-                        ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                    source: root.hasControllers ? "emblem-ok-symbolic" : "emblem-warning-symbolic"
+                    color: root.hasControllers ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
                     Layout.preferredWidth: Kirigami.Units.iconSizes.small
                     Layout.preferredHeight: Kirigami.Units.iconSizes.small
                 }
@@ -306,8 +308,7 @@ Kirigami.ScrollablePage {
                     text: deviceManager 
                         ? i18ncp("@info", "%1 detected", "%1 detected", deviceManager.controllers.length)
                         : i18nc("@info", "Unknown")
-                    color: deviceManager && deviceManager.controllers.length > 0 
-                        ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                    color: root.hasControllers ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
                 }
             }
 
@@ -316,19 +317,19 @@ Kirigami.ScrollablePage {
                 spacing: Kirigami.Units.smallSpacing
 
                 Kirigami.Icon {
-                    source: (helperClient?.available ?? false) ? "emblem-ok-symbolic" : "emblem-warning-symbolic"
-                    color: (helperClient?.available ?? false) ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                    source: root.helperAvailable ? "emblem-ok-symbolic" : "emblem-warning-symbolic"
+                    color: root.helperAvailable ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
                     Layout.preferredWidth: Kirigami.Units.iconSizes.small
                     Layout.preferredHeight: Kirigami.Units.iconSizes.small
                 }
 
                 Controls.Label {
-                    text: (helperClient?.available ?? false) ? i18nc("@info", "Connected") : i18nc("@info", "Not configured")
-                    color: (helperClient?.available ?? false) ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                    text: root.helperAvailable ? i18nc("@info", "Connected") : i18nc("@info", "Not configured")
+                    color: root.helperAvailable ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
                 }
 
                 Controls.Button {
-                    visible: !(helperClient?.available ?? false)
+                    visible: !root.helperAvailable
                     text: i18nc("@action:button", "Setup")
                     flat: true
                     onClicked: applicationWindow().pushSettingsPage()

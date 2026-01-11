@@ -93,6 +93,8 @@ QVariantList UserManager::usersAsVariant() const
         map[QStringLiteral("username")] = user.username;
         map[QStringLiteral("uid")] = user.uid;
         map[QStringLiteral("homeDir")] = user.homeDir;
+        // Keep isCurrent for reference only (e.g., showing which user runs the app)
+        // but it has no special treatment in the session
         map[QStringLiteral("isCurrent")] = (user.username == m_currentUser);
         list.append(map);
     }
