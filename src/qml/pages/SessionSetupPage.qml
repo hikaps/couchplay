@@ -300,11 +300,17 @@ Kirigami.ScrollablePage {
                         onModelChanged: {
                             let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
                             let currentUsername = config?.username ?? ""
-                            if (currentUsername) {
-                                currentIndex = indexOfValue(currentUsername)
-                            } else {
-                                currentIndex = -1
+                            if (currentUsername && model) {
+                                // Manual search - indexOfValue doesn't work with JS arrays of objects
+                                // We need to iterate through the model to find the matching username
+                                for (let i = 0; i < model.length; i++) {
+                                    if (model[i].username === currentUsername) {
+                                        currentIndex = i
+                                        return
+                                    }
+                                }
                             }
+                            currentIndex = -1
                         }
                         
                         // Show placeholder when no users available
