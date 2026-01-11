@@ -42,7 +42,7 @@ void PresetManager::initBuiltinPresets()
     steamDesktop.command = QStringLiteral("steam");
     steamDesktop.iconName = QStringLiteral("steam");
     steamDesktop.isBuiltin = true;
-    steamDesktop.steamIntegration = true;
+    steamDesktop.steamIntegration = false;  // Desktop mode doesn't need -e flag
     m_builtinPresets.append(steamDesktop);
 
     // Lutris preset

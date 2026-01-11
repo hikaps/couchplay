@@ -82,8 +82,8 @@ void TestGamescopeInstance::testBuildArgsMinimal()
     QVariantMap config;
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
     
-    // Should always include -e (Steam integration)
-    QVERIFY(args.contains(QStringLiteral("-e")));
+     // Should NOT include -e by default (steamIntegration is false)
+    QVERIFY(!args.contains(QStringLiteral("-e")));
     
     // Should NOT include -b by default (decorated windows for resizing)
     QVERIFY(!args.contains(QStringLiteral("-b")));
@@ -218,7 +218,7 @@ void TestGamescopeInstance::testBuildArgsFullConfig()
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
     
     // Verify all expected args are present
-    QVERIFY(args.contains(QStringLiteral("-e")));
+    QVERIFY(!args.contains(QStringLiteral("-e")));  // Should NOT include -e (steamIntegration is false)
     QVERIFY(args.contains(QStringLiteral("-b")));  // Now enabled because borderless=true
     QVERIFY(args.contains(QStringLiteral("-w")));
     QVERIFY(args.contains(QStringLiteral("-h")));

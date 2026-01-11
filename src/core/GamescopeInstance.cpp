@@ -262,7 +262,11 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     QStringList args;
 
     // Steam integration - expose Steam-specific window properties
-    args << QStringLiteral("-e");
+    // Only enable for presets that require it (e.g., Steam Big Picture mode)
+    bool steamIntegration = config.value(QStringLiteral("steamIntegration"), false).toBool();
+    if (steamIntegration) {
+        args << QStringLiteral("-e");
+    }
 
     // Borderless window (optional - allows positioning but removes decorations)
     // Default is false (decorated windows for resizing)
