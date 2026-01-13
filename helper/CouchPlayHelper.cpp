@@ -27,6 +27,7 @@ static const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couch
 static const QString ACTION_ENABLE_LINGER = QStringLiteral("io.github.hikaps.couchplay.enable-linger");
 static const QString ACTION_WAYLAND_ACCESS = QStringLiteral("io.github.hikaps.couchplay.setup-wayland-access");
 static const QString ACTION_LAUNCH_INSTANCE = QStringLiteral("io.github.hikaps.couchplay.launch-instance");
+static const QString ACTION_MANAGE_MOUNTS = QStringLiteral("io.github.hikaps.couchplay.manage-mounts");
 
 CouchPlayHelper::CouchPlayHelper(QObject *parent)
     : QObject(parent)
@@ -35,6 +36,22 @@ CouchPlayHelper::CouchPlayHelper(QObject *parent)
 
 CouchPlayHelper::~CouchPlayHelper()
 {
+    // Clean up: unmount all shared directories
+    if (!m_activeMounts.isEmpty()) {
+        for (const QString &username : m_activeMounts.keys()) {
+            for (const MountInfo &mount : m_activeMounts[username]) {
+                QProcess umountProcess;
+                umountProcess.start(QStringLiteral("umount"), {mount.target});
+                umountProcess.waitForFinished(5000);
+                if (umountProcess.exitCode() != 0) {
+                    // Try lazy unmount
+                    QProcess::execute(QStringLiteral("umount"), {QStringLiteral("-l"), mount.target});
+                }
+            }
+        }
+        m_activeMounts.clear();
+    }
+
     // Clean up: stop all launched processes
     for (auto it = m_launchedProcesses.begin(); it != m_launchedProcesses.end(); ++it) {
         QProcess *process = it.value();
@@ -256,6 +273,18 @@ uint CouchPlayHelper::getUserUid(const QString &username)
 {
     struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
     return pw ? pw->pw_uid : 0;
+}
+
+QString CouchPlayHelper::getUserHome(const QString &username)
+{
+    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+    return pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+}
+
+QString CouchPlayHelper::getUserHomeByUid(uint uid)
+{
+    struct passwd *pw = getpwuid(uid);
+    return pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
 }
 
 bool CouchPlayHelper::EnableLinger(const QString &username)
@@ -750,4 +779,705 @@ QString CouchPlayHelper::buildInstanceCommand(const QString &username, uint comp
                           .arg(username, exportStr, escapedGamescopeCmd);
 
     return command;
+}
+
+QString CouchPlayHelper::computeMountTarget(const QString &source, const QString &alias,
+                                             const QString &userHome, const QString &compositorHome)
+{
+    // Determine where to mount the source directory in the user's home
+    
+    if (source.startsWith(compositorHome) && alias.isEmpty()) {
+        // Home-relative: mount at same relative path in user's home
+        QString relativePath = source.mid(compositorHome.length());
+        return userHome + relativePath;
+    } else if (!alias.isEmpty()) {
+        // Has alias: mount at specified location relative to user's home
+        if (alias.startsWith(QLatin1Char('/'))) {
+            // Absolute alias - just append to home (remove leading slash)
+            return userHome + alias;
+        }
+        return userHome + QStringLiteral("/") + alias;
+    } else {
+        // Non-home path, no alias: mount under .couchplay/mounts/
+        return userHome + QStringLiteral("/.couchplay/mounts") + source;
+    }
+}
+
+int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compositorUid,
+                                             const QStringList &directories)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return 0;
+    }
+
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to manage mounts"));
+        return 0;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return 0;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Could not determine home directory for user '%1'").arg(username));
+        return 0;
+    }
+
+    QString compositorHome = getUserHomeByUid(compositorUid);
+    if (compositorHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Could not determine home directory for compositor user"));
+        return 0;
+    }
+
+    int successCount = 0;
+
+    for (const QString &dirSpec : directories) {
+        // Parse "source|alias" format
+        QStringList parts = dirSpec.split(QLatin1Char('|'));
+        if (parts.isEmpty()) {
+            continue;
+        }
+
+        QString source = parts.at(0);
+        QString alias = parts.size() > 1 ? parts.at(1) : QString();
+
+        // Validate source path exists
+        if (!QFile::exists(source)) {
+            qWarning() << "MountSharedDirectories: Source path does not exist:" << source;
+            continue;
+        }
+
+        // Validate source is a directory
+        QFileInfo sourceInfo(source);
+        if (!sourceInfo.isDir()) {
+            qWarning() << "MountSharedDirectories: Source is not a directory:" << source;
+            continue;
+        }
+
+        // Compute target path
+        QString target = computeMountTarget(source, alias, userHome, compositorHome);
+
+        // Create target directory if it doesn't exist
+        QDir targetDir(target);
+        if (!targetDir.exists()) {
+            if (!QDir().mkpath(target)) {
+                qWarning() << "MountSharedDirectories: Failed to create target directory:" << target;
+                continue;
+            }
+            // Set ownership of created directory to the target user
+            uint userUid = getUserUid(username);
+            struct passwd *pw = getpwuid(userUid);
+            if (pw) {
+                chown(target.toLocal8Bit().constData(), userUid, pw->pw_gid);
+            }
+        }
+
+        // Perform bind mount
+        QProcess mountProcess;
+        mountProcess.start(QStringLiteral("mount"), 
+            {QStringLiteral("--bind"), source, target});
+        mountProcess.waitForFinished(10000);
+
+        if (mountProcess.exitCode() != 0) {
+            qWarning() << "MountSharedDirectories: Failed to mount" << source << "to" << target
+                       << ":" << QString::fromLocal8Bit(mountProcess.readAllStandardError());
+            continue;
+        }
+
+        // Track the mount for cleanup
+        MountInfo info;
+        info.source = source;
+        info.target = target;
+        m_activeMounts[username].append(info);
+
+        qDebug() << "MountSharedDirectories: Mounted" << source << "to" << target << "for" << username;
+        successCount++;
+    }
+
+    return successCount;
+}
+
+int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return 0;
+    }
+
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to manage mounts"));
+        return 0;
+    }
+
+    if (!m_activeMounts.contains(username)) {
+        return 0;  // No mounts to remove
+    }
+
+    int successCount = 0;
+    QList<MountInfo> mounts = m_activeMounts[username];
+
+    // Unmount in reverse order (in case of nested mounts)
+    for (int i = mounts.size() - 1; i >= 0; --i) {
+        const MountInfo &mount = mounts.at(i);
+
+        QProcess umountProcess;
+        umountProcess.start(QStringLiteral("umount"), {mount.target});
+        umountProcess.waitForFinished(10000);
+
+        if (umountProcess.exitCode() == 0) {
+            qDebug() << "UnmountSharedDirectories: Unmounted" << mount.target << "for" << username;
+            successCount++;
+        } else {
+            // Try lazy unmount as fallback
+            QProcess lazyUmount;
+            lazyUmount.start(QStringLiteral("umount"), {QStringLiteral("-l"), mount.target});
+            lazyUmount.waitForFinished(10000);
+
+            if (lazyUmount.exitCode() == 0) {
+                qDebug() << "UnmountSharedDirectories: Lazy unmounted" << mount.target << "for" << username;
+                successCount++;
+            } else {
+                qWarning() << "UnmountSharedDirectories: Failed to unmount" << mount.target
+                           << ":" << QString::fromLocal8Bit(umountProcess.readAllStandardError());
+            }
+        }
+    }
+
+    m_activeMounts.remove(username);
+    return successCount;
+}
+
+int CouchPlayHelper::UnmountAllSharedDirectories()
+{
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to manage mounts"));
+        return 0;
+    }
+
+    int totalCount = 0;
+    QStringList users = m_activeMounts.keys();
+
+    for (const QString &username : users) {
+        // Call without auth check since we already checked above
+        QList<MountInfo> mounts = m_activeMounts[username];
+        
+        for (int i = mounts.size() - 1; i >= 0; --i) {
+            const MountInfo &mount = mounts.at(i);
+
+            QProcess umountProcess;
+            umountProcess.start(QStringLiteral("umount"), {mount.target});
+            umountProcess.waitForFinished(10000);
+
+            if (umountProcess.exitCode() == 0) {
+                qDebug() << "UnmountAllSharedDirectories: Unmounted" << mount.target;
+                totalCount++;
+            } else {
+                // Try lazy unmount as fallback
+                QProcess lazyUmount;
+                lazyUmount.start(QStringLiteral("umount"), {QStringLiteral("-l"), mount.target});
+                lazyUmount.waitForFinished(10000);
+
+                if (lazyUmount.exitCode() == 0) {
+                    qDebug() << "UnmountAllSharedDirectories: Lazy unmounted" << mount.target;
+                    totalCount++;
+                } else {
+                    qWarning() << "UnmountAllSharedDirectories: Failed to unmount" << mount.target;
+                }
+            }
+        }
+        
+        m_activeMounts.remove(username);
+    }
+
+    return totalCount;
+}
+
+bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &targetPath,
+                                      const QString &username)
+{
+    qDebug() << "CopyFileToUser:" << sourcePath << "->" << targetPath << "for" << username;
+    
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to copy files"));
+        return false;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // Validate source file exists
+    if (!QFile::exists(sourcePath)) {
+        qWarning() << "CopyFileToUser: Source file does not exist:" << sourcePath;
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Source file does not exist: %1").arg(sourcePath));
+        return false;
+    }
+
+    // Get user info for ownership
+    uint userUid = getUserUid(username);
+    struct passwd *pw = getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "CopyFileToUser: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+
+    // Create parent directories if needed
+    QFileInfo targetInfo(targetPath);
+    QString targetDir = targetInfo.absolutePath();
+    
+    if (!QDir().mkpath(targetDir)) {
+        qWarning() << "CopyFileToUser: Failed to create directory:" << targetDir;
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to create directory: %1").arg(targetDir));
+        return false;
+    }
+
+    // Set ownership on created directories
+    // Walk up from target directory, setting ownership on each new directory
+    QString userHome = getUserHome(username);
+    QStringList pathParts = targetDir.mid(userHome.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString currentPath = userHome;
+    for (const QString &part : pathParts) {
+        currentPath += QStringLiteral("/") + part;
+        // Only chown if it exists (mkpath created it)
+        if (QDir(currentPath).exists()) {
+            chown(currentPath.toLocal8Bit().constData(), userUid, pw->pw_gid);
+        }
+    }
+
+    // Copy the file
+    // Remove target first if it exists
+    if (QFile::exists(targetPath)) {
+        QFile::remove(targetPath);
+    }
+
+    if (!QFile::copy(sourcePath, targetPath)) {
+        qWarning() << "CopyFileToUser: Failed to copy" << sourcePath << "to" << targetPath;
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to copy file from %1 to %2").arg(sourcePath, targetPath));
+        return false;
+    }
+
+    // Set ownership on the copied file
+    if (chown(targetPath.toLocal8Bit().constData(), userUid, pw->pw_gid) != 0) {
+        qWarning() << "CopyFileToUser: Failed to set ownership on" << targetPath;
+        // Don't fail - file was copied successfully
+    }
+
+    // Set permissions to 0644 (owner read/write, group/other read)
+    if (chmod(targetPath.toLocal8Bit().constData(), 0644) != 0) {
+        qWarning() << "CopyFileToUser: Failed to set permissions on" << targetPath;
+    }
+
+    qDebug() << "CopyFileToUser: Copied" << sourcePath << "to" << targetPath << "for" << username;
+    return true;
+}
+
+bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &targetPath,
+                                       const QString &username)
+{
+    qDebug() << "WriteFileToUser:" << content.size() << "bytes to" << targetPath << "for" << username;
+    
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to write files"));
+        return false;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // Get user info for ownership
+    uint userUid = getUserUid(username);
+    struct passwd *pw = getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "WriteFileToUser: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+
+    // Create parent directories if needed
+    QFileInfo targetInfo(targetPath);
+    QString targetDir = targetInfo.absolutePath();
+    
+    if (!QDir().mkpath(targetDir)) {
+        qWarning() << "WriteFileToUser: Failed to create directory:" << targetDir;
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to create directory: %1").arg(targetDir));
+        return false;
+    }
+
+    // Set ownership on created directories
+    QString userHome = getUserHome(username);
+    QStringList pathParts = targetDir.mid(userHome.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString currentPath = userHome;
+    for (const QString &part : pathParts) {
+        currentPath += QStringLiteral("/") + part;
+        if (QDir(currentPath).exists()) {
+            chown(currentPath.toLocal8Bit().constData(), userUid, pw->pw_gid);
+        }
+    }
+
+    // Write the file
+    QFile file(targetPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qWarning() << "WriteFileToUser: Failed to open" << targetPath << "for writing:" << file.errorString();
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to open file for writing: %1").arg(file.errorString()));
+        return false;
+    }
+
+    qint64 written = file.write(content);
+    file.close();
+
+    if (written != content.size()) {
+        qWarning() << "WriteFileToUser: Only wrote" << written << "of" << content.size() << "bytes";
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to write all data to file"));
+        return false;
+    }
+
+    // Set ownership on the file
+    if (chown(targetPath.toLocal8Bit().constData(), userUid, pw->pw_gid) != 0) {
+        qWarning() << "WriteFileToUser: Failed to set ownership on" << targetPath;
+        // Don't fail - file was written successfully
+    }
+
+    // Set permissions to 0644
+    if (chmod(targetPath.toLocal8Bit().constData(), 0644) != 0) {
+        qWarning() << "WriteFileToUser: Failed to set permissions on" << targetPath;
+    }
+
+    qDebug() << "WriteFileToUser: Wrote" << content.size() << "bytes to" << targetPath << "for" << username;
+    return true;
+}
+
+bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &username)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to create directories"));
+        return false;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // Get user info for ownership
+    uint userUid = getUserUid(username);
+    struct passwd *pw = getpwuid(userUid);
+    if (!pw) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+
+    // Create directories
+    if (!QDir().mkpath(path)) {
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to create directory: %1").arg(path));
+        return false;
+    }
+
+    // Set ownership on the directory and all parent directories under user's home
+    QString userHome = getUserHome(username);
+    QStringList pathParts = path.mid(userHome.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString currentPath = userHome;
+    for (const QString &part : pathParts) {
+        currentPath += QStringLiteral("/") + part;
+        if (QDir(currentPath).exists()) {
+            chown(currentPath.toLocal8Bit().constData(), userUid, pw->pw_gid);
+        }
+    }
+
+    qDebug() << "CreateUserDirectory: Created" << path << "for" << username;
+    return true;
+}
+
+bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &username, bool recursive)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to set directory ACLs"));
+        return false;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // Check if path exists
+    if (!QFileInfo::exists(path)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Path does not exist: %1").arg(path));
+        return false;
+    }
+
+    // Build setfacl command
+    // setfacl -m u:username:rx /path (non-recursive)
+    // setfacl -R -m u:username:rx /path (recursive)
+    QStringList args;
+    if (recursive) {
+        args << QStringLiteral("-R");
+    }
+    args << QStringLiteral("-m");
+    args << QStringLiteral("u:%1:rx").arg(username);
+    args << path;
+
+    QProcess setfacl;
+    setfacl.start(QStringLiteral("setfacl"), args);
+    
+    if (!setfacl.waitForFinished(60000)) {  // 60 second timeout for recursive operations
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("setfacl timed out for path: %1").arg(path));
+        return false;
+    }
+
+    if (setfacl.exitCode() != 0) {
+        QString errorOutput = QString::fromUtf8(setfacl.readAllStandardError());
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("setfacl failed for path %1: %2").arg(path, errorOutput));
+        return false;
+    }
+
+    qDebug() << "SetDirectoryAcl:" << (recursive ? "Recursively set" : "Set") 
+             << "ACL for user" << username << "on" << path;
+    return true;
+}
+
+bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to set directory ACLs"));
+        return false;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // Check if path exists
+    if (!QFileInfo::exists(path)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Path does not exist: %1").arg(path));
+        return false;
+    }
+
+    // Safe boundaries where we stop traversing upward
+    // These are directories that either already have proper permissions
+    // or we shouldn't modify
+    static const QStringList stopBoundaries = {
+        QStringLiteral("/run/media"),
+        QStringLiteral("/media"),
+        QStringLiteral("/mnt"),
+        QStringLiteral("/home"),
+        QStringLiteral("/var/home"),  // Bazzite/Fedora Silverblue
+        QStringLiteral("/"),
+    };
+
+    // Collect all parent directories that need ACLs
+    QStringList pathsToSet;
+    QString current = path;
+    
+    // Normalize path (remove trailing slash)
+    while (current.endsWith(QLatin1Char('/')) && current.length() > 1) {
+        current.chop(1);
+    }
+    
+    // Add the target path first
+    pathsToSet.prepend(current);
+    
+    // Walk up the directory tree
+    while (true) {
+        int lastSlash = current.lastIndexOf(QLatin1Char('/'));
+        if (lastSlash <= 0) {
+            break;  // Reached root
+        }
+        
+        current = current.left(lastSlash);
+        if (current.isEmpty()) {
+            current = QStringLiteral("/");
+        }
+        
+        // Check if we've reached a stop boundary
+        bool atBoundary = false;
+        for (const QString &boundary : stopBoundaries) {
+            if (current == boundary || current.length() < boundary.length()) {
+                atBoundary = true;
+                break;
+            }
+        }
+        
+        if (atBoundary) {
+            break;
+        }
+        
+        // Add this parent to the list (prepend so we set from top down)
+        pathsToSet.prepend(current);
+    }
+
+    qDebug() << "SetPathAclWithParents: Setting ACLs for user" << username 
+             << "on" << pathsToSet.size() << "paths:" << pathsToSet;
+
+    // Set ACL on each path (non-recursive, just rx for traversal)
+    bool allSucceeded = true;
+    for (const QString &p : pathsToSet) {
+        if (!QFileInfo::exists(p)) {
+            qWarning() << "SetPathAclWithParents: Path does not exist, skipping:" << p;
+            continue;
+        }
+
+        QStringList args;
+        args << QStringLiteral("-m");
+        args << QStringLiteral("u:%1:rx").arg(username);
+        args << p;
+
+        QProcess setfacl;
+        setfacl.start(QStringLiteral("setfacl"), args);
+        
+        if (!setfacl.waitForFinished(5000)) {
+            qWarning() << "SetPathAclWithParents: setfacl timed out for:" << p;
+            allSucceeded = false;
+            continue;
+        }
+
+        if (setfacl.exitCode() != 0) {
+            QString errorOutput = QString::fromUtf8(setfacl.readAllStandardError());
+            qWarning() << "SetPathAclWithParents: setfacl failed for" << p << ":" << errorOutput;
+            // Continue anyway - some paths might not support ACLs (e.g., NTFS)
+            // but the mount point does
+        }
+    }
+
+    return allSucceeded;
+}
+
+QString CouchPlayHelper::GetUserSteamId(const QString &username)
+{
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return QString();
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return QString();
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        return QString();
+    }
+
+    // Check for Steam userdata in common locations
+    QStringList possibleRoots = {
+        userHome + QStringLiteral("/.steam/steam/userdata"),
+        userHome + QStringLiteral("/.local/share/Steam/userdata"),
+    };
+
+    for (const QString &userDataBase : possibleRoots) {
+        QDir userDataDir(userDataBase);
+        if (!userDataDir.exists()) {
+            continue;
+        }
+
+        // Find first numeric directory (Steam user ID)
+        QStringList entries = userDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &entry : entries) {
+            bool ok;
+            entry.toULongLong(&ok);
+            if (ok) {
+                qDebug() << "GetUserSteamId: Found Steam ID" << entry << "for user" << username;
+                return entry;
+            }
+        }
+    }
+
+    qDebug() << "GetUserSteamId: Steam userdata not found for" << username;
+    return QString();
 }

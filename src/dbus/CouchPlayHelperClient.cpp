@@ -2,8 +2,10 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include "CouchPlayHelperClient.h"
+#include "../core/Logging.h"
 
 #include <QDBusConnection>
+#include <QDBusMessage>
 #include <QDBusReply>
 #include <QDebug>
 
@@ -197,4 +199,253 @@ bool CouchPlayHelperClient::killInstance(qint64 pid)
     }
 
     return reply.value();
+}
+
+int CouchPlayHelperClient::mountSharedDirectories(const QString &username, uint compositorUid,
+                                                    const QStringList &directories)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return -1;
+    }
+
+    if (directories.isEmpty()) {
+        // Nothing to mount, that's fine
+        return 0;
+    }
+
+    QDBusReply<int> reply = m_interface->call(
+        QStringLiteral("MountSharedDirectories"),
+        username,
+        compositorUid,
+        directories
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return -1;
+    }
+
+    return reply.value();
+}
+
+int CouchPlayHelperClient::unmountSharedDirectories(const QString &username)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return -1;
+    }
+
+    QDBusReply<int> reply = m_interface->call(
+        QStringLiteral("UnmountSharedDirectories"),
+        username
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return -1;
+    }
+
+    return reply.value();
+}
+
+int CouchPlayHelperClient::unmountAllSharedDirectories()
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return -1;
+    }
+
+    QDBusReply<int> reply = m_interface->call(
+        QStringLiteral("UnmountAllSharedDirectories")
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return -1;
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath, const QString &targetPath,
+                                            const QString &username)
+{
+    qCDebug(couchplayHelper) << "copyFileToUser:" << sourcePath << "->" << targetPath << "for" << username;
+    
+    if (!m_available) {
+        qCWarning(couchplayHelper) << "copyFileToUser: Helper not available";
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    if (!m_interface->isValid()) {
+        qCWarning(couchplayHelper) << "copyFileToUser: Interface not valid:"
+                                   << m_interface->lastError().message();
+        Q_EMIT errorOccurred(QStringLiteral("Helper interface not valid"));
+        return false;
+    }
+
+    // Use QDBusMessage directly (more reliable than QDBusInterface::call)
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        SERVICE_NAME,
+        OBJECT_PATH,
+        INTERFACE_NAME,
+        QStringLiteral("CopyFileToUser")
+    );
+    msg << sourcePath << targetPath << username;
+    
+    QDBusMessage replyMsg = QDBusConnection::systemBus().call(msg, QDBus::Block, 30000);
+
+    if (replyMsg.type() == QDBusMessage::ErrorMessage) {
+        qCWarning(couchplayHelper) << "copyFileToUser failed:" << replyMsg.errorMessage();
+        Q_EMIT errorOccurred(replyMsg.errorMessage());
+        return false;
+    }
+
+    if (replyMsg.type() != QDBusMessage::ReplyMessage) {
+        qCWarning(couchplayHelper) << "copyFileToUser: Unexpected reply type:" << replyMsg.type();
+        Q_EMIT errorOccurred(QStringLiteral("Unexpected D-Bus reply type"));
+        return false;
+    }
+
+    bool result = replyMsg.arguments().value(0).toBool();
+    if (!result) {
+        qCWarning(couchplayHelper) << "copyFileToUser: Helper returned false";
+    }
+
+    return result;
+}
+
+bool CouchPlayHelperClient::createUserDirectory(const QString &path, const QString &username)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("CreateUserDirectory"),
+        path,
+        username
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::setDirectoryAcl(const QString &path, const QString &username, bool recursive)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("SetDirectoryAcl"),
+        path,
+        username,
+        recursive
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::setPathAclWithParents(const QString &path, const QString &username)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("SetPathAclWithParents"),
+        path,
+        username
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
+QString CouchPlayHelperClient::getUserSteamId(const QString &username)
+{
+    if (!m_available) {
+        qWarning() << "CouchPlayHelperClient: Helper not available";
+        return QString();
+    }
+
+    QDBusReply<QString> reply = m_interface->call(
+        QStringLiteral("GetUserSteamId"),
+        username
+    );
+
+    if (!reply.isValid()) {
+        qWarning() << "CouchPlayHelperClient: GetUserSteamId failed:" << reply.error().message();
+        return QString();
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content, const QString &targetPath,
+                                             const QString &username)
+{
+    qCDebug(couchplayHelper) << "writeFileToUser:" << content.size() << "bytes to" << targetPath << "for" << username;
+    
+    if (!m_available) {
+        qCWarning(couchplayHelper) << "writeFileToUser: Helper not available";
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    if (!m_interface->isValid()) {
+        qCWarning(couchplayHelper) << "writeFileToUser: Interface not valid:"
+                                   << m_interface->lastError().message();
+        Q_EMIT errorOccurred(QStringLiteral("Helper interface not valid"));
+        return false;
+    }
+
+    // Use QDBusMessage directly for reliable byte array transfer
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        SERVICE_NAME,
+        OBJECT_PATH,
+        INTERFACE_NAME,
+        QStringLiteral("WriteFileToUser")
+    );
+    msg << content << targetPath << username;
+    
+    QDBusMessage replyMsg = QDBusConnection::systemBus().call(msg, QDBus::Block, 30000);
+
+    if (replyMsg.type() == QDBusMessage::ErrorMessage) {
+        qCWarning(couchplayHelper) << "writeFileToUser failed:" << replyMsg.errorMessage();
+        Q_EMIT errorOccurred(replyMsg.errorMessage());
+        return false;
+    }
+
+    if (replyMsg.type() != QDBusMessage::ReplyMessage) {
+        qCWarning(couchplayHelper) << "writeFileToUser: Unexpected reply type:" << replyMsg.type();
+        Q_EMIT errorOccurred(QStringLiteral("Unexpected D-Bus reply type"));
+        return false;
+    }
+
+    bool result = replyMsg.arguments().value(0).toBool();
+    if (!result) {
+        qCWarning(couchplayHelper) << "writeFileToUser: Helper returned false";
+    }
+
+    return result;
 }

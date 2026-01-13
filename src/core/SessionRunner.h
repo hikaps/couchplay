@@ -11,6 +11,8 @@
 #include <qqmlintegration.h>
 
 #include "../dbus/CouchPlayHelperClient.h"
+#include "SharingManager.h"
+#include "SteamConfigManager.h"
 
 class QAction;
 
@@ -19,6 +21,7 @@ class DeviceManager;
 class SessionManager;
 class WindowManager;
 class PresetManager;
+class SharingManager;
 
 /**
  * @brief Orchestrates running a complete split-screen gaming session
@@ -49,6 +52,8 @@ class SessionRunner : public QObject
     Q_PROPERTY(DeviceManager* deviceManager READ deviceManager WRITE setDeviceManager NOTIFY deviceManagerChanged)
     Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
     Q_PROPERTY(PresetManager* presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
+    Q_PROPERTY(SharingManager* sharingManager READ sharingManager WRITE setSharingManager NOTIFY sharingManagerChanged)
+    Q_PROPERTY(SteamConfigManager* steamConfigManager READ steamConfigManager WRITE setSteamConfigManager NOTIFY steamConfigManagerChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -104,6 +109,12 @@ public:
     PresetManager* presetManager() const { return m_presetManager; }
     void setPresetManager(PresetManager *manager);
 
+    SharingManager* sharingManager() const { return m_sharingManager; }
+    void setSharingManager(SharingManager *manager);
+
+    SteamConfigManager* steamConfigManager() const { return m_steamConfigManager; }
+    void setSteamConfigManager(SteamConfigManager *manager);
+
     bool borderlessWindows() const { return m_borderlessWindows; }
     void setBorderlessWindows(bool borderless);
 
@@ -127,6 +138,8 @@ Q_SIGNALS:
     void deviceManagerChanged();
     void helperClientChanged();
     void presetManagerChanged();
+    void sharingManagerChanged();
+    void steamConfigManagerChanged();
     void borderlessWindowsChanged();
     void errorOccurred(const QString &message);
     void sessionStarted();
@@ -146,6 +159,9 @@ private:
     void cleanupInstances();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
+    bool setupSharedDirectories();
+    void teardownSharedDirectories();
+    bool setupSteamConfig();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
@@ -155,6 +171,8 @@ private:
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
     PresetManager *m_presetManager = nullptr;
+    SharingManager *m_sharingManager = nullptr;
+    SteamConfigManager *m_steamConfigManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     QAction *m_stopAction = nullptr;
     QString m_status;

@@ -8,9 +8,6 @@
 #include <QDBusReply>
 #include <QDir>
 #include <QFile>
-#include <QProcessEnvironment>
-#include <QStandardPaths>
-#include <QTemporaryFile>
 
 #include <pwd.h>
 #include <unistd.h>

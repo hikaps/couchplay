@@ -42,7 +42,8 @@ Kirigami.ScrollablePage {
         if (!root.userManager || !root.sessionManager) return []
         let allUsers = root.userManager.users
         let assignedToOthers = root.sessionManager.getAssignedUsers(forIndex)
-        return allUsers.filter(user => !assignedToOthers.includes(user.username))
+        // Exclude compositor (current) user - they run the app and can't be a session instance
+        return allUsers.filter(user => !user.isCurrent && !assignedToOthers.includes(user.username))
     }
 
     // Helper function to get primary monitor size

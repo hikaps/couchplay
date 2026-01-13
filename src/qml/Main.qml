@@ -31,6 +31,8 @@ Kirigami.ApplicationWindow {
         deviceManager: deviceManager
         helperClient: helperClient
         presetManager: presetManager
+        sharingManager: sharingManager
+        steamConfigManager: steamConfigManager
 
         onErrorOccurred: (message) => {
             applicationWindow().showPassiveNotification(message, "long")
@@ -63,6 +65,23 @@ Kirigami.ApplicationWindow {
 
     PresetManager {
         id: presetManager
+    }
+
+    SharingManager {
+        id: sharingManager
+    }
+
+    SteamConfigManager {
+        id: steamConfigManager
+        helperClient: helperClient
+        
+        Component.onCompleted: {
+            detectSteamPaths()
+        }
+    }
+
+    SettingsManager {
+        id: settingsManager
     }
 
     globalDrawer: Kirigami.GlobalDrawer {
@@ -151,7 +170,9 @@ Kirigami.ApplicationWindow {
                     pageStack.push(settingsPage, {
                         sessionRunner: sessionRunner,
                         helperClient: helperClient,
-                        presetManager: presetManager
+                        presetManager: presetManager,
+                        sharingManager: sharingManager,
+                        steamConfigManager: steamConfigManager
                     })
                 }
             }
@@ -263,7 +284,10 @@ Kirigami.ApplicationWindow {
         pageStack.push(settingsPage, {
             sessionRunner: sessionRunner,
             helperClient: helperClient,
-            presetManager: presetManager
+            presetManager: presetManager,
+            sharingManager: sharingManager,
+            steamConfigManager: steamConfigManager,
+            settingsManager: settingsManager
         })
     }
 }

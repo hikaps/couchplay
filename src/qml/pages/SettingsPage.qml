@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import QtQuick.Dialogs
 import io.github.hikaps.couchplay 1.0
 
 Kirigami.ScrollablePage {
@@ -23,6 +24,15 @@ Kirigami.ScrollablePage {
     // Reference to preset manager (optional, will use internal if not provided)
     property var presetManager: null
 
+    // Reference to sharing manager for directory sharing
+    property var sharingManager: null
+
+    // Reference to steam config manager for shortcut sync
+    property var steamConfigManager: null
+
+    // Reference to settings manager for persisted settings
+    property var settingsManager: null
+
     // Internal preset manager if not provided externally
     PresetManager {
         id: internalPresetManager
@@ -31,25 +41,16 @@ Kirigami.ScrollablePage {
     // Use provided preset manager or internal one
     readonly property var activePresetManager: root.presetManager ?? internalPresetManager
 
-    // Settings values (would be persisted via QSettings in production)
-    property bool hidePanels: true
-    property bool killSteam: true
-    property bool restoreSession: false
-    property string scalingMode: "fit"
-    property string filterMode: "linear"
-    property bool steamIntegration: true
-    property bool borderlessWindows: false  // Default: show window decorations for resizing
+    // Settings convenience properties (bound to SettingsManager)
+    readonly property bool hidePanels: settingsManager?.hidePanels ?? true
+    readonly property bool killSteam: settingsManager?.killSteam ?? true
+    readonly property bool restoreSession: settingsManager?.restoreSession ?? false
+    readonly property string scalingMode: settingsManager?.scalingMode ?? "fit"
+    readonly property string filterMode: settingsManager?.filterMode ?? "linear"
+    readonly property bool steamIntegration: settingsManager?.steamIntegration ?? true
+    readonly property bool borderlessWindows: settingsManager?.borderlessWindows ?? false
 
     actions: [
-        Kirigami.Action {
-            icon.name: "document-save"
-            text: i18nc("@action:button", "Save Settings")
-            onTriggered: {
-                // TODO: Save to QSettings
-                applicationWindow().showPassiveNotification(
-                    i18nc("@info", "Settings saved"))
-            }
-        },
         Kirigami.Action {
             icon.name: "edit-undo"
             text: i18nc("@action:button", "Reset to Defaults")
@@ -74,7 +75,7 @@ Kirigami.ScrollablePage {
                 id: hidePanelsCheck
                 Kirigami.FormData.label: i18nc("@option:check", "Hide KDE panels during session:")
                 checked: root.hidePanels
-                onToggled: root.hidePanels = checked
+                onToggled: if (root.settingsManager) root.settingsManager.hidePanels = checked
 
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Automatically hide Plasma panels when a session starts")
                 Controls.ToolTip.visible: hovered
@@ -85,7 +86,7 @@ Kirigami.ScrollablePage {
                 id: killSteamCheck
                 Kirigami.FormData.label: i18nc("@option:check", "Kill Steam before starting:")
                 checked: root.killSteam
-                onToggled: root.killSteam = checked
+                onToggled: if (root.settingsManager) root.settingsManager.killSteam = checked
 
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Close existing Steam instances before starting a session to prevent conflicts")
                 Controls.ToolTip.visible: hovered
@@ -96,7 +97,7 @@ Kirigami.ScrollablePage {
                 id: restoreSessionCheck
                 Kirigami.FormData.label: i18nc("@option:check", "Restore last session on startup:")
                 checked: root.restoreSession
-                onToggled: root.restoreSession = checked
+                onToggled: if (root.settingsManager) root.settingsManager.restoreSession = checked
 
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Automatically load the last used profile when CouchPlay starts")
                 Controls.ToolTip.visible: hovered
@@ -126,7 +127,7 @@ Kirigami.ScrollablePage {
                 textRole: "text"
                 valueRole: "value"
                 currentIndex: Math.max(0, model.findIndex(item => item.value === root.scalingMode))
-                onCurrentValueChanged: root.scalingMode = currentValue
+                onCurrentValueChanged: if (root.settingsManager) root.settingsManager.scalingMode = currentValue
             }
 
             Controls.ComboBox {
@@ -141,14 +142,14 @@ Kirigami.ScrollablePage {
                 textRole: "text"
                 valueRole: "value"
                 currentIndex: Math.max(0, model.findIndex(item => item.value === root.filterMode))
-                onCurrentValueChanged: root.filterMode = currentValue
+                onCurrentValueChanged: if (root.settingsManager) root.settingsManager.filterMode = currentValue
             }
 
             Controls.CheckBox {
                 id: steamIntegrationCheck
                 Kirigami.FormData.label: i18nc("@option:check", "Enable Steam integration (-e):")
                 checked: root.steamIntegration
-                onToggled: root.steamIntegration = checked
+                onToggled: if (root.settingsManager) root.settingsManager.steamIntegration = checked
 
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Pass -e flag to gamescope for better Steam Deck/Big Picture integration")
                 Controls.ToolTip.visible: hovered
@@ -160,7 +161,7 @@ Kirigami.ScrollablePage {
                 Kirigami.FormData.label: i18nc("@option:check", "Borderless windows:")
                 checked: root.sessionRunner ? root.sessionRunner.borderlessWindows : root.borderlessWindows
                 onToggled: {
-                    root.borderlessWindows = checked
+                    if (root.settingsManager) root.settingsManager.borderlessWindows = checked
                     if (root.sessionRunner) {
                         root.sessionRunner.borderlessWindows = checked
                     }
@@ -193,7 +194,6 @@ Kirigami.ScrollablePage {
                 model: activePresetManager.presets
 
                 delegate: RowLayout {
-                    Kirigami.FormData.label: index === 0 ? " " : ""
                     spacing: Kirigami.Units.smallSpacing
                     Layout.fillWidth: true
 
@@ -249,6 +249,171 @@ Kirigami.ScrollablePage {
                     activePresetManager.scanApplications()
                     addPresetDialog.open()
                 }
+            }
+        }
+
+        // Shared Directories Section
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            wideMode: false
+            visible: root.sharingManager !== null
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Shared Directories")
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: i18nc("@label", "Shared with gaming users:")
+                text: {
+                    if (!root.sharingManager) return "0"
+                    let dirs = root.sharingManager.sharedDirectories
+                    return i18nc("@info", "%1 directories configured", dirs ? dirs.length : 0)
+                }
+                opacity: 0.7
+            }
+
+            // List of current shared directories
+            Repeater {
+                model: root.sharingManager ? root.sharingManager.sharedDirectories : []
+
+                delegate: RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    Layout.fillWidth: true
+
+                    Kirigami.Icon {
+                        source: "folder"
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+
+                        Controls.Label {
+                            text: modelData.sourcePath
+                            Layout.fillWidth: true
+                            elide: Text.ElideMiddle
+                        }
+
+                        Controls.Label {
+                            visible: modelData.mountAlias !== ""
+                            text: modelData.mountAlias !== "" ? i18nc("@info", "Mounted as: ~/%1", modelData.mountAlias) : ""
+                            Layout.fillWidth: true
+                            elide: Text.ElideMiddle
+                            opacity: 0.7
+                            font.pointSize: Kirigami.Theme.smallFont.pointSize
+                        }
+                    }
+
+                    Controls.Button {
+                        icon.name: "edit-delete"
+                        display: Controls.AbstractButton.IconOnly
+                        Controls.ToolTip.text: i18nc("@info:tooltip", "Remove shared directory")
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.delay: 1000
+                        onClicked: {
+                            root.sharingManager.removeDirectory(modelData.sourcePath)
+                        }
+                    }
+                }
+            }
+
+            // Quick add Steam library button
+            Controls.Button {
+                Kirigami.FormData.label: " "
+                visible: root.sharingManager && root.sharingManager.steamLibraryPath !== ""
+                text: i18nc("@action:button", "Add Steam Library")
+                icon.name: "steam"
+                onClicked: {
+                    root.sharingManager.addDirectory(root.sharingManager.steamLibraryPath)
+                }
+            }
+
+            // Add directory button
+            Controls.Button {
+                Kirigami.FormData.label: root.sharingManager && root.sharingManager.steamLibraryPath !== "" ? "" : " "
+                text: i18nc("@action:button", "Add Directory...")
+                icon.name: "folder-add"
+                onClicked: {
+                    folderDialog.open()
+                }
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: " "
+                text: i18nc("@info", "Shared directories are bind-mounted into gaming users' home directories during sessions.")
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                Layout.fillWidth: true
+            }
+        }
+
+        // Steam Shortcuts Sync Section
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            wideMode: false
+            visible: root.steamConfigManager !== null
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Steam Shortcuts")
+            }
+
+            Controls.CheckBox {
+                id: syncShortcutsCheck
+                Kirigami.FormData.label: i18nc("@option:check", "Sync non-Steam shortcuts:")
+                checked: root.steamConfigManager ? root.steamConfigManager.syncShortcutsEnabled : false
+                onToggled: {
+                    if (root.steamConfigManager) {
+                        root.steamConfigManager.syncShortcutsEnabled = checked
+                    }
+                }
+
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Copy your non-Steam game shortcuts to gaming users at session start. Uses ACLs to grant access to game directories.")
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.delay: 1000
+            }
+
+            RowLayout {
+                Kirigami.FormData.label: i18nc("@label", "Steam detected:")
+                spacing: Kirigami.Units.smallSpacing
+                visible: root.steamConfigManager !== null
+
+                Kirigami.Icon {
+                    source: root.steamConfigManager && root.steamConfigManager.steamDetected ? "dialog-ok-apply" : "dialog-error"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                }
+
+                Controls.Label {
+                    text: root.steamConfigManager && root.steamConfigManager.steamDetected 
+                          ? i18nc("@info", "Yes (%1 shortcuts)", root.steamConfigManager.shortcutCount)
+                          : i18nc("@info", "Not found")
+                    color: root.steamConfigManager && root.steamConfigManager.steamDetected 
+                           ? Kirigami.Theme.positiveTextColor 
+                           : Kirigami.Theme.negativeTextColor
+                }
+
+                Controls.Button {
+                    visible: root.steamConfigManager && root.steamConfigManager.steamDetected
+                    text: i18nc("@action:button", "Reload")
+                    icon.name: "view-refresh"
+                    onClicked: {
+                        root.steamConfigManager.loadShortcuts()
+                        applicationWindow().showPassiveNotification(
+                            i18nc("@info", "Loaded %1 shortcuts", root.steamConfigManager.shortcutCount))
+                    }
+                }
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: " "
+                text: i18nc("@info", "Non-Steam shortcuts (Heroic, Lutris, etc.) are copied to gaming users. Access to game directories is granted using filesystem ACLs.")
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                Layout.fillWidth: true
             }
         }
 
@@ -538,13 +703,9 @@ Kirigami.ScrollablePage {
         standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel
 
         onAccepted: {
-            root.hidePanels = true
-            root.killSteam = true
-            root.restoreSession = false
-            root.scalingMode = "fit"
-            root.filterMode = "linear"
-            root.steamIntegration = true
-            root.borderlessWindows = false
+            if (root.settingsManager) {
+                root.settingsManager.resetToDefaults()
+            }
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Settings reset to defaults"))
         }
@@ -713,6 +874,91 @@ Kirigami.ScrollablePage {
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
                 text: i18nc("@info", "Select an installed application to add as a launch preset. You can then select it when configuring session instances.")
+                type: Kirigami.MessageType.Information
+                visible: true
+            }
+        }
+    }
+
+    // Folder picker dialog for shared directories
+    FolderDialog {
+        id: folderDialog
+        title: i18nc("@title:dialog", "Select Directory to Share")
+
+        onAccepted: {
+            let path = selectedFolder.toString()
+            // Remove file:// prefix
+            if (path.startsWith("file://")) {
+                path = path.substring(7)
+            }
+            // URL decode the path
+            path = decodeURIComponent(path)
+
+            if (root.sharingManager) {
+                // Check if the path is outside home directory
+                if (root.sharingManager.isOutsideHome(path)) {
+                    // Need to ask for an alias
+                    aliasDialog.directoryPath = path
+                    aliasDialog.open()
+                } else {
+                    // Home-relative path, no alias needed
+                    root.sharingManager.addDirectory(path)
+                }
+            }
+        }
+    }
+
+    // Alias dialog for non-home directories
+    Kirigami.Dialog {
+        id: aliasDialog
+        title: i18nc("@title:dialog", "Set Mount Alias")
+        standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
+        preferredWidth: Kirigami.Units.gridUnit * 25
+
+        property string directoryPath: ""
+
+        onAccepted: {
+            if (root.sharingManager) {
+                root.sharingManager.addDirectory(directoryPath, aliasField.text)
+            }
+            aliasField.text = ""
+        }
+
+        onRejected: {
+            aliasField.text = ""
+        }
+
+        ColumnLayout {
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.Label {
+                text: i18nc("@info", "The selected directory is outside your home folder:")
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            Controls.Label {
+                text: aliasDialog.directoryPath
+                font.family: "monospace"
+                wrapMode: Text.WrapAnywhere
+                Layout.fillWidth: true
+            }
+
+            Controls.Label {
+                text: i18nc("@info", "Enter a name for where it should appear in gaming users' home directories (e.g., 'Games' or 'SharedData'):")
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            Controls.TextField {
+                id: aliasField
+                Layout.fillWidth: true
+                placeholderText: i18nc("@info:placeholder", "Alias (optional)")
+            }
+
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                text: i18nc("@info", "If left empty, the directory will be mounted at ~/.couchplay/mounts/...")
                 type: Kirigami.MessageType.Information
                 visible: true
             }

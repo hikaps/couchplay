@@ -49,6 +49,14 @@ target_sources(couchplay PRIVATE
     core/WindowManager.h
     core/PresetManager.cpp
     core/PresetManager.h
+    core/SharingManager.cpp
+    core/SharingManager.h
+    core/SteamConfigManager.cpp
+    core/SteamConfigManager.h
+    core/SettingsManager.cpp
+    core/SettingsManager.h
+    core/Logging.cpp
+    core/Logging.h
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )
