@@ -172,7 +172,8 @@ Kirigami.ApplicationWindow {
                         helperClient: helperClient,
                         presetManager: presetManager,
                         sharingManager: sharingManager,
-                        steamConfigManager: steamConfigManager
+                        steamConfigManager: steamConfigManager,
+                        settingsManager: settingsManager
                     })
                 }
             }

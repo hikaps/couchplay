@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import Qt.labs.platform as Platform
 
 Kirigami.ScrollablePage {
     id: root
@@ -338,9 +339,9 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // System check properties
-    property bool gamescopeAvailable: true  // TODO: Implement actual check
-    property bool steamAvailable: true      // TODO: Implement actual check
+    // System check properties - check if executables exist in PATH
+    property bool gamescopeAvailable: Platform.StandardPaths.findExecutable("gamescope") !== ""
+    property bool steamAvailable: Platform.StandardPaths.findExecutable("steam") !== ""
 
     // Quick action card component
     component QuickActionCard: Kirigami.Card {
