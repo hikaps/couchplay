@@ -23,6 +23,35 @@
 #include <KLocalizedString>
 
 #include <pwd.h>
+#include <grp.h>
+#include <unistd.h>
+
+// Name of the couchplay group for managed users
+static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
+
+// Helper function to check if a user is in the couchplay group
+static bool isUserInCouchPlayGroup(const QString &username)
+{
+    struct group *grp = getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
+    if (!grp) {
+        return false;  // Group doesn't exist
+    }
+
+    // Check if username is in the group's member list
+    for (char **member = grp->gr_mem; *member != nullptr; ++member) {
+        if (username == QString::fromLocal8Bit(*member)) {
+            return true;
+        }
+    }
+
+    // Also check if couchplay is the user's primary group
+    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+    if (pw && pw->pw_gid == grp->gr_gid) {
+        return true;
+    }
+
+    return false;
+}
 
 SessionRunner::SessionRunner(QObject *parent)
     : QObject(parent)
@@ -147,6 +176,30 @@ bool SessionRunner::start()
                 return false;
             }
             usedUsers.insert(username);
+        }
+    }
+
+    // Validate that all users either are the compositor user or are in the couchplay group
+    // This ensures only CouchPlay-managed users can be assigned to sessions
+    struct passwd *compositorPw = getpwuid(getuid());
+    QString compositorUser = compositorPw ? QString::fromLocal8Bit(compositorPw->pw_name) : QString();
+    
+    for (int i = 0; i < instanceCount; ++i) {
+        const QString &username = profile.instances[i].username;
+        if (username.isEmpty()) {
+            continue;  // No username assigned, will use default behavior
+        }
+        
+        // Compositor user is always allowed (they own the display)
+        if (username == compositorUser) {
+            continue;
+        }
+        
+        // Other users must be in the couchplay group
+        if (!isUserInCouchPlayGroup(username)) {
+            Q_EMIT errorOccurred(QStringLiteral("User '%1' is not a CouchPlay managed user. Please create the user via CouchPlay or add them to the 'couchplay' group.").arg(username));
+            setStatus(QStringLiteral("Error"));
+            return false;
         }
     }
 

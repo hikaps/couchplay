@@ -77,11 +77,15 @@ add_executable(test_usermanager
     test_usermanager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/UserManager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/UserManager.h
+    ${CMAKE_SOURCE_DIR}/src/core/Logging.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/CouchPlayHelperClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/CouchPlayHelperClient.h
 )
 
 target_include_directories(test_usermanager PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/dbus
     ${CMAKE_BINARY_DIR}/src
 )
 
@@ -89,6 +93,7 @@ target_link_libraries(test_usermanager PRIVATE
     Qt6::Core
     Qt6::Test
     Qt6::Qml
+    Qt6::DBus
 )
 
 add_test(NAME UserManagerTest COMMAND test_usermanager)

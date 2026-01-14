@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include "UserManager.h"
+#include "../dbus/CouchPlayHelperClient.h"
 
 #include <QFile>
 #include <QTextStream>
@@ -11,6 +12,10 @@
 
 #include <unistd.h>
 #include <pwd.h>
+#include <grp.h>
+
+// Name of the couchplay group for managed users
+static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 
 UserManager::UserManager(QObject *parent)
     : QObject(parent)
@@ -26,6 +31,16 @@ UserManager::UserManager(QObject *parent)
 
 UserManager::~UserManager() = default;
 
+void UserManager::setHelperClient(CouchPlayHelperClient *client)
+{
+    m_helperClient = client;
+}
+
+void UserManager::setHelper(QObject *helper)
+{
+    setHelperClient(qobject_cast<CouchPlayHelperClient *>(helper));
+}
+
 void UserManager::refresh()
 {
     m_users.clear();
@@ -33,8 +48,45 @@ void UserManager::refresh()
     Q_EMIT usersChanged();
 }
 
+QSet<QString> UserManager::getCouchPlayGroupMembers() const
+{
+    QSet<QString> members;
+    
+    struct group *grp = getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
+    if (!grp) {
+        return members;  // Group doesn't exist yet
+    }
+
+    // Get all members from the group
+    for (char **member = grp->gr_mem; *member != nullptr; ++member) {
+        members.insert(QString::fromLocal8Bit(*member));
+    }
+
+    // Also check for users with couchplay as primary group
+    QFile file(QStringLiteral("/etc/passwd"));
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream stream(&file);
+        while (!stream.atEnd()) {
+            QString line = stream.readLine();
+            QStringList parts = line.split(QLatin1Char(':'));
+            if (parts.size() >= 4) {
+                int userGid = parts[3].toInt();
+                if (static_cast<gid_t>(userGid) == grp->gr_gid) {
+                    members.insert(parts[0]);
+                }
+            }
+        }
+        file.close();
+    }
+
+    return members;
+}
+
 void UserManager::parseUsers()
 {
+    // Get couchplay group members
+    QSet<QString> couchplayMembers = getCouchPlayGroupMembers();
+    
     QFile file(QStringLiteral("/etc/passwd"));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         Q_EMIT errorOccurred(QStringLiteral("Failed to read /etc/passwd"));
@@ -56,12 +108,22 @@ void UserManager::parseUsers()
         QString homeDir = parts[5];
         QString shell = parts[6];
 
+        // Skip current user - they run the app, not available for assignment
+        if (username == m_currentUser) {
+            continue;
+        }
+
+        // Only include users in the couchplay group
+        if (!couchplayMembers.contains(username)) {
+            continue;
+        }
+
         // Filter: only regular users (UID >= 1000 and < 65534)
-        // Also check for valid login shell (not nologin or false)
         if (uid < 1000 || uid >= 65534) {
             continue;
         }
 
+        // Check for valid login shell (not nologin or false)
         if (shell.contains(QStringLiteral("nologin")) || 
             shell.contains(QStringLiteral("false"))) {
             continue;
@@ -93,9 +155,8 @@ QVariantList UserManager::usersAsVariant() const
         map[QStringLiteral("username")] = user.username;
         map[QStringLiteral("uid")] = user.uid;
         map[QStringLiteral("homeDir")] = user.homeDir;
-        // Keep isCurrent for reference only (e.g., showing which user runs the app)
-        // but it has no special treatment in the session
-        map[QStringLiteral("isCurrent")] = (user.username == m_currentUser);
+        // isCurrent is always false since we filter out current user
+        map[QStringLiteral("isCurrent")] = false;
         list.append(map);
     }
 
@@ -114,11 +175,50 @@ bool UserManager::createUser(const QString &username)
         return false;
     }
 
-    // User creation will be done via the privileged helper
-    // For now, just emit a signal indicating the request
-    // The actual implementation will call the D-Bus helper
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper service not available. Please run install-helper.sh"));
+        return false;
+    }
 
-    Q_EMIT errorOccurred(QStringLiteral("User creation requires the CouchPlay helper. Please run the install script."));
+    if (m_helperClient->createUser(username)) {
+        refresh();
+        Q_EMIT userCreated(username);
+        return true;
+    }
+
+    return false;
+}
+
+bool UserManager::deleteUser(const QString &username, bool removeHome)
+{
+    if (!isValidUsername(username)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid username"));
+        return false;
+    }
+
+    if (!userExists(username)) {
+        Q_EMIT errorOccurred(QStringLiteral("User does not exist"));
+        return false;
+    }
+
+    // Cannot delete current user (extra safety check)
+    if (username == m_currentUser) {
+        Q_EMIT errorOccurred(QStringLiteral("Cannot delete the current user"));
+        return false;
+    }
+
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper service not available"));
+        return false;
+    }
+
+    // Helper will verify user is in couchplay group
+    if (m_helperClient->deleteUser(username, removeHome)) {
+        refresh();
+        Q_EMIT userDeleted(username);
+        return true;
+    }
+
     return false;
 }
 
@@ -140,13 +240,13 @@ bool UserManager::isValidUsername(const QString &username) const
 
 bool UserManager::userExists(const QString &username) const
 {
-    for (const auto &user : m_users) {
-        if (user.username == username) {
-            return true;
-        }
-    }
-
-    // Also check getpwnam for users not in our filtered list
+    // Check getpwnam for any user
     struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
     return pw != nullptr;
+}
+
+bool UserManager::isInCouchPlayGroup(const QString &username) const
+{
+    QSet<QString> members = getCouchPlayGroupMembers();
+    return members.contains(username);
 }

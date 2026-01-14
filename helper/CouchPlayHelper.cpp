@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QThread>
 #include <QDebug>
 
 #include <unistd.h>
@@ -24,10 +25,14 @@ static const QString HELPER_VERSION = QStringLiteral("0.1.0");
 // PolicyKit actions
 static const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couchplay.change-device-owner");
 static const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couchplay.create-user");
+static const QString ACTION_DELETE_USER = QStringLiteral("io.github.hikaps.couchplay.delete-user");
 static const QString ACTION_ENABLE_LINGER = QStringLiteral("io.github.hikaps.couchplay.enable-linger");
 static const QString ACTION_WAYLAND_ACCESS = QStringLiteral("io.github.hikaps.couchplay.setup-wayland-access");
 static const QString ACTION_LAUNCH_INSTANCE = QStringLiteral("io.github.hikaps.couchplay.launch-instance");
 static const QString ACTION_MANAGE_MOUNTS = QStringLiteral("io.github.hikaps.couchplay.manage-mounts");
+
+// couchplay group name for managed users
+static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 
 CouchPlayHelper::CouchPlayHelper(QObject *parent)
     : QObject(parent)
@@ -213,6 +218,12 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
         return 0;
     }
 
+    // Ensure couchplay group exists (create if needed)
+    QProcess groupProcess;
+    groupProcess.start(QStringLiteral("groupadd"), {QStringLiteral("-f"), COUCHPLAY_GROUP});
+    groupProcess.waitForFinished(10000);
+    // -f flag means no error if group exists, so we don't check exit code
+
     // Create user with useradd
     QProcess process;
     QStringList args;
@@ -220,10 +231,8 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
          << QStringLiteral("-c") << fullName
          << QStringLiteral("-s") << QStringLiteral("/bin/bash");
     
-    // Add supplementary groups that exist on the system
-    // On immutable distros like Bazzite, only 'input' group typically exists
-    // We use a simple approach: try to add input group only, which is required for gamepad access
-    args << QStringLiteral("-G") << QStringLiteral("input");
+    // Add supplementary groups: input (for gamepad access) and couchplay (for management)
+    args << QStringLiteral("-G") << QStringLiteral("input,") + COUCHPLAY_GROUP;
     
     args << username;
 
@@ -260,6 +269,7 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
         qDebug() << "Enabled linger for new user" << username;
     }
 
+    qDebug() << "Created user" << username << "with UID" << uid << "in couchplay group";
     return uid;
 }
 
@@ -285,6 +295,147 @@ QString CouchPlayHelper::getUserHomeByUid(uint uid)
 {
     struct passwd *pw = getpwuid(uid);
     return pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+}
+
+bool CouchPlayHelper::IsInCouchPlayGroup(const QString &username)
+{
+    // Get the couchplay group
+    struct group *grp = getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
+    if (!grp) {
+        return false;  // Group doesn't exist
+    }
+
+    // Check if username is in the group's member list
+    for (char **member = grp->gr_mem; *member != nullptr; ++member) {
+        if (username == QString::fromLocal8Bit(*member)) {
+            return true;
+        }
+    }
+
+    // Also check if couchplay is the user's primary group
+    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+    if (pw && pw->pw_gid == grp->gr_gid) {
+        return true;
+    }
+
+    return false;
+}
+
+bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
+{
+    qDebug() << "DeleteUser:" << username << "removeHome:" << removeHome;
+
+    // Validate username
+    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
+    if (!validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_DELETE_USER)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("Not authorized to delete users"));
+        return false;
+    }
+
+    // Check if user exists
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, 
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    // CRITICAL: Only allow deleting users in the couchplay group
+    if (!IsInCouchPlayGroup(username)) {
+        sendErrorReply(QDBusError::AccessDenied, 
+            QStringLiteral("User '%1' is not a CouchPlay user (not in couchplay group)").arg(username));
+        return false;
+    }
+
+    // Get the user's UID before deletion (needed for IPC cleanup)
+    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+    uid_t userUid = pw ? pw->pw_uid : 0;
+
+    // Disable linger first
+    QProcess lingerProcess;
+    lingerProcess.start(QStringLiteral("loginctl"), 
+        {QStringLiteral("disable-linger"), username});
+    lingerProcess.waitForFinished(10000);
+    // Don't fail if this doesn't work
+
+    // Kill any running processes for the user
+    QProcess pkillProcess;
+    pkillProcess.start(QStringLiteral("pkill"), {QStringLiteral("-u"), username});
+    pkillProcess.waitForFinished(10000);
+    // Don't fail if there are no processes to kill
+
+    // Wait a moment for processes to terminate
+    QThread::msleep(500);
+
+    // Clean up IPC resources (semaphores, shared memory, message queues) owned by the user
+    // This prevents "Permission denied" errors if a new user is created with the same name
+    // but a different UID, and tries to access stale IPC resources from the old user.
+    if (userUid > 0) {
+        // Remove semaphores owned by the user
+        QProcess ipcrm;
+        ipcrm.start(QStringLiteral("/bin/bash"), 
+            {QStringLiteral("-c"), 
+             QStringLiteral("ipcs -s | awk '$3 == %1 {print $2}' | xargs -r ipcrm -s").arg(userUid)});
+        ipcrm.waitForFinished(10000);
+        
+        // Remove shared memory segments owned by the user
+        QProcess shmrm;
+        shmrm.start(QStringLiteral("/bin/bash"),
+            {QStringLiteral("-c"),
+             QStringLiteral("ipcs -m | awk '$3 == %1 {print $2}' | xargs -r ipcrm -m").arg(userUid)});
+        shmrm.waitForFinished(10000);
+        
+        // Remove message queues owned by the user
+        QProcess msgrm;
+        msgrm.start(QStringLiteral("/bin/bash"),
+            {QStringLiteral("-c"),
+             QStringLiteral("ipcs -q | awk '$3 == %1 {print $2}' | xargs -r ipcrm -q").arg(userUid)});
+        msgrm.waitForFinished(10000);
+        
+        // Clean up /tmp files owned by the user (Steam dumps, etc.)
+        QProcess tmprm;
+        tmprm.start(QStringLiteral("find"), 
+            {QStringLiteral("/tmp"), QStringLiteral("-user"), QString::number(userUid),
+             QStringLiteral("-delete")});
+        tmprm.waitForFinished(30000);
+        
+        // Clean up /dev/shm files owned by the user
+        QProcess shmfilerm;
+        shmfilerm.start(QStringLiteral("find"),
+            {QStringLiteral("/dev/shm"), QStringLiteral("-user"), QString::number(userUid),
+             QStringLiteral("-delete")});
+        shmfilerm.waitForFinished(10000);
+        
+        qDebug() << "Cleaned up IPC resources for UID" << userUid;
+    }
+
+    // Delete user with userdel
+    QProcess process;
+    QStringList args;
+    if (removeHome) {
+        args << QStringLiteral("-r");  // Remove home directory
+    }
+    args << username;
+
+    process.start(QStringLiteral("userdel"), args);
+    process.waitForFinished(30000);
+
+    if (process.exitCode() != 0) {
+        QString errorMsg = QString::fromLocal8Bit(process.readAllStandardError());
+        qWarning() << "DeleteUser failed:" << errorMsg;
+        sendErrorReply(QDBusError::Failed, 
+            QStringLiteral("Failed to delete user: %1").arg(errorMsg));
+        return false;
+    }
+
+    qDebug() << "Deleted user" << username << (removeHome ? "with home directory" : "preserving home directory");
+    return true;
 }
 
 bool CouchPlayHelper::EnableLinger(const QString &username)

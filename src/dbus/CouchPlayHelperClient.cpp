@@ -134,6 +134,45 @@ bool CouchPlayHelperClient::createUser(const QString &username)
     return reply.value() > 0;
 }
 
+bool CouchPlayHelperClient::deleteUser(const QString &username, bool removeHome)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("DeleteUser"),
+        username,
+        removeHome
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::isInCouchPlayGroup(const QString &username)
+{
+    if (!m_available) {
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("IsInCouchPlayGroup"),
+        username
+    );
+
+    if (!reply.isValid()) {
+        return false;
+    }
+
+    return reply.value();
+}
+
 qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compositorUid,
                                               const QStringList &gamescopeArgs,
                                               const QString &gameCommand,

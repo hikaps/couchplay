@@ -31,21 +31,31 @@ private Q_SLOTS:
 
     // Current user tests
     void testCurrentUserNotEmpty();
+    void testCurrentUserNotInList();  // New: current user should be excluded
     
     // Users list tests
-    void testUsersListNotEmpty();
     void testUsersListFormat();
-    void testCurrentUserInList();
+    void testUsersListOnlyCouchPlayGroup();  // New: only couchplay group members
     
     // User exists tests
     void testUserExistsRoot();
     void testUserExistsNonexistent();
     void testUserExistsCurrent();
     
+    // isInCouchPlayGroup tests
+    void testIsInCouchPlayGroupNonexistent();
+    void testIsInCouchPlayGroupRoot();
+    
     // Create user tests
     void testCreateUserInvalidUsername();
     void testCreateUserAlreadyExists();
     void testCreateUserRequiresHelper();
+    
+    // Delete user tests
+    void testDeleteUserInvalidUsername();
+    void testDeleteUserNonexistent();
+    void testDeleteUserCurrentUser();
+    void testDeleteUserRequiresHelper();
     
     // Refresh tests
     void testRefreshEmitsSignal();
@@ -163,19 +173,30 @@ void TestUserManager::testCurrentUserNotEmpty()
     QVERIFY(!currentUser.isEmpty());
 }
 
-// ============ Users List Tests ============
-
-void TestUserManager::testUsersListNotEmpty()
+void TestUserManager::testCurrentUserNotInList()
 {
-    // On any real system, there should be at least one user
+    // Current user should be excluded from the users list
+    QString currentUser = m_manager->currentUser();
     QVariantList users = m_manager->usersAsVariant();
-    QVERIFY(!users.isEmpty());
+    
+    for (const QVariant &v : users) {
+        QVariantMap user = v.toMap();
+        QString username = user[QStringLiteral("username")].toString();
+        QVERIFY2(username != currentUser, 
+                 qPrintable(QStringLiteral("Current user '%1' should not be in users list").arg(currentUser)));
+    }
 }
+
+// ============ Users List Tests ============
 
 void TestUserManager::testUsersListFormat()
 {
     QVariantList users = m_manager->usersAsVariant();
-    QVERIFY(!users.isEmpty());
+    
+    // List may be empty if no couchplay users exist, that's ok
+    if (users.isEmpty()) {
+        QSKIP("No couchplay users on this system");
+    }
     
     // Check first user has expected fields
     QVariantMap user = users.first().toMap();
@@ -188,27 +209,22 @@ void TestUserManager::testUsersListFormat()
     int uid = user[QStringLiteral("uid")].toInt();
     QVERIFY(uid >= 1000);
     QVERIFY(uid < 65534);
+    
+    // isCurrent should always be false (current user is excluded)
+    QVERIFY(!user[QStringLiteral("isCurrent")].toBool());
 }
 
-void TestUserManager::testCurrentUserInList()
+void TestUserManager::testUsersListOnlyCouchPlayGroup()
 {
-    QString currentUser = m_manager->currentUser();
     QVariantList users = m_manager->usersAsVariant();
     
-    bool found = false;
-    bool markedAsCurrent = false;
-    
+    // All users in the list should be in couchplay group
     for (const QVariant &v : users) {
         QVariantMap user = v.toMap();
-        if (user[QStringLiteral("username")].toString() == currentUser) {
-            found = true;
-            markedAsCurrent = user[QStringLiteral("isCurrent")].toBool();
-            break;
-        }
+        QString username = user[QStringLiteral("username")].toString();
+        QVERIFY2(m_manager->isInCouchPlayGroup(username),
+                 qPrintable(QStringLiteral("User '%1' is in list but not in couchplay group").arg(username)));
     }
-    
-    QVERIFY(found);
-    QVERIFY(markedAsCurrent);
 }
 
 // ============ User Exists Tests ============
@@ -228,6 +244,19 @@ void TestUserManager::testUserExistsCurrent()
 {
     QString currentUser = m_manager->currentUser();
     QVERIFY(m_manager->userExists(currentUser));
+}
+
+// ============ isInCouchPlayGroup Tests ============
+
+void TestUserManager::testIsInCouchPlayGroupNonexistent()
+{
+    QVERIFY(!m_manager->isInCouchPlayGroup(QStringLiteral("nonexistent_user_xyz123")));
+}
+
+void TestUserManager::testIsInCouchPlayGroupRoot()
+{
+    // Root should not be in couchplay group
+    QVERIFY(!m_manager->isInCouchPlayGroup(QStringLiteral("root")));
 }
 
 // ============ Create User Tests ============
@@ -259,13 +288,64 @@ void TestUserManager::testCreateUserRequiresHelper()
 {
     QSignalSpy errorSpy(m_manager, &UserManager::errorOccurred);
     
-    // Valid username that doesn't exist
+    // Valid username that doesn't exist (no helper client set)
     bool result = m_manager->createUser(QStringLiteral("newcouchplayuser"));
     
     QVERIFY(!result);
     QCOMPARE(errorSpy.count(), 1);
     // Should indicate helper is required
-    QVERIFY(errorSpy.first().first().toString().contains(QStringLiteral("helper")));
+    QVERIFY(errorSpy.first().first().toString().contains(QStringLiteral("Helper")));
+}
+
+// ============ Delete User Tests ============
+
+void TestUserManager::testDeleteUserInvalidUsername()
+{
+    QSignalSpy errorSpy(m_manager, &UserManager::errorOccurred);
+    
+    bool result = m_manager->deleteUser(QStringLiteral("Invalid User"), false);
+    
+    QVERIFY(!result);
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Invalid username"));
+}
+
+void TestUserManager::testDeleteUserNonexistent()
+{
+    QSignalSpy errorSpy(m_manager, &UserManager::errorOccurred);
+    
+    bool result = m_manager->deleteUser(QStringLiteral("nonexistent_user_xyz123"), false);
+    
+    QVERIFY(!result);
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("User does not exist"));
+}
+
+void TestUserManager::testDeleteUserCurrentUser()
+{
+    QSignalSpy errorSpy(m_manager, &UserManager::errorOccurred);
+    
+    QString currentUser = m_manager->currentUser();
+    bool result = m_manager->deleteUser(currentUser, false);
+    
+    QVERIFY(!result);
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Cannot delete the current user"));
+}
+
+void TestUserManager::testDeleteUserRequiresHelper()
+{
+    QSignalSpy errorSpy(m_manager, &UserManager::errorOccurred);
+    
+    // Try to delete root (exists, not current, no helper)
+    // Note: This will fail with "helper not available" because root is not in couchplay group
+    // but we check helper first, then the helper checks the group
+    bool result = m_manager->deleteUser(QStringLiteral("root"), false);
+    
+    QVERIFY(!result);
+    QCOMPARE(errorSpy.count(), 1);
+    // Should indicate helper is required
+    QVERIFY(errorSpy.first().first().toString().contains(QStringLiteral("Helper")));
 }
 
 // ============ Refresh Tests ============

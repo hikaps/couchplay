@@ -48,6 +48,24 @@ public:
     Q_INVOKABLE bool createUser(const QString &username);
 
     /**
+     * @brief Delete a CouchPlay user account
+     * Only users in the couchplay group can be deleted
+     * 
+     * @param username Username to delete (must be in couchplay group)
+     * @param removeHome If true, also delete the user's home directory
+     * @return true if successful
+     */
+    Q_INVOKABLE bool deleteUser(const QString &username, bool removeHome);
+
+    /**
+     * @brief Check if a user is in the couchplay group
+     * 
+     * @param username Username to check
+     * @return true if user is in couchplay group
+     */
+    Q_INVOKABLE bool isInCouchPlayGroup(const QString &username);
+
+    /**
      * @brief Launch a gamescope instance as a specified user
      * @param username User to run as
      * @param compositorUid UID of compositor user (for Wayland socket access)

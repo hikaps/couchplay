@@ -112,4 +112,16 @@
     <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
   </action>
 
+  <action id="io.github.hikaps.couchplay.delete-user">
+    <description>Delete a CouchPlay user account</description>
+    <description xml:lang="en">Delete a Linux user account created for split-screen gaming</description>
+    <message>Authentication is required to delete a user account</message>
+    <message xml:lang="en">Authentication is required to delete a user account</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
 </policyconfig>

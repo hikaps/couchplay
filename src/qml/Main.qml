@@ -49,6 +49,7 @@ Kirigami.ApplicationWindow {
 
     UserManager {
         id: userManager
+        Component.onCompleted: setHelper(helperClient)
     }
 
     CouchPlayHelperClient {

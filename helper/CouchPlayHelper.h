@@ -35,13 +35,31 @@ public:
 public Q_SLOTS:
     /**
      * Create a new Linux user for split-screen gaming
-     * Also enables linger for the user automatically
+     * Also enables linger for the user automatically and adds to couchplay group
      * 
      * @param username Desired username (lowercase, alphanumeric)
      * @param fullName Full name for the user
      * @return UID of created user, or 0 on failure
      */
     uint CreateUser(const QString &username, const QString &fullName);
+
+    /**
+     * Delete a CouchPlay user account
+     * Only users in the couchplay group can be deleted
+     * 
+     * @param username Username to delete (must be in couchplay group)
+     * @param removeHome If true, also delete the user's home directory
+     * @return true if successful
+     */
+    bool DeleteUser(const QString &username, bool removeHome);
+
+    /**
+     * Check if a user is in the couchplay group
+     * 
+     * @param username Username to check
+     * @return true if user is in couchplay group
+     */
+    bool IsInCouchPlayGroup(const QString &username);
 
     /**
      * Enable systemd linger for a user
