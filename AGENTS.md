@@ -1,13 +1,6 @@
 # AGENTS.md - Agent Guidelines for CouchPlay
 
-## Project Overview
-
-CouchPlay is a KDE/Qt6 Kirigami application for split-screen gaming on Linux. It runs multiple gamescope/Steam instances simultaneously with input device isolation.
-
-- **Language**: C++20, QML
-- **Framework**: Qt6, KDE Frameworks 6 (Kirigami)
-- **Build System**: CMake with ECM (Extra CMake Modules)
-- **License**: GPL-3.0-or-later
+CouchPlay is a C++20/QML KDE/Qt6 Kirigami application for split-screen gaming on Linux (GPL-3.0-or-later).
 
 ## Build Environment
 
@@ -185,34 +178,6 @@ QTEST_MAIN(TestDeviceManager)
 #include "test_devicemanager.moc"
 ```
 
-## Project Structure
-
-```
-couchplay/
-├── src/
-│   ├── core/           # C++ backend logic
-│   ├── dbus/           # D-Bus client for helper service
-│   └── qml/
-│       ├── pages/      # Full-page QML views
-│       └── components/ # Reusable QML components
-├── helper/             # Privileged D-Bus service (runs as root)
-├── tests/              # Qt Test unit tests
-├── data/
-│   ├── dbus/           # D-Bus service/config files
-│   └── polkit/         # PolicyKit action definitions
-└── build/              # Build output (not in git)
-```
-
-## D-Bus Helper Service
-
-The helper (`couchplay-helper`) runs as a system service with root privileges. It handles:
-- Creating Linux users (`CreateUser`)
-- Enabling systemd linger (`EnableLinger`)
-- Setting Wayland socket ACLs (`SetupWaylandAccess`)
-- Changing input device ownership (`ChangeDeviceOwner`)
-
-All privileged operations require PolicyKit authorization.
-
 ## Common Patterns
 
 ### Exposing C++ to QML
@@ -229,56 +194,32 @@ public:
 };
 ```
 
-### Gadget Types for QML
+## Branch Documentation (Local Reference Only)
 
-Use `Q_GADGET` for value types exposed to QML:
+**Important:** The `docs/branches/` directory is kept locally for development reference only and is not committed to git (see `.gitignore`).
 
-```cpp
-struct InputDevice {
-    Q_GADGET
-    Q_PROPERTY(QString name MEMBER name)
-public:
-    QString name;
-};
-Q_DECLARE_METATYPE(InputDevice)
-```
+When working on feature branches, you may maintain local reference files:
 
-### Process Management
+- **`PLAN.md`** - Implementation plan, design decisions, task breakdown, and requirements
+- **`PROGRESS.md`** - Development progress, completed tasks, blockers, and session logs
 
-Use `QProcess` for spawning external processes. Always connect to signals for async handling:
+### Local Development Guidelines
 
-```cpp
-connect(m_process, &QProcess::started, this, &MyClass::onProcessStarted);
-connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        this, &MyClass::onProcessFinished);
-connect(m_process, &QProcess::errorOccurred, this, &MyClass::onProcessError);
-```
-
-## Branch Documentation
-
-When working on feature branches, check `docs/branches/<branch-name>/` for:
-
-- **`PLAN.md`** - Detailed implementation plan, design decisions, task breakdown, and requirements
-- **`PROGRESS.md`** - Current progress, completed tasks, blockers, and session logs
-
-### Guidelines
-
-1. **Before starting work on a branch**, read the PLAN.md and PROGRESS.md to understand:
+1. **Before starting work on a branch**, create or review local reference files to understand:
    - Design decisions already made
    - Tasks completed and remaining
    - Any blockers or dependencies
 
-2. **When making significant decisions**, document them in PLAN.md:
-   - What was decided
-   - Why (rationale)
+2. **Document significant decisions** in your local PLAN.md for future reference:
+   - What was decided and why
    - Any alternatives considered
 
-3. **After completing tasks**, update PROGRESS.md:
+3. **Update your local PROGRESS.md** after completing tasks as a personal development log:
    - Mark tasks as complete
    - Note any issues encountered
-   - Add session log entry with date
+   - Add session log entries with date
 
-4. **When encountering blockers**, document in PROGRESS.md:
+4. **When encountering blockers**, document locally for team discussion:
    - What is blocked
    - Why (dependency, technical issue, etc.)
    - What needs to happen to unblock
@@ -286,13 +227,3 @@ When working on feature branches, check `docs/branches/<branch-name>/` for:
 ### Branch Naming Convention
 
 Feature branches follow the pattern: `feature/<feature-name>`
-
-The corresponding docs folder uses the same name: `docs/branches/feature-<feature-name>/`
-
-### Current Feature Branches
-
-| Branch | Description | Status |
-|--------|-------------|--------|
-| `feature/systemd-run` | Replace machinectl with systemd-run | Not started |
-| `feature/launch-presets` | Preset system for launch commands | Not started |
-| `feature/equal-users` | Eliminate primary user concept | Blocked by systemd-run |
