@@ -71,7 +71,6 @@ Kirigami.ScrollablePage {
                 delegate: ProfileCard {
                     id: profileDelegate
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Kirigami.Units.gridUnit * 10
 
                     required property var modelData
                     required property int index
@@ -126,7 +125,7 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Profile card component
+    // Profile card component - Minimal Modern Design
     component ProfileCard: Kirigami.Card {
         id: profileCard
 
@@ -137,60 +136,102 @@ Kirigami.ScrollablePage {
         signal launchProfile()
         signal deleteProfile()
 
-        banner {
-            title: profile?.name ?? ""
-            titleIcon: "bookmark"
+        background: Rectangle {
+            color: profileCard.isCurrentProfile 
+                ? Qt.alpha(Kirigami.Theme.highlightColor, 0.1)
+                : Kirigami.Theme.backgroundColor
+            radius: Kirigami.Units.smallSpacing
+            border.width: profileCard.isCurrentProfile ? 2 : 1
+            border.color: profileCard.isCurrentProfile 
+                ? Kirigami.Theme.highlightColor 
+                : Qt.alpha(Kirigami.Theme.textColor, 0.1)
         }
 
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
 
-            // Layout info
+            // Top section: Icon and title
             RowLayout {
-                spacing: Kirigami.Units.smallSpacing
-                visible: profile !== undefined
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.mediumSpacing
 
-                Kirigami.Icon {
-                    source: {
-                        const layout = profile?.layout ?? "horizontal"
-                        switch (layout) {
-                            case "horizontal": return "view-split-left-right"
-                            case "vertical": return "view-split-top-bottom"
-                            case "grid": return "view-grid"
-                            case "multi-monitor": return "video-display"
-                            default: return "view-split-left-right"
-                        }
+                // Large profile icon
+                Rectangle {
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.large
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.large
+                    radius: Kirigami.Units.smallSpacing
+                    color: Qt.alpha(Kirigami.Theme.highlightColor, 0.15)
+
+                    Kirigami.Icon {
+                        anchors.centerIn: parent
+                        source: "bookmark"
+                        width: Kirigami.Units.iconSizes.medium
+                        height: Kirigami.Units.iconSizes.medium
+                        color: Kirigami.Theme.highlightColor
                     }
-                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
                 }
 
-                Controls.Label {
-                    text: {
-                        const layout = profile?.layout ?? "horizontal"
-                        switch (layout) {
-                            case "horizontal": return i18nc("@info", "Side by Side")
-                            case "vertical": return i18nc("@info", "Top and Bottom")
-                            case "grid": return i18nc("@info", "Grid")
-                            case "multi-monitor": return i18nc("@info", "Multi-Monitor")
-                            default: return layout
+                // Title and subtitle
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Controls.Label {
+                        text: profile?.name ?? ""
+                        font.bold: true
+                        font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.1
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        spacing: Kirigami.Units.smallSpacing
+                        Layout.fillWidth: true
+
+                        Kirigami.Icon {
+                            source: {
+                                const layout = profile?.layout ?? "horizontal"
+                                switch (layout) {
+                                    case "horizontal": return "view-split-left-right"
+                                    case "vertical": return "view-split-top-bottom"
+                                    case "grid": return "view-grid"
+                                    case "multi-monitor": return "video-display"
+                                    default: return "view-split-left-right"
+                                }
+                            }
+                            Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                            Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                            opacity: 0.7
+                        }
+
+                        Controls.Label {
+                            text: {
+                                const layout = profile?.layout ?? "horizontal"
+                                switch (layout) {
+                                    case "horizontal": return i18nc("@info", "Side by Side")
+                                    case "vertical": return i18nc("@info", "Top and Bottom")
+                                    case "grid": return i18nc("@info", "Grid")
+                                    case "multi-monitor": return i18nc("@info", "Multi-Monitor")
+                                    default: return layout
+                                }
+                            }
+                            opacity: 0.7
+                            font.pointSize: Kirigami.Theme.smallFont.pointSize
                         }
                     }
-                    opacity: 0.7
+                }
+
+                // Status indicator (top right)
+                Kirigami.Chip {
+                    visible: profileCard.isCurrentProfile
+                    text: i18nc("@info", "Loaded")
+                    icon.name: "checkmark"
+                    closable: false
+                    checkable: false
                 }
             }
 
-            // Current profile indicator
-            Kirigami.Chip {
-                visible: profileCard.isCurrentProfile
-                text: i18nc("@info", "Currently loaded")
-                icon.name: "checkmark"
-                closable: false
-            }
-
-            Item { Layout.fillHeight: true }
-
-            // Action buttons
+            // Action buttons row
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing

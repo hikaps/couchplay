@@ -18,12 +18,10 @@ ecm_add_qml_module(couchplay
         qml/pages/GamesPage.qml
         qml/pages/UsersPage.qml
         qml/pages/SettingsPage.qml
-        qml/components/DeviceCard.qml
-        qml/components/InstanceCard.qml
-        qml/components/LayoutPreview.qml
-        qml/components/MonitorSelector.qml
-        qml/components/GameCard.qml
         qml/components/PresetSelector.qml
+        qml/components/SelectableCard.qml
+        qml/components/InfoCard.qml
+        qml/components/ActionCard.qml
 )
 
 # C++ sources

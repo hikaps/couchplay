@@ -59,12 +59,12 @@ Kirigami.ScrollablePage {
     ]
 
     ColumnLayout {
-        spacing: Kirigami.Units.largeSpacing
+        spacing: Kirigami.Units.mediumSpacing
 
         // General Settings Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -107,8 +107,8 @@ Kirigami.ScrollablePage {
 
         // Gamescope Settings Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -175,8 +175,8 @@ Kirigami.ScrollablePage {
 
         // Launch Presets Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -254,8 +254,8 @@ Kirigami.ScrollablePage {
 
         // Shared Directories Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
             visible: root.sharingManager !== null
 
             Kirigami.Separator {
@@ -341,19 +341,20 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            Controls.Label {
-                Kirigami.FormData.label: " "
-                text: i18nc("@info", "Shared directories are bind-mounted into gaming users' home directories during sessions.")
-                wrapMode: Text.WordWrap
-                opacity: 0.7
-                Layout.fillWidth: true
-            }
+        }
+
+        // Shared directories info message (outside FormLayout to prevent overflow)
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: root.sharingManager !== null
+            text: i18nc("@info", "Shared directories are bind-mounted into gaming users' home directories during sessions.")
+            type: Kirigami.MessageType.Information
         }
 
         // Steam Shortcuts Sync Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
             visible: root.steamConfigManager !== null
 
             Kirigami.Separator {
@@ -408,19 +409,20 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            Controls.Label {
-                Kirigami.FormData.label: " "
-                text: i18nc("@info", "Non-Steam shortcuts (Heroic, Lutris, etc.) are copied to gaming users. Access to game directories is granted using filesystem ACLs.")
-                wrapMode: Text.WordWrap
-                opacity: 0.7
-                Layout.fillWidth: true
-            }
+        }
+
+        // Steam shortcuts info message (outside FormLayout to prevent overflow)
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: root.steamConfigManager !== null
+            text: i18nc("@info", "Non-Steam shortcuts (Heroic, Lutris, etc.) are copied to gaming users. Access to game directories is granted using filesystem ACLs.")
+            type: Kirigami.MessageType.Information
         }
 
         // Audio Settings Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -459,8 +461,8 @@ Kirigami.ScrollablePage {
 
         // Helper Service Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -494,8 +496,8 @@ Kirigami.ScrollablePage {
 
         // Keyboard Shortcuts Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -521,13 +523,14 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            Controls.Label {
-                Kirigami.FormData.label: " "
-                text: i18nc("@info", "You can also use Alt+Tab to switch away from gamescope windows.")
-                wrapMode: Text.WordWrap
-                opacity: 0.7
-                Layout.fillWidth: true
-            }
+        }
+
+        // Keyboard shortcuts info (outside FormLayout to prevent overflow)
+        Controls.Label {
+            Layout.fillWidth: true
+            text: i18nc("@info", "You can also use Alt+Tab to switch away from gamescope windows.")
+            wrapMode: Text.WordWrap
+            opacity: 0.7
         }
 
         // Helper info card
@@ -548,9 +551,8 @@ Kirigami.ScrollablePage {
 
         // About Section
         Kirigami.FormLayout {
-            Layout.fillWidth: true
-            Layout.topMargin: Kirigami.Units.largeSpacing
-            wideMode: false
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -598,7 +600,7 @@ Kirigami.ScrollablePage {
         // Dependencies info
         Kirigami.Card {
             Layout.fillWidth: true
-            Layout.topMargin: Kirigami.Units.largeSpacing
+            Layout.bottomMargin: Kirigami.Units.largeSpacing
 
             header: Kirigami.Heading {
                 text: i18nc("@title", "System Requirements")
@@ -628,6 +630,7 @@ Kirigami.ScrollablePage {
                 Controls.Label {
                     text: i18nc("@info", "Required for window compositing")
                     opacity: 0.7
+                    Layout.fillWidth: true
                 }
 
                 // Steam
@@ -647,6 +650,7 @@ Kirigami.ScrollablePage {
                 Controls.Label {
                     text: i18nc("@info", "For launching games")
                     opacity: 0.7
+                    Layout.fillWidth: true
                 }
 
                 // PipeWire
@@ -666,6 +670,7 @@ Kirigami.ScrollablePage {
                 Controls.Label {
                     text: i18nc("@info", "For multi-user audio")
                     opacity: 0.7
+                    Layout.fillWidth: true
                 }
 
                 // KDE Plasma
@@ -685,13 +690,9 @@ Kirigami.ScrollablePage {
                 Controls.Label {
                     text: i18nc("@info", "Recommended desktop environment")
                     opacity: 0.7
+                    Layout.fillWidth: true
                 }
             }
-        }
-
-        // Spacer
-        Item {
-            Layout.fillHeight: true
         }
     }
 

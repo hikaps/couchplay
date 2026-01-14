@@ -6,6 +6,8 @@ import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 
+import "../components" as Components
+
 Kirigami.ScrollablePage {
     id: root
     title: i18nc("@title", "Users")
@@ -203,68 +205,54 @@ Kirigami.ScrollablePage {
         }
 
         // How it works
-        Kirigami.Card {
+        Components.InfoCard {
+            title: i18nc("@title", "How Multi-User Sessions Work")
             Layout.fillWidth: true
 
-            header: Kirigami.Heading {
-                text: i18nc("@title", "How Multi-User Sessions Work")
-                level: 3
-                padding: Kirigami.Units.largeSpacing
-            }
-
-            contentItem: ColumnLayout {
+            RowLayout {
                 spacing: Kirigami.Units.largeSpacing
-
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    Kirigami.Icon {
-                        source: "dialog-ok"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
-                        color: Kirigami.Theme.positiveTextColor
-                    }
-                    Controls.Label {
-                        text: i18nc("@info", "Each player gets their own Steam instance with separate saves and settings")
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
+                Kirigami.Icon {
+                    source: "dialog-ok"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                    color: Kirigami.Theme.positiveTextColor
                 }
-
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    Kirigami.Icon {
-                        source: "dialog-ok"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
-                        color: Kirigami.Theme.positiveTextColor
-                    }
-                    Controls.Label {
-                        text: i18nc("@info", "Input devices are isolated per player using gamescope")
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                }
-
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    Kirigami.Icon {
-                        source: "dialog-ok"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
-                        color: Kirigami.Theme.positiveTextColor
-                    }
-                    Controls.Label {
-                        text: i18nc("@info", "Audio is routed through PipeWire for multi-user support")
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
+                Controls.Label {
+                    text: i18nc("@info", "Each player gets their own Steam instance with separate saves and settings")
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
                 }
             }
-        }
 
-        // Spacer
-        Item {
-            Layout.fillHeight: true
+            RowLayout {
+                spacing: Kirigami.Units.largeSpacing
+                Kirigami.Icon {
+                    source: "dialog-ok"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                    color: Kirigami.Theme.positiveTextColor
+                }
+                Controls.Label {
+                    text: i18nc("@info", "Input devices are isolated per player using gamescope")
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+            }
+
+            RowLayout {
+                spacing: Kirigami.Units.largeSpacing
+                Kirigami.Icon {
+                    source: "dialog-ok"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                    color: Kirigami.Theme.positiveTextColor
+                }
+                Controls.Label {
+                    text: i18nc("@info", "Audio is routed through PipeWire for multi-user support")
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+            }
         }
     }
 

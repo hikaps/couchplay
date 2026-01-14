@@ -6,6 +6,8 @@ import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 
+import "../components" as Components
+
 Kirigami.ScrollablePage {
     id: root
     title: i18nc("@title", "Games")
@@ -186,37 +188,23 @@ Kirigami.ScrollablePage {
         }
 
         // Tips section
-        Kirigami.Card {
+        Components.InfoCard {
+            title: i18nc("@title", "Tips")
             Layout.fillWidth: true
             visible: (gameLibrary?.games?.length ?? 0) > 0
 
-            header: Kirigami.Heading {
-                text: i18nc("@title", "Tips")
-                level: 3
-                padding: Kirigami.Units.largeSpacing
+            Controls.Label {
+                text: i18nc("@info", "Games added here can be selected when creating split-screen session profiles.")
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
             }
 
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                Controls.Label {
-                    text: i18nc("@info", "Games added here can be selected when creating split-screen session profiles.")
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
-                }
-
-                Controls.Label {
-                    text: i18nc("@info", "Steam games use steam:// URLs which launch through Steam's runtime.")
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
-                    opacity: 0.7
-                }
+            Controls.Label {
+                text: i18nc("@info", "Steam games use steam:// URLs which launch through Steam's runtime.")
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                opacity: 0.7
             }
-        }
-
-        // Spacer
-        Item {
-            Layout.fillHeight: true
         }
     }
 

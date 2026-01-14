@@ -6,6 +6,8 @@ import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 
+import "../components" as Components
+
 import "../components"
 
 Kirigami.ScrollablePage {
@@ -264,115 +266,101 @@ Kirigami.ScrollablePage {
         }
 
         // Layout explanations
-        Kirigami.Card {
+        Components.InfoCard {
+            title: i18nc("@title", "Layout Types")
             Layout.fillWidth: true
 
-            header: Kirigami.Heading {
-                text: i18nc("@title", "Layout Types")
-                level: 3
-                padding: Kirigami.Units.largeSpacing
-            }
-
-            contentItem: ColumnLayout {
+            RowLayout {
                 spacing: Kirigami.Units.largeSpacing
-
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    Kirigami.Icon {
-                        source: "view-split-left-right"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
-                    }
-                    ColumnLayout {
-                        spacing: 0
-                        Layout.fillWidth: true
-                        Controls.Label {
-                            text: i18nc("@title", "Horizontal Split")
-                            font.bold: true
-                        }
-                        Controls.Label {
-                            text: i18nc("@info", "Players side by side. Best for racing games and platformers.")
-                            wrapMode: Text.WordWrap
-                            opacity: 0.7
-                            Layout.fillWidth: true
-                        }
-                    }
+                Kirigami.Icon {
+                    source: "view-split-left-right"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.medium
                 }
-
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    Kirigami.Icon {
-                        source: "view-split-top-bottom"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                ColumnLayout {
+                    spacing: 0
+                    Layout.fillWidth: true
+                    Controls.Label {
+                        text: i18nc("@title", "Horizontal Split")
+                        font.bold: true
                     }
-                    ColumnLayout {
-                        spacing: 0
+                    Controls.Label {
+                        text: i18nc("@info", "Players side by side. Best for racing games and platformers.")
+                        wrapMode: Text.WordWrap
+                        opacity: 0.7
                         Layout.fillWidth: true
-                        Controls.Label {
-                            text: i18nc("@title", "Vertical Split")
-                            font.bold: true
-                        }
-                        Controls.Label {
-                            text: i18nc("@info", "Players stacked vertically. Good for ultrawide monitors.")
-                            wrapMode: Text.WordWrap
-                            opacity: 0.7
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    Kirigami.Icon {
-                        source: "view-grid"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
-                    }
-                    ColumnLayout {
-                        spacing: 0
-                        Layout.fillWidth: true
-                        Controls.Label {
-                            text: i18nc("@title", "Grid (2x2)")
-                            font.bold: true
-                        }
-                        Controls.Label {
-                            text: i18nc("@info", "Four equal quadrants. Ideal for 4-player sessions on one screen.")
-                            wrapMode: Text.WordWrap
-                            opacity: 0.7
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    Kirigami.Icon {
-                        source: "video-display"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
-                    }
-                    ColumnLayout {
-                        spacing: 0
-                        Layout.fillWidth: true
-                        Controls.Label {
-                            text: i18nc("@title", "Multi-Monitor")
-                            font.bold: true
-                        }
-                        Controls.Label {
-                            text: i18nc("@info", "Each player gets their own monitor. The best experience with multiple displays.")
-                            wrapMode: Text.WordWrap
-                            opacity: 0.7
-                            Layout.fillWidth: true
-                        }
                     }
                 }
             }
-        }
 
-        // Spacer
-        Item {
-            Layout.fillHeight: true
+            RowLayout {
+                spacing: Kirigami.Units.largeSpacing
+                Kirigami.Icon {
+                    source: "view-split-top-bottom"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                }
+                ColumnLayout {
+                    spacing: 0
+                    Layout.fillWidth: true
+                    Controls.Label {
+                        text: i18nc("@title", "Vertical Split")
+                        font.bold: true
+                    }
+                    Controls.Label {
+                        text: i18nc("@info", "Players stacked vertically. Good for ultrawide monitors.")
+                        wrapMode: Text.WordWrap
+                        opacity: 0.7
+                        Layout.fillWidth: true
+                    }
+                }
+            }
+
+            RowLayout {
+                spacing: Kirigami.Units.largeSpacing
+                Kirigami.Icon {
+                    source: "view-grid"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                }
+                ColumnLayout {
+                    spacing: 0
+                    Layout.fillWidth: true
+                    Controls.Label {
+                        text: i18nc("@title", "Grid (2x2)")
+                        font.bold: true
+                    }
+                    Controls.Label {
+                        text: i18nc("@info", "Four equal quadrants. Ideal for 4-player sessions on one screen.")
+                        wrapMode: Text.WordWrap
+                        opacity: 0.7
+                        Layout.fillWidth: true
+                    }
+                }
+            }
+
+            RowLayout {
+                spacing: Kirigami.Units.largeSpacing
+                Kirigami.Icon {
+                    source: "video-display"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                }
+                ColumnLayout {
+                    spacing: 0
+                    Layout.fillWidth: true
+                    Controls.Label {
+                        text: i18nc("@title", "Multi-Monitor")
+                        font.bold: true
+                    }
+                    Controls.Label {
+                        text: i18nc("@info", "Each player gets their own monitor. The best experience with multiple displays.")
+                        wrapMode: Text.WordWrap
+                        opacity: 0.7
+                        Layout.fillWidth: true
+                    }
+                }
+            }
         }
     }
 }

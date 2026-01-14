@@ -7,6 +7,8 @@ import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 import Qt.labs.platform as Platform
 
+import "../components" as Components
+
 Kirigami.ScrollablePage {
     id: root
 
@@ -105,8 +107,9 @@ Kirigami.ScrollablePage {
             spacing: Kirigami.Units.largeSpacing
             Layout.fillWidth: true
 
-            QuickActionCard {
+            Components.ActionCard {
                 Layout.fillWidth: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 8
                 iconName: "list-add"
                 title: i18nc("@action", "New Session")
                 description: i18nc("@info", "Configure and start a new split-screen session")
@@ -119,8 +122,9 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            QuickActionCard {
+            Components.ActionCard {
                 Layout.fillWidth: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 8
                 iconName: "bookmark"
                 title: i18nc("@action", "Load Profile")
                 description: i18nc("@info", "Launch a saved session profile")
@@ -131,8 +135,9 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            QuickActionCard {
+            Components.ActionCard {
                 Layout.fillWidth: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 8
                 iconName: "input-gamepad"
                 title: i18nc("@action", "Manage Devices")
                 description: i18nc("@info", "View and configure input devices")
@@ -259,6 +264,7 @@ Kirigami.ScrollablePage {
 
         Kirigami.FormLayout {
             Layout.fillWidth: true
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             RowLayout {
                 Kirigami.FormData.label: i18nc("@label", "Gamescope:")
@@ -342,62 +348,4 @@ Kirigami.ScrollablePage {
     // System check properties - check if executables exist in PATH
     property bool gamescopeAvailable: Platform.StandardPaths.findExecutable("gamescope") !== ""
     property bool steamAvailable: Platform.StandardPaths.findExecutable("steam") !== ""
-
-    // Quick action card component
-    component QuickActionCard: Kirigami.Card {
-        id: actionCard
-
-        required property string iconName
-        required property string title
-        required property string description
-        property int badgeCount: 0
-
-        Layout.preferredHeight: Kirigami.Units.gridUnit * 8
-
-        contentItem: ColumnLayout {
-            spacing: Kirigami.Units.smallSpacing
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignHCenter
-
-                Kirigami.Icon {
-                    source: actionCard.iconName
-                    Layout.preferredWidth: Kirigami.Units.iconSizes.huge
-                    Layout.preferredHeight: Kirigami.Units.iconSizes.huge
-                }
-
-                // Badge
-                Rectangle {
-                    visible: actionCard.badgeCount > 0
-                    width: badgeLabel.implicitWidth + Kirigami.Units.smallSpacing * 2
-                    height: badgeLabel.implicitHeight + Kirigami.Units.smallSpacing
-                    radius: height / 2
-                    color: Kirigami.Theme.highlightColor
-
-                    Controls.Label {
-                        id: badgeLabel
-                        anchors.centerIn: parent
-                        text: actionCard.badgeCount.toString()
-                        color: Kirigami.Theme.highlightedTextColor
-                        font: Kirigami.Theme.smallFont
-                    }
-                }
-            }
-
-            Controls.Label {
-                text: actionCard.title
-                font.bold: true
-                Layout.alignment: Qt.AlignHCenter
-            }
-
-            Controls.Label {
-                text: actionCard.description
-                wrapMode: Text.WordWrap
-                horizontalAlignment: Text.AlignHCenter
-                Layout.fillWidth: true
-                opacity: 0.7
-            }
-        }
-    }
 }

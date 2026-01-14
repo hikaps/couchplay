@@ -284,8 +284,7 @@ Kirigami.ScrollablePage {
                 }
 
                 contentItem: Kirigami.FormLayout {
-                    // Prevent binding loop on wideMode
-                    wideMode: false
+                    wideMode: root.width > Kirigami.Units.gridUnit * 30
 
                     Controls.ComboBox {
                         id: userCombo
@@ -469,7 +468,28 @@ Kirigami.ScrollablePage {
         required property int instanceCount
 
         Layout.preferredHeight: Kirigami.Units.gridUnit * 10
-        highlighted: selected
+
+        // Custom animated background for selection feedback
+        background: Rectangle {
+            color: layoutCard.selected 
+                ? Qt.alpha(Kirigami.Theme.highlightColor, 0.15) 
+                : Kirigami.Theme.backgroundColor
+            radius: Kirigami.Units.smallSpacing
+            border.width: layoutCard.selected ? 3 : 1
+            border.color: layoutCard.selected 
+                ? Kirigami.Theme.highlightColor 
+                : Qt.alpha(Kirigami.Theme.textColor, 0.15)
+
+            Behavior on color {
+                ColorAnimation { duration: Kirigami.Units.shortDuration }
+            }
+            Behavior on border.width {
+                NumberAnimation { duration: Kirigami.Units.shortDuration }
+            }
+            Behavior on border.color {
+                ColorAnimation { duration: Kirigami.Units.shortDuration }
+            }
+        }
 
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
@@ -479,9 +499,15 @@ Kirigami.ScrollablePage {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 4
                 color: "transparent"
-                border.color: Kirigami.Theme.textColor
+                border.color: layoutCard.selected 
+                    ? Kirigami.Theme.highlightColor 
+                    : Kirigami.Theme.textColor
                 border.width: 1
                 radius: 4
+
+                Behavior on border.color {
+                    ColorAnimation { duration: Kirigami.Units.shortDuration }
+                }
 
                 // Dynamic layout visualization
                 Loader {
@@ -503,6 +529,11 @@ Kirigami.ScrollablePage {
                 text: layoutCard.title
                 font.bold: true
                 Layout.alignment: Qt.AlignHCenter
+                color: layoutCard.selected ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
+                
+                Behavior on color {
+                    ColorAnimation { duration: Kirigami.Units.shortDuration }
+                }
             }
 
             Controls.Label {
