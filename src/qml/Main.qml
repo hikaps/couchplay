@@ -19,10 +19,54 @@ Kirigami.ApplicationWindow {
     // Backend managers
     DeviceManager {
         id: deviceManager
+        
+        // When a device is assigned or unassigned, update the stableIds and names in SessionManager
+        onDeviceAssigned: function(eventNumber, instanceIndex, previousInstanceIndex) {
+            if (sessionManager) {
+                // Update the new instance (if assigning to an instance)
+                if (instanceIndex >= 0) {
+                    let stableIds = deviceManager.getStableIdsForInstance(instanceIndex)
+                    let names = deviceManager.getDeviceNamesForInstance(instanceIndex)
+                    sessionManager.setInstanceDeviceStableIds(instanceIndex, stableIds, names)
+                }
+                
+                // Update the previous instance (if it was assigned somewhere before)
+                if (previousInstanceIndex >= 0 && previousInstanceIndex !== instanceIndex) {
+                    let stableIds = deviceManager.getStableIdsForInstance(previousInstanceIndex)
+                    let names = deviceManager.getDeviceNamesForInstance(previousInstanceIndex)
+                    sessionManager.setInstanceDeviceStableIds(previousInstanceIndex, stableIds, names)
+                }
+            }
+        }
+        
+        // When a pending device reconnects and is auto-restored
+        onDeviceAutoRestored: function(name, instanceIndex) {
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "%1 reconnected to Player %2", name, instanceIndex + 1))
+        }
     }
 
     SessionManager {
         id: sessionManager
+        
+        // When a profile is loaded, restore device assignments from stableIds
+        onProfileLoaded: function(deviceInfoByInstance) {
+            if (deviceManager) {
+                // Clear any existing pending devices before restoring
+                deviceManager.clearPendingDevicesForInstance(-1)
+                
+                // Restore assignments for each instance that has saved stableIds
+                for (let instanceStr in deviceInfoByInstance) {
+                    let instanceIndex = parseInt(instanceStr)
+                    let info = deviceInfoByInstance[instanceStr]
+                    let stableIds = info.stableIds || []
+                    let names = info.names || []
+                    if (stableIds.length > 0) {
+                        deviceManager.restoreAssignmentsFromStableIds(instanceIndex, stableIds, names)
+                    }
+                }
+            }
+        }
     }
 
     SessionRunner {

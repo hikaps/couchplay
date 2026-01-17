@@ -74,16 +74,12 @@ void DeviceManager::onDebounceTimeout()
     // Store old device list to detect changes
     QList<int> oldEventNumbers;
     QMap<int, QString> oldDeviceNames;
+    QSet<QString> oldStableIds;
     for (const auto &device : m_devices) {
         oldEventNumbers.append(device.eventNumber);
         oldDeviceNames[device.eventNumber] = device.name;
-    }
-    
-    // Preserve assignments
-    QMap<int, int> assignments;
-    for (const auto &device : m_devices) {
-        if (device.assigned) {
-            assignments[device.eventNumber] = device.assignedInstance;
+        if (!device.stableId.isEmpty()) {
+            oldStableIds.insert(device.stableId);
         }
     }
     
@@ -91,15 +87,70 @@ void DeviceManager::onDebounceTimeout()
     m_devices.clear();
     parseDevices();
     
-    // Restore assignments
-    for (auto &device : m_devices) {
-        if (assignments.contains(device.eventNumber)) {
-            device.assigned = true;
-            device.assignedInstance = assignments[device.eventNumber];
+    // Build set of currently connected stableIds
+    QSet<QString> newStableIds;
+    for (const auto &device : m_devices) {
+        if (!device.stableId.isEmpty()) {
+            newStableIds.insert(device.stableId);
         }
     }
     
-    // Detect added/removed devices
+    // Check for disconnected devices that were in the cache - add to pending
+    bool pendingChanged = false;
+    for (auto it = m_assignmentCache.constBegin(); it != m_assignmentCache.constEnd(); ++it) {
+        const QString &stableId = it.key();
+        if (!newStableIds.contains(stableId)) {
+            // Device was assigned but is now disconnected - add to pending if not already there
+            bool alreadyPending = false;
+            for (const auto &pending : m_pendingDevices) {
+                if (pending[QStringLiteral("stableId")].toString() == stableId) {
+                    alreadyPending = true;
+                    break;
+                }
+            }
+            if (!alreadyPending) {
+                QVariantMap pending;
+                pending[QStringLiteral("stableId")] = stableId;
+                pending[QStringLiteral("name")] = it.value().second;
+                pending[QStringLiteral("instanceIndex")] = it.value().first;
+                m_pendingDevices.append(pending);
+                pendingChanged = true;
+                qDebug() << "DeviceManager: Device disconnected, added to pending:" 
+                         << it.value().second << "for instance" << it.value().first;
+            }
+        }
+    }
+    
+    // Restore assignments from persistent cache (survives across hotplug cycles)
+    for (auto &device : m_devices) {
+        if (m_assignmentCache.contains(device.stableId)) {
+            int instanceIndex = m_assignmentCache[device.stableId].first;
+            device.assigned = true;
+            device.assignedInstance = instanceIndex;
+            
+            // Check if this is a reconnected device (wasn't present before)
+            bool wasPresent = oldStableIds.contains(device.stableId);
+            
+            if (!wasPresent) {
+                qDebug() << "DeviceManager: Device reconnected:" << device.name 
+                         << "stableId:" << device.stableId
+                         << "eventNumber:" << device.eventNumber;
+                Q_EMIT deviceReconnected(device.stableId, device.eventNumber, instanceIndex);
+                
+                // Remove from pending list
+                for (int i = m_pendingDevices.size() - 1; i >= 0; --i) {
+                    if (m_pendingDevices[i][QStringLiteral("stableId")].toString() == device.stableId) {
+                        m_pendingDevices.removeAt(i);
+                        pendingChanged = true;
+                        Q_EMIT deviceAutoRestored(device.name, instanceIndex);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Detect added/removed devices for signals
     QList<int> newEventNumbers;
     for (const auto &device : m_devices) {
         newEventNumbers.append(device.eventNumber);
@@ -118,6 +169,13 @@ void DeviceManager::onDebounceTimeout()
     }
     
     Q_EMIT devicesChanged();
+    
+    if (pendingChanged) {
+        Q_EMIT pendingDevicesChanged();
+    }
+    
+    // Check if any pending devices (from profile load) have reconnected
+    checkPendingDevices();
 }
 
 void DeviceManager::refresh()
@@ -175,6 +233,7 @@ void DeviceManager::parseDevices()
                 device.vendorId = currentVendor;
                 device.productId = currentProduct;
                 device.physPath = currentPhys;
+                device.stableId = generateStableId(currentVendor, currentProduct, currentPhys);
                 device.assigned = false;
                 device.assignedInstance = -1;
                 device.isVirtual = isVirtualDevice(currentName, currentPhys);
@@ -239,6 +298,7 @@ void DeviceManager::parseDevices()
         device.vendorId = currentVendor;
         device.productId = currentProduct;
         device.physPath = currentPhys;
+        device.stableId = generateStableId(currentVendor, currentProduct, currentPhys);
         device.assigned = false;
         device.assignedInstance = -1;
         device.isVirtual = isVirtualDevice(currentName, currentPhys);
@@ -338,12 +398,23 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
 {
     for (int i = 0; i < m_devices.size(); ++i) {
         if (m_devices[i].eventNumber == eventNumber) {
+            int previousInstance = m_devices[i].assignedInstance;
             m_devices[i].assigned = (instanceIndex >= 0);
             m_devices[i].assignedInstance = instanceIndex;
+            
+            // Update persistent assignment cache
+            if (!m_devices[i].stableId.isEmpty()) {
+                if (instanceIndex >= 0) {
+                    m_assignmentCache[m_devices[i].stableId] = qMakePair(instanceIndex, m_devices[i].name);
+                } else {
+                    m_assignmentCache.remove(m_devices[i].stableId);
+                }
+            }
+            
             Q_EMIT devicesChanged();
-            Q_EMIT deviceAssigned(eventNumber, instanceIndex);
+            Q_EMIT deviceAssigned(eventNumber, instanceIndex, previousInstance);
             qDebug() << "DeviceManager: Assigned device" << m_devices[i].name 
-                     << "to instance" << instanceIndex;
+                     << "to instance" << instanceIndex << "(was:" << previousInstance << ")";
             return true;
         }
     }
@@ -407,9 +478,10 @@ int DeviceManager::autoAssignControllers()
     int assignedCount = 0;
     for (int instance = 0; instance < m_instanceCount && assignedCount < controllerIndices.size(); ++instance) {
         int deviceIndex = controllerIndices[assignedCount];
+        int previousInstance = m_devices[deviceIndex].assignedInstance; // Will be -1 since we unassigned all above
         m_devices[deviceIndex].assigned = true;
         m_devices[deviceIndex].assignedInstance = instance;
-        Q_EMIT deviceAssigned(m_devices[deviceIndex].eventNumber, instance);
+        Q_EMIT deviceAssigned(m_devices[deviceIndex].eventNumber, instance, previousInstance);
         assignedCount++;
     }
     
@@ -497,6 +569,7 @@ QVariantMap DeviceManager::deviceToVariantMap(const InputDevice &device) const
     map[QStringLiteral("vendorId")] = device.vendorId;
     map[QStringLiteral("productId")] = device.productId;
     map[QStringLiteral("physPath")] = device.physPath;
+    map[QStringLiteral("stableId")] = device.stableId;
     map[QStringLiteral("assigned")] = device.assigned;
     map[QStringLiteral("assignedInstance")] = device.assignedInstance;
     map[QStringLiteral("isVirtual")] = device.isVirtual;
@@ -611,5 +684,148 @@ void DeviceManager::setInstanceCount(int count)
     if (m_instanceCount != count && count > 0 && count <= 4) {
         m_instanceCount = count;
         Q_EMIT instanceCountChanged();
+    }
+}
+
+QString DeviceManager::generateStableId(const QString &vendorId, const QString &productId, const QString &physPath)
+{
+    // Create a stable identifier from hardware properties
+    // Format: "vendorId:productId:physPath"
+    // This survives hotplug events and reboots (as long as device is plugged into same port)
+    if (vendorId.isEmpty() && productId.isEmpty() && physPath.isEmpty()) {
+        return QString();
+    }
+    return QStringLiteral("%1:%2:%3").arg(vendorId, productId, physPath);
+}
+
+int DeviceManager::findDeviceByStableId(const QString &stableId) const
+{
+    if (stableId.isEmpty()) {
+        return -1;
+    }
+    
+    for (const auto &device : m_devices) {
+        if (device.stableId == stableId) {
+            return device.eventNumber;
+        }
+    }
+    return -1;
+}
+
+bool DeviceManager::assignDeviceByStableId(const QString &stableId, int instanceIndex)
+{
+    int eventNumber = findDeviceByStableId(stableId);
+    if (eventNumber < 0) {
+        qDebug() << "DeviceManager: Device with stableId" << stableId << "not found";
+        return false;
+    }
+    return assignDevice(eventNumber, instanceIndex);
+}
+
+QStringList DeviceManager::getStableIdsForInstance(int instanceIndex) const
+{
+    QStringList result;
+    for (const auto &device : m_devices) {
+        if (device.assignedInstance == instanceIndex && !device.stableId.isEmpty()) {
+            result.append(device.stableId);
+        }
+    }
+    return result;
+}
+
+QStringList DeviceManager::getDeviceNamesForInstance(int instanceIndex) const
+{
+    QStringList result;
+    for (const auto &device : m_devices) {
+        if (device.assignedInstance == instanceIndex) {
+            result.append(device.name);
+        }
+    }
+    return result;
+}
+
+void DeviceManager::restoreAssignmentsFromStableIds(int instanceIndex, const QStringList &stableIds, const QStringList &names)
+{
+    for (int i = 0; i < stableIds.size(); ++i) {
+        const QString &stableId = stableIds[i];
+        QString name = (i < names.size()) ? names[i] : stableId;
+        
+        if (assignDeviceByStableId(stableId, instanceIndex)) {
+            qDebug() << "DeviceManager: Restored device" << name << "to instance" << instanceIndex;
+        } else {
+            // Device not connected - add to pending list
+            qDebug() << "DeviceManager: Device" << name << "not connected, adding to pending list";
+            
+            QVariantMap pending;
+            pending[QStringLiteral("stableId")] = stableId;
+            pending[QStringLiteral("name")] = name;
+            pending[QStringLiteral("instanceIndex")] = instanceIndex;
+            m_pendingDevices.append(pending);
+        }
+    }
+    
+    if (!m_pendingDevices.isEmpty()) {
+        Q_EMIT pendingDevicesChanged();
+    }
+}
+
+void DeviceManager::clearPendingDevicesForInstance(int instanceIndex)
+{
+    if (instanceIndex < 0) {
+        // Clear all
+        m_pendingDevices.clear();
+    } else {
+        // Remove only for specific instance
+        m_pendingDevices.erase(
+            std::remove_if(m_pendingDevices.begin(), m_pendingDevices.end(),
+                [instanceIndex](const QVariantMap &p) {
+                    return p[QStringLiteral("instanceIndex")].toInt() == instanceIndex;
+                }),
+            m_pendingDevices.end());
+    }
+    Q_EMIT pendingDevicesChanged();
+}
+
+QVariantList DeviceManager::pendingDevicesAsVariant() const
+{
+    QVariantList result;
+    for (const auto &pending : m_pendingDevices) {
+        result.append(pending);
+    }
+    return result;
+}
+
+void DeviceManager::checkPendingDevices()
+{
+    if (m_pendingDevices.isEmpty()) {
+        return;
+    }
+    
+    bool changed = false;
+    QList<QVariantMap> stillPending;
+    
+    for (const auto &pending : m_pendingDevices) {
+        QString stableId = pending[QStringLiteral("stableId")].toString();
+        QString name = pending[QStringLiteral("name")].toString();
+        int instanceIndex = pending[QStringLiteral("instanceIndex")].toInt();
+        
+        int eventNumber = findDeviceByStableId(stableId);
+        if (eventNumber >= 0) {
+            // Device reconnected! Assign it
+            if (assignDevice(eventNumber, instanceIndex)) {
+                qDebug() << "DeviceManager: Auto-restored device" << name << "to instance" << instanceIndex;
+                Q_EMIT deviceAutoRestored(name, instanceIndex);
+                changed = true;
+            } else {
+                stillPending.append(pending);
+            }
+        } else {
+            stillPending.append(pending);
+        }
+    }
+    
+    if (changed) {
+        m_pendingDevices = stillPending;
+        Q_EMIT pendingDevicesChanged();
     }
 }

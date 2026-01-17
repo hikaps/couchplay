@@ -27,11 +27,24 @@ Kirigami.ScrollablePage {
 
     // Revision counter to force re-evaluation of user filtering when instances change
     property int instancesRevision: 0
+    
+    // Revision counter to force re-evaluation of device display when devices change
+    property int devicesRevision: 0
 
     Connections {
         target: root.sessionManager
         function onInstancesChanged() {
             root.instancesRevision++
+        }
+    }
+    
+    Connections {
+        target: root.deviceManager
+        function onDevicesChanged() {
+            root.devicesRevision++
+        }
+        function onPendingDevicesChanged() {
+            root.devicesRevision++
         }
     }
 
@@ -68,16 +81,6 @@ Kirigami.ScrollablePage {
             // Recalculate output resolutions based on screen size
             let screenSize = getPrimaryMonitorSize()
             sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
-            // Show feedback to user
-            let layoutName = ""
-            switch (layoutMode) {
-                case "horizontal": layoutName = i18nc("@info", "Side by Side"); break
-                case "vertical": layoutName = i18nc("@info", "Top and Bottom"); break
-                case "grid": layoutName = i18nc("@info", "Grid"); break
-                case "multi-monitor": layoutName = i18nc("@info", "Multi-Monitor"); break
-            }
-            applicationWindow().showPassiveNotification(
-                i18nc("@info", "Layout: %1", layoutName))
         }
     }
 
@@ -263,6 +266,7 @@ Kirigami.ScrollablePage {
             delegate: Kirigami.Card {
                 id: instanceCard
                 Layout.fillWidth: true
+                Layout.bottomMargin: Kirigami.Units.smallSpacing
 
                 required property int index
                 
@@ -283,130 +287,205 @@ Kirigami.ScrollablePage {
                     padding: Kirigami.Units.smallSpacing
                 }
 
-                contentItem: Kirigami.FormLayout {
-                    wideMode: (root?.width ?? 0) > Kirigami.Units.gridUnit * 30
+                contentItem: Item {
+                    implicitHeight: cardContentLayout.implicitHeight
+                    implicitWidth: cardContentLayout.implicitWidth
+                    
+                    ColumnLayout {
+                        id: cardContentLayout
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        spacing: Kirigami.Units.smallSpacing
+                        
+                        Kirigami.FormLayout {
+                            Layout.fillWidth: true
+                            wideMode: (root?.width ?? 0) > Kirigami.Units.gridUnit * 30
 
-                    Controls.ComboBox {
-                        id: userCombo
-                        Kirigami.FormData.label: instanceCard.labelUser
-                        Layout.fillWidth: true
-                        
-                        // Filtered model: excludes users already assigned to other instances
-                        model: root.getAvailableUsers(instanceCard.index)
-                        textRole: "username"
-                        valueRole: "username"
-                        
-                        // Restore selection after model changes
-                        onModelChanged: {
-                            let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
-                            let currentUsername = config?.username ?? ""
-                            if (currentUsername && model) {
-                                // Manual search - indexOfValue doesn't work with JS arrays of objects
-                                // We need to iterate through the model to find the matching username
-                                for (let i = 0; i < model.length; i++) {
-                                    if (model[i].username === currentUsername) {
-                                        currentIndex = i
-                                        return
+                            Controls.ComboBox {
+                                id: userCombo
+                                Kirigami.FormData.label: instanceCard.labelUser
+                                Layout.fillWidth: true
+                                
+                                // Filtered model: excludes users already assigned to other instances
+                                model: root.getAvailableUsers(instanceCard.index)
+                                textRole: "username"
+                                valueRole: "username"
+                                
+                                // Restore selection after model changes
+                                onModelChanged: {
+                                    let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
+                                    let currentUsername = config?.username ?? ""
+                                    if (currentUsername && model) {
+                                        // Manual search - indexOfValue doesn't work with JS arrays of objects
+                                        // We need to iterate through the model to find the matching username
+                                        for (let i = 0; i < model.length; i++) {
+                                            if (model[i].username === currentUsername) {
+                                                currentIndex = i
+                                                return
+                                            }
+                                        }
+                                    }
+                                    currentIndex = -1
+                                }
+                                
+                                // Show placeholder when no users available
+                                displayText: count === 0 
+                                    ? i18nc("@info", "No users available") 
+                                    : (currentIndex >= 0 ? currentText : i18nc("@info", "Select a user..."))
+                                
+                                // Update session manager when user selects a different user
+                                onActivated: {
+                                    if (root.sessionManager && currentValue) {
+                                        root.sessionManager.setInstanceUser(instanceCard.index, currentValue)
                                     }
                                 }
                             }
-                            currentIndex = -1
-                        }
-                        
-                        // Show placeholder when no users available
-                        displayText: count === 0 
-                            ? i18nc("@info", "No users available") 
-                            : (currentIndex >= 0 ? currentText : i18nc("@info", "Select a user..."))
-                        
-                        // Update session manager when user selects a different user
-                        onActivated: {
-                            if (root.sessionManager && currentValue) {
-                                root.sessionManager.setInstanceUser(instanceCard.index, currentValue)
+                            
+                            // Warning when no user selected
+                            Controls.Label {
+                                visible: userCombo.currentIndex < 0 && userCombo.count > 0
+                                text: i18nc("@info:status", "Please select a user for this instance")
+                                color: Kirigami.Theme.neutralTextColor
+                                font.italic: true
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+
+                            // Launch preset selector
+                            Components.PresetSelector {
+                                id: presetSelector
+                                Kirigami.FormData.label: instanceCard.labelLauncher
+                                Layout.fillWidth: true
+                                presetManager: root.presetManager
+                                currentPresetId: {
+                                    let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
+                                    return config?.presetId ?? "steam"
+                                }
+                                
+                                onPresetSelected: function(presetId) {
+                                    if (root.sessionManager) {
+                                        root.sessionManager.setInstancePreset(instanceCard.index, presetId)
+                                    }
+                                }
+                            }
+
+                            // Resolution is auto-calculated from monitor size and layout
+                            Controls.Label {
+                                Kirigami.FormData.label: instanceCard.labelResolution
+                                text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
+                                opacity: 0.8
+                            }
+
+                            Controls.SpinBox {
+                                id: refreshSpin
+                                Kirigami.FormData.label: instanceCard.labelRefreshRate
+                                from: 30
+                                to: 240
+                                value: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).refreshRate : 60
+                                textFromValue: function(value) { return value + " Hz" }
+                                valueFromText: function(text) { return parseInt(text) }
+                                
+                                onValueModified: {
+                                    if (root.sessionManager) {
+                                        var config = root.sessionManager.getInstanceConfig(instanceCard.index)
+                                        config.refreshRate = value
+                                        root.sessionManager.setInstanceConfig(instanceCard.index, config)
+                                    }
+                                }
+                            }
+
+                            Controls.ComboBox {
+                                Kirigami.FormData.label: instanceCard.labelScaling
+                                model: ["fit", "stretch", "integer", "auto"]
+                                currentIndex: 0
+                                Layout.fillWidth: true
+                            }
+
+                            // Show assigned devices
+                            RowLayout {
+                                Kirigami.FormData.label: instanceCard.labelDevices
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Controls.Label {
+                                    text: {
+                                        // Reference devicesRevision to force re-evaluation on device changes
+                                        void(root.devicesRevision)
+                                        if (!root.deviceManager) return instanceCard.textNoneAssigned
+                                        var paths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
+                                        if (paths.length === 0) return instanceCard.textNoneAssigned
+                                        return paths.length === 1 
+                                            ? (paths.length + " device")
+                                            : (paths.length + " devices")
+                                    }
+                                    opacity: 0.7
+                                }
+
+                                Controls.Button {
+                                    text: instanceCard.textAssign
+                                    flat: true
+                                    onClicked: applicationWindow().pushDeviceAssignmentPage()
+                                }
                             }
                         }
-                    }
-                    
-                    // Warning when no user selected
-                    Controls.Label {
-                        visible: userCombo.currentIndex < 0 && userCombo.count > 0
-                        text: i18nc("@info:status", "Please select a user for this instance")
-                        color: Kirigami.Theme.neutralTextColor
-                        font.italic: true
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-
-                    // Launch preset selector
-                    Components.PresetSelector {
-                        id: presetSelector
-                        Kirigami.FormData.label: instanceCard.labelLauncher
-                        Layout.fillWidth: true
-                        presetManager: root.presetManager
-                        currentPresetId: {
-                            let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
-                            return config?.presetId ?? "steam"
-                        }
                         
-                        onPresetSelected: function(presetId) {
-                            if (root.sessionManager) {
-                                root.sessionManager.setInstancePreset(instanceCard.index, presetId)
+                        // Warning for missing devices (from loaded profile)
+                        // Placed outside FormLayout for proper rendering
+                        Kirigami.InlineMessage {
+                            Layout.fillWidth: true
+                            visible: {
+                                // Null-safe check and reference devicesRevision to force re-evaluation
+                                if (!root) return false
+                                void(root.devicesRevision)
+                                if (!root.deviceManager) return false
+                                let pending = root.deviceManager.pendingDevices
+                                for (let i = 0; i < pending.length; i++) {
+                                    // Use == for type-safe comparison (QVariant may convert int to different JS type)
+                                    if (pending[i].instanceIndex == instanceCard.index) return true
+                                }
+                                return false
                             }
-                        }
-                    }
-
-                    // Resolution is auto-calculated from monitor size and layout
-                    Controls.Label {
-                        Kirigami.FormData.label: instanceCard.labelResolution
-                        text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
-                        opacity: 0.8
-                    }
-
-                    Controls.SpinBox {
-                        id: refreshSpin
-                        Kirigami.FormData.label: instanceCard.labelRefreshRate
-                        from: 30
-                        to: 240
-                        value: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).refreshRate : 60
-                        textFromValue: function(value) { return value + " Hz" }
-                        valueFromText: function(text) { return parseInt(text) }
-                        
-                        onValueModified: {
-                            if (root.sessionManager) {
-                                var config = root.sessionManager.getInstanceConfig(instanceCard.index)
-                                config.refreshRate = value
-                                root.sessionManager.setInstanceConfig(instanceCard.index, config)
-                            }
-                        }
-                    }
-
-                    Controls.ComboBox {
-                        Kirigami.FormData.label: instanceCard.labelScaling
-                        model: ["fit", "stretch", "integer", "auto"]
-                        currentIndex: 0
-                        Layout.fillWidth: true
-                    }
-
-                    // Show assigned devices
-                    RowLayout {
-                        Kirigami.FormData.label: instanceCard.labelDevices
-                        spacing: Kirigami.Units.smallSpacing
-
-                        Controls.Label {
+                            type: Kirigami.MessageType.Warning
                             text: {
-                                if (!root.deviceManager) return instanceCard.textNoneAssigned
-                                var paths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
-                                if (paths.length === 0) return instanceCard.textNoneAssigned
-                                return paths.length === 1 
-                                    ? (paths.length + " device")
-                                    : (paths.length + " devices")
+                                // Null-safe check and reference devicesRevision to force re-evaluation
+                                if (!root) return ""
+                                void(root.devicesRevision)
+                                if (!root.deviceManager) return ""
+                                let pending = root.deviceManager.pendingDevices
+                                let names = []
+                                for (let i = 0; i < pending.length; i++) {
+                                    // Use == for type-safe comparison (QVariant may convert int to different JS type)
+                                    if (pending[i].instanceIndex == instanceCard.index) {
+                                        names.push(pending[i].name)
+                                    }
+                                }
+                                return i18nc("@info", "%1 not connected", names.join(", "))
                             }
-                            opacity: 0.7
                         }
-
-                        Controls.Button {
-                            text: instanceCard.textAssign
-                            flat: true
-                            onClicked: applicationWindow().pushDeviceAssignmentPage()
+                        
+                        // Info message when no device is assigned at all
+                        Kirigami.InlineMessage {
+                            Layout.fillWidth: true
+                            visible: {
+                                // Null-safe check and reference devicesRevision to force re-evaluation
+                                if (!root) return false
+                                void(root.devicesRevision)
+                                if (!root.deviceManager) return false
+                                
+                                // Check if any devices are assigned to this instance
+                                let assignedPaths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
+                                if (assignedPaths.length > 0) return false
+                                
+                                // Check if there are pending devices for this instance (disconnected warning takes priority)
+                                let pending = root.deviceManager.pendingDevices
+                                for (let i = 0; i < pending.length; i++) {
+                                    if (pending[i].instanceIndex == instanceCard.index) return false
+                                }
+                                
+                                // No devices assigned and no pending devices
+                                return true
+                            }
+                            type: Kirigami.MessageType.Information
+                            text: i18nc("@info", "No controller assigned to this player")
                         }
                     }
                 }

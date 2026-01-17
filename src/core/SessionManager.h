@@ -29,6 +29,8 @@ struct InstanceConfig {
     Q_PROPERTY(QString scalingMode MEMBER scalingMode)
     Q_PROPERTY(QString filterMode MEMBER filterMode)
     Q_PROPERTY(QList<int> devices MEMBER devices)
+    Q_PROPERTY(QStringList deviceStableIds MEMBER deviceStableIds)
+    Q_PROPERTY(QStringList deviceStableIdNames MEMBER deviceStableIdNames)
     Q_PROPERTY(QString gameCommand MEMBER gameCommand)
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
     Q_PROPERTY(QString presetId MEMBER presetId)
@@ -43,7 +45,9 @@ public:
     int refreshRate = 60;
     QString scalingMode = QStringLiteral("fit");
     QString filterMode = QStringLiteral("linear");
-    QList<int> devices;
+    QList<int> devices;                               // Runtime: current event numbers
+    QStringList deviceStableIds;                      // Persistent: stable IDs for profile save/load
+    QStringList deviceStableIdNames;                  // Persistent: friendly names (parallel to stableIds)
     QString gameCommand;
     QString steamAppId;                              // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam");      // ID of the launch preset to use
@@ -100,6 +104,18 @@ public:
     Q_INVOKABLE void setInstanceMonitor(int index, int monitor);
     Q_INVOKABLE void setInstanceResolution(int index, int internalW, int internalH, int outputW, int outputH);
     Q_INVOKABLE void setInstanceDevices(int index, const QList<int> &devices);
+    /**
+     * @brief Set device stable IDs and names for an instance
+     * 
+     * These stable IDs persist across hotplug events and reboots, allowing
+     * device assignments to be restored when a profile is loaded.
+     * The names list is parallel to stableIds and provides friendly names.
+     * 
+     * @param index Instance index
+     * @param stableIds List of device stable IDs
+     * @param names List of device friendly names (parallel to stableIds)
+     */
+    Q_INVOKABLE void setInstanceDeviceStableIds(int index, const QStringList &stableIds, const QStringList &names);
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
@@ -125,6 +141,15 @@ Q_SIGNALS:
     void savedProfilesChanged();
     void instancesChanged();
     void errorOccurred(const QString &message);
+    /**
+     * @brief Emitted after a profile is successfully loaded
+     * 
+     * This signal allows the UI to trigger device assignment restoration
+     * using the stable device IDs saved in the profile.
+     * 
+     * @param deviceInfoByInstance Map of instance index to {stableIds: [...], names: [...]}
+     */
+    void profileLoaded(const QVariantMap &deviceInfoByInstance);
 
 private:
     QString profilesDir() const;

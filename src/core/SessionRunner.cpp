@@ -93,7 +93,20 @@ void SessionRunner::setSessionManager(SessionManager *manager)
 void SessionRunner::setDeviceManager(DeviceManager *manager)
 {
     if (m_deviceManager != manager) {
+        // Disconnect from old manager
+        if (m_deviceManager) {
+            disconnect(m_deviceManager, &DeviceManager::deviceReconnected,
+                      this, &SessionRunner::onDeviceReconnected);
+        }
+        
         m_deviceManager = manager;
+        
+        // Connect to new manager for device reconnection handling
+        if (m_deviceManager) {
+            connect(m_deviceManager, &DeviceManager::deviceReconnected,
+                   this, &SessionRunner::onDeviceReconnected);
+        }
+        
         Q_EMIT deviceManagerChanged();
     }
 }
@@ -752,4 +765,59 @@ void SessionRunner::setupGlobalShortcut()
     // Set default shortcut: Meta+Shift+Escape
     KGlobalAccel::setGlobalShortcut(m_stopAction, 
         QList<QKeySequence>() << QKeySequence(Qt::META | Qt::SHIFT | Qt::Key_Escape));
+}
+
+void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex)
+{
+    // Only handle if session is running
+    if (!isRunning()) {
+        return;
+    }
+    
+    if (!m_helperClient || !m_sessionManager) {
+        return;
+    }
+    
+    if (!m_helperClient->isAvailable()) {
+        qWarning() << "SessionRunner: Helper not available, cannot restore device ownership";
+        return;
+    }
+    
+    // Get the username for this instance
+    const auto &profile = m_sessionManager->currentProfile();
+    if (instanceIndex < 0 || instanceIndex >= profile.instances.size()) {
+        qWarning() << "SessionRunner: Invalid instance index" << instanceIndex << "for reconnected device";
+        return;
+    }
+    
+    const QString &username = profile.instances[instanceIndex].username;
+    if (username.isEmpty()) {
+        qWarning() << "SessionRunner: No username for instance" << instanceIndex;
+        return;
+    }
+    
+    // Get UID for this user
+    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+    if (!pw) {
+        qWarning() << "SessionRunner: User" << username << "not found";
+        return;
+    }
+    int uid = static_cast<int>(pw->pw_uid);
+    
+    // Construct the new device path
+    QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
+    
+    qDebug() << "SessionRunner: Device reconnected, restoring ownership:"
+             << devicePath << "(stableId:" << stableId << ") to user" << username;
+    
+    // Set ownership on the reconnected device
+    if (m_helperClient->setDeviceOwner(devicePath, uid)) {
+        if (!m_ownedDevicePaths.contains(devicePath)) {
+            m_ownedDevicePaths.append(devicePath);
+        }
+        qDebug() << "SessionRunner: Successfully restored ownership of" << devicePath;
+    } else {
+        qWarning() << "SessionRunner: Failed to restore ownership of" << devicePath;
+        Q_EMIT errorOccurred(QStringLiteral("Failed to restore device ownership for %1").arg(devicePath));
+    }
 }

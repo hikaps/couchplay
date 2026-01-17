@@ -153,6 +153,18 @@ private Q_SLOTS:
     void onInstanceError(const QString &message);
     void onWindowPositioned(int requestId, const QString &windowId);
     void onWindowPositioningTimeout(int requestId);
+    /**
+     * @brief Handle device reconnection during active session
+     * 
+     * When a device that was assigned to an instance disconnects and then
+     * reconnects (possibly with a different event number), this slot restores
+     * the device ownership so input continues to work.
+     * 
+     * @param stableId The stable ID of the reconnected device
+     * @param eventNumber The new event number (may differ from before disconnect)
+     * @param instanceIndex The instance the device was assigned to
+     */
+    void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
 
 private:
     void setStatus(const QString &status);

@@ -47,6 +47,14 @@ private Q_SLOTS:
     void testDevicesChangedSignal();
     void testDeviceAssignedSignal();
     void testInstanceCountChangedSignal();
+    
+    // Stable ID tests
+    void testGenerateStableId();
+    void testFindDeviceByStableId();
+    void testAssignDeviceByStableId();
+    void testGetStableIdsForInstance();
+    void testRestoreAssignmentsFromStableIds();
+    void testStableIdInDeviceVariantMap();
 
 private:
     DeviceManager *m_deviceManager = nullptr;
@@ -417,6 +425,197 @@ void TestDeviceManager::testInstanceCountChangedSignal()
     
     // Reset
     m_deviceManager->setInstanceCount(initial);
+}
+
+void TestDeviceManager::testGenerateStableId()
+{
+    // Test with all components
+    QString stableId = DeviceManager::generateStableId(
+        QStringLiteral("045e"), 
+        QStringLiteral("028e"), 
+        QStringLiteral("usb-0000:00:14.0-2.4/input0")
+    );
+    QCOMPARE(stableId, QStringLiteral("045e:028e:usb-0000:00:14.0-2.4/input0"));
+    
+    // Test with empty components - should return empty string
+    QString emptyId = DeviceManager::generateStableId(QString(), QString(), QString());
+    QVERIFY(emptyId.isEmpty());
+    
+    // Test with partial components - should still generate ID
+    QString partialId = DeviceManager::generateStableId(
+        QStringLiteral("045e"), 
+        QString(), 
+        QString()
+    );
+    QVERIFY(!partialId.isEmpty());
+    QVERIFY(partialId.startsWith(QStringLiteral("045e:")));
+}
+
+void TestDeviceManager::testFindDeviceByStableId()
+{
+    // Test finding non-existent device
+    int notFound = m_deviceManager->findDeviceByStableId(QStringLiteral("nonexistent:id:here"));
+    QCOMPARE(notFound, -1);
+    
+    // Test with empty stableId
+    int emptyResult = m_deviceManager->findDeviceByStableId(QString());
+    QCOMPARE(emptyResult, -1);
+    
+    // If devices exist, try to find one by its stableId
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (!devices.isEmpty()) {
+        QVariantMap device = devices.first().toMap();
+        QString stableId = device.value(KEY("stableId")).toString();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        
+        if (!stableId.isEmpty()) {
+            int foundEvent = m_deviceManager->findDeviceByStableId(stableId);
+            QCOMPARE(foundEvent, eventNumber);
+        }
+    }
+}
+
+void TestDeviceManager::testAssignDeviceByStableId()
+{
+    m_deviceManager->unassignAll();
+    
+    // Test assigning non-existent device
+    bool result = m_deviceManager->assignDeviceByStableId(QStringLiteral("nonexistent:id:here"), 0);
+    QCOMPARE(result, false);
+    
+    // If devices exist, try to assign one by stableId
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (!devices.isEmpty()) {
+        QVariantMap device = devices.first().toMap();
+        QString stableId = device.value(KEY("stableId")).toString();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        
+        if (!stableId.isEmpty()) {
+            result = m_deviceManager->assignDeviceByStableId(stableId, 0);
+            QCOMPARE(result, true);
+            
+            // Verify assignment
+            QVariantMap updatedDevice = m_deviceManager->getDevice(eventNumber);
+            QCOMPARE(updatedDevice.value(KEY("assigned")).toBool(), true);
+            QCOMPARE(updatedDevice.value(KEY("assignedInstance")).toInt(), 0);
+            
+            // Unassign
+            m_deviceManager->assignDevice(eventNumber, -1);
+        }
+    }
+}
+
+void TestDeviceManager::testGetStableIdsForInstance()
+{
+    m_deviceManager->unassignAll();
+    
+    // Get stable IDs for empty instance - should be empty
+    QStringList emptyList = m_deviceManager->getStableIdsForInstance(0);
+    QCOMPARE(emptyList.size(), 0);
+    
+    // Assign some devices to instance 0
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    QStringList expectedStableIds;
+    
+    for (int i = 0; i < qMin(devices.size(), 2); ++i) {
+        QVariantMap device = devices.at(i).toMap();
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        QString stableId = device.value(KEY("stableId")).toString();
+        
+        m_deviceManager->assignDevice(eventNumber, 0);
+        if (!stableId.isEmpty()) {
+            expectedStableIds.append(stableId);
+        }
+    }
+    
+    // Get stable IDs for instance 0
+    QStringList stableIds = m_deviceManager->getStableIdsForInstance(0);
+    QCOMPARE(stableIds.size(), expectedStableIds.size());
+    
+    for (const QString &id : expectedStableIds) {
+        QVERIFY(stableIds.contains(id));
+    }
+    
+    // Cleanup
+    m_deviceManager->unassignAll();
+}
+
+void TestDeviceManager::testRestoreAssignmentsFromStableIds()
+{
+    m_deviceManager->unassignAll();
+    
+    // Clear any pending devices first
+    m_deviceManager->clearPendingDevicesForInstance(-1);
+    
+    // Test with empty list - no assignments should happen
+    m_deviceManager->restoreAssignmentsFromStableIds(0, QStringList(), QStringList());
+    QList<int> assignedDevices = m_deviceManager->getDevicesForInstance(0);
+    QCOMPARE(assignedDevices.size(), 0);
+    
+    // Test with non-existent stable IDs - should add to pending list
+    QStringList fakeIds;
+    QStringList fakeNames;
+    fakeIds << QStringLiteral("fake:id:1") << QStringLiteral("fake:id:2");
+    fakeNames << QStringLiteral("Fake Device 1") << QStringLiteral("Fake Device 2");
+    m_deviceManager->restoreAssignmentsFromStableIds(0, fakeIds, fakeNames);
+    assignedDevices = m_deviceManager->getDevicesForInstance(0);
+    QCOMPARE(assignedDevices.size(), 0);
+    
+    // Pending devices should have 2 entries
+    QVariantList pending = m_deviceManager->pendingDevicesAsVariant();
+    QCOMPARE(pending.size(), 2);
+    
+    // Clear pending for cleanup
+    m_deviceManager->clearPendingDevicesForInstance(-1);
+    
+    // If devices exist, test restoring real stable IDs
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (devices.size() >= 2) {
+        QStringList realStableIds;
+        QStringList realNames;
+        for (int i = 0; i < 2; ++i) {
+            QVariantMap device = devices.at(i).toMap();
+            QString stableId = device.value(KEY("stableId")).toString();
+            QString name = device.value(KEY("name")).toString();
+            if (!stableId.isEmpty()) {
+                realStableIds.append(stableId);
+                realNames.append(name);
+            }
+        }
+        
+        if (!realStableIds.isEmpty()) {
+            m_deviceManager->restoreAssignmentsFromStableIds(1, realStableIds, realNames);
+            
+            // Verify assignments
+            assignedDevices = m_deviceManager->getDevicesForInstance(1);
+            QCOMPARE(assignedDevices.size(), realStableIds.size());
+            
+            // Cleanup
+            m_deviceManager->unassignAll();
+        }
+    }
+}
+
+void TestDeviceManager::testStableIdInDeviceVariantMap()
+{
+    // Verify that stableId is included in device variant map
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (!devices.isEmpty()) {
+        QVariantMap device = devices.first().toMap();
+        QVERIFY(device.contains(KEY("stableId")));
+        
+        // stableId should be a string
+        QVERIFY(device.value(KEY("stableId")).canConvert<QString>());
+        
+        // Get device by eventNumber and verify stableId is present
+        int eventNumber = device.value(KEY("eventNumber")).toInt();
+        QVariantMap retrieved = m_deviceManager->getDevice(eventNumber);
+        QVERIFY(retrieved.contains(KEY("stableId")));
+        
+        // stableIds should match
+        QCOMPARE(device.value(KEY("stableId")).toString(), 
+                 retrieved.value(KEY("stableId")).toString());
+    }
 }
 
 QTEST_MAIN(TestDeviceManager)

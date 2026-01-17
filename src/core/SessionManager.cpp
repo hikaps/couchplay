@@ -116,12 +116,16 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
 
-        // Convert devices to string list
+        // Convert devices to string list (legacy - for backwards compatibility)
         QStringList deviceStrings;
         for (int dev : inst.devices) {
             deviceStrings << QString::number(dev);
         }
         instGroup.writeEntry("devices", deviceStrings);
+        
+        // Save stable device IDs (primary - survives hotplug/reboot)
+        instGroup.writeEntry("deviceStableIds", inst.deviceStableIds);
+        instGroup.writeEntry("deviceStableIdNames", inst.deviceStableIdNames);
     }
 
     config.sync();
@@ -172,7 +176,12 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
 
-        // Read devices
+        // Read stable device IDs (primary - survives hotplug/reboot)
+        inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
+        inst.deviceStableIdNames = instGroup.readEntry("deviceStableIdNames", QStringList());
+        
+        // Read legacy device event numbers (for backwards compatibility)
+        // These are only used if no stableIds are present, or for migration
         QStringList deviceStrings = instGroup.readEntry("devices", QStringList());
         for (const QString &devStr : deviceStrings) {
             inst.devices << devStr.toInt();
@@ -185,6 +194,22 @@ bool SessionManager::loadProfile(const QString &name)
     Q_EMIT currentLayoutChanged();
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
+
+    // Build map of stable device IDs and names for each instance and emit signal
+    QVariantMap deviceInfoByInstance;
+    for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
+        const QStringList &stableIds = m_currentProfile.instances[i].deviceStableIds;
+        const QStringList &names = m_currentProfile.instances[i].deviceStableIdNames;
+        if (!stableIds.isEmpty()) {
+            QVariantMap instanceInfo;
+            instanceInfo[QStringLiteral("stableIds")] = QVariant::fromValue(stableIds);
+            instanceInfo[QStringLiteral("names")] = QVariant::fromValue(names);
+            deviceInfoByInstance.insert(QString::number(i), instanceInfo);
+        }
+    }
+    if (!deviceInfoByInstance.isEmpty()) {
+        Q_EMIT profileLoaded(deviceInfoByInstance);
+    }
 
     return true;
 }
@@ -272,6 +297,18 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
         deviceList << dev;
     }
     map[QStringLiteral("devices")] = deviceList;
+    
+    QVariantList stableIdList;
+    for (const QString &id : inst.deviceStableIds) {
+        stableIdList << id;
+    }
+    map[QStringLiteral("deviceStableIds")] = stableIdList;
+    
+    QVariantList stableIdNameList;
+    for (const QString &name : inst.deviceStableIdNames) {
+        stableIdNameList << name;
+    }
+    map[QStringLiteral("deviceStableIdNames")] = stableIdNameList;
 
     return map;
 }
@@ -344,6 +381,15 @@ void SessionManager::setInstanceDevices(int index, const QList<int> &devices)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].devices = devices;
+        Q_EMIT instancesChanged();
+    }
+}
+
+void SessionManager::setInstanceDeviceStableIds(int index, const QStringList &stableIds, const QStringList &names)
+{
+    if (index >= 0 && index < m_currentProfile.instances.size()) {
+        m_currentProfile.instances[index].deviceStableIds = stableIds;
+        m_currentProfile.instances[index].deviceStableIdNames = names;
         Q_EMIT instancesChanged();
     }
 }
