@@ -115,34 +115,11 @@ private Q_SLOTS:
 
 private:
     void setStatus(const QString &status);
-    
-    /**
-     * @brief Set up Wayland socket access for a user via helper service
-     * Calls the D-Bus helper to grant the user permission to access
-     * the compositor's Wayland socket via ACLs
-     * @param username Target username
-     * @return true if ACLs were set successfully
-     */
-    bool setupWaylandAccessForUser(const QString &username);
-    
-    /**
-     * @brief Fallback method to set up Wayland access directly
-     * Used when the helper service is not available
-     * @param username Target username
-     * @return true if ACLs were set successfully
-     */
-    bool setupWaylandAccessFallback(const QString &username);
-    
-    /**
-     * @brief Clean up Wayland socket ACLs for a secondary user
-     */
-    void cleanupWaylandAccess();
 
     QProcess *m_process = nullptr;
     int m_index = -1;
     QString m_status;
     QString m_username;
     QRect m_windowGeometry;
-    bool m_waylandAclSet = false;  // Track if we set up Wayland ACLs
     qint64 m_helperPid = 0;        // PID from helper service
 };

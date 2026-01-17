@@ -284,7 +284,7 @@ Kirigami.ScrollablePage {
                 }
 
                 contentItem: Kirigami.FormLayout {
-                    wideMode: root && root.width > Kirigami.Units.gridUnit * 30
+                    wideMode: (root?.width ?? 0) > Kirigami.Units.gridUnit * 30
 
                     Controls.ComboBox {
                         id: userCombo

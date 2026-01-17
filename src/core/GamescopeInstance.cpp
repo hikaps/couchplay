@@ -20,7 +20,6 @@ GamescopeInstance::GamescopeInstance(QObject *parent)
 GamescopeInstance::~GamescopeInstance()
 {
     stop();
-    cleanupWaylandAccess();
 }
 
 bool GamescopeInstance::start(const QVariantMap &config, int index)
@@ -152,9 +151,6 @@ void GamescopeInstance::stop(int timeoutMs)
             }
         }
         
-        // Clean up Wayland ACLs for secondary user
-        cleanupWaylandAccess();
-        
         m_helperPid = 0;
         setStatus(QStringLiteral("Stopped"));
         Q_EMIT runningChanged();
@@ -177,9 +173,6 @@ void GamescopeInstance::stop(int timeoutMs)
             m_process->waitForFinished(2000);
         }
     }
-
-    // Clean up Wayland ACLs for secondary user
-    cleanupWaylandAccess();
 
     m_process->deleteLater();
     m_process = nullptr;
@@ -206,9 +199,6 @@ void GamescopeInstance::kill()
             helper.call(QStringLiteral("KillInstance"), m_helperPid);
         }
         
-        // Clean up Wayland ACLs for secondary user
-        cleanupWaylandAccess();
-        
         m_helperPid = 0;
         setStatus(QStringLiteral("Killed"));
         Q_EMIT runningChanged();
@@ -225,9 +215,6 @@ void GamescopeInstance::kill()
         m_process->kill();
         m_process->waitForFinished(2000);
     }
-
-    // Clean up Wayland ACLs for secondary user
-    cleanupWaylandAccess();
 
     m_process->deleteLater();
     m_process = nullptr;
@@ -420,140 +407,4 @@ void GamescopeInstance::onReadyReadStandardError()
     if (!output.trimmed().isEmpty()) {
         Q_EMIT outputReceived(QStringLiteral("[stderr] ") + output);
     }
-}
-
-bool GamescopeInstance::setupWaylandAccessForUser(const QString &username)
-{
-    // Use the D-Bus helper service to set up Wayland ACLs
-    // This requires root privileges, which the helper has
-    
-    QDBusInterface helper(
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QDBusConnection::systemBus()
-    );
-    
-    if (!helper.isValid()) {
-        qWarning() << "CouchPlay helper service not available for Wayland access setup";
-        // Fallback: try to set ACLs directly (will fail if not root)
-        return setupWaylandAccessFallback(username);
-    }
-    
-    // Call SetupWaylandAccess(username, compositorUid)
-    uid_t compositorUid = getuid();
-    QDBusReply<bool> reply = helper.call(
-        QStringLiteral("SetupWaylandAccess"), 
-        username, 
-        static_cast<uint>(compositorUid)
-    );
-    
-    if (!reply.isValid()) {
-        qWarning() << "Failed to call SetupWaylandAccess:" << reply.error().message();
-        return setupWaylandAccessFallback(username);
-    }
-    
-    if (!reply.value()) {
-        qWarning() << "SetupWaylandAccess returned false";
-        return false;
-    }
-    
-    m_waylandAclSet = true;
-    return true;
-}
-
-bool GamescopeInstance::setupWaylandAccessFallback(const QString &username)
-{
-    // Fallback: try to set ACLs directly (will only work if already have permissions)
-    QString runtimeDir = QString::fromLocal8Bit(qgetenv("XDG_RUNTIME_DIR"));
-    if (runtimeDir.isEmpty()) {
-        runtimeDir = QStringLiteral("/run/user/%1").arg(getuid());
-    }
-    
-    QString waylandDisplay = QString::fromLocal8Bit(qgetenv("WAYLAND_DISPLAY"));
-    if (waylandDisplay.isEmpty()) {
-        waylandDisplay = QStringLiteral("wayland-0");
-    }
-    
-    QString waylandSocket = runtimeDir + QStringLiteral("/") + waylandDisplay;
-    
-    if (!QFile::exists(waylandSocket)) {
-        qWarning() << "Wayland socket not found:" << waylandSocket;
-        return false;
-    }
-    
-    // Try to set ACL on runtime dir (traverse permission)
-    QProcess setfaclDir;
-    setfaclDir.start(QStringLiteral("setfacl"), 
-        {QStringLiteral("-m"), QStringLiteral("u:%1:x").arg(username), runtimeDir});
-    setfaclDir.waitForFinished(5000);
-    
-    if (setfaclDir.exitCode() != 0) {
-        qWarning() << "Fallback: Failed to set ACL on runtime dir:" << setfaclDir.readAllStandardError();
-        return false;
-    }
-    
-    // Try to set ACL on Wayland socket (rw permission)
-    QProcess setfaclSocket;
-    setfaclSocket.start(QStringLiteral("setfacl"), 
-        {QStringLiteral("-m"), QStringLiteral("u:%1:rw").arg(username), waylandSocket});
-    setfaclSocket.waitForFinished(5000);
-    
-    if (setfaclSocket.exitCode() != 0) {
-        qWarning() << "Fallback: Failed to set ACL on Wayland socket:" << setfaclSocket.readAllStandardError();
-        // Clean up
-        QProcess::execute(QStringLiteral("setfacl"), 
-            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), runtimeDir});
-        return false;
-    }
-    
-    m_waylandAclSet = true;
-    return true;
-}
-
-void GamescopeInstance::cleanupWaylandAccess()
-{
-    if (!m_waylandAclSet || m_username.isEmpty()) {
-        return;
-    }
-    
-    // Use the D-Bus helper service to remove Wayland ACLs
-    QDBusInterface helper(
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QDBusConnection::systemBus()
-    );
-    
-    uid_t compositorUid = getuid();
-    
-    if (helper.isValid()) {
-        QDBusReply<bool> reply = helper.call(
-            QStringLiteral("RemoveWaylandAccess"), 
-            m_username, 
-            static_cast<uint>(compositorUid)
-        );
-        
-        if (reply.isValid() && reply.value()) {
-            m_waylandAclSet = false;
-            return;
-        }
-        qWarning() << "Helper RemoveWaylandAccess failed, trying fallback";
-    }
-    
-    // Fallback: try direct setfacl (may fail without permissions)
-    QString runtimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
-    QString waylandSocket = runtimeDir + QStringLiteral("/wayland-0");
-    
-    if (QFile::exists(waylandSocket)) {
-        QProcess::execute(QStringLiteral("setfacl"), 
-            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(m_username), waylandSocket});
-    }
-    
-    if (QFile::exists(runtimeDir)) {
-        QProcess::execute(QStringLiteral("setfacl"), 
-            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(m_username), runtimeDir});
-    }
-    
-    m_waylandAclSet = false;
 }

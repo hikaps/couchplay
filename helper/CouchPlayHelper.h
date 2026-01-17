@@ -7,6 +7,7 @@
 #include <QDBusContext>
 #include <QMap>
 #include <QProcess>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -79,22 +80,35 @@ public Q_SLOTS:
     bool IsLingerEnabled(const QString &username);
 
     /**
-     * Set up Wayland socket access for a user via ACLs
+     * Set up runtime directory access for the couchplay group
      * 
-     * @param username Username to grant access to
-     * @param compositorUid UID of the compositor user (Wayland socket owner)
-     * @return true if successful
-     */
-    bool SetupWaylandAccess(const QString &username, uint compositorUid);
-
-    /**
-     * Remove Wayland socket access for a user
+     * Sets group ACLs on compositor's runtime directory sockets:
+     * - XDG_RUNTIME_DIR (traverse)
+     * - wayland-0 (rw)
+     * - xauth_* (r)
+     * - pipewire-0 (rw)
+     * - pipewire-0-manager (rw)
+     * - pulse/ (traverse)
+     * - pulse/native (rw)
      * 
-     * @param username Username to revoke access from
+     * Called automatically by LaunchInstance() on first invocation.
+     * Idempotent - safe to call multiple times.
+     * 
      * @param compositorUid UID of the compositor user
      * @return true if successful
      */
-    bool RemoveWaylandAccess(const QString &username, uint compositorUid);
+    bool SetupRuntimeAccess(uint compositorUid);
+
+    /**
+     * Remove runtime directory access for the couchplay group
+     * 
+     * Removes all couchplay group ACLs from compositor's runtime directory.
+     * Called automatically on helper shutdown.
+     * 
+     * @param compositorUid UID of the compositor user
+     * @return true if successful
+     */
+    bool RemoveRuntimeAccess(uint compositorUid);
 
     /**
      * Change ownership of a device to a specific user
@@ -142,12 +156,12 @@ public Q_SLOTS:
      * Launch a gamescope instance as a specified user
      * 
      * This method handles all the complexity of running gamescope as any user:
-     * - Sets up Wayland socket ACLs (if user differs from compositor user)
+     * - Sets up runtime access for couchplay group (once per compositor)
      * - Spawns the process via machinectl shell
      * - Returns the PID for tracking
      * 
      * @param username User to run as
-     * @param compositorUid UID of compositor user (for Wayland socket access)
+     * @param compositorUid UID of compositor user (for runtime access setup)
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Command to run inside gamescope (e.g., "steam -tenfoot")
      * @param environment Additional environment variables (VAR=value format)
@@ -310,4 +324,7 @@ private:
         QString target;
     };
     QMap<QString, QList<MountInfo>> m_activeMounts;  // username -> list of mounts
+    
+    // Track which compositor UIDs have runtime access set up
+    QSet<uint> m_runtimeAccessSetForUid;
 };

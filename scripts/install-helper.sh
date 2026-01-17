@@ -110,10 +110,10 @@ install_helper() {
     print_info "Reloading D-Bus configuration..."
     systemctl reload dbus 2>/dev/null || true
 
-    # Enable and start service
-    print_info "Enabling and starting service..."
+    # Enable and restart service (restart ensures new binary is loaded)
+    print_info "Enabling and restarting service..."
     systemctl enable couchplay-helper.service
-    systemctl start couchplay-helper.service
+    systemctl restart couchplay-helper.service
 
     print_info "Installation complete!"
     echo ""
