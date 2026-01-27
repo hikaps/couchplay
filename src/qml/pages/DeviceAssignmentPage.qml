@@ -316,6 +316,9 @@ Kirigami.ScrollablePage {
                 onIdentify: (eventNumber) => {
                     deviceListRoot.identifyDevice(eventNumber)
                 }
+                onIgnore: (stableId) => {
+                    if (deviceManager) deviceManager.ignoreDevice(stableId)
+                }
             }
         }
 
@@ -351,6 +354,7 @@ Kirigami.ScrollablePage {
         
         signal assign(int eventNumber, int instanceIndex)
         signal identify(int eventNumber)
+        signal ignore(string stableId)
 
         property bool isDragging: false
         
@@ -438,6 +442,22 @@ Kirigami.ScrollablePage {
                 onClicked: {
                     if (deviceCard.device) {
                         deviceCard.identify(deviceCard.device.eventNumber)
+                    }
+                }
+            }
+
+            // Ignore button
+            QQC2.Button {
+                icon.name: "dialog-cancel"
+                flat: true
+                visible: !(deviceCard.device?.assigned ?? true) // Only allow ignoring unassigned devices
+                
+                QQC2.ToolTip.visible: hovered
+                QQC2.ToolTip.text: i18nc("@info:tooltip", "Ignore this device")
+                
+                onClicked: {
+                    if (deviceCard.device) {
+                        deviceCard.ignore(deviceCard.device.stableId)
                     }
                 }
             }

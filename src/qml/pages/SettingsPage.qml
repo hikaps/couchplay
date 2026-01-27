@@ -343,6 +343,61 @@ Kirigami.ScrollablePage {
 
         }
 
+        // Ignored Devices Section
+        Kirigami.FormLayout {
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
+            visible: root.settingsManager !== null && (root.settingsManager.ignoredDevices.length > 0)
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Ignored Devices")
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: i18nc("@label", "Blacklisted devices:")
+                text: i18nc("@info", "%1 devices ignored", root.settingsManager ? root.settingsManager.ignoredDevices.length : 0)
+                opacity: 0.7
+            }
+
+            // List of ignored devices
+            Repeater {
+                model: root.settingsManager ? root.settingsManager.ignoredDevices : []
+
+                delegate: RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    Layout.fillWidth: true
+
+                    Kirigami.Icon {
+                        source: "dialog-cancel"
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                        color: Kirigami.Theme.negativeTextColor
+                    }
+
+                    Controls.Label {
+                        text: modelData
+                        Layout.fillWidth: true
+                        elide: Text.ElideMiddle
+                        font.family: "monospace"
+                    }
+
+                    Controls.Button {
+                        icon.name: "edit-delete"
+                        display: Controls.AbstractButton.IconOnly
+                        Controls.ToolTip.text: i18nc("@info:tooltip", "Unignore device")
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.delay: 1000
+                        onClicked: {
+                            if (root.settingsManager) {
+                                root.settingsManager.removeIgnoredDevice(modelData)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Shared directories info message (outside FormLayout to prevent overflow)
         Kirigami.InlineMessage {
             Layout.fillWidth: true

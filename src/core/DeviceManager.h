@@ -14,6 +14,8 @@
 #include <QTimer>
 #include <qqmlintegration.h>
 
+#include "SettingsManager.h"
+
 /**
  * @brief Represents an input device (controller, keyboard, mouse)
  */
@@ -23,6 +25,7 @@ struct InputDevice {
     Q_PROPERTY(QString name MEMBER name)
     Q_PROPERTY(QString type MEMBER type)
     Q_PROPERTY(QString path MEMBER path)
+    Q_PROPERTY(QString joyPath MEMBER joyPath)
     Q_PROPERTY(QString vendorId MEMBER vendorId)
     Q_PROPERTY(QString productId MEMBER productId)
     Q_PROPERTY(QString physPath MEMBER physPath)
@@ -37,6 +40,7 @@ public:
     QString name;
     QString type; // "controller", "keyboard", "mouse", "other"
     QString path; // /dev/input/eventN
+    QString joyPath; // /dev/input/jsN (optional)
     QString vendorId;
     QString productId;
     QString physPath; // Physical device path (for grouping)
@@ -71,10 +75,27 @@ class DeviceManager : public QObject
     Q_PROPERTY(bool hotplugEnabled READ hotplugEnabled WRITE setHotplugEnabled NOTIFY hotplugEnabledChanged)
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList pendingDevices READ pendingDevicesAsVariant NOTIFY pendingDevicesChanged)
+    Q_PROPERTY(SettingsManager* settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
 
 public:
     explicit DeviceManager(QObject *parent = nullptr);
     ~DeviceManager() override;
+
+    /**
+     * @brief Set the settings manager to use for device filtering
+     */
+    void setSettingsManager(SettingsManager *manager);
+    SettingsManager* settingsManager() const { return m_settingsManager; }
+
+    /**
+     * @brief Ignore a device by its stable ID
+     */
+    Q_INVOKABLE void ignoreDevice(const QString &stableId);
+
+    /**
+     * @brief Unignore a device by its stable ID
+     */
+    Q_INVOKABLE void unignoreDevice(const QString &stableId);
 
     /**
      * @brief Refresh the list of input devices
@@ -242,10 +263,13 @@ Q_SIGNALS:
     void showInternalDevicesChanged();
     void hotplugEnabledChanged();
     void instanceCountChanged();
+    void settingsManagerChanged();
 
 private Q_SLOTS:
     void onInputDirectoryChanged();
     void onDebounceTimeout();
+
+    void onIgnoredDevicesChanged();
 
 private:
     void parseDevices();
@@ -257,6 +281,7 @@ private:
     void checkPendingDevices();
 
     QList<InputDevice> m_devices;
+    SettingsManager *m_settingsManager = nullptr;
     QFileSystemWatcher *m_watcher = nullptr;
     QTimer *m_debounceTimer = nullptr;
     

@@ -17,8 +17,13 @@ Kirigami.ApplicationWindow {
     minimumHeight: Kirigami.Units.gridUnit * 30
 
     // Backend managers
+    SettingsManager {
+        id: settingsManager
+    }
+
     DeviceManager {
         id: deviceManager
+        settingsManager: settingsManager
         
         // When a device is assigned or unassigned, update the stableIds and names in SessionManager
         onDeviceAssigned: function(eventNumber, instanceIndex, previousInstanceIndex) {
@@ -123,10 +128,6 @@ Kirigami.ApplicationWindow {
         Component.onCompleted: {
             detectSteamPaths()
         }
-    }
-
-    SettingsManager {
-        id: settingsManager
     }
 
     globalDrawer: Kirigami.GlobalDrawer {

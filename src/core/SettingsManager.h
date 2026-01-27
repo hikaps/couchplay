@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <qqmlintegration.h>
 
 /**
@@ -28,6 +29,9 @@ class SettingsManager : public QObject
     Q_PROPERTY(QString filterMode READ filterMode WRITE setFilterMode NOTIFY filterModeChanged)
     Q_PROPERTY(bool steamIntegration READ steamIntegration WRITE setSteamIntegration NOTIFY steamIntegrationChanged)
     Q_PROPERTY(bool borderlessWindows READ borderlessWindows WRITE setBorderlessWindows NOTIFY borderlessWindowsChanged)
+
+    // Device settings
+    Q_PROPERTY(QStringList ignoredDevices READ ignoredDevices WRITE setIgnoredDevices NOTIFY ignoredDevicesChanged)
 
 public:
     explicit SettingsManager(QObject *parent = nullptr);
@@ -56,6 +60,12 @@ public:
     bool borderlessWindows() const { return m_borderlessWindows; }
     void setBorderlessWindows(bool value);
 
+    // Device settings
+    QStringList ignoredDevices() const { return m_ignoredDevices; }
+    void setIgnoredDevices(const QStringList &value);
+    Q_INVOKABLE void addIgnoredDevice(const QString &stableId);
+    Q_INVOKABLE void removeIgnoredDevice(const QString &stableId);
+
     /**
      * Reset all settings to defaults
      */
@@ -69,6 +79,7 @@ Q_SIGNALS:
     void filterModeChanged();
     void steamIntegrationChanged();
     void borderlessWindowsChanged();
+    void ignoredDevicesChanged();
 
 private:
     void loadSettings();
@@ -84,4 +95,7 @@ private:
     QString m_filterMode = QStringLiteral("linear");
     bool m_steamIntegration = true;
     bool m_borderlessWindows = false;
+
+    // Device settings
+    QStringList m_ignoredDevices;
 };

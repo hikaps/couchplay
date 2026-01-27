@@ -7,6 +7,7 @@
 #include <QTemporaryDir>
 
 #include "DeviceManager.h"
+#include "SettingsManager.h"
 
 // Helper macro for QVariantMap key access with proper QString conversion
 #define KEY(x) QStringLiteral(x)
@@ -55,6 +56,9 @@ private Q_SLOTS:
     void testGetStableIdsForInstance();
     void testRestoreAssignmentsFromStableIds();
     void testStableIdInDeviceVariantMap();
+
+    // Blacklist tests
+    void testIgnoredDevices();
 
 private:
     DeviceManager *m_deviceManager = nullptr;
@@ -616,6 +620,51 @@ void TestDeviceManager::testStableIdInDeviceVariantMap()
         QCOMPARE(device.value(KEY("stableId")).toString(), 
                  retrieved.value(KEY("stableId")).toString());
     }
+}
+
+void TestDeviceManager::testIgnoredDevices()
+{
+    // Create a SettingsManager
+    SettingsManager settingsManager;
+    m_deviceManager->setSettingsManager(&settingsManager);
+    
+    // Get initial device count
+    m_deviceManager->refresh();
+    QVariantList devices = m_deviceManager->devicesAsVariant();
+    int initialCount = devices.size();
+    
+    if (initialCount > 0) {
+        // Pick a device to ignore
+        QVariantMap device = devices.first().toMap();
+        QString stableId = device.value(KEY("stableId")).toString();
+        
+        if (!stableId.isEmpty()) {
+            m_deviceManager->ignoreDevice(stableId);
+            
+            QVERIFY(settingsManager.ignoredDevices().contains(stableId));
+            
+            m_deviceManager->refresh();
+            
+            QVariantList newDevices = m_deviceManager->devicesAsVariant();
+            QCOMPARE(newDevices.size(), initialCount - 1);
+            
+            for (const QVariant &v : newDevices) {
+                QVariantMap d = v.toMap();
+                QVERIFY(d.value(KEY("stableId")).toString() != stableId);
+            }
+            
+            m_deviceManager->unignoreDevice(stableId);
+            
+            QVERIFY(!settingsManager.ignoredDevices().contains(stableId));
+            
+            m_deviceManager->refresh();
+            
+            QVariantList restoredDevices = m_deviceManager->devicesAsVariant();
+            QCOMPARE(restoredDevices.size(), initialCount);
+        }
+    }
+    
+    m_deviceManager->setSettingsManager(nullptr);
 }
 
 QTEST_MAIN(TestDeviceManager)

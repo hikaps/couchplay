@@ -23,6 +23,7 @@ void SettingsManager::loadSettings()
     m_hidePanels = general.readEntry(QStringLiteral("HidePanels"), true);
     m_killSteam = general.readEntry(QStringLiteral("KillSteam"), true);
     m_restoreSession = general.readEntry(QStringLiteral("RestoreSession"), false);
+    m_ignoredDevices = general.readEntry(QStringLiteral("IgnoredDevices"), QStringList());
     
     // Gamescope settings
     KConfigGroup gamescope = config->group(QStringLiteral("Gamescope"));
@@ -43,6 +44,7 @@ void SettingsManager::saveSettings()
     general.writeEntry(QStringLiteral("HidePanels"), m_hidePanels);
     general.writeEntry(QStringLiteral("KillSteam"), m_killSteam);
     general.writeEntry(QStringLiteral("RestoreSession"), m_restoreSession);
+    general.writeEntry(QStringLiteral("IgnoredDevices"), m_ignoredDevices);
     
     // Gamescope settings
     KConfigGroup gamescope = config->group(QStringLiteral("Gamescope"));
@@ -117,6 +119,33 @@ void SettingsManager::setBorderlessWindows(bool value)
     }
 }
 
+void SettingsManager::setIgnoredDevices(const QStringList &value)
+{
+    if (m_ignoredDevices != value) {
+        m_ignoredDevices = value;
+        saveSettings();
+        Q_EMIT ignoredDevicesChanged();
+    }
+}
+
+void SettingsManager::addIgnoredDevice(const QString &stableId)
+{
+    if (!m_ignoredDevices.contains(stableId)) {
+        m_ignoredDevices.append(stableId);
+        saveSettings();
+        Q_EMIT ignoredDevicesChanged();
+    }
+}
+
+void SettingsManager::removeIgnoredDevice(const QString &stableId)
+{
+    if (m_ignoredDevices.contains(stableId)) {
+        m_ignoredDevices.removeAll(stableId);
+        saveSettings();
+        Q_EMIT ignoredDevicesChanged();
+    }
+}
+
 void SettingsManager::resetToDefaults()
 {
     m_hidePanels = true;
@@ -126,6 +155,7 @@ void SettingsManager::resetToDefaults()
     m_filterMode = QStringLiteral("linear");
     m_steamIntegration = true;
     m_borderlessWindows = false;
+    m_ignoredDevices.clear();
     
     saveSettings();
     
@@ -136,6 +166,7 @@ void SettingsManager::resetToDefaults()
     Q_EMIT filterModeChanged();
     Q_EMIT steamIntegrationChanged();
     Q_EMIT borderlessWindowsChanged();
+    Q_EMIT ignoredDevicesChanged();
     
     qDebug() << "SettingsManager: Reset all settings to defaults";
 }

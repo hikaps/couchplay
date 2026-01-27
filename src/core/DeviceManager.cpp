@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "DeviceManager.h"
+#include "SettingsManager.h"
 
 #include <QFile>
 #include <QDir>
@@ -14,6 +15,7 @@
 #include <unistd.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
+#include <cerrno>
 
 DeviceManager::DeviceManager(QObject *parent)
     : QObject(parent)
@@ -215,6 +217,7 @@ void DeviceManager::parseDevices()
     static const QRegularExpression nameRegex(QStringLiteral("^N: Name=\"(.*)\"$"));
     static const QRegularExpression handlersRegex(QStringLiteral("^H: Handlers=(.*)$"));
     static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
+    static const QRegularExpression joyRegex(QStringLiteral("js(\\d+)"));
     static const QRegularExpression physRegex(QStringLiteral("^P: Phys=(.*)$"));
     static const QRegularExpression idRegex(QStringLiteral("^I: Bus=\\w+ Vendor=(\\w+) Product=(\\w+)"));
 
@@ -229,6 +232,15 @@ void DeviceManager::parseDevices()
                 device.eventNumber = currentEventNumber;
                 device.name = currentName;
                 device.path = QStringLiteral("/dev/input/event%1").arg(currentEventNumber);
+                
+                // Construct joystick path if a js handler was found
+                if (!currentHandlers.isEmpty()) {
+                    QRegularExpressionMatch joyMatch = joyRegex.match(currentHandlers);
+                    if (joyMatch.hasMatch()) {
+                        device.joyPath = QStringLiteral("/dev/input/js%1").arg(joyMatch.captured(1));
+                    }
+                }
+
                 device.type = detectDeviceType(currentName, currentHandlers);
                 device.vendorId = currentVendor;
                 device.productId = currentProduct;
@@ -239,7 +251,11 @@ void DeviceManager::parseDevices()
                 device.isVirtual = isVirtualDevice(currentName, currentPhys);
                 device.isInternal = isInternalDevice(currentName);
 
-                m_devices.append(device);
+                if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
+                    qDebug() << "DeviceManager: Ignoring device" << device.name << "stableId:" << device.stableId;
+                } else {
+                    m_devices.append(device);
+                }
             }
 
             // Reset for next device
@@ -294,6 +310,15 @@ void DeviceManager::parseDevices()
         device.eventNumber = currentEventNumber;
         device.name = currentName;
         device.path = QStringLiteral("/dev/input/event%1").arg(currentEventNumber);
+
+        // Construct joystick path if a js handler was found
+        if (!currentHandlers.isEmpty()) {
+            QRegularExpressionMatch joyMatch = joyRegex.match(currentHandlers);
+            if (joyMatch.hasMatch()) {
+                device.joyPath = QStringLiteral("/dev/input/js%1").arg(joyMatch.captured(1));
+            }
+        }
+
         device.type = detectDeviceType(currentName, currentHandlers);
         device.vendorId = currentVendor;
         device.productId = currentProduct;
@@ -304,7 +329,11 @@ void DeviceManager::parseDevices()
         device.isVirtual = isVirtualDevice(currentName, currentPhys);
         device.isInternal = isInternalDevice(currentName);
 
-        m_devices.append(device);
+        if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
+            qDebug() << "DeviceManager: Ignoring device" << device.name << "stableId:" << device.stableId;
+        } else {
+            m_devices.append(device);
+        }
     }
     
     qDebug() << "DeviceManager: Found" << m_devices.size() << "input devices";
@@ -328,7 +357,42 @@ QString DeviceManager::detectDeviceType(const QString &name, const QString &hand
         lowerName.contains(QStringLiteral("pro controller")) ||
         lowerName.contains(QStringLiteral("8bitdo")) ||
         lowerName.contains(QStringLiteral("steam controller")) ||
-        lowerHandlers.contains(QStringLiteral("js"))) {
+        (lowerHandlers.contains(QStringLiteral("js")) && 
+         !lowerName.contains(QStringLiteral("mouse")) && 
+         !lowerName.contains(QStringLiteral("keyboard")))) {
+        
+        // Extra check: If it claims to be a controller but has no buttons, it's likely a wireless receiver with no controller connected
+        // We can check this by trying to open the device and querying capabilities
+        // However, we need to be careful about permissions. 
+        // If we can't open it, we assume it's valid to avoid blocking valid devices due to permission issues.
+        // But for "ghost" devices that are readable (like event8 in the user report), this check will filter them out.
+        
+        QString path = QStringLiteral("/dev/input/event%1").arg(handlers.section(QStringLiteral("event"), 1, 1).section(QLatin1Char(' '), 0, 0));
+        if (!path.isEmpty()) {
+            int fd = open(path.toLocal8Bit().constData(), O_RDONLY);
+            if (fd >= 0) {
+                unsigned char keyBitmask[KEY_MAX/8 + 1] = {0};
+                if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBitmask)), keyBitmask) >= 0) {
+                    bool hasGamepadBtns = false;
+                    // BTN_GAMEPAD is 0x130 (304)
+                    for (int i = 0x130; i < 0x140; i++) {
+                        if ((keyBitmask[i/8] >> (i%8)) & 1) {
+                            hasGamepadBtns = true;
+                            break;
+                        }
+                    }
+                    
+                    close(fd);
+                    if (!hasGamepadBtns) {
+                         qDebug() << "DeviceManager: Device" << name << "ignored (no gamepad buttons)";
+                         return QStringLiteral("other");
+                    }
+                } else {
+                    close(fd);
+                }
+            }
+        }
+
         return QStringLiteral("controller");
     }
 
@@ -450,6 +514,9 @@ QStringList DeviceManager::getDevicePathsForInstance(int instanceIndex) const
     for (const auto &device : m_devices) {
         if (device.assignedInstance == instanceIndex) {
             result.append(device.path);
+            if (!device.joyPath.isEmpty()) {
+                result.append(device.joyPath);
+            }
         }
     }
     return result;
@@ -521,32 +588,53 @@ void DeviceManager::identifyDevice(int eventNumber)
     
     // Check for force feedback support
     unsigned long features[4] = {0};
-    if (ioctl(fd, EVIOCGBIT(EV_FF, sizeof(features)), features) >= 0) {
-        // Create a simple rumble effect
-        struct ff_effect effect;
-        memset(&effect, 0, sizeof(effect));
-        effect.type = FF_RUMBLE;
-        effect.id = -1;
-        effect.u.rumble.strong_magnitude = 0xC000;
-        effect.u.rumble.weak_magnitude = 0xC000;
-        effect.replay.length = 500; // 500ms
-        effect.replay.delay = 0;
-        
-        if (ioctl(fd, EVIOCSFF, &effect) >= 0) {
-            // Play the effect
-            struct input_event play;
-            memset(&play, 0, sizeof(play));
-            play.type = EV_FF;
-            play.code = effect.id;
-            play.value = 1;
-            
-            if (write(fd, &play, sizeof(play)) > 0) {
-                qDebug() << "DeviceManager: Triggered rumble on" << device->name;
-            }
-        }
+    if (ioctl(fd, EVIOCGBIT(EV_FF, sizeof(features)), features) < 0) {
+        qWarning() << "DeviceManager: Failed to get FF features for" << device->name << "errno:" << errno;
+        close(fd);
+        return;
     }
+
+    // Create a simple rumble effect
+    struct ff_effect effect;
+    memset(&effect, 0, sizeof(effect));
+    effect.type = FF_RUMBLE;
+    effect.id = -1;
+    effect.u.rumble.strong_magnitude = 0xC000;
+    effect.u.rumble.weak_magnitude = 0xC000;
+    effect.replay.length = 1000; // 1000ms (matched to test_rumble)
+    effect.replay.delay = 0;
     
-    close(fd);
+    if (ioctl(fd, EVIOCSFF, &effect) < 0) {
+        qWarning() << "DeviceManager: Failed to upload rumble effect to" << device->name << "errno:" << errno;
+        close(fd);
+        return;
+    }
+
+    // Play the effect
+    struct input_event play;
+    memset(&play, 0, sizeof(play));
+    play.type = EV_FF;
+    play.code = effect.id;
+    play.value = 1;
+    
+    if (write(fd, &play, sizeof(play)) < 0) {
+        qWarning() << "DeviceManager: Failed to play rumble effect on" << device->name << "errno:" << errno;
+        close(fd);
+    } else {
+        // Keep FD open for duration of effect, otherwise kernel stops it immediately
+        // Use QTimer to close it asynchronously
+        QTimer::singleShot(effect.replay.length + 100, [fd, id = effect.id, name = device->name]() {
+            struct input_event stop;
+            memset(&stop, 0, sizeof(stop));
+            stop.type = EV_FF;
+            stop.code = id;
+            stop.value = 0;
+            if (write(fd, &stop, sizeof(stop)) < 0) {
+                // Best effort stop
+            }
+            close(fd);
+        });
+    }
 }
 
 QVariantMap DeviceManager::getDevice(int eventNumber) const
@@ -566,6 +654,7 @@ QVariantMap DeviceManager::deviceToVariantMap(const InputDevice &device) const
     map[QStringLiteral("name")] = device.name;
     map[QStringLiteral("type")] = device.type;
     map[QStringLiteral("path")] = device.path;
+    map[QStringLiteral("joyPath")] = device.joyPath;
     map[QStringLiteral("vendorId")] = device.vendorId;
     map[QStringLiteral("productId")] = device.productId;
     map[QStringLiteral("physPath")] = device.physPath;
@@ -684,6 +773,40 @@ void DeviceManager::setInstanceCount(int count)
     if (m_instanceCount != count && count > 0 && count <= 4) {
         m_instanceCount = count;
         Q_EMIT instanceCountChanged();
+    }
+}
+
+void DeviceManager::setSettingsManager(SettingsManager *manager)
+{
+    if (m_settingsManager != manager) {
+        if (m_settingsManager) {
+            disconnect(m_settingsManager, &SettingsManager::ignoredDevicesChanged, this, &DeviceManager::refresh);
+        }
+        m_settingsManager = manager;
+        if (m_settingsManager) {
+            connect(m_settingsManager, &SettingsManager::ignoredDevicesChanged, this, &DeviceManager::onIgnoredDevicesChanged);
+        }
+        Q_EMIT settingsManagerChanged();
+        refresh();
+    }
+}
+
+void DeviceManager::onIgnoredDevicesChanged()
+{
+    refresh();
+}
+
+void DeviceManager::ignoreDevice(const QString &stableId)
+{
+    if (m_settingsManager) {
+        m_settingsManager->addIgnoredDevice(stableId);
+    }
+}
+
+void DeviceManager::unignoreDevice(const QString &stableId)
+{
+    if (m_settingsManager) {
+        m_settingsManager->removeIgnoredDevice(stableId);
     }
 }
 

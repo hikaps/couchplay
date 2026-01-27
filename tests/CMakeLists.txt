@@ -12,6 +12,8 @@ add_executable(test_devicemanager
     test_devicemanager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/DeviceManager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/DeviceManager.h
+    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.h
 )
 
 target_include_directories(test_devicemanager PRIVATE
@@ -24,6 +26,8 @@ target_link_libraries(test_devicemanager PRIVATE
     Qt6::Core
     Qt6::Test
     Qt6::Qml
+    KF6::ConfigCore
+    KF6::ConfigGui
 )
 
 add_test(NAME DeviceManagerTest COMMAND test_devicemanager)
