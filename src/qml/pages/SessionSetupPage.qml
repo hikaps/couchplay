@@ -365,6 +365,12 @@ Kirigami.ScrollablePage {
                                 onPresetSelected: function(presetId) {
                                     if (root.sessionManager) {
                                         root.sessionManager.setInstancePreset(instanceCard.index, presetId)
+
+                                        // Also copy shared directories from the preset
+                                        if (root.presetManager) {
+                                            let directories = root.presetManager.getSharedDirectories(presetId) || []
+                                            root.sessionManager.setInstanceSharedDirectories(instanceCard.index, directories)
+                                        }
                                     }
                                 }
                             }

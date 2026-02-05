@@ -34,6 +34,7 @@ struct InstanceConfig {
     Q_PROPERTY(QString gameCommand MEMBER gameCommand)
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
     Q_PROPERTY(QString presetId MEMBER presetId)
+    Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
 
 public:
     QString username;
@@ -51,6 +52,7 @@ public:
     QString gameCommand;
     QString steamAppId;                              // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam");      // ID of the launch preset to use
+    QStringList sharedDirectories;                   // Per-instance shared directories (from preset)
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)
@@ -118,6 +120,7 @@ public:
     Q_INVOKABLE void setInstanceDeviceStableIds(int index, const QStringList &stableIds, const QStringList &names);
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
+    Q_INVOKABLE void setInstanceSharedDirectories(int index, const QStringList &directories);
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;
 

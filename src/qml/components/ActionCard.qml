@@ -25,7 +25,7 @@ Kirigami.AbstractCard {
     property int badgeCount: 0
     property bool centerContent: true
 
-    signal clicked()
+    // Note: clicked() signal is inherited from Kirigami.AbstractCard, don't redefine
 
     // Hover effect for visual feedback
     HoverHandler {

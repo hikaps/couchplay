@@ -5,8 +5,9 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
-import QtQuick.Dialogs
 import io.github.hikaps.couchplay 1.0
+
+import "../components/dialogs" as Dialogs
 
 Kirigami.ScrollablePage {
     id: root
@@ -24,14 +25,14 @@ Kirigami.ScrollablePage {
     // Reference to preset manager (optional, will use internal if not provided)
     property var presetManager: null
 
-    // Reference to sharing manager for directory sharing
-    property var sharingManager: null
-
     // Reference to steam config manager for shortcut sync
     property var steamConfigManager: null
 
     // Reference to settings manager for persisted settings
     property var settingsManager: null
+
+    // Reference to heroic config manager for Heroic detection
+    property var heroicConfigManager: null
 
     // Internal preset manager if not provided externally
     PresetManager {
@@ -83,7 +84,7 @@ Kirigami.ScrollablePage {
             }
 
             Controls.CheckBox {
-                id: killSteamCheck
+                id: killSteamOption
                 Kirigami.FormData.label: i18nc("@option:check", "Kill Steam before starting:")
                 checked: root.killSteam
                 onToggled: if (root.settingsManager) root.settingsManager.killSteam = checked
@@ -189,158 +190,88 @@ Kirigami.ScrollablePage {
                 opacity: 0.7
             }
 
-            // List of current presets
-            Repeater {
-                model: activePresetManager.presets
-
-                delegate: RowLayout {
-                    spacing: Kirigami.Units.smallSpacing
-                    Layout.fillWidth: true
-
-                    Kirigami.Icon {
-                        source: modelData.iconName || "application-x-executable"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                    }
-
-                    Controls.Label {
-                        text: modelData.name
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                    }
-
-                    Kirigami.Chip {
-                        visible: modelData.isBuiltin
-                        text: i18nc("@info", "Builtin")
-                        closable: false
-                        checkable: false
-                    }
-
-                    Kirigami.Chip {
-                        visible: modelData.steamIntegration
-                        text: i18nc("@info", "Steam")
-                        icon.name: "steam"
-                        closable: false
-                        checkable: false
-                    }
-
-                    Controls.Button {
-                        visible: !modelData.isBuiltin
-                        icon.name: "edit-delete"
-                        display: Controls.AbstractButton.IconOnly
-                        Controls.ToolTip.text: i18nc("@info:tooltip", "Remove preset")
-                        Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.delay: 1000
-                        onClicked: {
-                            deletePresetDialog.presetId = modelData.id
-                            deletePresetDialog.presetName = modelData.name
-                            deletePresetDialog.open()
-                        }
-                    }
-                }
-            }
-
-            // Add preset button
-            Controls.Button {
+            // List of current presets and add button
+            ColumnLayout {
                 Kirigami.FormData.label: " "
-                text: i18nc("@action:button", "Add from Application...")
-                icon.name: "list-add"
-                onClicked: {
-                    activePresetManager.scanApplications()
-                    addPresetDialog.open()
-                }
-            }
-        }
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
 
-        // Shared Directories Section
-        Kirigami.FormLayout {
-            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
-            wideMode: root.width > Kirigami.Units.gridUnit * 30
-            visible: root.sharingManager !== null
+                Repeater {
+                    model: activePresetManager.presets
 
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18nc("@title:group", "Shared Directories")
-            }
-
-            Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Shared with gaming users:")
-                text: {
-                    if (!root.sharingManager) return "0"
-                    let dirs = root.sharingManager.sharedDirectories
-                    return i18nc("@info", "%1 directories configured", dirs ? dirs.length : 0)
-                }
-                opacity: 0.7
-            }
-
-            // List of current shared directories
-            Repeater {
-                model: root.sharingManager ? root.sharingManager.sharedDirectories : []
-
-                delegate: RowLayout {
-                    spacing: Kirigami.Units.smallSpacing
-                    Layout.fillWidth: true
-
-                    Kirigami.Icon {
-                        source: "folder"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                    }
-
-                    ColumnLayout {
+                    delegate: RowLayout {
+                        spacing: Kirigami.Units.smallSpacing
                         Layout.fillWidth: true
-                        spacing: 0
 
-                        Controls.Label {
-                            text: modelData.sourcePath
-                            Layout.fillWidth: true
-                            elide: Text.ElideMiddle
+                        Kirigami.Icon {
+                            source: modelData.iconName || "application-x-executable"
+                            Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                            Layout.preferredHeight: Kirigami.Units.iconSizes.small
                         }
 
                         Controls.Label {
-                            visible: modelData.mountAlias !== ""
-                            text: modelData.mountAlias !== "" ? i18nc("@info", "Mounted as: ~/%1", modelData.mountAlias) : ""
+                            text: modelData.name
                             Layout.fillWidth: true
-                            elide: Text.ElideMiddle
-                            opacity: 0.7
-                            font.pointSize: Kirigami.Theme.smallFont.pointSize
+                            elide: Text.ElideRight
+                        }
+
+                        Kirigami.Chip {
+                            visible: modelData.isBuiltin
+                            text: i18nc("@info", "Builtin")
+                            closable: false
+                            checkable: false
+                        }
+
+                        Kirigami.Chip {
+                            visible: modelData.steamIntegration
+                            text: i18nc("@info", "Steam")
+                            icon.name: "steam"
+                            closable: false
+                            checkable: false
+                        }
+
+                        // Edit button for custom presets only (to manage shared directories)
+                        Controls.Button {
+                            icon.name: "document-edit"
+                            display: Controls.AbstractButton.IconOnly
+                            Controls.ToolTip.text: i18nc("@info:tooltip", "Edit preset")
+                            Controls.ToolTip.visible: hovered
+                            Controls.ToolTip.delay: 1000
+                            visible: !modelData.isBuiltin
+                            onClicked: {
+                                editPresetDialog.presetId = modelData.id
+                                editPresetDialog.presetName = modelData.name
+                                editPresetDialog.setDirectoriesFromBackend(activePresetManager.getSharedDirectories(modelData.id))
+                                editPresetDialog.open()
+                            }
+                        }
+
+                        Controls.Button {
+                            visible: !modelData.isBuiltin
+                            icon.name: "edit-delete"
+                            display: Controls.AbstractButton.IconOnly
+                            Controls.ToolTip.text: i18nc("@info:tooltip", "Remove preset")
+                            Controls.ToolTip.visible: hovered
+                            Controls.ToolTip.delay: 1000
+                            onClicked: {
+                                deletePresetDialog.presetId = modelData.id
+                                deletePresetDialog.presetName = modelData.name
+                                deletePresetDialog.open()
+                            }
                         }
                     }
+                }
 
-                    Controls.Button {
-                        icon.name: "edit-delete"
-                        display: Controls.AbstractButton.IconOnly
-                        Controls.ToolTip.text: i18nc("@info:tooltip", "Remove shared directory")
-                        Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.delay: 1000
-                        onClicked: {
-                            root.sharingManager.removeDirectory(modelData.sourcePath)
-                        }
+                // Add preset button
+                Controls.Button {
+                    text: i18nc("@action:button", "Add from Application...")
+                    icon.name: "list-add"
+                    onClicked: {
+                        activePresetManager.scanApplications()
+                        addPresetDialog.open()
                     }
                 }
             }
-
-            // Quick add Steam library button
-            Controls.Button {
-                Kirigami.FormData.label: " "
-                visible: root.sharingManager && root.sharingManager.steamLibraryPath !== ""
-                text: i18nc("@action:button", "Add Steam Library")
-                icon.name: "steam"
-                onClicked: {
-                    root.sharingManager.addDirectory(root.sharingManager.steamLibraryPath)
-                }
-            }
-
-            // Add directory button
-            Controls.Button {
-                Kirigami.FormData.label: root.sharingManager && root.sharingManager.steamLibraryPath !== "" ? "" : " "
-                text: i18nc("@action:button", "Add Directory...")
-                icon.name: "folder-add"
-                onClicked: {
-                    folderDialog.open()
-                }
-            }
-
         }
 
         // Ignored Devices Section
@@ -361,49 +292,47 @@ Kirigami.ScrollablePage {
             }
 
             // List of ignored devices
-            Repeater {
-                model: root.settingsManager ? root.settingsManager.ignoredDevices : []
+            ColumnLayout {
+                Kirigami.FormData.label: " "
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
 
-                delegate: RowLayout {
-                    spacing: Kirigami.Units.smallSpacing
-                    Layout.fillWidth: true
+                Repeater {
+                    model: root.settingsManager ? root.settingsManager.ignoredDevices : []
 
-                    Kirigami.Icon {
-                        source: "dialog-cancel"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                        color: Kirigami.Theme.negativeTextColor
-                    }
-
-                    Controls.Label {
-                        text: modelData
+                    delegate: RowLayout {
+                        spacing: Kirigami.Units.smallSpacing
                         Layout.fillWidth: true
-                        elide: Text.ElideMiddle
-                        font.family: "monospace"
-                    }
 
-                    Controls.Button {
-                        icon.name: "edit-delete"
-                        display: Controls.AbstractButton.IconOnly
-                        Controls.ToolTip.text: i18nc("@info:tooltip", "Unignore device")
-                        Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.delay: 1000
-                        onClicked: {
-                            if (root.settingsManager) {
-                                root.settingsManager.removeIgnoredDevice(modelData)
+                        Kirigami.Icon {
+                            source: "dialog-cancel"
+                            Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                            Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                            color: Kirigami.Theme.negativeTextColor
+                        }
+
+                        Controls.Label {
+                            text: modelData
+                            Layout.fillWidth: true
+                            elide: Text.ElideMiddle
+                            font.family: "monospace"
+                        }
+
+                        Controls.Button {
+                            icon.name: "edit-delete"
+                            display: Controls.AbstractButton.IconOnly
+                            Controls.ToolTip.text: i18nc("@info:tooltip", "Unignore device")
+                            Controls.ToolTip.visible: hovered
+                            Controls.ToolTip.delay: 1000
+                            onClicked: {
+                                if (root.settingsManager) {
+                                    root.settingsManager.removeIgnoredDevice(modelData)
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-
-        // Shared directories info message (outside FormLayout to prevent overflow)
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            visible: root.sharingManager !== null
-            text: i18nc("@info", "Shared directories are bind-mounted into gaming users' home directories during sessions.")
-            type: Kirigami.MessageType.Information
         }
 
         // Steam Shortcuts Sync Section
@@ -444,11 +373,11 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Label {
-                    text: root.steamConfigManager && root.steamConfigManager.steamDetected 
+                    text: root.steamConfigManager && root.steamConfigManager.steamDetected
                           ? i18nc("@info", "Yes (%1 shortcuts)", root.steamConfigManager.shortcutCount)
                           : i18nc("@info", "Not found")
-                    color: root.steamConfigManager && root.steamConfigManager.steamDetected 
-                           ? Kirigami.Theme.positiveTextColor 
+                    color: root.steamConfigManager && root.steamConfigManager.steamDetected
+                           ? Kirigami.Theme.positiveTextColor
                            : Kirigami.Theme.negativeTextColor
                 }
 
@@ -463,14 +392,81 @@ Kirigami.ScrollablePage {
                     }
                 }
             }
-
         }
 
-        // Steam shortcuts info message (outside FormLayout to prevent overflow)
+        // Steam shortcuts info message
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             visible: root.steamConfigManager !== null
             text: i18nc("@info", "Non-Steam shortcuts (Heroic, Lutris, etc.) are copied to gaming users. Access to game directories is granted using filesystem ACLs.")
+            type: Kirigami.MessageType.Information
+        }
+
+        // Heroic Games Launcher Section
+        Kirigami.FormLayout {
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
+            visible: root.heroicConfigManager !== null
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Heroic Games Launcher")
+            }
+
+            RowLayout {
+                Kirigami.FormData.label: i18nc("@label", "Heroic detected:")
+                spacing: Kirigami.Units.smallSpacing
+                visible: root.heroicConfigManager !== null
+
+                Kirigami.Icon {
+                    source: root.heroicConfigManager && root.heroicConfigManager.heroicDetected ? "dialog-ok-apply" : "dialog-error"
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                }
+
+                Controls.Label {
+                    text: root.heroicConfigManager && root.heroicConfigManager.heroicDetected
+                          ? i18nc("@info", "Yes (%1 games)", root.heroicConfigManager.gameCount)
+                          : i18nc("@info", "Not found")
+                    color: root.heroicConfigManager && root.heroicConfigManager.heroicDetected
+                           ? Kirigami.Theme.positiveTextColor
+                           : Kirigami.Theme.negativeTextColor
+                }
+
+                Kirigami.Chip {
+                    visible: root.heroicConfigManager && root.heroicConfigManager.heroicDetected && root.heroicConfigManager.isFlatpak
+                    text: i18nc("@info", "Flatpak")
+                    closable: false
+                    checkable: false
+                }
+
+                Controls.Button {
+                    visible: root.heroicConfigManager && root.heroicConfigManager.heroicDetected
+                    text: i18nc("@action:button", "Reload")
+                    icon.name: "view-refresh"
+                    onClicked: {
+                        root.heroicConfigManager.loadGames()
+                        applicationWindow().showPassiveNotification(
+                            i18nc("@info", "Loaded %1 games from Heroic", root.heroicConfigManager.gameCount))
+                    }
+                }
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: i18nc("@label", "Installation type:")
+                visible: root.heroicConfigManager && root.heroicConfigManager.heroicDetected
+                text: root.heroicConfigManager && root.heroicConfigManager.isFlatpak
+                      ? i18nc("@info", "Flatpak (com.heroicgameslauncher.hgl)")
+                      : i18nc("@info", "Native installation")
+                opacity: 0.7
+            }
+        }
+
+        // Heroic info message
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: root.heroicConfigManager !== null && root.heroicConfigManager.heroicDetected
+            text: i18nc("@info", "Heroic games from Epic, GOG, and Amazon are automatically detected. Game directories are shared with gaming users using filesystem ACLs.")
             type: Kirigami.MessageType.Information
         }
 
@@ -572,15 +568,13 @@ Kirigami.ScrollablePage {
                     text: i18nc("@action:button", "Configure...")
                     icon.name: "configure-shortcuts"
                     onClicked: {
-                        // Open KDE Global Shortcuts settings for couchplay
                         Qt.openUrlExternally("systemsettings://kcm_keys?search=couchplay")
                     }
                 }
             }
-
         }
 
-        // Keyboard shortcuts info (outside FormLayout to prevent overflow)
+        // Keyboard shortcuts info
         Controls.Label {
             Layout.fillWidth: true
             text: i18nc("@info", "You can also use Alt+Tab to switch away from gamescope windows.")
@@ -594,7 +588,7 @@ Kirigami.ScrollablePage {
             text: i18nc("@info", "The CouchPlay Helper is a privileged system service required for creating users and managing device permissions. It uses PolicyKit for secure authorization.")
             type: Kirigami.MessageType.Information
             visible: !root.helperAvailable
-            
+
             actions: [
                 Kirigami.Action {
                     icon.name: "help-about"
@@ -751,273 +745,29 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Reset confirmation dialog
-    Kirigami.PromptDialog {
+    // Dialog components (extracted to separate files)
+    Dialogs.ResetSettingsDialog {
         id: resetConfirmDialog
-        title: i18nc("@title:dialog", "Reset Settings")
-        subtitle: i18nc("@info", "Reset all settings to their default values?")
-        standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel
-
-        onAccepted: {
-            if (root.settingsManager) {
-                root.settingsManager.resetToDefaults()
-            }
-            applicationWindow().showPassiveNotification(
-                i18nc("@info", "Settings reset to defaults"))
-        }
+        settingsManager: root.settingsManager
     }
 
-    // Install helper dialog
-    Kirigami.Dialog {
+    Dialogs.InstallHelperDialog {
         id: installHelperDialog
-        title: i18nc("@title:dialog", "Install Helper Service")
-        standardButtons: Kirigami.Dialog.Close
-        preferredWidth: Kirigami.Units.gridUnit * 25
-
-        ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-
-            Controls.Label {
-                text: i18nc("@info", "To install the CouchPlay Helper, run the following command in a terminal:")
-                wrapMode: Text.WordWrap
-                Layout.fillWidth: true
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: commandLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
-                color: Kirigami.Theme.alternateBackgroundColor
-                radius: Kirigami.Units.smallSpacing
-
-                Controls.Label {
-                    id: commandLabel
-                    anchors.centerIn: parent
-                    anchors.margins: Kirigami.Units.largeSpacing
-                    text: "sudo /usr/share/couchplay/install-helper.sh"
-                    font.family: "monospace"
-                }
-            }
-
-            Kirigami.InlineMessage {
-                Layout.fillWidth: true
-                text: i18nc("@info", "This will install a D-Bus system service and PolicyKit rules for secure privilege escalation.")
-                type: Kirigami.MessageType.Information
-                visible: true
-            }
-        }
     }
 
-    // Delete preset confirmation dialog
-    Kirigami.PromptDialog {
+    Dialogs.EditPresetDialog {
+        id: editPresetDialog
+        presetManager: activePresetManager
+        steamConfigManager: root.steamConfigManager
+    }
+
+    Dialogs.DeletePresetDialog {
         id: deletePresetDialog
-        title: i18nc("@title:dialog", "Remove Preset")
-        subtitle: i18nc("@info", "Remove the preset \"%1\"?", deletePresetDialog.presetName)
-        standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel
-
-        property string presetId: ""
-        property string presetName: ""
-
-        onAccepted: {
-            if (activePresetManager.removeCustomPreset(presetId)) {
-                applicationWindow().showPassiveNotification(
-                    i18nc("@info", "Preset removed"))
-            } else {
-                applicationWindow().showPassiveNotification(
-                    i18nc("@info", "Failed to remove preset"), "long")
-            }
-        }
+        presetManager: activePresetManager
     }
 
-    // Add preset from application dialog
-    Kirigami.Dialog {
+    Dialogs.AddPresetDialog {
         id: addPresetDialog
-        title: i18nc("@title:dialog", "Add Preset from Application")
-        standardButtons: Kirigami.Dialog.Close
-        preferredWidth: Kirigami.Units.gridUnit * 30
-        preferredHeight: Kirigami.Units.gridUnit * 25
-
-        ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-
-            Controls.TextField {
-                id: appSearchField
-                Layout.fillWidth: true
-                placeholderText: i18nc("@info:placeholder", "Search applications...")
-                onTextChanged: appListView.filterText = text.toLowerCase()
-            }
-
-            Controls.ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 15
-
-                ListView {
-                    id: appListView
-                    clip: true
-
-                    property string filterText: ""
-
-                    model: {
-                        if (filterText === "") {
-                            return activePresetManager.availableApplications
-                        }
-                        return activePresetManager.availableApplications.filter(function(app) {
-                            return app.name.toLowerCase().includes(filterText)
-                        })
-                    }
-
-                    delegate: Controls.ItemDelegate {
-                        width: appListView.width
-                        highlighted: ListView.isCurrentItem
-
-                        contentItem: RowLayout {
-                            spacing: Kirigami.Units.smallSpacing
-
-                            Kirigami.Icon {
-                                source: modelData.iconName || "application-x-executable"
-                                Layout.preferredWidth: Kirigami.Units.iconSizes.medium
-                                Layout.preferredHeight: Kirigami.Units.iconSizes.medium
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 0
-
-                                Controls.Label {
-                                    text: modelData.name
-                                    Layout.fillWidth: true
-                                    elide: Text.ElideRight
-                                }
-
-                                Controls.Label {
-                                    text: modelData.command
-                                    Layout.fillWidth: true
-                                    elide: Text.ElideMiddle
-                                    opacity: 0.7
-                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
-                                }
-                            }
-
-                            Controls.Button {
-                                text: i18nc("@action:button", "Add")
-                                icon.name: "list-add"
-                                onClicked: {
-                                    let id = activePresetManager.addPresetFromDesktopFile(modelData.desktopFilePath)
-                                    if (id !== "") {
-                                        applicationWindow().showPassiveNotification(
-                                            i18nc("@info", "Added preset: %1", modelData.name))
-                                        addPresetDialog.close()
-                                    } else {
-                                        applicationWindow().showPassiveNotification(
-                                            i18nc("@info", "Failed to add preset"), "long")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Kirigami.PlaceholderMessage {
-                        anchors.centerIn: parent
-                        visible: appListView.count === 0
-                        text: appSearchField.text !== ""
-                              ? i18nc("@info", "No applications match your search")
-                              : i18nc("@info", "No applications found")
-                        icon.name: "application-x-executable"
-                    }
-                }
-            }
-
-            Kirigami.InlineMessage {
-                Layout.fillWidth: true
-                text: i18nc("@info", "Select an installed application to add as a launch preset. You can then select it when configuring session instances.")
-                type: Kirigami.MessageType.Information
-                visible: true
-            }
-        }
-    }
-
-    // Folder picker dialog for shared directories
-    FolderDialog {
-        id: folderDialog
-        title: i18nc("@title:dialog", "Select Directory to Share")
-
-        onAccepted: {
-            let path = selectedFolder.toString()
-            // Remove file:// prefix
-            if (path.startsWith("file://")) {
-                path = path.substring(7)
-            }
-            // URL decode the path
-            path = decodeURIComponent(path)
-
-            if (root.sharingManager) {
-                // Check if the path is outside home directory
-                if (root.sharingManager.isOutsideHome(path)) {
-                    // Need to ask for an alias
-                    aliasDialog.directoryPath = path
-                    aliasDialog.open()
-                } else {
-                    // Home-relative path, no alias needed
-                    root.sharingManager.addDirectory(path)
-                }
-            }
-        }
-    }
-
-    // Alias dialog for non-home directories
-    Kirigami.Dialog {
-        id: aliasDialog
-        title: i18nc("@title:dialog", "Set Mount Alias")
-        standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
-        preferredWidth: Kirigami.Units.gridUnit * 25
-
-        property string directoryPath: ""
-
-        onAccepted: {
-            if (root.sharingManager) {
-                root.sharingManager.addDirectory(directoryPath, aliasField.text)
-            }
-            aliasField.text = ""
-        }
-
-        onRejected: {
-            aliasField.text = ""
-        }
-
-        ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-
-            Controls.Label {
-                text: i18nc("@info", "The selected directory is outside your home folder:")
-                wrapMode: Text.WordWrap
-                Layout.fillWidth: true
-            }
-
-            Controls.Label {
-                text: aliasDialog.directoryPath
-                font.family: "monospace"
-                wrapMode: Text.WrapAnywhere
-                Layout.fillWidth: true
-            }
-
-            Controls.Label {
-                text: i18nc("@info", "Enter a name for where it should appear in gaming users' home directories (e.g., 'Games' or 'SharedData'):")
-                wrapMode: Text.WordWrap
-                Layout.fillWidth: true
-            }
-
-            Controls.TextField {
-                id: aliasField
-                Layout.fillWidth: true
-                placeholderText: i18nc("@info:placeholder", "Alias (optional)")
-            }
-
-            Kirigami.InlineMessage {
-                Layout.fillWidth: true
-                text: i18nc("@info", "If left empty, the directory will be mounted at ~/.couchplay/mounts/...")
-                type: Kirigami.MessageType.Information
-                visible: true
-            }
-        }
+        presetManager: activePresetManager
     }
 }

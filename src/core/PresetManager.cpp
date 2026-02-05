@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "PresetManager.h"
+#include "HeroicConfigManager.h"
+#include "SteamConfigManager.h"
 
 #include <QDir>
 #include <QFile>
@@ -21,6 +23,62 @@ PresetManager::PresetManager(QObject *parent)
 
 PresetManager::~PresetManager() = default;
 
+void PresetManager::setHeroicConfigManager(HeroicConfigManager *manager)
+{
+    if (m_heroicConfigManager != manager) {
+        m_heroicConfigManager = manager;
+        initBuiltinPresets();
+        Q_EMIT presetsChanged();
+    }
+}
+
+void PresetManager::setSteamConfigManager(SteamConfigManager *manager)
+{
+    if (m_steamConfigManager != manager) {
+        m_steamConfigManager = manager;
+        initBuiltinPresets();
+        Q_EMIT presetsChanged();
+    }
+}
+
+QStringList PresetManager::getDefaultSharedDirectories(const QString &id) const
+{
+    QStringList dirs;
+
+    if (id == QStringLiteral("steam")) {
+        if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
+            QString steamRoot = m_steamConfigManager->steamPaths().steamRoot;
+            if (!steamRoot.isEmpty()) {
+                dirs.append(steamRoot);
+            }
+        }
+    } else if (id == QStringLiteral("heroic")) {
+        if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            QString configPath = m_heroicConfigManager->configPath();
+            if (!configPath.isEmpty()) {
+                dirs.append(configPath);
+            }
+            QString installPath = m_heroicConfigManager->defaultInstallPath();
+            if (!installPath.isEmpty()) {
+                dirs.append(installPath);
+            }
+        }
+    } else if (id == QStringLiteral("lutris")) {
+        QString home = QDir::homePath();
+        QString lutrisData = home + QStringLiteral("/.local/share/lutris");
+        QString lutrisGames = home + QStringLiteral("/Games");
+        if (QDir(lutrisData).exists()) {
+            dirs.append(lutrisData);
+        }
+        if (QDir(lutrisGames).exists()) {
+            dirs.append(lutrisGames);
+        }
+    }
+
+    dirs.removeDuplicates();
+    return dirs;
+}
+
 void PresetManager::initBuiltinPresets()
 {
     m_builtinPresets.clear();
@@ -33,17 +91,36 @@ void PresetManager::initBuiltinPresets()
     steam.iconName = QStringLiteral("steam");
     steam.isBuiltin = true;
     steam.steamIntegration = true;
+    steam.launcherId = QStringLiteral("steam");
+    steam.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("steam"));
     m_builtinPresets.append(steam);
 
-    // Steam Desktop preset
-    LaunchPreset steamDesktop;
-    steamDesktop.id = QStringLiteral("steam-desktop");
-    steamDesktop.name = QStringLiteral("Steam Desktop");
-    steamDesktop.command = QStringLiteral("steam");
-    steamDesktop.iconName = QStringLiteral("steam");
-    steamDesktop.isBuiltin = true;
-    steamDesktop.steamIntegration = false;  // Desktop mode doesn't need -e flag
-    m_builtinPresets.append(steamDesktop);
+    // Heroic Games preset
+    LaunchPreset heroic;
+    heroic.id = QStringLiteral("heroic");
+    heroic.name = QStringLiteral("Heroic Games");
+    heroic.iconName = QStringLiteral("com.heroicgameslauncher.hgl");
+    heroic.isBuiltin = true;
+    heroic.steamIntegration = false;
+    heroic.launcherId = QStringLiteral("heroic");
+
+        // Auto-detect Heroic and populate info
+        if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            heroic.command = m_heroicConfigManager->heroicCommand();
+            heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
+            heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
+            heroic.launcherInfo.requiresAcls = true;
+            heroic.launcherInfo.hasShortcutSync = false;
+
+            if (m_heroicConfigManager->gameCount() == 0) {
+                m_heroicConfigManager->loadGames();
+            }
+            heroic.launcherInfo.gameDirectories = m_heroicConfigManager->extractGameDirectories();
+        } else {
+            heroic.command = QStringLiteral("heroic");
+        }
+        heroic.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("heroic"));
+        m_builtinPresets.append(heroic);
 
     // Lutris preset
     LaunchPreset lutris;
@@ -53,6 +130,8 @@ void PresetManager::initBuiltinPresets()
     lutris.iconName = QStringLiteral("lutris");
     lutris.isBuiltin = true;
     lutris.steamIntegration = false;
+    lutris.launcherId = QStringLiteral("lutris");
+    lutris.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("lutris"));
     m_builtinPresets.append(lutris);
 }
 
@@ -76,6 +155,9 @@ QVariantList PresetManager::presetsAsVariant() const
         map[QStringLiteral("desktopFilePath")] = preset.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = preset.isBuiltin;
         map[QStringLiteral("steamIntegration")] = preset.steamIntegration;
+        map[QStringLiteral("launcherId")] = preset.launcherId;
+        map[QStringLiteral("launcherInfo")] = QVariant::fromValue(preset.launcherInfo);
+        map[QStringLiteral("sharedDirectories")] = preset.sharedDirectories;
         result.append(map);
     }
     return result;
@@ -94,6 +176,8 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
         map[QStringLiteral("desktopFilePath")] = app.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = app.isBuiltin;
         map[QStringLiteral("steamIntegration")] = app.steamIntegration;
+        map[QStringLiteral("launcherId")] = app.launcherId;
+        map[QStringLiteral("launcherInfo")] = QVariant::fromValue(app.launcherInfo);
         result.append(map);
     }
     return result;
@@ -131,6 +215,44 @@ QString PresetManager::getWorkingDirectory(const QString &id) const
 bool PresetManager::getSteamIntegration(const QString &id) const
 {
     return getPreset(id).steamIntegration;
+}
+
+QString PresetManager::getLauncherId(const QString &id) const
+{
+    return getPreset(id).launcherId;
+}
+
+QStringList PresetManager::getGameDirectories(const QString &id) const
+{
+    return getPreset(id).launcherInfo.gameDirectories;
+}
+
+QStringList PresetManager::getSharedDirectories(const QString &id) const
+{
+    return getPreset(id).sharedDirectories;
+}
+
+bool PresetManager::setSharedDirectories(const QString &id, const QStringList &directories)
+{
+    for (int i = 0; i < m_builtinPresets.size(); ++i) {
+        if (m_builtinPresets[i].id == id) {
+            m_builtinPresets[i].sharedDirectories = directories;
+            Q_EMIT presetsChanged();
+            return true;
+        }
+    }
+    
+    for (int i = 0; i < m_customPresets.size(); ++i) {
+        if (m_customPresets[i].id == id) {
+            m_customPresets[i].sharedDirectories = directories;
+            saveCustomPresets();
+            Q_EMIT presetsChanged();
+            return true;
+        }
+    }
+
+    qWarning() << "Cannot set shared directories - preset not found:" << id;
+    return false;
 }
 
 QString PresetManager::addCustomPreset(const QString &name,
@@ -406,6 +528,11 @@ void PresetManager::loadCustomPresets()
         preset.isBuiltin = false;
         preset.steamIntegration = obj[QStringLiteral("steamIntegration")].toBool();
 
+        QJsonArray dirsArray = obj[QStringLiteral("sharedDirectories")].toArray();
+        for (const QJsonValue &dirValue : dirsArray) {
+            preset.sharedDirectories.append(dirValue.toString());
+        }
+
         if (!preset.id.isEmpty() && !preset.name.isEmpty()) {
             m_customPresets.append(preset);
         }
@@ -430,6 +557,13 @@ void PresetManager::saveCustomPresets()
         obj[QStringLiteral("iconName")] = preset.iconName;
         obj[QStringLiteral("desktopFilePath")] = preset.desktopFilePath;
         obj[QStringLiteral("steamIntegration")] = preset.steamIntegration;
+        
+        QJsonArray dirsArray;
+        for (const QString &dir : preset.sharedDirectories) {
+            dirsArray.append(dir);
+        }
+        obj[QStringLiteral("sharedDirectories")] = dirsArray;
+        
         presetsArray.append(obj);
     }
 

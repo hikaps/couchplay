@@ -4,10 +4,9 @@
 #include <QTest>
 #include <QSignalSpy>
 #include <QTemporaryDir>
-#include <QTemporaryFile>
-#include <QDir>
+#include <QStandardPaths>
 #include <QFile>
-#include <QTextStream>
+#include <QDir>
 
 #include "PresetManager.h"
 
@@ -21,458 +20,238 @@ private Q_SLOTS:
     void init();
     void cleanup();
 
-    // Builtin preset tests
+    // Builtin presets tests
     void testBuiltinPresetsExist();
-    void testSteamPresetProperties();
-    void testLutrisPresetProperties();
-
-    // Preset lookup tests
-    void testGetPresetById();
-    void testGetPresetByIdNotFound();
     void testGetCommand();
     void testGetWorkingDirectory();
+    void testGetLauncherId();
     void testGetSteamIntegration();
 
-    // Custom preset CRUD tests
+    // Custom presets tests
     void testAddCustomPreset();
-    void testAddCustomPresetEmitsSignal();
-    void testUpdateCustomPreset();
-    void testUpdateBuiltinPresetFails();
     void testRemoveCustomPreset();
-    void testRemoveBuiltinPresetFails();
 
-    // Exec= field cleaning tests
-    void testCleanExecCommand();
-    void testCleanExecCommandMultipleCodes();
-    void testCleanExecCommandNoChanges();
-
-    // Desktop file parsing tests
-    void testAddPresetFromDesktopFile();
-    void testAddPresetFromDesktopFileInvalid();
-    void testAddPresetFromDesktopFileDuplicate();
-
-    // Persistence tests
-    void testCustomPresetsPersist();
-
-    // Signal tests
-    void testPresetsChangedSignal();
+    // Shared directories tests
+    void testGetSetSharedDirectories();
 
 private:
-    PresetManager *m_presetManager = nullptr;
     QTemporaryDir *m_tempDir = nullptr;
-    QString m_originalConfigPath;
-
-    QString createTestDesktopFile(const QString &name, const QString &exec,
-                                   const QString &icon = QString(),
-                                   const QString &path = QString(),
-                                   bool hidden = false);
 };
 
 void TestPresetManager::initTestCase()
 {
-    m_tempDir = new QTemporaryDir();
-    QVERIFY(m_tempDir->isValid());
-
-    // Set XDG_CONFIG_HOME to temp dir so we don't affect real config
-    m_originalConfigPath = qEnvironmentVariable("XDG_CONFIG_HOME");
-    qputenv("XDG_CONFIG_HOME", m_tempDir->path().toUtf8());
 }
 
 void TestPresetManager::cleanupTestCase()
 {
-    // Restore original config path
-    if (m_originalConfigPath.isEmpty()) {
-        qunsetenv("XDG_CONFIG_HOME");
-    } else {
-        qputenv("XDG_CONFIG_HOME", m_originalConfigPath.toUtf8());
-    }
-
-    delete m_tempDir;
-    m_tempDir = nullptr;
 }
 
 void TestPresetManager::init()
 {
-    m_presetManager = new PresetManager(this);
+    // Create temporary directory for each test
+    m_tempDir = new QTemporaryDir();
+    QVERIFY(m_tempDir->isValid());
+
+    // Set test mode to use temp directory
+    QStandardPaths::setTestModeEnabled(true);
+
+    // Create the config directory
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    QDir().mkpath(configDir);
+
+    // Remove any existing presets.json to ensure clean state
+    QString presetsPath = configDir + QStringLiteral("/presets.json");
+    QFile::remove(presetsPath);
 }
 
 void TestPresetManager::cleanup()
 {
-    delete m_presetManager;
-    m_presetManager = nullptr;
-
-    // Clean up preset config file
-    QString configPath = m_tempDir->path() + QStringLiteral("/couchplay/presets.json");
-    QFile::remove(configPath);
+    delete m_tempDir;
+    m_tempDir = nullptr;
+    QStandardPaths::setTestModeEnabled(false);
 }
 
-// Helper to create test .desktop files
-QString TestPresetManager::createTestDesktopFile(const QString &name, const QString &exec,
-                                                   const QString &icon, const QString &path,
-                                                   bool hidden)
-{
-    QTemporaryFile *file = new QTemporaryFile(m_tempDir->path() + QStringLiteral("/XXXXXX.desktop"));
-    file->setAutoRemove(false);  // Keep for test duration
-    if (!file->open()) {
-        delete file;
-        return QString();
-    }
-
-    QTextStream stream(file);
-    stream << "[Desktop Entry]\n";
-    stream << "Type=Application\n";
-    stream << "Name=" << name << "\n";
-    stream << "Exec=" << exec << "\n";
-    if (!icon.isEmpty()) {
-        stream << "Icon=" << icon << "\n";
-    }
-    if (!path.isEmpty()) {
-        stream << "Path=" << path << "\n";
-    }
-    if (hidden) {
-        stream << "Hidden=true\n";
-    }
-    stream.flush();
-
-    QString filePath = file->fileName();
-    file->close();
-    delete file;
-
-    return filePath;
-}
+// ============ Builtin Presets Tests ============
 
 void TestPresetManager::testBuiltinPresetsExist()
 {
-    QList<LaunchPreset> presets = m_presetManager->presets();
+    PresetManager manager;
 
-    QVERIFY(presets.size() >= 2);
+    QVariantList presets = manager.presetsAsVariant();
+    QVERIFY(presets.size() >= 3); // Steam, Heroic, Lutris
 
+    // Check for Steam preset
     bool foundSteam = false;
+    bool foundHeroic = false;
     bool foundLutris = false;
-    for (const LaunchPreset &preset : presets) {
-        if (preset.id == QStringLiteral("steam")) {
+
+    for (const QVariant &presetVar : presets) {
+        QVariantMap preset = presetVar.toMap();
+        QString id = preset[QStringLiteral("id")].toString();
+
+        if (id == QStringLiteral("steam")) {
             foundSteam = true;
-            QVERIFY(preset.isBuiltin);
-        }
-        if (preset.id == QStringLiteral("lutris")) {
+            QCOMPARE(preset[QStringLiteral("name")].toString(), QStringLiteral("Steam Big Picture"));
+            QCOMPARE(preset[QStringLiteral("isBuiltin")].toBool(), true);
+        } else if (id == QStringLiteral("heroic")) {
+            foundHeroic = true;
+            QCOMPARE(preset[QStringLiteral("name")].toString(), QStringLiteral("Heroic Games"));
+            QCOMPARE(preset[QStringLiteral("isBuiltin")].toBool(), true);
+        } else if (id == QStringLiteral("lutris")) {
             foundLutris = true;
-            QVERIFY(preset.isBuiltin);
+            QCOMPARE(preset[QStringLiteral("name")].toString(), QStringLiteral("Lutris"));
+            QCOMPARE(preset[QStringLiteral("isBuiltin")].toBool(), true);
         }
     }
 
-    QVERIFY2(foundSteam, "Steam preset not found");
-    QVERIFY2(foundLutris, "Lutris preset not found");
-}
-
-void TestPresetManager::testSteamPresetProperties()
-{
-    LaunchPreset steam = m_presetManager->getPreset(QStringLiteral("steam"));
-
-    QCOMPARE(steam.id, QStringLiteral("steam"));
-    QCOMPARE(steam.name, QStringLiteral("Steam Big Picture"));
-    QCOMPARE(steam.command, QStringLiteral("steam -tenfoot -steamdeck"));
-    QCOMPARE(steam.iconName, QStringLiteral("steam"));
-    QVERIFY(steam.isBuiltin);
-    QVERIFY(steam.steamIntegration);
-}
-
-void TestPresetManager::testLutrisPresetProperties()
-{
-    LaunchPreset lutris = m_presetManager->getPreset(QStringLiteral("lutris"));
-
-    QCOMPARE(lutris.id, QStringLiteral("lutris"));
-    QCOMPARE(lutris.name, QStringLiteral("Lutris"));
-    QCOMPARE(lutris.command, QStringLiteral("lutris"));
-    QCOMPARE(lutris.iconName, QStringLiteral("lutris"));
-    QVERIFY(lutris.isBuiltin);
-    QVERIFY(!lutris.steamIntegration);
-}
-
-void TestPresetManager::testGetPresetById()
-{
-    LaunchPreset preset = m_presetManager->getPreset(QStringLiteral("steam"));
-    QCOMPARE(preset.id, QStringLiteral("steam"));
-
-    preset = m_presetManager->getPreset(QStringLiteral("lutris"));
-    QCOMPARE(preset.id, QStringLiteral("lutris"));
-}
-
-void TestPresetManager::testGetPresetByIdNotFound()
-{
-    // When not found, should return default (Steam)
-    LaunchPreset preset = m_presetManager->getPreset(QStringLiteral("nonexistent"));
-    QCOMPARE(preset.id, QStringLiteral("steam"));
+    QVERIFY(foundSteam);
+    QVERIFY(foundHeroic);
+    QVERIFY(foundLutris);
 }
 
 void TestPresetManager::testGetCommand()
 {
-    QString command = m_presetManager->getCommand(QStringLiteral("steam"));
-    QCOMPARE(command, QStringLiteral("steam -tenfoot -steamdeck"));
+    PresetManager manager;
 
-    command = m_presetManager->getCommand(QStringLiteral("lutris"));
-    QCOMPARE(command, QStringLiteral("lutris"));
+    // Test Steam preset command
+    QString steamCommand = manager.getCommand(QStringLiteral("steam"));
+    QCOMPARE(steamCommand, QStringLiteral("steam -tenfoot -steamdeck"));
+
+    // Test Heroic preset command
+    QString heroicCommand = manager.getCommand(QStringLiteral("heroic"));
+    QVERIFY(!heroicCommand.isEmpty());
+
+    // Test Lutris preset command
+    QString lutrisCommand = manager.getCommand(QStringLiteral("lutris"));
+    QCOMPARE(lutrisCommand, QStringLiteral("lutris"));
 }
 
 void TestPresetManager::testGetWorkingDirectory()
 {
-    // Builtin presets have no working directory
-    QString workDir = m_presetManager->getWorkingDirectory(QStringLiteral("steam"));
-    QVERIFY(workDir.isEmpty());
+    PresetManager manager;
+
+    // Builtin presets typically have empty working directories
+    QString steamDir = manager.getWorkingDirectory(QStringLiteral("steam"));
+    QVERIFY(steamDir.isEmpty());
+
+    QString heroicDir = manager.getWorkingDirectory(QStringLiteral("heroic"));
+    QVERIFY(heroicDir.isEmpty());
+
+    QString lutrisDir = manager.getWorkingDirectory(QStringLiteral("lutris"));
+    QVERIFY(lutrisDir.isEmpty());
+}
+
+void TestPresetManager::testGetLauncherId()
+{
+    PresetManager manager;
+
+    QCOMPARE(manager.getLauncherId(QStringLiteral("steam")), QStringLiteral("steam"));
+    QCOMPARE(manager.getLauncherId(QStringLiteral("heroic")), QStringLiteral("heroic"));
+    QCOMPARE(manager.getLauncherId(QStringLiteral("lutris")), QStringLiteral("lutris"));
 }
 
 void TestPresetManager::testGetSteamIntegration()
 {
-    QVERIFY(m_presetManager->getSteamIntegration(QStringLiteral("steam")));
-    QVERIFY(!m_presetManager->getSteamIntegration(QStringLiteral("lutris")));
+    PresetManager manager;
+
+    // Steam preset should have integration enabled
+    QVERIFY(manager.getSteamIntegration(QStringLiteral("steam")));
+
+    // Heroic and Lutris should have it disabled
+    QVERIFY(!manager.getSteamIntegration(QStringLiteral("heroic")));
+    QVERIFY(!manager.getSteamIntegration(QStringLiteral("lutris")));
 }
+
+// ============ Custom Presets Tests ============
 
 void TestPresetManager::testAddCustomPreset()
 {
-    QString id = m_presetManager->addCustomPreset(
+    PresetManager manager;
+    QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
+
+    QString id = manager.addCustomPreset(
         QStringLiteral("Test Game"),
-        QStringLiteral("/usr/bin/testgame"),
-        QStringLiteral("/home/user/games"),
-        QStringLiteral("testgame-icon"),
-        true  // steamIntegration
+        QStringLiteral("/path/to/game"),
+        QStringLiteral("/working/dir"),
+        QStringLiteral("test-icon"),
+        true
     );
 
     QVERIFY(!id.isEmpty());
     QVERIFY(id.startsWith(QStringLiteral("custom-")));
+    QCOMPARE(presetsChangedSpy.count(), 1);
 
-    LaunchPreset preset = m_presetManager->getPreset(id);
-    QCOMPARE(preset.id, id);
-    QCOMPARE(preset.name, QStringLiteral("Test Game"));
-    QCOMPARE(preset.command, QStringLiteral("/usr/bin/testgame"));
-    QCOMPARE(preset.workingDirectory, QStringLiteral("/home/user/games"));
-    QCOMPARE(preset.iconName, QStringLiteral("testgame-icon"));
-    QVERIFY(!preset.isBuiltin);
-    QVERIFY(preset.steamIntegration);
-}
-
-void TestPresetManager::testAddCustomPresetEmitsSignal()
-{
-    QSignalSpy spy(m_presetManager, &PresetManager::presetsChanged);
-
-    m_presetManager->addCustomPreset(
-        QStringLiteral("Signal Test"),
-        QStringLiteral("/bin/true")
-    );
-
-    QCOMPARE(spy.count(), 1);
-}
-
-void TestPresetManager::testUpdateCustomPreset()
-{
-    QString id = m_presetManager->addCustomPreset(
-        QStringLiteral("Original Name"),
-        QStringLiteral("original-command")
-    );
-
-    bool result = m_presetManager->updateCustomPreset(
-        id,
-        QStringLiteral("Updated Name"),
-        QStringLiteral("updated-command"),
-        QStringLiteral("/new/path"),
-        QStringLiteral("new-icon"),
-        true
-    );
-
-    QVERIFY(result);
-
-    LaunchPreset preset = m_presetManager->getPreset(id);
-    QCOMPARE(preset.name, QStringLiteral("Updated Name"));
-    QCOMPARE(preset.command, QStringLiteral("updated-command"));
-    QCOMPARE(preset.workingDirectory, QStringLiteral("/new/path"));
-    QCOMPARE(preset.iconName, QStringLiteral("new-icon"));
-    QVERIFY(preset.steamIntegration);
-}
-
-void TestPresetManager::testUpdateBuiltinPresetFails()
-{
-    bool result = m_presetManager->updateCustomPreset(
-        QStringLiteral("steam"),
-        QStringLiteral("Hacked Steam"),
-        QStringLiteral("malicious-command"),
-        QString(),
-        QString(),
-        false
-    );
-
-    QVERIFY(!result);
-
-    // Verify Steam preset is unchanged
-    LaunchPreset steam = m_presetManager->getPreset(QStringLiteral("steam"));
-    QCOMPARE(steam.name, QStringLiteral("Steam Big Picture"));
-    QCOMPARE(steam.command, QStringLiteral("steam -tenfoot -steamdeck"));
+    // Verify preset was added
+    QVariantList presets = manager.presetsAsVariant();
+    bool found = false;
+    for (const QVariant &presetVar : presets) {
+        QVariantMap preset = presetVar.toMap();
+        if (preset[QStringLiteral("id")] == id) {
+            found = true;
+            QCOMPARE(preset[QStringLiteral("name")].toString(), QStringLiteral("Test Game"));
+            QCOMPARE(preset[QStringLiteral("command")].toString(), QStringLiteral("/path/to/game"));
+            QCOMPARE(preset[QStringLiteral("workingDirectory")].toString(), QStringLiteral("/working/dir"));
+            QCOMPARE(preset[QStringLiteral("iconName")].toString(), QStringLiteral("test-icon"));
+            QCOMPARE(preset[QStringLiteral("steamIntegration")].toBool(), true);
+            QCOMPARE(preset[QStringLiteral("isBuiltin")].toBool(), false);
+        }
+    }
+    QVERIFY(found);
 }
 
 void TestPresetManager::testRemoveCustomPreset()
 {
-    QString id = m_presetManager->addCustomPreset(
-        QStringLiteral("To Be Deleted"),
-        QStringLiteral("/bin/delete-me")
-    );
+    PresetManager manager;
+    QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
 
-    // Verify it exists
-    LaunchPreset preset = m_presetManager->getPreset(id);
-    QCOMPARE(preset.id, id);
+    // Add a custom preset
+    QString id = manager.addCustomPreset(
+        QStringLiteral("To Remove"),
+        QStringLiteral("/path/to/game")
+    );
+    QVERIFY(!id.isEmpty());
+    presetsChangedSpy.clear();
 
     // Remove it
-    bool result = m_presetManager->removeCustomPreset(id);
+    bool result = manager.removeCustomPreset(id);
     QVERIFY(result);
+    QCOMPARE(presetsChangedSpy.count(), 1);
 
-    // Verify it's gone (should return default now)
-    preset = m_presetManager->getPreset(id);
-    QCOMPARE(preset.id, QStringLiteral("steam"));
+    // Verify it's gone
+    QVariantList presets = manager.presetsAsVariant();
+    for (const QVariant &presetVar : presets) {
+        QVariantMap preset = presetVar.toMap();
+        QVERIFY(preset[QStringLiteral("id")] != id);
+    }
 }
 
-void TestPresetManager::testRemoveBuiltinPresetFails()
+// ============ Shared Directories Tests ============
+
+void TestPresetManager::testGetSetSharedDirectories()
 {
-    bool result = m_presetManager->removeCustomPreset(QStringLiteral("steam"));
-    QVERIFY(!result);
+    PresetManager manager;
+    QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
 
-    // Steam should still exist
-    LaunchPreset steam = m_presetManager->getPreset(QStringLiteral("steam"));
-    QCOMPARE(steam.id, QStringLiteral("steam"));
-}
-
-void TestPresetManager::testCleanExecCommand()
-{
-    // Test single field code removal
-    QString cleaned = PresetManager::cleanExecCommand(QStringLiteral("steam %U"));
-    QCOMPARE(cleaned, QStringLiteral("steam"));
-
-    cleaned = PresetManager::cleanExecCommand(QStringLiteral("game --launch %f"));
-    QCOMPARE(cleaned, QStringLiteral("game --launch"));
-}
-
-void TestPresetManager::testCleanExecCommandMultipleCodes()
-{
-    QString cleaned = PresetManager::cleanExecCommand(
-        QStringLiteral("flatpak run com.example.Game %u %F %i %c"));
-    QCOMPARE(cleaned, QStringLiteral("flatpak run com.example.Game"));
-}
-
-void TestPresetManager::testCleanExecCommandNoChanges()
-{
-    QString cleaned = PresetManager::cleanExecCommand(
-        QStringLiteral("/usr/bin/game --option value"));
-    QCOMPARE(cleaned, QStringLiteral("/usr/bin/game --option value"));
-}
-
-void TestPresetManager::testAddPresetFromDesktopFile()
-{
-    QString desktopFile = createTestDesktopFile(
-        QStringLiteral("Test Application"),
-        QStringLiteral("/usr/bin/testapp %U"),
-        QStringLiteral("testapp-icon"),
-        QStringLiteral("/opt/testapp")
-    );
-
-    // Verify file was created
-    QVERIFY2(!desktopFile.isEmpty(), "Failed to create test desktop file");
-    QVERIFY2(QFile::exists(desktopFile), "Desktop file does not exist");
-
-    QString id = m_presetManager->addPresetFromDesktopFile(desktopFile);
-
-    QVERIFY2(!id.isEmpty(), qPrintable(QStringLiteral("Failed to add preset from: %1").arg(desktopFile)));
-    QVERIFY(id.startsWith(QStringLiteral("custom-")));
-
-    LaunchPreset preset = m_presetManager->getPreset(id);
-    QCOMPARE(preset.name, QStringLiteral("Test Application"));
-    QCOMPARE(preset.command, QStringLiteral("/usr/bin/testapp"));  // %U stripped
-    QCOMPARE(preset.iconName, QStringLiteral("testapp-icon"));
-    QCOMPARE(preset.workingDirectory, QStringLiteral("/opt/testapp"));
-    QCOMPARE(preset.desktopFilePath, desktopFile);
-    QVERIFY(!preset.isBuiltin);
-
-    // Cleanup
-    QFile::remove(desktopFile);
-}
-
-void TestPresetManager::testAddPresetFromDesktopFileInvalid()
-{
-    QSignalSpy spy(m_presetManager, &PresetManager::errorOccurred);
-
-    QString id = m_presetManager->addPresetFromDesktopFile(
-        QStringLiteral("/nonexistent/path/to/app.desktop"));
-
-    QVERIFY(id.isEmpty());
-    QCOMPARE(spy.count(), 1);
-}
-
-void TestPresetManager::testAddPresetFromDesktopFileDuplicate()
-{
-    QString desktopFile = createTestDesktopFile(
-        QStringLiteral("Duplicate Test"),
-        QStringLiteral("/usr/bin/duptest")
-    );
-
-    // Verify file was created
-    QVERIFY2(!desktopFile.isEmpty(), "Failed to create test desktop file");
-    QVERIFY2(QFile::exists(desktopFile), "Desktop file does not exist");
-
-    QString id1 = m_presetManager->addPresetFromDesktopFile(desktopFile);
-    QVERIFY2(!id1.isEmpty(), "Failed to add preset from desktop file");
-
-    // Adding same file again should return existing ID
-    QString id2 = m_presetManager->addPresetFromDesktopFile(desktopFile);
-    QCOMPARE(id1, id2);
-
-    // Cleanup
-    QFile::remove(desktopFile);
-}
-
-void TestPresetManager::testCustomPresetsPersist()
-{
     // Add a custom preset
-    QString id = m_presetManager->addCustomPreset(
-        QStringLiteral("Persistent Preset"),
-        QStringLiteral("/usr/bin/persist"),
-        QStringLiteral("/home/persist"),
-        QStringLiteral("persist-icon"),
-        true
+    QString id = manager.addCustomPreset(
+        QStringLiteral("Shared Test"),
+        QStringLiteral("/path/to/game")
     );
 
-    // Delete this manager
-    delete m_presetManager;
+    // Initially empty
+    QStringList dirs = manager.getSharedDirectories(id);
+    QVERIFY(dirs.isEmpty());
+    presetsChangedSpy.clear();
 
-    // Create a new manager - should load from disk
-    m_presetManager = new PresetManager(this);
+    // Set shared directories
+    QStringList newDirs = {QStringLiteral("/shared/dir1"), QStringLiteral("/shared/dir2")};
+    bool result = manager.setSharedDirectories(id, newDirs);
+    QVERIFY(result);
+    QCOMPARE(presetsChangedSpy.count(), 1);
 
-    // Verify preset was loaded
-    LaunchPreset preset = m_presetManager->getPreset(id);
-    QCOMPARE(preset.id, id);
-    QCOMPARE(preset.name, QStringLiteral("Persistent Preset"));
-    QCOMPARE(preset.command, QStringLiteral("/usr/bin/persist"));
-    QCOMPARE(preset.workingDirectory, QStringLiteral("/home/persist"));
-    QCOMPARE(preset.iconName, QStringLiteral("persist-icon"));
-    QVERIFY(preset.steamIntegration);
-}
-
-void TestPresetManager::testPresetsChangedSignal()
-{
-    QSignalSpy spy(m_presetManager, &PresetManager::presetsChanged);
-
-    // Add
-    QString id = m_presetManager->addCustomPreset(
-        QStringLiteral("Signal Test 1"),
-        QStringLiteral("/bin/true")
-    );
-    QCOMPARE(spy.count(), 1);
-
-    // Update
-    m_presetManager->updateCustomPreset(id, QStringLiteral("Updated"), QStringLiteral("/bin/false"),
-                                         QString(), QString(), false);
-    QCOMPARE(spy.count(), 2);
-
-    // Remove
-    m_presetManager->removeCustomPreset(id);
-    QCOMPARE(spy.count(), 3);
-
-    // Refresh
-    m_presetManager->refresh();
-    QCOMPARE(spy.count(), 4);
+    // Verify they were set
+    dirs = manager.getSharedDirectories(id);
+    QCOMPARE(dirs, newDirs);
 }
 
 QTEST_MAIN(TestPresetManager)

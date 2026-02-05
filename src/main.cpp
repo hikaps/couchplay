@@ -22,8 +22,26 @@
 #include "core/PresetManager.h"
 #include "dbus/CouchPlayHelperClient.h"
 
+// Custom message handler to filter noisy Qt warnings
+static QtMessageHandler s_originalHandler = nullptr;
+
+void couchplayMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+{
+    // Suppress QStandardPaths permission warnings (common on Bazzite/immutable distros with 0710 permissions)
+    if (type == QtWarningMsg && msg.contains(QStringLiteral("QStandardPaths: wrong permissions on runtime directory"))) {
+        return;
+    }
+
+    if (s_originalHandler) {
+        s_originalHandler(type, context, msg);
+    }
+}
+
 int main(int argc, char *argv[])
 {
+    // Install custom message handler before QApplication
+    s_originalHandler = qInstallMessageHandler(couchplayMessageHandler);
+
     // Initialize KDE icon theme before QApplication
     KIconTheme::initTheme();
 

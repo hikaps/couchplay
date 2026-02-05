@@ -115,6 +115,7 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("gameCommand", inst.gameCommand);
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
+        instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
 
         // Convert devices to string list (legacy - for backwards compatibility)
         QStringList deviceStrings;
@@ -175,6 +176,7 @@ bool SessionManager::loadProfile(const QString &name)
         inst.gameCommand = instGroup.readEntry("gameCommand", QString());
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
+        inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
 
         // Read stable device IDs (primary - survives hotplug/reboot)
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
@@ -406,6 +408,14 @@ void SessionManager::setInstancePreset(int index, const QString &presetId)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].presetId = presetId;
+        Q_EMIT instancesChanged();
+    }
+}
+
+void SessionManager::setInstanceSharedDirectories(int index, const QStringList &directories)
+{
+    if (index >= 0 && index < m_currentProfile.instances.size()) {
+        m_currentProfile.instances[index].sharedDirectories = directories;
         Q_EMIT instancesChanged();
     }
 }

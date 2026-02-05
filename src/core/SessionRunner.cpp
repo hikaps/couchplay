@@ -7,7 +7,6 @@
 #include "SessionManager.h"
 #include "DeviceManager.h"
 #include "PresetManager.h"
-#include "SharingManager.h"
 #include "SteamConfigManager.h"
 #include "WindowManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
@@ -127,14 +126,6 @@ void SessionRunner::setPresetManager(PresetManager *manager)
     }
 }
 
-void SessionRunner::setSharingManager(SharingManager *manager)
-{
-    if (m_sharingManager != manager) {
-        m_sharingManager = manager;
-        Q_EMIT sharingManagerChanged();
-    }
-}
-
 void SessionRunner::setSteamConfigManager(SteamConfigManager *manager)
 {
     if (m_steamConfigManager != manager) {
@@ -230,9 +221,9 @@ bool SessionRunner::start()
         qWarning() << "Failed to set up shared directories - continuing anyway";
     }
 
-    // Sync Steam config to gaming users
-    if (!setupSteamConfig()) {
-        qWarning() << "Failed to sync Steam config - continuing anyway";
+    // Set up launcher access (ACLs, shortcut sync)
+    if (!setupLauncherAccess()) {
+        qWarning() << "Failed to set up launcher access - continuing anyway";
     }
 
     // Create and start instances
@@ -475,8 +466,8 @@ void SessionRunner::restoreDeviceOwnership()
 
 bool SessionRunner::setupSharedDirectories()
 {
-    if (!m_sharingManager || !m_helperClient || !m_sessionManager) {
-        return true; // No sharing configured, skip
+    if (!m_helperClient || !m_sessionManager) {
+        return true;
     }
 
     if (!m_helperClient->isAvailable()) {
@@ -484,12 +475,6 @@ bool SessionRunner::setupSharedDirectories()
         return true;
     }
 
-    QStringList directories = m_sharingManager->directoryList();
-    if (directories.isEmpty()) {
-        return true; // Nothing to share
-    }
-
-    // Get compositor UID (current user running CouchPlay)
     uint compositorUid = static_cast<uint>(getuid());
 
     const auto &profile = m_sessionManager->currentProfile();
@@ -497,14 +482,25 @@ bool SessionRunner::setupSharedDirectories()
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
+        const QStringList &sharedDirs = profile.instances[i].sharedDirectories;
         
         if (username.isEmpty()) {
             continue;
         }
 
-        qDebug() << "SessionRunner: Mounting shared directories for user" << username;
+        if (sharedDirs.isEmpty()) {
+            qDebug() << "SessionRunner: No shared directories for instance" << i << "user" << username;
+            continue;
+        }
+
+        qDebug() << "SessionRunner: Mounting" << sharedDirs.size() << "shared directories for user" << username;
         
-        int mountResult = m_helperClient->mountSharedDirectories(username, compositorUid, directories);
+        QStringList formattedDirs;
+        for (const QString &dir : sharedDirs) {
+            formattedDirs << dir + QLatin1Char('|');
+        }
+        
+        int mountResult = m_helperClient->mountSharedDirectories(username, compositorUid, formattedDirs);
         if (mountResult < 0) {
             qWarning() << "SessionRunner: Failed to mount shared directories for user" << username;
             allSucceeded = false;
@@ -531,60 +527,77 @@ void SessionRunner::teardownSharedDirectories()
     m_helperClient->unmountAllSharedDirectories();
 }
 
-bool SessionRunner::setupSteamConfig()
+bool SessionRunner::setupLauncherAccess()
 {
-    if (!m_steamConfigManager || !m_sessionManager) {
-        return true; // No Steam config manager, skip
-    }
-
-    // Check if shortcut sync is enabled
-    if (!m_steamConfigManager->syncShortcutsEnabled()) {
-        qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
+    if (!m_sessionManager || !m_presetManager || !m_helperClient) {
         return true;
     }
-
-    // Ensure Steam paths are detected
-    if (!m_steamConfigManager->isSteamDetected()) {
-        m_steamConfigManager->detectSteamPaths();
-    }
-
-    if (!m_steamConfigManager->isSteamDetected()) {
-        qCDebug(couchplaySteam) << "Steam not detected, skipping config sync";
-        return true;
-    }
-
-    // Load shortcuts from compositor's Steam
-    m_steamConfigManager->loadShortcuts();
-    
-    // Extract directories from shortcuts for ACL setup
-    QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
-    qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
 
     const auto &profile = m_sessionManager->currentProfile();
     bool allSucceeded = true;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
-        
+        const QString &presetId = profile.instances[i].presetId;
+
         if (username.isEmpty()) {
             qCDebug(couchplaySteam) << "Skipping instance" << i << "- no username";
             continue;
         }
 
+        LaunchPreset preset = m_presetManager->getPreset(presetId);
+
+        if (preset.launcherInfo.requiresAcls) {
+            for (const QString &dir : preset.launcherInfo.gameDirectories) {
+                if (dir.isEmpty()) {
+                    continue;
+                }
+                qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
+                if (!m_helperClient->setPathAclWithParents(dir, username)) {
+                    qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
+                }
+            }
+        }
+
+        if (!m_steamConfigManager) {
+            continue;
+        }
+
+        if (!m_steamConfigManager->syncShortcutsEnabled()) {
+            qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
+            continue;
+        }
+
+        if (!m_steamConfigManager->isSteamDetected()) {
+            m_steamConfigManager->detectSteamPaths();
+        }
+
+        if (!m_steamConfigManager->isSteamDetected()) {
+            qCDebug(couchplaySteam) << "Steam not detected, skipping config sync";
+            continue;
+        }
+
+        if (!(preset.steamIntegration || preset.launcherId == QStringLiteral("steam"))) {
+            qCDebug(couchplaySteam) << "Skipping instance" << i << "- preset" << presetId
+                                    << "does not use Steam integration";
+            continue;
+        }
+
+        m_steamConfigManager->loadShortcuts();
+        QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
+        qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
+
         qCDebug(couchplaySteam) << "Setting up Steam shortcuts for user" << username;
 
-        // Set ACLs on directories referenced in shortcuts (including parent paths for traversal)
         for (const QString &dir : shortcutDirs) {
             if (QDir(dir).exists()) {
                 qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
                 if (!m_helperClient->setPathAclWithParents(dir, username)) {
                     qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
-                    // Continue anyway - some directories might not need ACLs
                 }
             }
         }
 
-        // Sync shortcuts to this user
         qCDebug(couchplaySteam) << "Calling syncShortcutsToUser for" << username;
         if (!m_steamConfigManager->syncShortcutsToUser(username)) {
             qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;

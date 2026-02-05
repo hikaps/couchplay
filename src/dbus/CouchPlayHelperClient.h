@@ -105,8 +105,8 @@ public:
      * @param directories List of directories in "source|alias" format
      * @return Number of successful mounts, or -1 on error
      */
-    Q_INVOKABLE int mountSharedDirectories(const QString &username, uint compositorUid,
-                                            const QStringList &directories);
+    Q_INVOKABLE virtual int mountSharedDirectories(const QString &username, uint compositorUid,
+                                                   const QStringList &directories);
 
     /**
      * @brief Unmount shared directories for a user
@@ -159,7 +159,7 @@ public:
      * @param username User to grant access to
      * @return true if successful
      */
-    Q_INVOKABLE bool setPathAclWithParents(const QString &path, const QString &username);
+    Q_INVOKABLE virtual bool setPathAclWithParents(const QString &path, const QString &username);
 
     /**
      * @brief Get a user's Steam user ID via the privileged helper

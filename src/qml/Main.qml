@@ -80,7 +80,6 @@ Kirigami.ApplicationWindow {
         deviceManager: deviceManager
         helperClient: helperClient
         presetManager: presetManager
-        sharingManager: sharingManager
         steamConfigManager: steamConfigManager
 
         onErrorOccurred: (message) => {
@@ -115,10 +114,15 @@ Kirigami.ApplicationWindow {
 
     PresetManager {
         id: presetManager
+        
+        Component.onCompleted: {
+            setHeroicConfigManager(heroicConfigManager)
+            setSteamConfigManager(steamConfigManager)
+        }
     }
 
-    SharingManager {
-        id: sharingManager
+    HeroicConfigManager {
+        id: heroicConfigManager
     }
 
     SteamConfigManager {
@@ -217,9 +221,9 @@ Kirigami.ApplicationWindow {
                         sessionRunner: sessionRunner,
                         helperClient: helperClient,
                         presetManager: presetManager,
-                        sharingManager: sharingManager,
                         steamConfigManager: steamConfigManager,
-                        settingsManager: settingsManager
+                        settingsManager: settingsManager,
+                        heroicConfigManager: heroicConfigManager
                     })
                 }
             }
@@ -332,9 +336,9 @@ Kirigami.ApplicationWindow {
             sessionRunner: sessionRunner,
             helperClient: helperClient,
             presetManager: presetManager,
-            sharingManager: sharingManager,
             steamConfigManager: steamConfigManager,
-            settingsManager: settingsManager
+            settingsManager: settingsManager,
+            heroicConfigManager: heroicConfigManager
         })
     }
 }
