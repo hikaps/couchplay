@@ -20,6 +20,7 @@
 #include "core/GameLibrary.h"
 #include "core/AudioManager.h"
 #include "core/PresetManager.h"
+#include "core/AppImageHelper.h"
 #include "dbus/CouchPlayHelperClient.h"
 
 // Custom message handler to filter noisy Qt warnings
@@ -63,9 +64,21 @@ int main(int argc, char *argv[])
     }
 
     // QML types are registered via QML_ELEMENT macro in headers
+    qmlRegisterSingletonType<AppImageHelper>("io.github.hikaps.couchplay", 1, 0, "AppImageHelper", [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject * {
+        Q_UNUSED(engine)
+        Q_UNUSED(scriptEngine)
+        return new AppImageHelper();
+    });
 
     // Create QML engine
     QQmlApplicationEngine engine;
+
+    // Register AppImageHelper check
+    bool isAppImage = AppImageHelper::isRunningAsAppImage();
+    bool isHelperInstalled = AppImageHelper::isHelperInstalled();
+    
+    engine.rootContext()->setContextProperty(QStringLiteral("isAppImage"), isAppImage);
+    engine.rootContext()->setContextProperty(QStringLiteral("isHelperInstalled"), isHelperInstalled);
 
     // Add i18n context
     engine.rootContext()->setContextObject(new KLocalizedContext(&engine));

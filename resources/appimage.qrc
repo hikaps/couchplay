@@ -1,0 +1,10 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/helper">
+        <!-- These files will be populated during the build process -->
+        <!-- For development, we use placeholders -->
+        <file alias="couchplay-helper">placeholder</file>
+        <file alias="install-helper.sh">placeholder</file>
+        <file alias="io.github.hikaps.couchplay.policy">placeholder</file>
+    </qresource>
+</RCC>

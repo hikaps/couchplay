@@ -17,12 +17,12 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          dnf install -y cmake gcc-c++ git make tar \
+          dnf install -y cmake gcc-c++ git make tar wget file patchelf \
             qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
             kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel \
             kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
             kf6-kglobalaccel-devel extra-cmake-modules \
-            pipewire-devel polkit-devel
+            pipewire-devel polkit-devel fuse
 
       - uses: actions/checkout@v4
 
@@ -64,14 +64,61 @@ jobs:
           
           tar -czf couchplay-${VERSION}-linux.tar.gz -C release-appdir .
 
+      - name: Build AppImage
+        run: |
+          # Download linuxdeploy tools
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          
+          # Prepare AppDir
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/libexec
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+          mkdir -p AppDir/usr/share/polkit-1/actions
+          
+          # Copy binaries
+          cp build/bin/couchplay AppDir/usr/bin/
+          cp build/bin/couchplay-helper AppDir/usr/libexec/
+          cp scripts/install-helper.sh AppDir/usr/libexec/
+          chmod +x AppDir/usr/libexec/install-helper.sh
+          
+          # Copy resources
+          cp data/desktop/io.github.hikaps.couchplay.desktop AppDir/usr/share/applications/
+          cp data/icons/io.github.hikaps.couchplay.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          cp data/polkit/io.github.hikaps.couchplay.policy AppDir/usr/share/polkit-1/actions/
+          
+          # Setup environment for Qt plugin
+          export QML_SOURCES_PATHS=src/qml
+          export EXTRA_QT_PLUGINS=platformthemes/libqgtk3.so,platformthemes/libqt6ct.so
+          
+          # Generate AppImage
+          # We use --appimage-extract-and-run to avoid FUSE issues in container
+          ./linuxdeploy-x86_64.AppImage --appimage-extract-and-run \
+            --appdir AppDir \
+            --plugin qt \
+            --output appimage
+            
+          # Rename based on version
+          VERSION=${GITHUB_REF_NAME#refs/tags/}
+          if [[ -z "$VERSION" || "$VERSION" == "main" ]]; then
+            VERSION="nightly"
+          fi
+          mv CouchPlay-*.AppImage CouchPlay-${VERSION}-x86_64.AppImage
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-tarball
-          path: couchplay-*-linux.tar.gz
+          name: release-artifacts
+          path: |
+            couchplay-*-linux.tar.gz
+            CouchPlay-*.AppImage
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: couchplay-*-linux.tar.gz
+          files: |
+            couchplay-*-linux.tar.gz
+            CouchPlay-*.AppImage
