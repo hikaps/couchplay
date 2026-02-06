@@ -23,8 +23,43 @@ private Q_SLOTS:
     // Basic functionality tests
     void testInitialization();
     void testRefresh();
-    // ... other slots ...
+    void testDeviceAssignment();
+    void testUnassignAll();
+    void testAutoAssignControllers();
+    void testGetDevicesForInstance();
+    void testGetDevicePathsForInstance();
+    void testIdentifyDevice();
+    void testGetDevice();
     
+    // Property tests
+    void testShowVirtualDevices();
+    void testShowInternalDevices();
+    void testHotplugEnabled();
+    void testInstanceCount();
+    
+    // Filtering tests
+    void testDeviceFiltering();
+    void testControllersProperty();
+    void testKeyboardsProperty();
+    void testMiceProperty();
+    void testVisibleDevicesProperty();
+    
+    // Signal tests
+    void testDevicesChangedSignal();
+    void testDeviceAssignedSignal();
+    void testInstanceCountChangedSignal();
+    
+    // Stable ID tests
+    void testGenerateStableId();
+    void testFindDeviceByStableId();
+    void testAssignDeviceByStableId();
+    void testGetStableIdsForInstance();
+    void testRestoreAssignmentsFromStableIds();
+    void testStableIdInDeviceVariantMap();
+
+    // Blacklist tests
+    void testIgnoredDevices();
+
 private:
     // Helper to create a fresh DeviceManager with mock data
     void createManager() {
@@ -41,7 +76,7 @@ private:
 void TestDeviceManager::initTestCase()
 {
     // Create mock devices file
-    m_mockDevicesFile = QDir::currentPath() + "/mock_devices";
+    m_mockDevicesFile = QDir::currentPath() + QStringLiteral("/mock_devices");
     QFile mockData(QFINDTESTDATA("data/mock_devices"));
     if (mockData.open(QIODevice::ReadOnly)) {
         QFile target(m_mockDevicesFile);
