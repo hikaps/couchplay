@@ -40,7 +40,7 @@ void TestCommandVerifier::initTestCase()
     QVERIFY(m_mockBinDir.isValid());
     
     // Create dummy 'ls' command
-    m_mockLs = m_mockBinDir.filePath("ls");
+    m_mockLs = m_mockBinDir.filePath(QStringLiteral("ls"));
     QFile f(m_mockLs);
     QVERIFY(f.open(QIODevice::WriteOnly));
     f.write("#!/bin/sh\n");
