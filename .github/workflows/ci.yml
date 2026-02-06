@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ develop ]
+  pull_request:
+    branches: [ develop ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf install -y cmake gcc-c++ git make \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
+            kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel \
+            kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
+            kf6-kglobalaccel-devel extra-cmake-modules \
+            pipewire-devel polkit-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory /__w/couchplay/couchplay
+
+      - name: Configure CMake
+        run: cmake -B build -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -E "test_usermanager|test_couchplayhelper|test_gamescopeinstance|test_presetmanager_integration|test_commandverifier|test_devicemanager"
+        env:
+          QT_QPA_PLATFORM: offscreen

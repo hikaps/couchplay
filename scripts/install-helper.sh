@@ -32,7 +32,17 @@ LIBEXEC_DIR="/usr/local/libexec"
 DBUS_SYSTEM_DIR="/etc/dbus-1/system.d"
 DBUS_SERVICE_DIR="/usr/local/share/dbus-1/system-services"
 SYSTEMD_DIR="/etc/systemd/system"
-POLKIT_DIR="/usr/local/share/polkit-1/actions"
+# Polkit actions usually reside in /usr/share/polkit-1/actions.
+# On immutable systems, we try /etc/polkit-1/actions if /usr is read-only.
+if [ -w "/usr/share/polkit-1/actions" ]; then
+    POLKIT_DIR="/usr/share/polkit-1/actions"
+else
+    # Fallback for immutable systems (requires Polkit to be configured to read this, or user to layer)
+    # Note: If /etc/polkit-1/actions is not scanned by your Polkit version, 
+    # you may need to use 'rpm-ostree install' or an overlay.
+    POLKIT_DIR="/etc/polkit-1/actions"
+    mkdir -p "$POLKIT_DIR"
+fi
 
 # Source paths (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

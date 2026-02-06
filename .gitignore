@@ -1,5 +1,10 @@
 # Build output
 build/
+bin/
+lib/
+cmake-build-*/
+release-appdir/
+couchplay-*-linux.tar.gz
 
 # IDE
 .vscode/

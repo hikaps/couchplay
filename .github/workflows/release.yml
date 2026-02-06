@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf install -y cmake gcc-c++ git make tar \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
+            kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel \
+            kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
+            kf6-kglobalaccel-devel extra-cmake-modules \
+            pipewire-devel polkit-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory /__w/couchplay/couchplay
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -E "test_usermanager|test_couchplayhelper|test_gamescopeinstance|test_presetmanager_integration|test_commandverifier|test_devicemanager"
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Package
+        run: |
+          mkdir -p release-appdir/bin
+          mkdir -p release-appdir/data
+          
+          # Copy binaries
+          cp build/bin/couchplay release-appdir/bin/
+          cp build/bin/couchplay-helper release-appdir/bin/
+          
+          # Copy scripts
+          cp scripts/install-helper.sh release-appdir/
+          chmod +x release-appdir/install-helper.sh
+          
+          # Copy data
+          cp -r data/* release-appdir/data/
+          
+          # Create tarball
+          VERSION=${GITHUB_REF_NAME#refs/tags/}
+          if [[ -z "$VERSION" || "$VERSION" == "main" ]]; then
+            VERSION="nightly"
+          fi
+          
+          tar -czf couchplay-${VERSION}-linux.tar.gz -C release-appdir .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tarball
+          path: couchplay-*-linux.tar.gz
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: couchplay-*-linux.tar.gz
