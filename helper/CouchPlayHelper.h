@@ -11,16 +11,21 @@
 #include <QString>
 #include <QStringList>
 
+#include "SystemOps.h"
+
+// Forward declaration
+class RealSystemOps;
+
 /**
  * CouchPlayHelper - Privileged D-Bus service for split-screen gaming
- * 
+ *
  * This helper runs as a system service with elevated privileges to perform
  * operations that require root access:
  * - Creating Linux users for secondary players
  * - Enabling systemd linger for user sessions
  * - Setting up Wayland socket ACLs
  * - Changing input device ownership
- * 
+ *
  * D-Bus interface: io.github.hikaps.CouchPlayHelper
  * Object path: /io/github/hikaps/CouchPlayHelper
  */
@@ -30,14 +35,14 @@ class CouchPlayHelper : public QObject, protected QDBusContext
     Q_CLASSINFO("D-Bus Interface", "io.github.hikaps.CouchPlayHelper")
 
 public:
-    explicit CouchPlayHelper(QObject *parent = nullptr);
+    explicit CouchPlayHelper(SystemOps *ops = nullptr, QObject *parent = nullptr);
     ~CouchPlayHelper() override;
 
 public Q_SLOTS:
     /**
      * Create a new Linux user for split-screen gaming
      * Also enables linger for the user automatically and adds to couchplay group
-     * 
+     *
      * @param username Desired username (lowercase, alphanumeric)
      * @param fullName Full name for the user
      * @return UID of created user, or 0 on failure
@@ -47,7 +52,7 @@ public Q_SLOTS:
     /**
      * Delete a CouchPlay user account
      * Only users in the couchplay group can be deleted
-     * 
+     *
      * @param username Username to delete (must be in couchplay group)
      * @param removeHome If true, also delete the user's home directory
      * @return true if successful
@@ -56,7 +61,7 @@ public Q_SLOTS:
 
     /**
      * Check if a user is in the couchplay group
-     * 
+     *
      * @param username Username to check
      * @return true if user is in couchplay group
      */
@@ -65,7 +70,7 @@ public Q_SLOTS:
     /**
      * Enable systemd linger for a user
      * Required for machinectl shell to work properly
-     * 
+     *
      * @param username Username to enable linger for
      * @return true if successful
      */
@@ -73,7 +78,7 @@ public Q_SLOTS:
 
     /**
      * Check if linger is enabled for a user
-     * 
+     *
      * @param username Username to check
      * @return true if linger is enabled
      */
@@ -81,7 +86,7 @@ public Q_SLOTS:
 
     /**
      * Set up runtime directory access for the couchplay group
-     * 
+     *
      * Sets group ACLs on compositor's runtime directory sockets:
      * - XDG_RUNTIME_DIR (traverse)
      * - wayland-0 (rw)
@@ -90,10 +95,10 @@ public Q_SLOTS:
      * - pipewire-0-manager (rw)
      * - pulse/ (traverse)
      * - pulse/native (rw)
-     * 
+     *
      * Called automatically by LaunchInstance() on first invocation.
      * Idempotent - safe to call multiple times.
-     * 
+     *
      * @param compositorUid UID of the compositor user
      * @return true if successful
      */
@@ -101,10 +106,10 @@ public Q_SLOTS:
 
     /**
      * Remove runtime directory access for the couchplay group
-     * 
+     *
      * Removes all couchplay group ACLs from compositor's runtime directory.
      * Called automatically on helper shutdown.
-     * 
+     *
      * @param compositorUid UID of the compositor user
      * @return true if successful
      */
@@ -113,7 +118,7 @@ public Q_SLOTS:
     /**
      * Change ownership of a device to a specific user
      * Used for input device isolation between instances
-     * 
+     *
      * @param devicePath Path to the device (e.g., /dev/input/event5)
      * @param uid User ID to assign ownership to
      * @return true if successful
@@ -122,7 +127,7 @@ public Q_SLOTS:
 
     /**
      * Change ownership of multiple devices to a specific user
-     * 
+     *
      * @param devicePaths List of device paths
      * @param uid User ID to assign ownership to
      * @return Number of devices successfully changed
@@ -131,7 +136,7 @@ public Q_SLOTS:
 
     /**
      * Reset device ownership to root
-     * 
+     *
      * @param devicePath Path to the device
      * @return true if successful
      */
@@ -140,26 +145,26 @@ public Q_SLOTS:
     /**
      * Reset ownership of all managed devices to root
      * Called automatically on helper shutdown
-     * 
+     *
      * @return Number of devices successfully reset
      */
     int ResetAllDevices();
 
     /**
      * Get version of the helper daemon
-     * 
+     *
      * @return Version string
      */
     QString Version();
 
     /**
      * Launch a gamescope instance as a specified user
-     * 
+     *
      * This method handles all the complexity of running gamescope as any user:
      * - Sets up runtime access for couchplay group (once per compositor)
      * - Spawns the process via machinectl shell
      * - Returns the PID for tracking
-     * 
+     *
      * @param username User to run as
      * @param compositorUid UID of compositor user (for runtime access setup)
      * @param gamescopeArgs Gamescope command-line arguments
@@ -174,7 +179,7 @@ public Q_SLOTS:
 
     /**
      * Stop a launched instance
-     * 
+     *
      * @param pid Process ID to stop
      * @return true if the process was successfully signaled
      */
@@ -182,7 +187,7 @@ public Q_SLOTS:
 
     /**
      * Kill a launched instance forcefully
-     * 
+     *
      * @param pid Process ID to kill
      * @return true if the process was successfully signaled
      */
@@ -190,12 +195,12 @@ public Q_SLOTS:
 
     /**
      * Mount shared directories for a user
-     * 
+     *
      * Bind-mounts the specified directories into the user's home directory.
      * For paths inside the compositor's home, they're mounted at the same
      * relative path. For paths outside, they're mounted at the specified alias
      * or under ~/.couchplay/mounts/ if no alias is provided.
-     * 
+     *
      * @param username Target user (must exist)
      * @param compositorUid UID of the compositor user (for determining home-relative paths)
      * @param directories List of "source|alias" strings (alias empty for home-relative)
@@ -206,7 +211,7 @@ public Q_SLOTS:
 
     /**
      * Unmount all shared directories for a user
-     * 
+     *
      * @param username Target user
      * @return Number of successful unmounts
      */
@@ -215,17 +220,17 @@ public Q_SLOTS:
     /**
      * Unmount all shared directories for all users
      * Called on session stop or app exit
-     * 
+     *
      * @return Total number of unmounts performed
      */
     int UnmountAllSharedDirectories();
 
     /**
      * Copy a file to a user's directory with proper ownership
-     * 
+     *
      * Used for copying Steam config files (libraryfolders.vdf, shortcuts.vdf)
      * to gaming users' Steam directories.
-     * 
+     *
      * @param sourcePath Source file path
      * @param targetPath Target file path (will be created/overwritten)
      * @param username Target user (file will be owned by this user)
@@ -236,10 +241,10 @@ public Q_SLOTS:
 
     /**
      * Create a directory with proper ownership
-     * 
+     *
      * Creates the directory and all parent directories, setting ownership
      * on each created directory.
-     * 
+     *
      * @param path Directory path to create
      * @param username User who should own the directory
      * @return true if successful
@@ -248,10 +253,10 @@ public Q_SLOTS:
 
     /**
      * Set ACL on a directory to grant a user read+execute access
-     * 
+     *
      * Uses setfacl to grant the specified user access to the directory.
      * When recursive is true, applies ACLs to all files and subdirectories.
-     * 
+     *
      * @param path Directory path to set ACL on
      * @param username User to grant access to
      * @param recursive Apply recursively to all contents
@@ -261,12 +266,12 @@ public Q_SLOTS:
 
     /**
      * Set ACLs on a path and all parent directories needed for traversal
-     * 
+     *
      * This is useful for paths on external drives or in /run/media/username/
      * where the user needs rx access to all parent directories to reach the
      * target path. Traversal stops at safe boundaries like /run/media, /mnt,
      * /media, or the filesystem root.
-     * 
+     *
      * @param path Target path to set ACL on
      * @param username User to grant access to
      * @return true if successful
@@ -275,11 +280,11 @@ public Q_SLOTS:
 
     /**
      * Get a user's Steam user ID
-     * 
+     *
      * Looks in the user's Steam userdata directory to find their Steam ID.
      * This requires root access since other users' home directories are
      * typically not readable.
-     * 
+     *
      * @param username User to get Steam ID for
      * @return Steam user ID string, or empty if not found
      */
@@ -287,10 +292,10 @@ public Q_SLOTS:
 
     /**
      * Write content directly to a file in a user's directory
-     * 
+     *
      * Used for writing generated config files (e.g., shortcuts.vdf) directly
      * to gaming users' directories without needing a temp file.
-     * 
+     *
      * @param content File content as bytes
      * @param targetPath Target file path (will be created/overwritten)
      * @param username Target user (file will be owned by this user)
@@ -302,7 +307,7 @@ public Q_SLOTS:
 private:
     bool checkAuthorization(const QString &action);
     bool isValidDevicePath(const QString &path);
-    
+
     // Internal helpers (not exposed via D-Bus)
     bool userExists(const QString &username);
     uint getUserUid(const QString &username);
@@ -317,14 +322,17 @@ private:
 
     QStringList m_modifiedDevices;
     QMap<qint64, QProcess *> m_launchedProcesses;  // PID -> QProcess
-    
+
     // Track active mounts per user for cleanup
     struct MountInfo {
         QString source;
         QString target;
     };
     QMap<QString, QList<MountInfo>> m_activeMounts;  // username -> list of mounts
-    
+
     // Track which compositor UIDs have runtime access set up
     QSet<uint> m_runtimeAccessSetForUid;
+
+    // System operations abstraction (for testing/mocking)
+    SystemOps *m_ops;
 };

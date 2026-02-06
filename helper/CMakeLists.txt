@@ -7,7 +7,9 @@ add_executable(couchplay-helper
     main.cpp
     CouchPlayHelper.cpp
     CouchPlayHelper.h
-)
+    SystemOps.cpp
+    SystemOps.h
+    )
 
 target_link_libraries(couchplay-helper PRIVATE
     Qt6::Core

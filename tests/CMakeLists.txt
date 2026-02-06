@@ -52,6 +52,14 @@ set(TEST_MANAGER_SOURCES
     ../src/dbus/CouchPlayHelperClient.h
 )
 
+# CouchPlayHelper sources for helper tests
+set(HELPER_TEST_SOURCES
+    ../helper/CouchPlayHelper.cpp
+    ../helper/CouchPlayHelper.h
+    ../helper/SystemOps.cpp
+    ../helper/SystemOps.h
+)
+
 # Function to create a test executable
 function(add_couchplay_test TEST_NAME)
     add_executable(${TEST_NAME}
@@ -88,6 +96,34 @@ function(add_couchplay_test TEST_NAME)
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endfunction()
 
+# Function to create helper test executable (needs helper sources)
+function(add_helper_test TEST_NAME)
+    add_executable(${TEST_NAME}
+        ${TEST_NAME}.cpp
+        ${HELPER_TEST_SOURCES}
+    )
+
+    target_link_libraries(${TEST_NAME} PRIVATE
+        Qt6::Core
+        Qt6::DBus
+        Qt6::Test
+    )
+
+    target_include_directories(${TEST_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../helper
+    )
+
+    # Enable automoc for QtTest
+    set_target_properties(${TEST_NAME} PROPERTIES
+        AUTOMOC ON
+        AUTORCC ON
+    )
+
+    # Register with CTest
+    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+endfunction()
+
 # Add test executables
 add_couchplay_test(test_commandverifier)
 add_couchplay_test(test_devicemanager)
@@ -101,3 +137,6 @@ add_couchplay_test(test_scanapplications)
 add_couchplay_test(test_sessionmanager)
 add_couchplay_test(test_sessionrunner)
 add_couchplay_test(test_usermanager)
+
+# Add helper tests
+add_helper_test(test_couchplayhelper)
