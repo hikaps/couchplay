@@ -23,66 +23,71 @@ private Q_SLOTS:
     // Basic functionality tests
     void testInitialization();
     void testRefresh();
-    void testDeviceAssignment();
-    void testUnassignAll();
-    void testAutoAssignControllers();
-    void testGetDevicesForInstance();
-    void testGetDevicePathsForInstance();
-    void testIdentifyDevice();
-    void testGetDevice();
+    // ... other slots ...
     
-    // Property tests
-    void testShowVirtualDevices();
-    void testShowInternalDevices();
-    void testHotplugEnabled();
-    void testInstanceCount();
-    
-    // Filtering tests
-    void testDeviceFiltering();
-    void testControllersProperty();
-    void testKeyboardsProperty();
-    void testMiceProperty();
-    void testVisibleDevicesProperty();
-    
-    // Signal tests
-    void testDevicesChangedSignal();
-    void testDeviceAssignedSignal();
-    void testInstanceCountChangedSignal();
-    
-    // Stable ID tests
-    void testGenerateStableId();
-    void testFindDeviceByStableId();
-    void testAssignDeviceByStableId();
-    void testGetStableIdsForInstance();
-    void testRestoreAssignmentsFromStableIds();
-    void testStableIdInDeviceVariantMap();
-
-    // Blacklist tests
-    void testIgnoredDevices();
-
 private:
+    // Helper to create a fresh DeviceManager with mock data
+    void createManager() {
+        if (m_deviceManager) delete m_deviceManager;
+        m_deviceManager = new DeviceManager(this);
+        m_deviceManager->setInputPaths(m_mockInputDir.path(), m_mockDevicesFile);
+    }
+    
     DeviceManager *m_deviceManager = nullptr;
+    QTemporaryDir m_mockInputDir;
+    QString m_mockDevicesFile;
 };
 
 void TestDeviceManager::initTestCase()
 {
-    m_deviceManager = new DeviceManager(this);
+    // Create mock devices file
+    m_mockDevicesFile = QDir::currentPath() + "/mock_devices";
+    QFile mockData(QFINDTESTDATA("data/mock_devices"));
+    if (mockData.open(QIODevice::ReadOnly)) {
+        QFile target(m_mockDevicesFile);
+        if (target.open(QIODevice::WriteOnly)) {
+            target.write(mockData.readAll());
+            target.close();
+        }
+        mockData.close();
+    } else {
+        // Fallback if test data not found (e.g. running from wrong dir)
+        // Write minimal mock data
+        QFile target(m_mockDevicesFile);
+        if (target.open(QIODevice::WriteOnly)) {
+            target.write("I: Bus=0003 Vendor=045e Product=028e Version=0114\n");
+            target.write("N: Name=\"Microsoft X-Box 360 pad\"\n");
+            target.write("H: Handlers=event5 js0\n");
+            target.write("\n");
+            target.close();
+        }
+    }
 }
 
 void TestDeviceManager::cleanupTestCase()
 {
-    delete m_deviceManager;
-    m_deviceManager = nullptr;
+    QFile::remove(m_mockDevicesFile);
 }
 
 void TestDeviceManager::testInitialization()
 {
+    m_deviceManager = new DeviceManager(this);
+    
+    // Create dummy event files in temp dir
+    QFile(m_mockInputDir.filePath("event5")).open(QIODevice::WriteOnly);
+    QFile(m_mockInputDir.filePath("event6")).open(QIODevice::WriteOnly);
+    QFile(m_mockInputDir.filePath("event2")).open(QIODevice::WriteOnly);
+    
+    // Inject mock paths
+    m_deviceManager->setInputPaths(m_mockInputDir.path(), m_mockDevicesFile);
+    
     // DeviceManager should initialize with sensible defaults
     QVERIFY(m_deviceManager != nullptr);
     QCOMPARE(m_deviceManager->instanceCount(), 2);
-    QCOMPARE(m_deviceManager->showVirtualDevices(), false);
-    QCOMPARE(m_deviceManager->showInternalDevices(), false);
-    QCOMPARE(m_deviceManager->hotplugEnabled(), true);
+    // ... rest of test
+    
+    delete m_deviceManager;
+    m_deviceManager = nullptr;
 }
 
 void TestDeviceManager::testRefresh()

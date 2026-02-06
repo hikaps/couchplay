@@ -13,6 +13,41 @@
 #include <pwd.h>
 #include <unistd.h>
 
+namespace {
+    // Default system path resolver
+    QString systemPathResolver(const QString &commandName) {
+        QProcess process;
+        process.setProgram(QStringLiteral("which"));
+        process.setArguments({commandName});
+        process.start();
+        
+        if (process.waitForFinished(2000)) {
+            if (process.exitCode() == 0) {
+                QByteArray output = process.readAllStandardOutput();
+                QString path = QString::fromUtf8(output).trimmed();
+                if (!path.isEmpty()) {
+                    QFileInfo fileInfo(path);
+                    if (fileInfo.exists() && fileInfo.isExecutable()) {
+                        return path;
+                    }
+                }
+            }
+        }
+        return QString();
+    }
+
+    PathResolverFunc s_resolver = systemPathResolver;
+}
+
+void CommandVerifier::setPathResolver(PathResolverFunc resolver)
+{
+    if (resolver) {
+        s_resolver = resolver;
+    } else {
+        s_resolver = systemPathResolver;
+    }
+}
+
 CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
 {
     CommandVerificationResult result;
@@ -91,8 +126,22 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
             QFileInfo fileInfo(resolvedPath);
             result.resolvedPath = resolvedPath;
             result.isAccessibleToOtherUsers = isAccessibleToOtherUsersPath(resolvedPath);
+            // Allow if resolved path exists OR if we are in test mode (mock resolver might return path that doesn't exist on disk)
+            // But ideally mock resolver returns a path that points to a mock file.
+            // For now, we trust the resolver's output if it's non-empty.
+            // But wait, the original code checked fileInfo.exists().
+            // If we use a mock resolver, we might return "/mock/bin/steam", which doesn't exist.
+            // So tests verifyCommand need to either mock file system too OR return a path that exists (like /bin/sh).
+            
+            // Let's keep the check but assume tests will handle it.
             result.isValid = fileInfo.exists() && fileInfo.isExecutable();
+            
+            // Override for testing: if resolver is NOT system resolver, maybe we skip file check?
+            // Better: update tests to create dummy files at the resolved path.
+            
             if (!result.isValid) {
+                // If it came from our mock resolver, we might want to trust it?
+                // But typically integration tests verify the FILE exists.
                 result.errorMessage = QString(QStringLiteral("Command is not executable: %1")).arg(command);
             }
         }
@@ -227,24 +276,9 @@ bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
 
 QString CommandVerifier::resolveCommandPath(const QString &commandName)
 {
-    QProcess process;
-    process.setProgram(QStringLiteral("which"));
-    process.setArguments({commandName});
-    process.start();
-    
-    if (process.waitForFinished(2000)) {
-        if (process.exitCode() == 0) {
-            QByteArray output = process.readAllStandardOutput();
-            QString path = QString::fromUtf8(output).trimmed();
-            if (!path.isEmpty()) {
-                QFileInfo fileInfo(path);
-                if (fileInfo.exists() && fileInfo.isExecutable()) {
-                    return path;
-                }
-            }
-        }
+    if (s_resolver) {
+        return s_resolver(commandName);
     }
-    
     return QString();
 }
 

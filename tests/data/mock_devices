@@ -1,0 +1,35 @@
+I: Bus=0003 Vendor=045e Product=028e Version=0114
+N: Name="Microsoft X-Box 360 pad"
+P: Phys=usb-0000:00:14.0-1/input0
+S: Sysfs=/devices/pci0000:00/0000:00:14.0/usb1/1-1/1-1:1.0/input/input18
+U: Uniq=
+H: Handlers=event5 js0 
+B: PROP=0
+B: EV=20000b
+B: KEY=7cdb000000000000 0 0 0 0
+B: ABS=3003f
+B: FF=100000000
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Sony Interactive Entertainment Wireless Controller"
+P: Phys=usb-0000:00:14.0-2/input3
+S: Sysfs=/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.3/0003:054C:0CE6.0005/input/input24
+U: Uniq=
+H: Handlers=event6 js1 
+B: PROP=0
+B: EV=1b
+B: KEY=1f0000 0 0 0 0
+B: ABS=3003f
+B: MSC=10
+
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
+N: Name="AT Translated Set 2 keyboard"
+P: Phys=isa0060/serio0/input0
+S: Sysfs=/devices/platform/i8042/serio0/input/input3
+U: Uniq=
+H: Handlers=sysrq kbd event2 leds 
+B: PROP=0
+B: EV=120013
+B: KEY=402000000 3803078f800d001 feffffdfffefffff fffffffffffffffe
+B: MSC=10
+B: LED=7
