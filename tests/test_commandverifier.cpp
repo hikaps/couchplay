@@ -49,8 +49,8 @@ void TestCommandVerifier::initTestCase()
     
     // Set up mock resolver
     CommandVerifier::setPathResolver([this](const QString &cmd) -> QString {
-        if (cmd == "ls") return m_mockLs;
-        if (cmd == "steam") return QStringLiteral("/usr/bin/steam"); // Might fail exists() check if not created
+        if (cmd == QStringLiteral("ls")) return m_mockLs;
+        if (cmd == QStringLiteral("steam")) return QStringLiteral("/usr/bin/steam"); // Might fail exists() check if not created
         return QString();
     });
 }

@@ -5,6 +5,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <functional>
 
 /**
  * @brief Command verification result structure
@@ -21,6 +22,11 @@ struct CommandVerificationResult {
 };
 
 /**
+ * @brief Interface for path resolution dependency injection
+ */
+using PathResolverFunc = std::function<QString(const QString&)>;
+
+/**
  * @brief Command verification utility
  * 
  * Provides methods to verify commands work properly for different users,
@@ -29,6 +35,12 @@ struct CommandVerificationResult {
 class CommandVerifier
 {
 public:
+    /**
+     * @brief Set a custom path resolver function for testing
+     * @param resolver Function that takes a command name and returns absolute path
+     */
+    static void setPathResolver(PathResolverFunc resolver);
+
     /**
      * @brief Verify a command will work for gaming users
      * @param command The command string to verify

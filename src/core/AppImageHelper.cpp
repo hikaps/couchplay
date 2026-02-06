@@ -1,4 +1,5 @@
 #include "AppImageHelper.h"
+#include <QtGlobal>
 #include <QDir>
 #include <QFile>
 #include <QProcess>
