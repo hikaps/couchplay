@@ -97,8 +97,11 @@ target_sources(couchplay PRIVATE
      core/SteamConfigManager.h
     core/SettingsManager.cpp
     core/SettingsManager.h
+    core/AppImageHelper.cpp
+    core/AppImageHelper.h
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
+    ../resources/appimage.qrc
 )
 
 # Link against core library
