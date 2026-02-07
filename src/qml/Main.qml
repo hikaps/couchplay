@@ -274,8 +274,28 @@ Kirigami.ApplicationWindow {
     }
 
     Component {
-        id: settingsPage
-        SettingsPage {}
+        id: installHelperDialog
+        InstallHelperDialog {
+            isAppImage: root.isAppImageContext
+        }
+    }
+
+    property bool isAppImageContext: false 
+
+    Component.onCompleted: {
+        // Retrieve context properties
+        // Note: QML can access context properties directly, but explicit property allows binding
+        // Assuming context property names "isAppImage" and "isHelperInstalled"
+        
+        // We can't access context properties inside onCompleted directly if they share name with property?
+        // Actually, they are in the root context scope.
+        
+        // Let's rely on global context property
+        root.isAppImageContext = isAppImage
+        
+        if (isAppImage && !isHelperInstalled) {
+            installHelperDialog.createObject(root).open()
+        }
     }
 
     // Helper functions to push pages with required properties

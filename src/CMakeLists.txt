@@ -95,10 +95,12 @@ target_sources(couchplay PRIVATE
      core/HeroicConfigManager.h
      core/SteamConfigManager.cpp
      core/SteamConfigManager.h
-    core/SettingsManager.cpp
-    core/SettingsManager.h
-    dbus/CouchPlayHelperClient.cpp
-    dbus/CouchPlayHelperClient.h
+     core/SettingsManager.cpp
+     core/SettingsManager.h
+     core/AppImageHelper.cpp
+     core/AppImageHelper.h
+     dbus/CouchPlayHelperClient.cpp
+     dbus/CouchPlayHelperClient.h
 )
 
 # Link against core library

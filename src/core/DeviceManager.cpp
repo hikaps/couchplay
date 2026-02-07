@@ -32,6 +32,16 @@ DeviceManager::DeviceManager(QObject *parent)
 
 DeviceManager::~DeviceManager() = default;
 
+void DeviceManager::setInputPaths(const QString &inputDir, const QString &devicesFile)
+{
+    m_inputDir = inputDir;
+    m_devicesFile = devicesFile;
+    
+    // Re-setup watcher with new paths
+    setupHotplugWatcher();
+    refresh();
+}
+
 void DeviceManager::setupHotplugWatcher()
 {
     if (m_watcher) {
@@ -45,14 +55,14 @@ void DeviceManager::setupHotplugWatcher()
     
     m_watcher = new QFileSystemWatcher(this);
     
-    // Watch /dev/input for device changes
-    if (QDir(QStringLiteral("/dev/input")).exists()) {
-        m_watcher->addPath(QStringLiteral("/dev/input"));
+    // Watch input directory for device changes
+    if (QDir(m_inputDir).exists()) {
+        m_watcher->addPath(m_inputDir);
     }
     
-    // Also watch /proc/bus/input/devices for more reliable detection
-    if (QFile::exists(QStringLiteral("/proc/bus/input/devices"))) {
-        m_watcher->addPath(QStringLiteral("/proc/bus/input/devices"));
+    // Also watch devices info file for more reliable detection
+    if (QFile::exists(m_devicesFile)) {
+        m_watcher->addPath(m_devicesFile);
     }
     
     connect(m_watcher, &QFileSystemWatcher::directoryChanged, 
@@ -60,7 +70,7 @@ void DeviceManager::setupHotplugWatcher()
     connect(m_watcher, &QFileSystemWatcher::fileChanged,
             this, &DeviceManager::onInputDirectoryChanged);
     
-    qDebug() << "DeviceManager: Hotplug watcher enabled";
+    qDebug() << "DeviceManager: Hotplug watcher enabled for" << m_inputDir;
 }
 
 void DeviceManager::onInputDirectoryChanged()
@@ -189,10 +199,10 @@ void DeviceManager::refresh()
 
 void DeviceManager::parseDevices()
 {
-    QFile file(QStringLiteral("/proc/bus/input/devices"));
+    QFile file(m_devicesFile);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qWarning() << "DeviceManager: Failed to open /proc/bus/input/devices";
-        Q_EMIT errorOccurred(QStringLiteral("Failed to open /proc/bus/input/devices"));
+        qWarning() << "DeviceManager: Failed to open" << m_devicesFile;
+        Q_EMIT errorOccurred(QStringLiteral("Failed to open %1").arg(m_devicesFile));
         return;
     }
     
@@ -201,7 +211,7 @@ void DeviceManager::parseDevices()
     file.close();
     
     if (content.isEmpty()) {
-        qWarning() << "DeviceManager: /proc/bus/input/devices is empty";
+        qWarning() << "DeviceManager:" << m_devicesFile << "is empty";
         return;
     }
 
@@ -231,13 +241,23 @@ void DeviceManager::parseDevices()
                 InputDevice device;
                 device.eventNumber = currentEventNumber;
                 device.name = currentName;
-                device.path = QStringLiteral("/dev/input/event%1").arg(currentEventNumber);
+                // Construct path using configured input directory
+                // Ensure we don't double slashes if m_inputDir ends with /
+                if (m_inputDir.endsWith(QLatin1Char('/'))) {
+                    device.path = QStringLiteral("%1event%2").arg(m_inputDir).arg(currentEventNumber);
+                } else {
+                    device.path = QStringLiteral("%1/event%2").arg(m_inputDir).arg(currentEventNumber);
+                }
                 
                 // Construct joystick path if a js handler was found
                 if (!currentHandlers.isEmpty()) {
                     QRegularExpressionMatch joyMatch = joyRegex.match(currentHandlers);
                     if (joyMatch.hasMatch()) {
-                        device.joyPath = QStringLiteral("/dev/input/js%1").arg(joyMatch.captured(1));
+                        if (m_inputDir.endsWith(QLatin1Char('/'))) {
+                            device.joyPath = QStringLiteral("%1js%2").arg(m_inputDir).arg(joyMatch.captured(1));
+                        } else {
+                            device.joyPath = QStringLiteral("%1/js%2").arg(m_inputDir).arg(joyMatch.captured(1));
+                        }
                     }
                 }
 
@@ -309,13 +329,22 @@ void DeviceManager::parseDevices()
         InputDevice device;
         device.eventNumber = currentEventNumber;
         device.name = currentName;
-        device.path = QStringLiteral("/dev/input/event%1").arg(currentEventNumber);
+        // Construct path using configured input directory
+        if (m_inputDir.endsWith(QLatin1Char('/'))) {
+            device.path = QStringLiteral("%1event%2").arg(m_inputDir).arg(currentEventNumber);
+        } else {
+            device.path = QStringLiteral("%1/event%2").arg(m_inputDir).arg(currentEventNumber);
+        }
 
         // Construct joystick path if a js handler was found
         if (!currentHandlers.isEmpty()) {
             QRegularExpressionMatch joyMatch = joyRegex.match(currentHandlers);
             if (joyMatch.hasMatch()) {
-                device.joyPath = QStringLiteral("/dev/input/js%1").arg(joyMatch.captured(1));
+                if (m_inputDir.endsWith(QLatin1Char('/'))) {
+                    device.joyPath = QStringLiteral("%1js%2").arg(m_inputDir).arg(joyMatch.captured(1));
+                } else {
+                    device.joyPath = QStringLiteral("%1/js%2").arg(m_inputDir).arg(joyMatch.captured(1));
+                }
             }
         }
 

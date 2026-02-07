@@ -19,6 +19,9 @@ class TestCommandVerifier : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void initTestCase();
+    void cleanupTestCase();
+    
     void testFlatpakDetection();
     void testUserLocalDetection();
     void testAccessibleToOtherUsers();
@@ -26,7 +29,37 @@ private Q_SLOTS:
     void testAbsoluteValidation();
     void testNonExistentCommand();
     void testFlatpakAppDetection();
+
+private:
+    QTemporaryDir m_mockBinDir;
+    QString m_mockLs;
 };
+
+void TestCommandVerifier::initTestCase()
+{
+    QVERIFY(m_mockBinDir.isValid());
+    
+    // Create dummy 'ls' command
+    m_mockLs = m_mockBinDir.filePath(QStringLiteral("ls"));
+    QFile f(m_mockLs);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("#!/bin/sh\n");
+    f.close();
+    QFile::setPermissions(m_mockLs, QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    
+    // Set up mock resolver
+    CommandVerifier::setPathResolver([this](const QString &cmd) -> QString {
+        if (cmd == QStringLiteral("ls")) return m_mockLs;
+        if (cmd == QStringLiteral("steam")) return QStringLiteral("/usr/bin/steam"); // Might fail exists() check if not created
+        return QString();
+    });
+}
+
+void TestCommandVerifier::cleanupTestCase()
+{
+    // Reset to default
+    CommandVerifier::setPathResolver(nullptr);
+}
 
 void TestCommandVerifier::testFlatpakDetection()
 {
@@ -95,13 +128,18 @@ void TestCommandVerifier::testAccessibleToOtherUsers()
 
 void TestCommandVerifier::testPathResolution()
 {
-    // Test PATH-based command resolution
+    // Test PATH-based command resolution using mock
     QString resolved = CommandVerifier::resolveCommandPath(QStringLiteral("ls"));
-    qDebug() << "Resolved 'ls' to:" << resolved;
-    // Resolution result depends on test environment PATH
+    QCOMPARE(resolved, m_mockLs);
     
-    resolved = CommandVerifier::resolveCommandPath(QStringLiteral("/usr/bin/ls"));
-    QCOMPARE(resolved, QStringLiteral("/usr/bin/ls")); // Should return unchanged for absolute paths
+    // Verify verifyCommand works with mock
+    CommandVerificationResult result = CommandVerifier::verifyCommand(QStringLiteral("ls"));
+    QVERIFY(result.isValid);
+    QCOMPARE(result.resolvedPath, m_mockLs);
+    
+    // Test non-existent command
+    resolved = CommandVerifier::resolveCommandPath(QStringLiteral("nonexistent"));
+    QVERIFY(resolved.isEmpty());
 }
 
 void TestCommandVerifier::testAbsoluteValidation()
