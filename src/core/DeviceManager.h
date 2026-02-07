@@ -82,6 +82,13 @@ public:
     ~DeviceManager() override;
 
     /**
+     * @brief Set custom input directories for testing
+     * @param inputDir Directory containing event nodes (e.g. /dev/input)
+     * @param devicesFile File containing device info (e.g. /proc/bus/input/devices)
+     */
+    void setInputPaths(const QString &inputDir, const QString &devicesFile);
+
+    /**
      * @brief Set the settings manager to use for device filtering
      */
     void setSettingsManager(SettingsManager *manager);
@@ -279,6 +286,9 @@ private:
     QVariantMap deviceToVariantMap(const InputDevice &device) const;
     void setupHotplugWatcher();
     void checkPendingDevices();
+
+    QString m_inputDir = QStringLiteral("/dev/input");
+    QString m_devicesFile = QStringLiteral("/proc/bus/input/devices");
 
     QList<InputDevice> m_devices;
     SettingsManager *m_settingsManager = nullptr;
