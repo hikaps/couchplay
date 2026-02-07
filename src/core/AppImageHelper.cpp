@@ -24,7 +24,7 @@ bool AppImageHelper::isHelperInstalled()
 QString AppImageHelper::getAppDir()
 {
     // When running as AppImage, APPDIR env var points to the mount point
-    QString appDir = qgetenv("APPDIR");
+    QString appDir = QString::fromUtf8(qgetenv("APPDIR"));
     if (appDir.isEmpty()) {
         return QCoreApplication::applicationDirPath();
     }
@@ -36,14 +36,14 @@ bool AppImageHelper::installHelper()
     // 1. Locate bundled helper files
     // In AppImage, they should be relative to APPDIR
     QString appDir = getAppDir();
-    QString binaryPath = appDir + "/usr/libexec/couchplay-helper";
-    QString scriptPath = ":/helper/install-helper.sh"; // From QRC
-    QString policyPath = ":/helper/io.github.hikaps.couchplay.policy"; // From QRC
-    
+    QString binaryPath = appDir + QStringLiteral("/usr/libexec/couchplay-helper");
+    QString scriptPath = QStringLiteral(":/helper/install-helper.sh"); // From QRC
+    QString policyPath = QStringLiteral(":/helper/io.github.hikaps.couchplay.policy"); // From QRC
+
     if (!QFile::exists(binaryPath)) {
         qWarning() << "AppImageHelper: Helper binary not found at" << binaryPath;
         // Fallback: try relative to executable if not in standard AppDir structure
-        binaryPath = QCoreApplication::applicationDirPath() + "/../libexec/couchplay-helper";
+        binaryPath = QCoreApplication::applicationDirPath() + QStringLiteral("/../libexec/couchplay-helper");
         if (!QFile::exists(binaryPath)) {
              qWarning() << "AppImageHelper: Helper binary not found at fallback" << binaryPath;
              return false;
@@ -51,12 +51,12 @@ bool AppImageHelper::installHelper()
     }
 
     // 2. Extract to /tmp
-    QString tmpDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/couchplay-install";
+    QString tmpDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/couchplay-install");
     QDir().mkpath(tmpDir);
-    
-    QString tmpBinary = tmpDir + "/couchplay-helper";
-    QString tmpScript = tmpDir + "/install-helper.sh";
-    QString tmpPolicy = tmpDir + "/io.github.hikaps.couchplay.policy";
+
+    QString tmpBinary = tmpDir + QStringLiteral("/couchplay-helper");
+    QString tmpScript = tmpDir + QStringLiteral("/install-helper.sh");
+    QString tmpPolicy = tmpDir + QStringLiteral("/io.github.hikaps.couchplay.policy");
     
     // Remove existing
     QFile::remove(tmpBinary);
@@ -86,10 +86,10 @@ bool AppImageHelper::installHelper()
     // 3. Run pkexec
     // We pass the tmp dir as argument to the script so it knows where to find files
     QStringList args;
-    args << tmpScript << "install_from_dir" << tmpDir;
+    args << tmpScript << QStringLiteral("install_from_dir") << tmpDir;
     
     // Use pkexec to run the script as root
-    int ret = QProcess::execute("pkexec", args);
+    int ret = QProcess::execute(QStringLiteral("pkexec"), args);
     
     // Cleanup
     QDir(tmpDir).removeRecursively();
