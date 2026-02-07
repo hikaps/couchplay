@@ -109,9 +109,9 @@ void TestDeviceManager::testInitialization()
     m_deviceManager = new DeviceManager(this);
     
     // Create dummy event files in temp dir
-    QFile(m_mockInputDir.filePath("event5")).open(QIODevice::WriteOnly);
-    QFile(m_mockInputDir.filePath("event6")).open(QIODevice::WriteOnly);
-    QFile(m_mockInputDir.filePath("event2")).open(QIODevice::WriteOnly);
+    QFile(m_mockInputDir.filePath(QStringLiteral("event5"))).open(QIODevice::WriteOnly);
+    QFile(m_mockInputDir.filePath(QStringLiteral("event6"))).open(QIODevice::WriteOnly);
+    QFile(m_mockInputDir.filePath(QStringLiteral("event2"))).open(QIODevice::WriteOnly);
     
     // Inject mock paths
     m_deviceManager->setInputPaths(m_mockInputDir.path(), m_mockDevicesFile);
