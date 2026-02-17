@@ -291,6 +291,62 @@ public Q_SLOTS:
     QString GetUserSteamId(const QString &username);
 
     /**
+     * Set up an overlay filesystem for a game
+     *
+     * Creates an overlay mount that merges a shared game directory with a
+     * user-specific upper layer. This allows multiple users to share game
+     * binaries while having isolated configuration files.
+     *
+     * @param username Target user (must exist, in couchplay group)
+     * @param gamePath Absolute path to shared game directory
+     * @param gameId Unique game identifier (e.g., "steam_12345")
+     * @param overrideFiles Relative paths to files needing per-user copies
+     * @param compositorUid UID of compositor user for ACL setup
+     * @return true if overlay mounted successfully
+     */
+    bool SetupOverlayMount(const QString &username, const QString &gamePath,
+                           const QString &gameId, const QStringList &overrideFiles,
+                           uint compositorUid);
+
+    /**
+     * Tear down a specific overlay mount
+     *
+     * @param username Target user
+     * @param gameId Game identifier to teardown
+     * @return true if unmounted successfully (or didn't exist)
+     */
+    bool TeardownOverlayMount(const QString &username, const QString &gameId);
+
+    /**
+     * Tear down all overlay mounts for a user
+     *
+     * @param username Target user
+     * @return true if all overlays unmounted successfully
+     */
+    bool TeardownAllUserOverlays(const QString &username);
+
+    /**
+     * Write a per-user override file into the overlay's upperdir
+     *
+     * @param username Target user
+     * @param gameId Game identifier
+     * @param relativePath Path relative to game root (validated for traversal)
+     * @param content File content to write
+     * @return true if file written successfully
+     */
+    bool WriteOverrideFile(const QString &username, const QString &gameId,
+                           const QString &relativePath, const QByteArray &content);
+
+    /**
+     * Get the mount point path for a user's game overlay
+     *
+     * @param username Target user
+     * @param gameId Game identifier
+     * @return Mount point path, or empty string if not found
+     */
+    QString GetOverlayMountPoint(const QString &username, const QString &gameId);
+
+    /**
      * Write content directly to a file in a user's directory
      *
      * Used for writing generated config files (e.g., shortcuts.vdf) directly
@@ -329,6 +385,16 @@ private:
         QString target;
     };
     QMap<QString, QList<MountInfo>> m_activeMounts;  // username -> list of mounts
+
+    // Track active overlay mounts per user for cleanup
+    struct OverlayInfo {
+        QString gameId;
+        QString gamePath;
+        QString mountPoint;
+        QString upperDir;
+        QString workDir;
+    };
+    QMap<QString, QList<OverlayInfo>> m_activeOverlays;  // username -> list of overlays
 
     // Track which compositor UIDs have runtime access set up
     QSet<uint> m_runtimeAccessSetForUid;
