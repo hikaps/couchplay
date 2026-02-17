@@ -375,6 +375,43 @@ Kirigami.ScrollablePage {
                                 }
                             }
 
+                            // Per-User Overlay Configuration
+                            ColumnLayout {
+                                Kirigami.FormData.label: i18nc("@label", "Per-User Overlay")
+                                visible: presetSelector.currentPresetId !== ""
+                                
+                                Controls.CheckBox {
+                                    id: overlayToggle
+                                    text: i18nc("@label", "Enable per-user config overlay")
+                                    checked: {
+                                        let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
+                                        return config?.overlayEnabled ?? false
+                                    }
+                                    onCheckedChanged: {
+                                        if (root.sessionManager) {
+                                            let config = root.sessionManager.getInstanceConfig(instanceCard.index)
+                                            config.overlayEnabled = checked
+                                            root.sessionManager.setInstanceConfig(instanceCard.index, config)
+                                        }
+                                    }
+                                }
+                                
+                                ListView {
+                                    id: overrideFilesList
+                                    visible: overlayToggle.checked
+                                    height: overlayToggle.checked ? implicitHeight : 0
+                                    model: {
+                                        let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
+                                        return config?.overrideFiles ?? []
+                                    }
+                                    delegate: Text {
+                                        text: modelData
+                                        color: Kirigami.Theme.textColor
+                                        opacity: 0.8
+                                    }
+                                }
+                            }
+
                             // Resolution is auto-calculated from monitor size and layout
                             Controls.Label {
                                 Kirigami.FormData.label: instanceCard.labelResolution

@@ -81,6 +81,7 @@ Kirigami.ApplicationWindow {
         helperClient: helperClient
         presetManager: presetManager
         steamConfigManager: steamConfigManager
+        heroicConfigManager: heroicConfigManager
 
         onErrorOccurred: (message) => {
             applicationWindow().showPassiveNotification(message, "long")
@@ -123,6 +124,7 @@ Kirigami.ApplicationWindow {
 
     HeroicConfigManager {
         id: heroicConfigManager
+        helperClient: helperClient
     }
 
     SteamConfigManager {
