@@ -35,6 +35,9 @@ struct InstanceConfig {
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
     Q_PROPERTY(QString presetId MEMBER presetId)
     Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
+    Q_PROPERTY(bool overlayEnabled MEMBER overlayEnabled)
+    Q_PROPERTY(QString overlayGamePath MEMBER overlayGamePath)
+    Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
 
 public:
     QString username;
@@ -53,6 +56,9 @@ public:
     QString steamAppId;                              // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam");      // ID of the launch preset to use
     QStringList sharedDirectories;                   // Per-instance shared directories (from preset)
+    bool overlayEnabled = false;
+    QString overlayGamePath;
+    QStringList overrideFiles;
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)

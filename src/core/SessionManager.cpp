@@ -116,6 +116,9 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
         instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
+        instGroup.writeEntry("overlayEnabled", inst.overlayEnabled);
+        instGroup.writeEntry("overlayGamePath", inst.overlayGamePath);
+        instGroup.writeEntry("overrideFiles", inst.overrideFiles);
 
         // Convert devices to string list (legacy - for backwards compatibility)
         QStringList deviceStrings;
@@ -177,6 +180,9 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
         inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
+        inst.overlayEnabled = instGroup.readEntry("overlayEnabled", false);
+        inst.overlayGamePath = instGroup.readEntry("overlayGamePath", QString());
+        inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
 
         // Read stable device IDs (primary - survives hotplug/reboot)
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
