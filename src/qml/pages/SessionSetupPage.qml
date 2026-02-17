@@ -277,6 +277,8 @@ Kirigami.ScrollablePage {
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelDevices: i18nc("@label", "Devices:")
+                readonly property string labelOverlay: i18nc("@label", "Per-User Overlay:")
+                readonly property string textEnableOverlay: i18nc("@label", "Enable per-user config overlay")
 
                 readonly property string textNoneAssigned: i18nc("@info", "None assigned")
                 readonly property string textAssign: i18nc("@action:button", "Assign...")
@@ -377,12 +379,12 @@ Kirigami.ScrollablePage {
 
                             // Per-User Overlay Configuration
                             ColumnLayout {
-                                Kirigami.FormData.label: i18nc("@label", "Per-User Overlay")
+                                Kirigami.FormData.label: instanceCard.labelOverlay
                                 visible: presetSelector.currentPresetId !== ""
                                 
                                 Controls.CheckBox {
                                     id: overlayToggle
-                                    text: i18nc("@label", "Enable per-user config overlay")
+                                    text: instanceCard.textEnableOverlay
                                     checked: {
                                         let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
                                         return config?.overlayEnabled ?? false
