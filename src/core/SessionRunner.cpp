@@ -134,6 +134,14 @@ void SessionRunner::setSteamConfigManager(SteamConfigManager *manager)
     }
 }
 
+void SessionRunner::setHeroicConfigManager(HeroicConfigManager *manager)
+{
+    if (m_heroicConfigManager != manager) {
+        m_heroicConfigManager = manager;
+        Q_EMIT heroicConfigManagerChanged();
+    }
+}
+
 void SessionRunner::setBorderlessWindows(bool borderless)
 {
     if (m_borderlessWindows != borderless) {
@@ -557,6 +565,21 @@ bool SessionRunner::setupLauncherAccess()
                     qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
                 }
             }
+        }
+
+        // Handle Heroic Shortcut Sync
+        if (preset.launcherId == QStringLiteral("heroic")) {
+             if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+                 qCDebug(couchplaySteam) << "Syncing Heroic config and shortcuts for user" << username;
+                 if (!m_heroicConfigManager->syncConfigToUser(username)) {
+                     qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
+                     allSucceeded = false;
+                 }
+                 if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
+                     qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
+                     allSucceeded = false;
+                 }
+             }
         }
 
         if (!m_steamConfigManager) {

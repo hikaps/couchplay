@@ -3,6 +3,7 @@
 
 #include "HeroicConfigManager.h"
 #include "Logging.h"
+#include "../dbus/CouchPlayHelperClient.h"
 
 #include <QDebug>
 #include <QDir>
@@ -96,8 +97,195 @@ void HeroicConfigManager::detectHeroicPaths()
     } else {
         qWarning() << "HeroicConfigManager: config.json not found, marking as invalid";
     }
+
+    // Set shortcuts directory (standard XDG location where Heroic puts .desktop files)
+    m_heroicPaths.shortcutsDir = m_userHome + QStringLiteral("/.local/share/applications");
     
     Q_EMIT heroicPathsChanged();
+}
+
+void HeroicConfigManager::setHelperClient(CouchPlayHelperClient *client)
+{
+    if (m_helperClient != client) {
+        m_helperClient = client;
+        Q_EMIT helperClientChanged();
+    }
+}
+
+int HeroicConfigManager::generateShortcuts()
+{
+    if (!m_heroicPaths.valid) {
+        qWarning() << "HeroicConfigManager: Heroic not detected, cannot generate shortcuts";
+        return 0;
+    }
+
+    QDir shortcutsDir(m_heroicPaths.shortcutsDir);
+    if (!shortcutsDir.exists()) {
+        shortcutsDir.mkpath(QStringLiteral("."));
+    }
+
+    int generated = 0;
+    QString launchCmd = m_heroicPaths.isFlatpak 
+        ? QStringLiteral("flatpak run com.heroicgameslauncher.hgl --no-gui")
+        : QStringLiteral("heroic --no-gui");
+
+    for (const HeroicGame &game : m_games) {
+        QString runner = game.runner;
+        if (runner.isEmpty()) {
+            runner = QStringLiteral("sideload");
+        }
+
+        QString desktopContent = QStringLiteral(
+            "[Desktop Entry]\n"
+            "Version=1.0\n"
+            "Type=Application\n"
+            "Name=%1\n"
+            "Exec=%2 \"heroic://launch/%3/%4\"\n"
+            "Icon=applications-games\n"
+            "Categories=Game;\n"
+            "StartupNotify=true\n"
+        ).arg(game.title, launchCmd, runner, game.appName);
+
+        QString filename = QStringLiteral("heroic-%1.desktop").arg(game.appName);
+        QString filePath = shortcutsDir.absoluteFilePath(filename);
+
+        QFile file(filePath);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            file.write(desktopContent.toUtf8());
+            file.close();
+            generated++;
+            qDebug() << "HeroicConfigManager: Generated shortcut" << filename;
+        } else {
+            qWarning() << "HeroicConfigManager: Failed to write shortcut" << filePath;
+        }
+    }
+
+    qDebug() << "HeroicConfigManager: Generated" << generated << "shortcuts";
+    return generated;
+}
+
+bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
+{
+    qDebug() << "HeroicConfigManager: Syncing shortcuts to" << targetUsername;
+
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        qWarning() << "HeroicConfigManager: Helper not available, cannot sync shortcuts";
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    if (!m_heroicPaths.valid) {
+        qWarning() << "HeroicConfigManager: Heroic not detected, cannot sync shortcuts";
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Heroic not detected"));
+        return false;
+    }
+
+    QDir sourceDir(m_heroicPaths.shortcutsDir);
+    if (!sourceDir.exists()) {
+        sourceDir.mkpath(QStringLiteral("."));
+    }
+
+    if (m_games.isEmpty()) {
+        loadGames();
+    }
+    
+    int generated = generateShortcuts();
+    qDebug() << "HeroicConfigManager: Generated" << generated << "shortcuts from game library";
+
+    QStringList filters;
+    filters << QStringLiteral("heroic-*.desktop");
+    QStringList shortcuts = sourceDir.entryList(filters, QDir::Files);
+    
+    if (shortcuts.isEmpty()) {
+        qDebug() << "HeroicConfigManager: No shortcuts to sync";
+        return true;
+    }
+
+    struct passwd *pw = getpwnam(targetUsername.toLocal8Bit().constData());
+    if (!pw) {
+        qWarning() << "HeroicConfigManager: User not found:" << targetUsername;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("User not found"));
+        return false;
+    }
+    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    QString targetDir = targetHome + QStringLiteral("/.local/share/applications");
+
+    if (!m_helperClient->createUserDirectory(targetDir, targetUsername)) {
+        qWarning() << "HeroicConfigManager: Failed to create target directory:" << targetDir;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to create target directory"));
+        return false;
+    }
+
+    bool allSucceeded = true;
+    for (const QString &filename : shortcuts) {
+        QString sourcePath = sourceDir.absoluteFilePath(filename);
+        QString targetPath = targetDir + QLatin1Char('/') + filename;
+
+        qDebug() << "HeroicConfigManager: Copying" << filename << "to" << targetUsername;
+        
+        if (!m_helperClient->copyFileToUser(sourcePath, targetPath, targetUsername)) {
+            qWarning() << "HeroicConfigManager: Failed to copy" << filename;
+            allSucceeded = false;
+        }
+    }
+
+    if (allSucceeded) {
+        Q_EMIT syncCompleted(targetUsername);
+    } else {
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to sync some shortcuts"));
+    }
+
+    return allSucceeded;
+}
+
+bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
+{
+    qDebug() << "HeroicConfigManager: Syncing library to" << targetUsername;
+
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        qWarning() << "HeroicConfigManager: Helper not available, cannot sync config";
+        return false;
+    }
+
+    if (!m_heroicPaths.valid) {
+        qWarning() << "HeroicConfigManager: Heroic not detected, cannot sync config";
+        return false;
+    }
+
+    struct passwd *pw = getpwnam(targetUsername.toLocal8Bit().constData());
+    if (!pw) {
+        qWarning() << "HeroicConfigManager: User not found:" << targetUsername;
+        return false;
+    }
+    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    
+    QString targetHeroicRoot;
+    if (m_heroicPaths.isFlatpak) {
+        targetHeroicRoot = targetHome + QStringLiteral("/.var/app/com.heroicgameslauncher.hgl/config/heroic");
+    } else {
+        targetHeroicRoot = targetHome + QStringLiteral("/.config/heroic");
+    }
+
+    auto copyFile = [this, &targetUsername, &targetHeroicRoot](const QString &sourcePath, const QString &relTargetPath) {
+        if (!QFile::exists(sourcePath)) {
+            return;
+        }
+        QString targetPath = targetHeroicRoot + QLatin1Char('/') + relTargetPath;
+        qDebug() << "HeroicConfigManager: Copying" << relTargetPath;
+        m_helperClient->copyFileToUser(sourcePath, targetPath, targetUsername);
+    };
+
+    copyFile(m_heroicPaths.sideloadLibrary, QStringLiteral("sideload_apps/library.json"));
+    
+    if (!m_heroicPaths.legendaryInstalled.isEmpty()) {
+        copyFile(m_heroicPaths.legendaryInstalled, QStringLiteral("legendaryConfig/legendary/installed.json"));
+    }
+    
+    copyFile(m_heroicPaths.gogInstalled, QStringLiteral("gog_store/installed.json"));
+    copyFile(m_heroicPaths.nileInstalled, QStringLiteral("nile_config/installed.json"));
+
+    qDebug() << "HeroicConfigManager: Library sync completed for" << targetUsername;
+    return true;
 }
 
 QString HeroicConfigManager::heroicCommand() const

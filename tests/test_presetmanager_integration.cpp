@@ -172,7 +172,7 @@ void TestPresetManagerIntegration::testHeroicDetected()
              homeDir.path() + QStringLiteral("/Games/Heroic"));
 
     QCOMPARE(heroicPreset.launcherInfo.requiresAcls, true);
-    QCOMPARE(heroicPreset.launcherInfo.hasShortcutSync, false);
+    QCOMPARE(heroicPreset.launcherInfo.hasShortcutSync, true);
 
     // Verify gameDirectories are extracted
     QCOMPARE(heroicPreset.launcherInfo.gameDirectories.size(), 3);

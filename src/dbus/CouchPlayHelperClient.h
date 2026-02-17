@@ -25,7 +25,7 @@ public:
     /**
      * @brief Check if the helper is available
      */
-    bool isAvailable() const { return m_available; }
+    virtual bool isAvailable() const { return m_available; }
 
     /**
      * @brief Set device ownership for a specific user
@@ -128,7 +128,7 @@ public:
      * @param username Target user (file will be owned by this user)
      * @return true if successful
      */
-    Q_INVOKABLE bool copyFileToUser(const QString &sourcePath, const QString &targetPath,
+    Q_INVOKABLE virtual bool copyFileToUser(const QString &sourcePath, const QString &targetPath,
                                      const QString &username);
 
     /**
@@ -137,7 +137,7 @@ public:
      * @param username User who should own the directory
      * @return true if successful
      */
-    Q_INVOKABLE bool createUserDirectory(const QString &path, const QString &username);
+    Q_INVOKABLE virtual bool createUserDirectory(const QString &path, const QString &username);
 
     /**
      * @brief Set ACL on a directory to grant a user read+execute access

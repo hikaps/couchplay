@@ -110,7 +110,7 @@ void PresetManager::initBuiltinPresets()
             heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
             heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
             heroic.launcherInfo.requiresAcls = true;
-            heroic.launcherInfo.hasShortcutSync = false;
+            heroic.launcherInfo.hasShortcutSync = true;
 
             if (m_heroicConfigManager->gameCount() == 0) {
                 m_heroicConfigManager->loadGames();
