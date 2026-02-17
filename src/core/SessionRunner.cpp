@@ -15,6 +15,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QGuiApplication>
+#include <QCryptographicHash>
 #include <QScreen>
 #include <QSet>
 
@@ -229,6 +230,11 @@ bool SessionRunner::start()
         qWarning() << "Failed to set up shared directories - continuing anyway";
     }
 
+    // Set up overlay mounts (requires polkit helper)
+    if (!setupOverlayMounts()) {
+        qWarning() << "Failed to set up overlay mounts - continuing anyway";
+    }
+
     // Set up launcher access (ACLs, shortcut sync)
     if (!setupLauncherAccess()) {
         qWarning() << "Failed to set up launcher access - continuing anyway";
@@ -324,6 +330,9 @@ void SessionRunner::stop()
 
     // Restore device ownership
     restoreDeviceOwnership();
+
+    // Teardown overlay mounts
+    teardownOverlayMounts();
 
     // Teardown shared directory mounts
     teardownSharedDirectories();
@@ -533,6 +542,119 @@ void SessionRunner::teardownSharedDirectories()
 
     // Unmount all shared directories for all users
     m_helperClient->unmountAllSharedDirectories();
+}
+
+bool SessionRunner::setupOverlayMounts()
+{
+    if (!m_helperClient || !m_sessionManager) {
+        return true;
+    }
+
+    if (!m_helperClient->isAvailable()) {
+        qCWarning(couchplaySharing) << "Helper not available, skipping overlay mount setup";
+        return true;
+    }
+
+    uint compositorUid = static_cast<uint>(getuid());
+
+    const auto &profile = m_sessionManager->currentProfile();
+    bool allSucceeded = true;
+
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        const auto &instConfig = profile.instances[i];
+        
+        if (!instConfig.overlayEnabled) {
+            continue;
+        }
+        
+        const QString &username = instConfig.username;
+        
+        if (username.isEmpty()) {
+            qCDebug(couchplaySharing) << "Instance" << i << "has no username, skipping overlay mount";
+            continue;
+        }
+        
+        QString gamePath = instConfig.overlayGamePath;
+        if (gamePath.isEmpty()) {
+            qCWarning(couchplaySharing) << "Instance" << i << "has overlay enabled but no game path, skipping";
+            continue;
+        }
+        
+        QString gameId = instConfig.steamAppId;
+        if (gameId.isEmpty()) {
+            gameId = QString::fromLatin1(QCryptographicHash::hash(
+                gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
+        }
+        
+        const QStringList &overrideFiles = instConfig.overrideFiles;
+        
+        qCDebug(couchplaySharing) << "Setting up overlay mount for instance" << i
+                                  << "user" << username
+                                  << "gamePath:" << gamePath
+                                  << "gameId:" << gameId
+                                  << "overrideFiles:" << overrideFiles.size();
+        
+        if (!m_helperClient->setupOverlayMount(username, gamePath, gameId, overrideFiles, compositorUid)) {
+            qCWarning(couchplaySharing) << "Failed to set up overlay mount for instance" << i
+                                        << "user" << username << "gameId:" << gameId;
+            Q_EMIT errorOccurred(QStringLiteral("Overlay mount failed for instance %1 (user: %2). "
+                                                 "The game will use the shared directory instead.")
+                                 .arg(i + 1).arg(username));
+            allSucceeded = false;
+            // Continue with other instances - graceful degradation
+        }
+    }
+
+    return allSucceeded;
+}
+
+void SessionRunner::teardownOverlayMounts()
+{
+    if (!m_helperClient || !m_sessionManager) {
+        return;
+    }
+
+    if (!m_helperClient->isAvailable()) {
+        qCWarning(couchplaySharing) << "Helper not available, cannot teardown overlay mounts";
+        return;
+    }
+
+    const auto &profile = m_sessionManager->currentProfile();
+
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        const auto &instConfig = profile.instances[i];
+        
+        if (!instConfig.overlayEnabled) {
+            continue;
+        }
+        
+        const QString &username = instConfig.username;
+        
+        if (username.isEmpty()) {
+            continue;
+        }
+        
+        QString gameId = instConfig.steamAppId;
+        if (gameId.isEmpty()) {
+            QString gamePath = instConfig.overlayGamePath;
+            if (!gamePath.isEmpty()) {
+                gameId = QString::fromLatin1(QCryptographicHash::hash(
+                    gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
+            }
+        }
+        
+        if (gameId.isEmpty()) {
+            continue;
+        }
+        
+        qCDebug(couchplaySharing) << "Tearing down overlay mount for instance" << i
+                                  << "user" << username << "gameId:" << gameId;
+        
+        if (!m_helperClient->teardownOverlayMount(username, gameId)) {
+            qCWarning(couchplaySharing) << "Failed to teardown overlay mount for instance" << i
+                                        << "user" << username << "gameId:" << gameId;
+        }
+    }
 }
 
 bool SessionRunner::setupLauncherAccess()

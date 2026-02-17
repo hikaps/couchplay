@@ -161,6 +161,8 @@ private:
     void restoreDeviceOwnership();
     bool setupSharedDirectories();
     void teardownSharedDirectories();
+    bool setupOverlayMounts();
+    void teardownOverlayMounts();
     bool setupLauncherAccess();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
