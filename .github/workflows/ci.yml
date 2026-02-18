@@ -33,7 +33,7 @@ jobs:
         run: cmake --build build --parallel 2
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -E "test_usermanager|test_couchplayhelper|test_gamescopeinstance|test_presetmanager_integration|test_commandverifier|test_devicemanager"
+        run: ctest --test-dir build --output-on-failure -E "test_usermanager|test_couchplayhelper|test_gamescopeinstance|test_presetmanager_integration|test_commandverifier|test_devicemanager|test_heroicconfigmanager"
         env:
           QT_QPA_PLATFORM: offscreen
 
