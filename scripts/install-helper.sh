@@ -44,6 +44,9 @@ else
     mkdir -p "$POLKIT_DIR"
 fi
 
+# Binary name
+HELPER_BINARY="couchplay-helper"
+
 # Source paths (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -61,9 +64,6 @@ else
     BINARY_PATH="${PROJECT_DIR}/build/bin/${HELPER_BINARY}"
     DATA_DIR="${PROJECT_DIR}/data"
 fi
-
-# Binary name
-HELPER_BINARY="couchplay-helper"
 
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
