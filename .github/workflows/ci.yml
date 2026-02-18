@@ -36,3 +36,20 @@ jobs:
         run: ctest --test-dir build --output-on-failure -E "test_usermanager|test_couchplayhelper|test_gamescopeinstance|test_presetmanager_integration|test_commandverifier|test_devicemanager"
         env:
           QT_QPA_PLATFORM: offscreen
+
+      - name: Package
+        run: |
+          mkdir -p pkg/bin pkg/data
+          cp build/bin/couchplay pkg/bin/
+          cp build/bin/couchplay-helper pkg/bin/
+          cp scripts/install-helper.sh pkg/
+          chmod +x pkg/install-helper.sh
+          cp -r data/* pkg/data/
+          VERSION="${{ github.event.pull_request.number || 'develop' }}"
+          tar -czf couchplay-${VERSION}-linux.tar.gz -C pkg .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: couchplay-build
+          path: couchplay-*.tar.gz
