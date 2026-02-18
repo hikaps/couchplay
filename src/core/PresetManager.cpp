@@ -54,10 +54,10 @@ QStringList PresetManager::getDefaultSharedDirectories(const QString &id) const
         }
     } else if (id == QStringLiteral("heroic")) {
         if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            QString configPath = m_heroicConfigManager->configPath();
-            if (!configPath.isEmpty()) {
-                dirs.append(configPath);
-            }
+            // NOTE: configPath is NOT added to shared directories because:
+            // 1. syncConfigToUser() copies specific config files to the gaming user's home
+            // 2. Bind-mounting the config dir would cause ownership conflicts when syncing
+            // Only share the install path where games are installed
             QString installPath = m_heroicConfigManager->defaultInstallPath();
             if (!installPath.isEmpty()) {
                 dirs.append(installPath);

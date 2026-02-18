@@ -186,11 +186,11 @@ void TestPresetManagerIntegration::testHeroicDetected()
     // Verify command is set from HeroicConfigManager
     QCOMPARE(heroicPreset.command, QStringLiteral("heroic"));
 
-    // Verify shared directories for Heroic exclude game directories
+    // Verify shared directories for Heroic - only installPath, not configPath
+    // (configPath is synced via syncConfigToUser, not bind-mounted)
     QStringList sharedDirs = presetManager.getSharedDirectories(QStringLiteral("heroic"));
-    QCOMPARE(sharedDirs.size(), 2); // configPath + installPath
+    QCOMPARE(sharedDirs.size(), 1);
 
-    QVERIFY(sharedDirs.contains(homeDir.path() + QStringLiteral("/.config/heroic")));
     QVERIFY(sharedDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic")));
     QVERIFY(!sharedDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame")));
     QVERIFY(!sharedDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/GogGame")));
