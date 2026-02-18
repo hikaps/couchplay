@@ -72,6 +72,10 @@ Controls.ComboBox {
     onCurrentPresetIdChanged: {
         updateCurrentIndex()
     }
+    
+    onModelChanged: {
+        updateCurrentIndex()
+    }
 
     // When user selects a different preset
     onActivated: function(index) {

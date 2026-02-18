@@ -38,6 +38,7 @@ struct InstanceConfig {
     Q_PROPERTY(bool overlayEnabled MEMBER overlayEnabled)
     Q_PROPERTY(QString overlayGamePath MEMBER overlayGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
+    Q_PROPERTY(QStringList overlayPatterns MEMBER overlayPatterns)
 
 public:
     QString username;
@@ -59,6 +60,7 @@ public:
     bool overlayEnabled = false;
     QString overlayGamePath;
     QStringList overrideFiles;
+    QStringList overlayPatterns;                      // Glob patterns for per-user overrides
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)

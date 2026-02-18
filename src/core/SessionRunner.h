@@ -128,6 +128,15 @@ public:
                                          int instanceCount,
                                          const QRect &screenGeometry);
 
+    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash);
+
+    static QStringList expandPatternsToFiles(const QString &gamePath, const QStringList &patterns);
+    
+    // Returns override path for a preset (~/.local/share/hikaps/CouchPlay/overrides/<presetId>/), creating it if needed
+    Q_INVOKABLE static QString getAndEnsureOverridesPath(const QString &presetId);
+    
+    void loadOverrideFiles(const QString &overridesRoot, const QStringList &matchedFiles, const QString &username, const QString &gameId);
+
 Q_SIGNALS:
     void runningChanged();
     void runningInstanceCountChanged();
