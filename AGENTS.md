@@ -7,21 +7,21 @@
 Developed on **Bazzite** (immutable Fedora with Wayland/KDE). Build in distrobox container, run on host.
 
 ```bash
-# Configure
-distrobox enter fedora-dev -- bash -c "cd /var/home/notaname/Repos/splitscreen && cmake -B build"
+# Configure (run from project root)
+distrobox enter fedora-dev -- cmake -B build
 
 # Build
-distrobox enter fedora-dev -- bash -c "cd /var/home/notaname/Repos/splitscreen && cmake --build build"
+distrobox enter fedora-dev -- cmake --build build
 
 # Run (on HOST - gamescope requires host environment)
 ./build/bin/couchplay
 
 # Tests
-distrobox enter fedora-dev -- bash -c "cd /var/home/notaname/Repos/splitscreen/build && ctest --output-on-failure"
+distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 
-# Single test: ctest -R DeviceManagerTest --output-on-failure
-# List tests: ctest -N
-# Direct run: ./bin/test_devicemanager
+# Single test: ctest --test-dir build -R DeviceManagerTest --output-on-failure
+# List tests: ctest --test-dir build -N
+# Direct run: ./build/bin/test_devicemanager
 ```
 
 ## Structure
@@ -121,7 +121,6 @@ distrobox enter fedora-dev -- bash -c "cd /var/home/notaname/Repos/splitscreen/b
 
 ## ANTI-PATTERNS (Project-Specific)
 
-- **No CI/CD**: No `.github/workflows`, no automated testing pipeline
 - **No linting config**: No `.clang-format`, `.clang-tidy`, `.editorconfig`
 - **Test source inclusion**: Tests include source files directly instead of linking targets (see `tests/CMakeLists.txt`)
 - **Gamescope host requirement**: App must run on host, not in container (gamescope needs host display)
@@ -150,3 +149,5 @@ distrobox enter fedora-dev -- bash -c "cd /var/home/notaname/Repos/splitscreen/b
 - **Local docs**: `PLAN.md` contains architecture overview and feature roadmap
 - **Build artifacts**: Ignore `build/` directory
 - **Test files in root**: `test_*.cpp` files are temporary/experimental, not part of test suite
+- **CI exclusions**: CI skips 6/13 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
+- **Security TODO**: `helper/SystemOps.cpp:checkAuthorization()` stub returns true (Polkit not implemented)

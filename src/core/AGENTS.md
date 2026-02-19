@@ -22,6 +22,11 @@ Core business logic layer: device management, session orchestration, user/monito
 
 **Data Structures:** `InputDevice`, `InstanceConfig`, `SessionProfile`, `SteamPaths`, `SteamShortcut` (Q_GADGET structs)
 
+**Shared Utilities:**
+- `Logging.h/cpp` - 6 scoped logging categories (couchplayCore, couchplaySteam, couchplayHelper, couchplayGamescope, couchplayDevices, couchplaySharing)
+- `CommandVerifier.h/cpp` - Static utility for command validation (Flatpak detection, PATH resolution, executable checks)
+- `../dbus/CouchPlayHelperClient` - Shared D-Bus client for privileged operations (used by SessionRunner, UserManager, SteamConfigManager, GamescopeInstance)
+
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
@@ -66,3 +71,17 @@ SessionRunner (orchestrator)
 ```
 
 **Device Assignment Flow:** DeviceManager detects → stableId → user assigns via QML → SessionRunner starts → Helper transfers ownership via D-Bus → hotplug reconnection → auto-restore
+
+## COMPLEXITY HOTSPOTS
+
+**DeviceManager.cpp (954 lines):**
+- `onDebounceTimeout()` (lines 72-181): 4-phase hotplug state machine (store old → parse new → detect disconnection → detect reconnection)
+- `parseDevices()` (lines 190-340): Regex-based `/proc/bus/input/devices` parser
+- `detectDeviceType()`: Ghost device filtering (opens device, queries EVIOCGBIT)
+
+**SessionRunner.cpp (837 lines):**
+- `start()` (lines 145-300): 6-phase orchestration (validation → layout → device ownership → mounts → ACLs → instance creation)
+- `setupLauncherAccess()`: Conditional ACL + Steam shortcuts sync
+
+**SteamConfigManager.cpp (599 lines):**
+- `parseShortcutsVdf()`: Binary VDF parser with type markers (0x00=object, 0x01=string, 0x02=int32)

@@ -6,9 +6,11 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 ## STRUCTURE
 
-**CouchPlayHelper.cpp (1580 lines):** Main service implementation - Polkit authorization, D-Bus slots, machinectl process spawning, device ownership, mount management
+**CouchPlayHelper.cpp (1595 lines):** Main service implementation - Polkit authorization, D-Bus slots, machinectl process spawning, device ownership, mount management
 
 **CouchPlayHelper.h (330 lines):** D-Bus interface definition - 15 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
+
+**SystemOps.h/cpp:** Abstraction layer for system calls (getpwnam, chown, mount, etc.) - enables mocking in tests
 
 ## WHERE TO LOOK
 
@@ -63,6 +65,12 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 **Mount Aliasing:** MountSharedDirectories() supports both home-relative paths (mounted at same relative location) and absolute paths with explicit aliases or ~/.couchplay/mounts/ default.
 
 **Cleanup Contract:** Helper destructor removes all device ownership changes and unmounts all mounts - ensures no lingering privileged state after app exit.
+
+**IPC Cleanup on DeleteUser:** Removes semaphores, shared memory, message queues owned by user to prevent "Permission denied" errors if new user gets same name.
+
+**Reverse Mount Unmounting:** UnmountSharedDirectories() processes mounts in reverse order for nested mount handling.
+
+**Lazy Umount Fallback:** Tries `umount` first, falls back to `umount -l` on failure.
 
 ## NOTES
 

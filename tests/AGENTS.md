@@ -54,6 +54,32 @@ QtTest unit test suite for core manager components (11 test files, ~7.2K lines).
 - No mocking framework (GMock/QtMock) - build mock data manually
 - D-Bus tests: Use real helper client, may fail if polkit unavailable
 
+## MOCK PATTERNS
+
+**1. Manual Mock Class (test_sessionrunner.cpp):**
+```cpp
+class MockCouchPlayHelperClient : public CouchPlayHelperClient {
+    QList<AclCall> aclCalls;  // Record calls for verification
+    bool setPathAclWithParents(...) override { aclCalls.append({path, username}); return true; }
+};
+```
+
+**2. Comprehensive Mock (test_couchplayhelper.cpp):**
+```cpp
+class MockSystemOps : public SystemOps {
+    void setAuthResult(bool authorized) { m_authorized = authorized; }
+    void setUserExists(const QString &username, bool exists, uint uid = 0);
+    struct passwd *getpwnam(const char *name) override;
+};
+```
+
+**3. Private Member Access (test_sessionrunner.cpp):**
+```cpp
+#define private public
+#include "SessionRunner.h"
+#undef private
+```
+
 ### Test Method Naming
 - `test<Feature>()` - basic functionality (e.g., `testInitialization()`)
 - `test<Method><Scenario>()` - method-specific cases (e.g., `testAddGameDuplicate()`)
@@ -64,6 +90,6 @@ QtTest unit test suite for core manager components (11 test files, ~7.2K lines).
 - **No test doubles framework**: Mocking requires manual file creation - verbose
 - **Flaky environment tests**: Tests assuming specific desktop files or installed flatpaks may fail
 - **D-Bus dependency**: `UserManagerTest` requires helper service running
-- **No CI/CD**: Tests run locally only; no automated pipeline to catch regressions
+- **CI exclusions**: CI skips 6/13 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
 - **Verbose mocking**: Creating mock config files inline in tests (see `test_heroicconfigmanager.cpp`)
 - **Partial coverage**: Some managers (AudioManager, SessionRunner) lack dedicated tests

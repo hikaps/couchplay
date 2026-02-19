@@ -12,6 +12,8 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 
 **Components (components/):** SelectableCard (selection state), ActionCard (CTA with badge), InfoCard, PresetSelector (ComboBox)
 
+**Dialogs (components/dialogs/):** AddPresetDialog (search/filter ListView), EditPresetDialog (ListModel + FolderDialog), DeletePresetDialog, ResetSettingsDialog, InstallHelperDialog
+
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
@@ -72,3 +74,28 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 **Lazy Managers:** SettingsPage creates internal PresetManager if not provided (enables standalone testing).
 
 **Badge:** ActionCard/SelectableCard support `badgeCount` with visual indicator.
+
+## DIALOG PATTERNS
+
+**Structure:**
+- Base: `Kirigami.Dialog` (complex) or `Kirigami.PromptDialog` (simple confirmations)
+- Size: `preferredWidth: Kirigami.Units.gridUnit * 30`
+- Buttons: `standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel`
+- Injection: `required property var managerName`
+
+**I18n Context Tags:**
+- `@title:dialog` — Dialog titles
+- `@info` — Explanatory text
+- `@action:button` — Button labels
+
+**Common Patterns:**
+```qml
+// Notification
+applicationWindow().showPassiveNotification(i18nc("@info", "Message"), "long")
+
+// Empty state
+Kirigami.PlaceholderMessage { visible: listView.count === 0 }
+
+// Footer button
+footerLeadingComponent: Controls.Button { icon.name: "folder-add" }
+```
