@@ -44,14 +44,26 @@ else
     mkdir -p "$POLKIT_DIR"
 fi
 
-# Source paths (relative to script location)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="${PROJECT_DIR}/build"
-DATA_DIR="${PROJECT_DIR}/data"
-
 # Binary name
 HELPER_BINARY="couchplay-helper"
+
+# Source paths (relative to script location)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Detect structure: release tarball or build directory
+# Release tarball: script at root, bin/ and data/ are siblings
+# Build directory: script in scripts/, build/bin/ and data/ exist
+if [[ -f "${SCRIPT_DIR}/bin/${HELPER_BINARY}" ]]; then
+    # Release tarball structure
+    RELEASE_DIR="${SCRIPT_DIR}"
+    BINARY_PATH="${RELEASE_DIR}/bin/${HELPER_BINARY}"
+    DATA_DIR="${RELEASE_DIR}/data"
+else
+    # Build directory structure
+    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+    BINARY_PATH="${PROJECT_DIR}/build/bin/${HELPER_BINARY}"
+    DATA_DIR="${PROJECT_DIR}/data"
+fi
 
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -73,8 +85,8 @@ check_root() {
 }
 
 check_binary() {
-    if [[ ! -f "${BUILD_DIR}/bin/${HELPER_BINARY}" ]]; then
-        print_error "Helper binary not found at ${BUILD_DIR}/bin/${HELPER_BINARY}"
+    if [[ ! -f "${BINARY_PATH}" ]]; then
+        print_error "Helper binary not found at ${BINARY_PATH}"
         print_info "Please build the project first:"
         echo "    mkdir -p build && cd build"
         echo "    cmake .."
@@ -91,7 +103,7 @@ install_helper() {
 
     # Install binary
     print_info "Installing binary to ${LIBEXEC_DIR}/"
-    install -Dm755 "${BUILD_DIR}/bin/${HELPER_BINARY}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
+    install -Dm755 "${BINARY_PATH}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
 
     # Install D-Bus configuration
     print_info "Installing D-Bus configuration..."
