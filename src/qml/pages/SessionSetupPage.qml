@@ -270,6 +270,30 @@ Kirigami.ScrollablePage {
 
                 required property int index
                 
+                // Pass managers through to avoid root access issues in bindings
+                property var cardPresetManager: root.presetManager
+                property var cardSessionManager: root.sessionManager
+                
+                // Copy revision counter for reliable binding
+                property int cardRevision: root?.instancesRevision ?? 0
+                
+                // Current preset ID (updated when instances change)
+                property string currentPresetId: {
+                    void(cardRevision)
+                    if (!cardSessionManager) return "steam"
+                    let config = cardSessionManager.getInstanceConfig(instanceCard.index)
+                    return config?.presetId || "steam"
+                }
+                
+                // Overlay patterns for this instance
+                property var overlayPatternsModel: {
+                    void(cardRevision)
+                    if (!cardSessionManager) return []
+                    let config = cardSessionManager.getInstanceConfig(instanceCard.index)
+                    let patterns = config?.overlayPatterns
+                    return patterns ? patterns : []
+                }
+                
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
                 readonly property string labelUser: i18nc("@label", "User:")
                 readonly property string labelLauncher: i18nc("@label", "Launcher:")
@@ -277,6 +301,12 @@ Kirigami.ScrollablePage {
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelDevices: i18nc("@label", "Devices:")
+                readonly property string labelOverlay: i18nc("@label", "Per-User Overlay:")
+                readonly property string textEnableOverlay: i18nc("@label", "Enable per-user config overlay")
+                readonly property string labelPatterns: i18nc("@label", "Override Patterns:")
+                readonly property string placeholderPattern: i18nc("@placeholder", "e.g., *.ini or config/*.conf")
+                readonly property string buttonAdd: i18nc("@action:button", "Add")
+                readonly property string buttonRemove: i18nc("@action:button", "Remove")
 
                 readonly property string textNoneAssigned: i18nc("@info", "None assigned")
                 readonly property string textAssign: i18nc("@action:button", "Assign...")
@@ -356,20 +386,54 @@ Kirigami.ScrollablePage {
                                 id: presetSelector
                                 Kirigami.FormData.label: instanceCard.labelLauncher
                                 Layout.fillWidth: true
-                                presetManager: root.presetManager
-                                currentPresetId: {
-                                    let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
-                                    return config?.presetId ?? "steam"
-                                }
+                                presetManager: instanceCard.cardPresetManager
+                                currentPresetId: instanceCard.currentPresetId
                                 
                                 onPresetSelected: function(presetId) {
-                                    if (root.sessionManager) {
-                                        root.sessionManager.setInstancePreset(instanceCard.index, presetId)
+                                    if (instanceCard.cardSessionManager) {
+                                        instanceCard.cardSessionManager.setInstancePreset(instanceCard.index, presetId)
 
                                         // Also copy shared directories from the preset
-                                        if (root.presetManager) {
-                                            let directories = root.presetManager.getSharedDirectories(presetId) || []
-                                            root.sessionManager.setInstanceSharedDirectories(instanceCard.index, directories)
+                                        if (instanceCard.cardPresetManager) {
+                                            let directories = instanceCard.cardPresetManager.getSharedDirectories(presetId) || []
+                                            instanceCard.cardSessionManager.setInstanceSharedDirectories(instanceCard.index, directories)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Per-User Overlay Configuration - Pattern input
+                            RowLayout {
+                                Kirigami.FormData.label: instanceCard.labelOverlay
+                                visible: presetSelector.currentPresetId !== ""
+                                Layout.fillWidth: true
+                                
+                                Controls.TextField {
+                                    id: patternInput
+                                    placeholderText: instanceCard.placeholderPattern
+                                    Layout.fillWidth: true
+                                    onAccepted: {
+                                        if (text.trim() !== "" && instanceCard.cardSessionManager) {
+                                            let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                            let patterns = [...(config.overlayPatterns || [])]
+                                            patterns.push(text.trim())
+                                            config.overlayPatterns = patterns
+                                            instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                            text = ""
+                                        }
+                                    }
+                                }
+                                Controls.Button {
+                                    text: instanceCard.buttonAdd
+                                    flat: true
+                                    onClicked: {
+                                        if (patternInput.text.trim() !== "" && instanceCard.cardSessionManager) {
+                                            let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                            let patterns = [...(config.overlayPatterns || [])]
+                                            patterns.push(patternInput.text.trim())
+                                            config.overlayPatterns = patterns
+                                            instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                            patternInput.text = ""
                                         }
                                     }
                                 }
@@ -430,6 +494,105 @@ Kirigami.ScrollablePage {
                                     text: instanceCard.textAssign
                                     flat: true
                                     onClicked: applicationWindow().pushDeviceAssignmentPage()
+                                }
+                            }
+                        }
+                        
+                        // Pattern list display
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.topMargin: Kirigami.Units.smallSpacing
+                            implicitHeight: patternColumn.implicitHeight + Kirigami.Units.largeSpacing
+                            visible: presetSelector.currentPresetId !== "" && instanceCard.overlayPatternsModel.length > 0
+                            color: Kirigami.Theme.backgroundColor
+                            radius: Kirigami.Units.cornerRadius
+                            border.color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
+                            border.width: 1
+                            
+                            ColumnLayout {
+                                id: patternColumn
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Kirigami.Units.largeSpacing
+                                spacing: Kirigami.Units.smallSpacing
+                                
+                                // Header
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Kirigami.Units.smallSpacing
+                                    
+                                    Kirigami.Icon {
+                                        source: "document-multiple"
+                                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                                    }
+                                    Controls.Label {
+                                        text: i18nc("@title", "Configured Patterns")
+                                        font.weight: Font.Medium
+                                    }
+                                    Controls.Label {
+                                        text: "(" + instanceCard.overlayPatternsModel.length + ")"
+                                        opacity: 0.7
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Controls.Button {
+                                        text: i18nc("@action:button", "Open Folder")
+                                        icon.name: "folder-open"
+                                        flat: true
+                                        onClicked: {
+                                            if (root?.sessionRunner) {
+                                                let presetId = instanceCard.currentPresetId || "steam"
+                                                let overridePath = root.sessionRunner.getAndEnsureOverridesPath(presetId)
+                                                Qt.openUrlExternally("file://" + overridePath)
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Pattern items
+                                Repeater {
+                                    model: instanceCard.overlayPatternsModel
+                                    delegate: RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Kirigami.Units.smallSpacing
+                                        
+                                        Kirigami.Icon {
+                                            source: "text-plain"
+                                            Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                                            Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                                            opacity: 0.7
+                                        }
+                                        Controls.Label { 
+                                            text: modelData 
+                                            Layout.fillWidth: true
+                                            elide: Text.ElideMiddle
+                                            font.family: "monospace"
+                                        }
+                                        Controls.ToolButton {
+                                            icon.name: "list-remove"
+                                            onClicked: {
+                                                if (!instanceCard.cardSessionManager) return
+                                                let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                                let patterns = [...config.overlayPatterns]
+                                                patterns.splice(index, 1)
+                                                config.overlayPatterns = patterns
+                                                instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                            }
+                                            
+                                        Controls.ToolTip.visible: hovered
+                                        Controls.ToolTip.text: i18nc("@info:tooltip", "Remove pattern")
+                                        }
+                                    }
+                                }
+                                
+                                // Help text
+                                Controls.Label {
+                                    Layout.fillWidth: true
+                                    text: i18nc("@info", "Place override files in the preset folder. The file path must match the pattern.")
+                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                    opacity: 0.6
+                                    wrapMode: Text.WordWrap
                                 }
                             }
                         }

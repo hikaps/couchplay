@@ -55,5 +55,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## AI Disclosure
+
+This project was developed with assistance from AI tools for code generation, documentation, and debugging.
+
 ## License
 GPL-3.0-or-later

@@ -54,10 +54,10 @@ QStringList PresetManager::getDefaultSharedDirectories(const QString &id) const
         }
     } else if (id == QStringLiteral("heroic")) {
         if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            QString configPath = m_heroicConfigManager->configPath();
-            if (!configPath.isEmpty()) {
-                dirs.append(configPath);
-            }
+            // NOTE: configPath is NOT added to shared directories because:
+            // 1. syncConfigToUser() copies specific config files to the gaming user's home
+            // 2. Bind-mounting the config dir would cause ownership conflicts when syncing
+            // Only share the install path where games are installed
             QString installPath = m_heroicConfigManager->defaultInstallPath();
             if (!installPath.isEmpty()) {
                 dirs.append(installPath);
@@ -110,7 +110,7 @@ void PresetManager::initBuiltinPresets()
             heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
             heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
             heroic.launcherInfo.requiresAcls = true;
-            heroic.launcherInfo.hasShortcutSync = false;
+            heroic.launcherInfo.hasShortcutSync = true;
 
             if (m_heroicConfigManager->gameCount() == 0) {
                 m_heroicConfigManager->loadGames();

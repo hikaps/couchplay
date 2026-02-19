@@ -12,6 +12,7 @@
 
 #include "../dbus/CouchPlayHelperClient.h"
 #include "SteamConfigManager.h"
+#include "HeroicConfigManager.h"
 
 class QAction;
 
@@ -51,6 +52,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
     Q_PROPERTY(PresetManager* presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
     Q_PROPERTY(SteamConfigManager* steamConfigManager READ steamConfigManager WRITE setSteamConfigManager NOTIFY steamConfigManagerChanged)
+    Q_PROPERTY(HeroicConfigManager* heroicConfigManager READ heroicConfigManager WRITE setHeroicConfigManager NOTIFY heroicConfigManagerChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -109,6 +111,9 @@ public:
     SteamConfigManager* steamConfigManager() const { return m_steamConfigManager; }
     void setSteamConfigManager(SteamConfigManager *manager);
 
+    HeroicConfigManager* heroicConfigManager() const { return m_heroicConfigManager; }
+    void setHeroicConfigManager(HeroicConfigManager *manager);
+
     bool borderlessWindows() const { return m_borderlessWindows; }
     void setBorderlessWindows(bool borderless);
 
@@ -123,6 +128,15 @@ public:
                                          int instanceCount,
                                          const QRect &screenGeometry);
 
+    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash);
+
+    static QStringList expandPatternsToFiles(const QString &gamePath, const QStringList &patterns);
+    
+    // Returns override path for a preset (~/.local/share/hikaps/CouchPlay/overrides/<presetId>/), creating it if needed
+    Q_INVOKABLE static QString getAndEnsureOverridesPath(const QString &presetId);
+    
+    void loadOverrideFiles(const QString &overridesRoot, const QStringList &matchedFiles, const QString &username, const QString &gameId);
+
 Q_SIGNALS:
     void runningChanged();
     void runningInstanceCountChanged();
@@ -133,6 +147,7 @@ Q_SIGNALS:
     void helperClientChanged();
     void presetManagerChanged();
     void steamConfigManagerChanged();
+    void heroicConfigManagerChanged();
     void borderlessWindowsChanged();
     void errorOccurred(const QString &message);
     void sessionStarted();
@@ -146,17 +161,6 @@ private Q_SLOTS:
     void onInstanceError(const QString &message);
     void onWindowPositioned(int requestId, const QString &windowId);
     void onWindowPositioningTimeout(int requestId);
-    /**
-     * @brief Handle device reconnection during active session
-     * 
-     * When a device that was assigned to an instance disconnects and then
-     * reconnects (possibly with a different event number), this slot restores
-     * the device ownership so input continues to work.
-     * 
-     * @param stableId The stable ID of the reconnected device
-     * @param eventNumber The new event number (may differ from before disconnect)
-     * @param instanceIndex The instance the device was assigned to
-     */
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
 
 private:
@@ -166,18 +170,21 @@ private:
     void restoreDeviceOwnership();
     bool setupSharedDirectories();
     void teardownSharedDirectories();
+    bool setupOverlayMounts();
+    void teardownOverlayMounts();
     bool setupLauncherAccess();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
 
-    QList<GamescopeInstance*> m_instances;
     SessionManager *m_sessionManager = nullptr;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
     PresetManager *m_presetManager = nullptr;
     SteamConfigManager *m_steamConfigManager = nullptr;
+    HeroicConfigManager *m_heroicConfigManager = nullptr;
     WindowManager *m_windowManager = nullptr;
+    QList<GamescopeInstance*> m_instances;
     QAction *m_stopAction = nullptr;
     QString m_status;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of

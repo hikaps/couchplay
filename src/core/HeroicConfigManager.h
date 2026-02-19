@@ -9,6 +9,8 @@
 #include <QList>
 #include <qqmlintegration.h>
 
+#include "../dbus/CouchPlayHelperClient.h"
+
 /**
  * HeroicPaths - Detected Heroic installation paths
  */
@@ -22,6 +24,7 @@ struct HeroicPaths {
     Q_PROPERTY(QString sideloadLibrary MEMBER sideloadLibrary)
     Q_PROPERTY(QString gamesConfig MEMBER gamesConfig)
     Q_PROPERTY(QString toolsPath MEMBER toolsPath)
+    Q_PROPERTY(QString shortcutsDir MEMBER shortcutsDir)
     Q_PROPERTY(bool isFlatpak MEMBER isFlatpak)
     Q_PROPERTY(bool valid MEMBER valid)
 
@@ -34,6 +37,7 @@ public:
     QString sideloadLibrary;      // sideload_apps/library.json (manually added)
     QString gamesConfig;          // GamesConfig/ directory
     QString toolsPath;            // tools/ directory
+    QString shortcutsDir;         // ~/.local/share/applications/ or ~/.local/share/heroic/shortcuts
     bool isFlatpak = false;
     bool valid = false;
 };
@@ -80,10 +84,17 @@ class HeroicConfigManager : public QObject
     Q_PROPERTY(bool isFlatpak READ isFlatpak NOTIFY heroicPathsChanged)
     Q_PROPERTY(int gameCount READ gameCount NOTIFY gamesLoaded)
     Q_PROPERTY(QString heroicCommand READ heroicCommand NOTIFY heroicPathsChanged)
+    Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
 
 public:
     explicit HeroicConfigManager(QObject *parent = nullptr);
     ~HeroicConfigManager() override = default;
+
+    /**
+     * Set the helper client for privileged file operations
+     */
+    void setHelperClient(CouchPlayHelperClient *client);
+    CouchPlayHelperClient *helperClient() const { return m_helperClient; }
 
     /**
      * @brief Detect Heroic installation paths
@@ -149,9 +160,37 @@ public:
      */
     QString defaultInstallPath() const;
 
+    /**
+     * @brief Sync Heroic shortcuts to a target user
+     * Generates .desktop files from game library and copies to target user's local applications folder
+     * 
+     * @param targetUsername Username to sync to
+     * @return true if successful
+     */
+    Q_INVOKABLE bool syncShortcutsToUser(const QString &targetUsername);
+
+    /**
+     * @brief Sync Heroic config to a target user
+     * Copies game configs, library files to target user's Heroic config directory
+     * 
+     * @param targetUsername Username to sync to
+     * @return true if successful
+     */
+    Q_INVOKABLE bool syncConfigToUser(const QString &targetUsername);
+
+    /**
+     * @brief Generate .desktop shortcuts from installed games
+     * Creates shortcuts in ~/.local/share/applications/ with heroic-<appname>.desktop naming
+     * @return Number of shortcuts generated
+     */
+    Q_INVOKABLE int generateShortcuts();
+
 Q_SIGNALS:
     void heroicPathsChanged();
     void gamesLoaded();
+    void helperClientChanged();
+    void syncCompleted(const QString &username);
+    void syncFailed(const QString &username, const QString &error);
     void errorOccurred(const QString &message);
 
 private:
@@ -165,6 +204,7 @@ private:
      */
     void loadHeroicConfig();
 
+    CouchPlayHelperClient *m_helperClient = nullptr;
     HeroicPaths m_heroicPaths;
     QList<HeroicGame> m_games;
     QString m_userHome;

@@ -25,7 +25,7 @@ public:
     /**
      * @brief Check if the helper is available
      */
-    bool isAvailable() const { return m_available; }
+    virtual bool isAvailable() const { return m_available; }
 
     /**
      * @brief Set device ownership for a specific user
@@ -122,13 +122,41 @@ public:
     Q_INVOKABLE int unmountAllSharedDirectories();
 
     /**
+     * @brief Set up overlay filesystem mount for a game
+     * @param username Target user (must exist, in couchplay group)
+     * @param gamePath Absolute path to shared game directory
+     * @param gameId Unique game identifier (e.g., steam app ID)
+     * @param overrideFiles List of relative paths for files needing per-user copies
+     * @param compositorUid UID of compositor user (for ACL setup)
+     * @return true if successful, false on failure
+     */
+    Q_INVOKABLE bool setupOverlayMount(const QString &username, const QString &gamePath,
+                                        const QString &gameId, const QStringList &overrideFiles,
+                                        uint compositorUid);
+
+    /**
+     * @brief Tear down overlay mount for a specific game
+     * @param username Target user
+     * @param gameId Game identifier to tear down
+     * @return true if successful, false on failure
+     */
+    Q_INVOKABLE bool teardownOverlayMount(const QString &username, const QString &gameId);
+
+    /**
+     * @brief Tear down all overlay mounts for a user
+     * @param username Target user
+     * @return true if successful, false on failure
+     */
+    Q_INVOKABLE bool teardownAllUserOverlays(const QString &username);
+
+    /**
      * @brief Copy a file to a user's directory with proper ownership
      * @param sourcePath Source file path
      * @param targetPath Target file path (will be created/overwritten)
      * @param username Target user (file will be owned by this user)
      * @return true if successful
      */
-    Q_INVOKABLE bool copyFileToUser(const QString &sourcePath, const QString &targetPath,
+    Q_INVOKABLE virtual bool copyFileToUser(const QString &sourcePath, const QString &targetPath,
                                      const QString &username);
 
     /**
@@ -137,7 +165,7 @@ public:
      * @param username User who should own the directory
      * @return true if successful
      */
-    Q_INVOKABLE bool createUserDirectory(const QString &path, const QString &username);
+    Q_INVOKABLE virtual bool createUserDirectory(const QString &path, const QString &username);
 
     /**
      * @brief Set ACL on a directory to grant a user read+execute access
@@ -177,6 +205,33 @@ public:
      */
     Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath,
                                       const QString &username);
+
+    /**
+     * @brief Write a per-user override file into an overlay's upperdir
+     *
+     * Used for customizing configuration files for specific players (e.g.,
+     * steam_emu.ini with different account IDs for each player).
+     *
+     * @param username Target user (must have overlay set up for this game)
+     * @param gameId Game identifier (must match SetupOverlayMount call)
+     * @param relativePath Path relative to game root (e.g., "steam_emu.ini")
+     * @param content Binary content of the file
+     * @return true if successful
+     */
+    Q_INVOKABLE bool writeOverrideFile(const QString &username, const QString &gameId,
+                                        const QString &relativePath, const QByteArray &content);
+
+    /**
+     * @brief Get the mount point path for a user's game overlay
+     *
+     * Returns the path where the overlay is mounted, which can be passed
+     * to gamescope or the game as the working directory.
+     *
+     * @param username Target user
+     * @param gameId Game identifier
+     * @return Mount point path, or empty string if not found
+     */
+    Q_INVOKABLE QString getOverlayMountPoint(const QString &username, const QString &gameId);
 
 Q_SIGNALS:
     void availabilityChanged();

@@ -14,9 +14,13 @@
 #include <QAction>
 #include <QDebug>
 #include <QDir>
+#include <QDirIterator>
+#include <QFile>
 #include <QGuiApplication>
+#include <QCryptographicHash>
 #include <QScreen>
 #include <QSet>
+#include <QStandardPaths>
 
 #include <KGlobalAccel>
 #include <KLocalizedString>
@@ -134,6 +138,14 @@ void SessionRunner::setSteamConfigManager(SteamConfigManager *manager)
     }
 }
 
+void SessionRunner::setHeroicConfigManager(HeroicConfigManager *manager)
+{
+    if (m_heroicConfigManager != manager) {
+        m_heroicConfigManager = manager;
+        Q_EMIT heroicConfigManagerChanged();
+    }
+}
+
 void SessionRunner::setBorderlessWindows(bool borderless)
 {
     if (m_borderlessWindows != borderless) {
@@ -219,6 +231,11 @@ bool SessionRunner::start()
     // Set up shared directory mounts (requires polkit helper)
     if (!setupSharedDirectories()) {
         qWarning() << "Failed to set up shared directories - continuing anyway";
+    }
+
+    // Set up overlay mounts (requires polkit helper)
+    if (!setupOverlayMounts()) {
+        qWarning() << "Failed to set up overlay mounts - continuing anyway";
     }
 
     // Set up launcher access (ACLs, shortcut sync)
@@ -316,6 +333,9 @@ void SessionRunner::stop()
 
     // Restore device ownership
     restoreDeviceOwnership();
+
+    // Teardown overlay mounts
+    teardownOverlayMounts();
 
     // Teardown shared directory mounts
     teardownSharedDirectories();
@@ -527,6 +547,136 @@ void SessionRunner::teardownSharedDirectories()
     m_helperClient->unmountAllSharedDirectories();
 }
 
+bool SessionRunner::setupOverlayMounts()
+{
+    if (!m_helperClient || !m_sessionManager) {
+        return true;
+    }
+
+    if (!m_helperClient->isAvailable()) {
+        qCWarning(couchplaySharing) << "Helper not available, skipping overlay mount setup";
+        return true;
+    }
+
+    uint compositorUid = static_cast<uint>(getuid());
+
+    const auto &profile = m_sessionManager->currentProfile();
+    bool allSucceeded = true;
+
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        const auto &instConfig = profile.instances[i];
+
+        // Task 8: Check patterns instead of overlayEnabled
+        if (instConfig.overlayPatterns.isEmpty()) {
+            qCDebug(couchplaySharing) << "No overlay patterns for instance" << i << "- skipping overlay";
+            continue;
+        }
+        qCDebug(couchplaySharing) << "Auto-enabling overlay for instance" << i << "with" << instConfig.overlayPatterns.size() << "patterns";
+
+        const QString &username = instConfig.username;
+
+        if (username.isEmpty()) {
+            qCDebug(couchplaySharing) << "Instance" << i << "has no username, skipping overlay mount";
+            continue;
+        }
+
+        QString gamePath = instConfig.overlayGamePath;
+        if (gamePath.isEmpty()) {
+            qCWarning(couchplaySharing) << "Instance" << i << "has patterns but no game path, skipping";
+            continue;
+        }
+
+        // Derive gameId from gamePath
+        QString gameId = instConfig.steamAppId;
+        if (gameId.isEmpty()) {
+            gameId = QString::fromLatin1(QCryptographicHash::hash(
+                gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
+        }
+
+        // Task 6: Expand patterns to file list
+        QStringList matchedFiles = expandPatternsToFiles(gamePath, instConfig.overlayPatterns);
+        qCDebug(couchplaySharing) << "Instance" << i << "matched" << matchedFiles.size() << "files from" << instConfig.overlayPatterns.size() << "patterns";
+
+        // Get overrides root path
+        QString presetId = instConfig.presetId;
+        if (presetId.isEmpty()) {
+            presetId = QStringLiteral("steam");  // Default preset
+        }
+        QString overridesRoot = getOverridesRootPath(presetId, gameId);
+
+        qCDebug(couchplaySharing) << "Setting up overlay mount for instance" << i
+                                  << "user" << username
+                                  << "gamePath:" << gamePath
+                                  << "gameId:" << gameId
+                                  << "matchedFiles:" << matchedFiles.size();
+
+        // Call helper setupOverlayMount() first
+        if (!m_helperClient->setupOverlayMount(username, gamePath, gameId, matchedFiles, compositorUid)) {
+            qCWarning(couchplaySharing) << "Failed to set up overlay mount for instance" << i
+                                        << "user" << username << "gameId:" << gameId;
+            Q_EMIT errorOccurred(QStringLiteral("Overlay mount failed for instance %1 (user: %2). "
+                                                 "The game will use the shared directory instead.")
+                                 .arg(i + 1).arg(username));
+            allSucceeded = false;
+            // Continue with other instances - graceful degradation
+        }
+
+        // Task 7: Load override files from root and write to overlay upperdir
+        loadOverrideFiles(overridesRoot, matchedFiles, username, gameId);
+    }
+
+    return allSucceeded;
+}
+
+void SessionRunner::teardownOverlayMounts()
+{
+    if (!m_helperClient || !m_sessionManager) {
+        return;
+    }
+
+    if (!m_helperClient->isAvailable()) {
+        qCWarning(couchplaySharing) << "Helper not available, cannot teardown overlay mounts";
+        return;
+    }
+
+    const auto &profile = m_sessionManager->currentProfile();
+
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        const auto &instConfig = profile.instances[i];
+        
+        if (!instConfig.overlayEnabled) {
+            continue;
+        }
+        
+        const QString &username = instConfig.username;
+        
+        if (username.isEmpty()) {
+            continue;
+        }
+        
+        QString gameId = instConfig.steamAppId;
+        if (gameId.isEmpty()) {
+            QString gamePath = instConfig.overlayGamePath;
+            if (!gamePath.isEmpty()) {
+                gameId = QString::fromLatin1(QCryptographicHash::hash(
+                    gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
+            }
+        }
+        
+        if (gameId.isEmpty()) {
+            continue;
+        }
+        
+        qCDebug(couchplaySharing) << "Tearing down overlay mount for instance" << i
+                                  << "user" << username << "gameId:" << gameId;
+        
+        if (!m_helperClient->teardownOverlayMount(username, gameId)) {
+            qCWarning(couchplaySharing) << "Failed to teardown overlay mount for instance" << i
+                                        << "user" << username << "gameId:" << gameId;
+        }
+    }
+}
+
 bool SessionRunner::setupLauncherAccess()
 {
     if (!m_sessionManager || !m_presetManager || !m_helperClient) {
@@ -557,6 +707,21 @@ bool SessionRunner::setupLauncherAccess()
                     qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
                 }
             }
+        }
+
+        // Handle Heroic Shortcut Sync
+        if (preset.launcherId == QStringLiteral("heroic")) {
+             if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+                 qCDebug(couchplaySteam) << "Syncing Heroic config and shortcuts for user" << username;
+                 if (!m_heroicConfigManager->syncConfigToUser(username)) {
+                     qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
+                     allSucceeded = false;
+                 }
+                 if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
+                     qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
+                     allSucceeded = false;
+                 }
+             }
         }
 
         if (!m_steamConfigManager) {
@@ -615,9 +780,102 @@ QRect SessionRunner::getScreenGeometry() const
     if (screen) {
         return screen->geometry();
     }
-    
+
     // Fallback to a reasonable default
     return QRect(0, 0, 1920, 1080);
+}
+
+QString SessionRunner::getOverridesRootPath(const QString &presetId, const QString &gameKeyHash)
+{
+    QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QString path = basePath + QStringLiteral("/overrides/") + presetId + QStringLiteral("/") + gameKeyHash + QStringLiteral("/");
+    return path;
+}
+
+QString SessionRunner::getAndEnsureOverridesPath(const QString &presetId)
+{
+    QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QString overridesPath = basePath + QStringLiteral("/overrides/") + presetId + QStringLiteral("/");
+    
+    QDir dir;
+    if (!dir.exists(overridesPath)) {
+        dir.mkpath(overridesPath);
+    }
+    
+    return overridesPath;
+}
+
+QStringList SessionRunner::expandPatternsToFiles(const QString &gamePath, const QStringList &patterns)
+{
+    QStringList matchedFiles;
+    
+    if (gamePath.isEmpty() || patterns.isEmpty()) {
+        return matchedFiles;
+    }
+    
+    QDir baseDir(gamePath);
+    if (!baseDir.exists()) {
+        qCWarning(couchplaySharing) << "expandPatternsToFiles: gamePath does not exist:" << gamePath;
+        return matchedFiles;
+    }
+    
+    QDirIterator it(gamePath, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    
+    while (it.hasNext()) {
+        QString filePath = it.next();
+        QString relativePath = baseDir.relativeFilePath(filePath);
+        
+        for (const QString &pattern : patterns) {
+            if (QDir::match(pattern, relativePath)) {
+                matchedFiles.append(relativePath);
+                qCDebug(couchplaySharing) << "Pattern" << pattern << "matched file:" << relativePath;
+                break;
+            }
+        }
+    }
+    
+    qCDebug(couchplaySharing) << "expandPatternsToFiles:" << matchedFiles.size()
+                              << "files matched from" << patterns.size() << "patterns in" << gamePath;
+    
+    return matchedFiles;
+}
+
+void SessionRunner::loadOverrideFiles(const QString &overridesRoot, const QStringList &matchedFiles, const QString &username, const QString &gameId)
+{
+    if (overridesRoot.isEmpty() || matchedFiles.isEmpty() || username.isEmpty() || gameId.isEmpty()) {
+        return;
+    }
+
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        qCWarning(couchplaySharing) << "Helper not available, cannot load override files";
+        return;
+    }
+
+    for (const QString &relativePath : matchedFiles) {
+        QString overrideFilePath = overridesRoot + relativePath;
+        
+        QFile overrideFile(overrideFilePath);
+        if (!overrideFile.exists()) {
+            qCDebug(couchplaySharing) << "Override file not found:" << overrideFilePath;
+            continue;
+        }
+
+        if (!overrideFile.open(QIODevice::ReadOnly)) {
+            qCWarning(couchplaySharing) << "Failed to open override file:" << overrideFilePath;
+            continue;
+        }
+
+        QByteArray content = overrideFile.readAll();
+        overrideFile.close();
+
+        if (m_helperClient->writeOverrideFile(username, gameId, relativePath, content)) {
+            qCDebug(couchplaySharing) << "Loaded override file:" << overrideFilePath
+                                      << "for user" << username << "gameId" << gameId;
+        } else {
+            qCWarning(couchplaySharing) << "Failed to write override file:" << relativePath
+                                        << "for user" << username << "gameId" << gameId;
+        }
+    }
 }
 
 QList<QRect> SessionRunner::calculateLayout(const QString &layout,

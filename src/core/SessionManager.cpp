@@ -116,6 +116,10 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
         instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
+        instGroup.writeEntry("overlayEnabled", inst.overlayEnabled);
+        instGroup.writeEntry("overlayGamePath", inst.overlayGamePath);
+        instGroup.writeEntry("overrideFiles", inst.overrideFiles);
+        instGroup.writeEntry("overlayPatterns", inst.overlayPatterns);
 
         // Convert devices to string list (legacy - for backwards compatibility)
         QStringList deviceStrings;
@@ -177,6 +181,18 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
         inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
+        inst.overlayEnabled = instGroup.readEntry("overlayEnabled", false);
+        inst.overlayGamePath = instGroup.readEntry("overlayGamePath", QString());
+        inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
+
+        // Read overlayPatterns (may not exist in old profiles)
+        inst.overlayPatterns = instGroup.readEntry("overlayPatterns", QStringList());
+
+        // Migration: copy legacy overrideFiles to overlayPatterns if overlayPatterns is empty
+        if (inst.overlayPatterns.isEmpty() && !inst.overrideFiles.isEmpty()) {
+            inst.overlayPatterns = inst.overrideFiles;
+            qDebug() << "Migrated overrideFiles to overlayPatterns for instance" << i;
+        }
 
         // Read stable device IDs (primary - survives hotplug/reboot)
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
@@ -293,6 +309,8 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("gameCommand")] = inst.gameCommand;
     map[QStringLiteral("steamAppId")] = inst.steamAppId;
     map[QStringLiteral("presetId")] = inst.presetId;
+    map[QStringLiteral("overlayPatterns")] = inst.overlayPatterns;
+    map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -347,8 +365,17 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.steamAppId = config[QStringLiteral("steamAppId")].toString();
     if (config.contains(QStringLiteral("presetId")))
         inst.presetId = config[QStringLiteral("presetId")].toString();
+    if (config.contains(QStringLiteral("overlayPatterns")))
+        inst.overlayPatterns = config[QStringLiteral("overlayPatterns")].toStringList();
+    if (config.contains(QStringLiteral("overlayGamePath")))
+        inst.overlayGamePath = config[QStringLiteral("overlayGamePath")].toString();
 
     Q_EMIT instancesChanged();
+    
+    // Auto-save if a profile is loaded
+    if (!m_currentProfile.name.isEmpty()) {
+        saveProfile(m_currentProfile.name);
+    }
 }
 
 void SessionManager::setInstanceUser(int index, const QString &username)
@@ -356,6 +383,10 @@ void SessionManager::setInstanceUser(int index, const QString &username)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].username = username;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
@@ -364,6 +395,10 @@ void SessionManager::setInstanceMonitor(int index, int monitor)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].monitor = monitor;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
@@ -376,6 +411,10 @@ void SessionManager::setInstanceResolution(int index, int internalW, int interna
         inst.outputWidth = outputW;
         inst.outputHeight = outputH;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
@@ -384,6 +423,10 @@ void SessionManager::setInstanceDevices(int index, const QList<int> &devices)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].devices = devices;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
@@ -393,6 +436,10 @@ void SessionManager::setInstanceDeviceStableIds(int index, const QStringList &st
         m_currentProfile.instances[index].deviceStableIds = stableIds;
         m_currentProfile.instances[index].deviceStableIdNames = names;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
@@ -401,6 +448,10 @@ void SessionManager::setInstanceGame(int index, const QString &gameCommand)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].gameCommand = gameCommand;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
@@ -409,6 +460,10 @@ void SessionManager::setInstancePreset(int index, const QString &presetId)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].presetId = presetId;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
@@ -417,6 +472,10 @@ void SessionManager::setInstanceSharedDirectories(int index, const QStringList &
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].sharedDirectories = directories;
         Q_EMIT instancesChanged();
+        
+        if (!m_currentProfile.name.isEmpty()) {
+            saveProfile(m_currentProfile.name);
+        }
     }
 }
 
