@@ -142,10 +142,19 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 - Enables device reconnection recognition after USB hotplug
 - See `DeviceManager::generateStableId()` implementation
 
+## BRANCHING & RELEASE
+
+- **develop**: Main development branch, all PRs merge here
+- **main**: Stable releases only
+- **Feature branches**: Pattern `feature/<feature-name>`
+- **Releases**: Tag and release only from `main`, never from `develop`
+  1. Merge `develop` into `main`
+  2. Tag release on `main`
+  3. Push tag to trigger release workflow
+
 ## NOTES
 
 - **App ID**: `io.github.hikaps.couchplay` (used in D-Bus, QML module, desktop file)
-- **Feature branches**: Pattern `feature/<feature-name>`
 - **Local docs**: `PLAN.md` contains architecture overview and feature roadmap
 - **Build artifacts**: Ignore `build/` directory
 - **Test files in root**: `test_*.cpp` files are temporary/experimental, not part of test suite
