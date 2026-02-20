@@ -40,7 +40,7 @@ jobs:
 
       - name: Build Flatpak
         run: |
-          flatpak-builder --user --install-deps-from=flathub --force-clean build-dir io.github.hikaps.couchplay.json
+          flatpak-builder --user --install-deps-from=flathub --force-clean --repo=repo build-dir io.github.hikaps.couchplay.json
 
       - name: Create Flatpak bundle
         run: |
