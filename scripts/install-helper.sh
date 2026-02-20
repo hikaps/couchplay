@@ -16,6 +16,10 @@
 #   sudo ./install-helper.sh install    - Install the helper
 #   sudo ./install-helper.sh uninstall  - Remove the helper
 #   sudo ./install-helper.sh status     - Check installation status
+#   ./install-helper.sh export          - Export helper for host install (Flatpak)
+#
+# Flatpak users: Run 'export' first inside the Flatpak, then run the
+# exported script with sudo on the host.
 
 set -e
 
@@ -25,35 +29,54 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Installation paths
+# Flatpak detection
+IN_FLATPAK=false
+if [ -f /.flatpak-info ]; then
+    IN_FLATPAK=true
+fi
+
+# Installation paths (overridable via environment)
 # Use /usr/local for immutable distros (Fedora Silverblue/Kinoite/Bazzite)
 # On traditional distros, these can be changed to /usr paths
-LIBEXEC_DIR="/usr/local/libexec"
-DBUS_SYSTEM_DIR="/etc/dbus-1/system.d"
-DBUS_SERVICE_DIR="/usr/local/share/dbus-1/system-services"
-SYSTEMD_DIR="/etc/systemd/system"
+PREFIX="${PREFIX:-/usr/local}"
+LIBEXEC_DIR="${LIBEXEC_DIR:-${PREFIX}/libexec}"
+DBUS_SYSTEM_DIR="${DBUS_SYSTEM_DIR:-/etc/dbus-1/system.d}"
+DBUS_SERVICE_DIR="${DBUS_SERVICE_DIR:-${PREFIX}/share/dbus-1/system-services}"
+SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
+
 # Polkit actions usually reside in /usr/share/polkit-1/actions.
 # On immutable systems, we try /etc/polkit-1/actions if /usr is read-only.
-if [ -w "/usr/share/polkit-1/actions" ]; then
-    POLKIT_DIR="/usr/share/polkit-1/actions"
-else
-    # Fallback for immutable systems (requires Polkit to be configured to read this, or user to layer)
-    # Note: If /etc/polkit-1/actions is not scanned by your Polkit version, 
-    # you may need to use 'rpm-ostree install' or an overlay.
-    POLKIT_DIR="/etc/polkit-1/actions"
-    mkdir -p "$POLKIT_DIR"
+if [ -z "${POLKIT_DIR:-}" ]; then
+    if [ -w "/usr/share/polkit-1/actions" ]; then
+        POLKIT_DIR="/usr/share/polkit-1/actions"
+    else
+        # Fallback for immutable systems (requires Polkit to be configured to read this, or user to layer)
+        # Note: If /etc/polkit-1/actions is not scanned by your Polkit version, 
+        # you may need to use 'rpm-ostree install' or an overlay.
+        POLKIT_DIR="/etc/polkit-1/actions"
+        mkdir -p "$POLKIT_DIR"
+    fi
 fi
 
 # Binary name
 HELPER_BINARY="couchplay-helper"
 
+# Export directory for Flatpak (user's local share)
+EXPORT_DIR="${EXPORT_DIR:-${HOME}/.local/share/couchplay}"
+
 # Source paths (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Detect structure: release tarball or build directory
+# Detect structure: release tarball, Flatpak, or build directory
+# Flatpak: binary at /app/libexec/, script at /app/share/couchplay/
 # Release tarball: script at root, bin/ and data/ are siblings
 # Build directory: script in scripts/, build/bin/ and data/ exist
-if [[ -f "${SCRIPT_DIR}/bin/${HELPER_BINARY}" ]]; then
+if [[ -f "/app/libexec/${HELPER_BINARY}" ]]; then
+    # Flatpak structure
+    FLATPAK_LIBEXEC="/app/libexec"
+    BINARY_PATH="${FLATPAK_LIBEXEC}/${HELPER_BINARY}"
+    DATA_DIR="/app/share/couchplay/data"
+elif [[ -f "${SCRIPT_DIR}/bin/${HELPER_BINARY}" ]]; then
     # Release tarball structure
     RELEASE_DIR="${SCRIPT_DIR}"
     BINARY_PATH="${RELEASE_DIR}/bin/${HELPER_BINARY}"
@@ -93,6 +116,65 @@ check_binary() {
         echo "    make"
         exit 1
     fi
+}
+
+export_helper() {
+    # Export helper binary and install script for host-side installation
+    # This is used when running from inside a Flatpak
+    
+    print_info "Exporting CouchPlay helper for host installation..."
+    
+    # Check for Flatpak binary
+    if [[ ! -f "${BINARY_PATH}" ]]; then
+        print_error "Helper binary not found at ${BINARY_PATH}"
+        exit 1
+    fi
+    
+    # Create export directory
+    mkdir -p "${EXPORT_DIR}"
+    
+    # Copy helper binary
+    print_info "Copying helper binary to ${EXPORT_DIR}/"
+    install -m755 "${BINARY_PATH}" "${EXPORT_DIR}/${HELPER_BINARY}"
+    
+    # Copy this script
+    print_info "Copying install script to ${EXPORT_DIR}/"
+    install -m755 "${BASH_SOURCE[0]}" "${EXPORT_DIR}/install-helper.sh"
+    
+    # Copy data files (D-Bus config, systemd service, polkit policy)
+    if [[ -d "${DATA_DIR}" ]]; then
+        print_info "Copying configuration files..."
+        mkdir -p "${EXPORT_DIR}/data/dbus"
+        mkdir -p "${EXPORT_DIR}/data/polkit"
+        
+        if [[ -f "${DATA_DIR}/dbus/io.github.hikaps.CouchPlayHelper.conf" ]]; then
+            install -m644 "${DATA_DIR}/dbus/io.github.hikaps.CouchPlayHelper.conf" \
+                "${EXPORT_DIR}/data/dbus/"
+        fi
+        if [[ -f "${DATA_DIR}/dbus/io.github.hikaps.CouchPlayHelper.service" ]]; then
+            install -m644 "${DATA_DIR}/dbus/io.github.hikaps.CouchPlayHelper.service" \
+                "${EXPORT_DIR}/data/dbus/"
+        fi
+        if [[ -f "${DATA_DIR}/dbus/couchplay-helper.service" ]]; then
+            install -m644 "${DATA_DIR}/dbus/couchplay-helper.service" \
+                "${EXPORT_DIR}/data/dbus/"
+        fi
+        if [[ -f "${DATA_DIR}/polkit/io.github.hikaps.couchplay.policy" ]]; then
+            install -m644 "${DATA_DIR}/polkit/io.github.hikaps.couchplay.policy" \
+                "${EXPORT_DIR}/data/polkit/"
+        fi
+    fi
+    
+    print_info "Export complete!"
+    echo ""
+    echo "Files exported to: ${EXPORT_DIR}/"
+    echo ""
+    echo "To install the helper on your host system, run:"
+    echo ""
+    echo "    sudo ${EXPORT_DIR}/install-helper.sh install"
+    echo ""
+    echo "Note: The install command requires root privileges to copy files"
+    echo "to system directories and enable the systemd service."
 }
 
 install_helper() {
@@ -238,17 +320,43 @@ status_helper() {
 usage() {
     echo "CouchPlay Helper Installation Script"
     echo ""
-    echo "Usage: sudo $0 <command>"
+    echo "Usage: $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  install     Install the helper daemon"
-    echo "  uninstall   Remove the helper daemon"
+    echo "  export      Export helper files for host installation (run inside Flatpak)"
+    echo "  install     Install the helper daemon (requires sudo)"
+    echo "  uninstall   Remove the helper daemon (requires sudo)"
     echo "  status      Check installation status"
     echo ""
+    if [[ "$IN_FLATPAK" == "true" ]]; then
+        echo "Running inside Flatpak detected."
+        echo "To install the helper, first run: $0 export"
+        echo "Then on the host: sudo ~/.local/share/couchplay/install-helper.sh install"
+        echo ""
+    fi
+    echo "Environment variables:"
+    echo "  PREFIX          Installation prefix (default: /usr/local)"
+    echo "  LIBEXEC_DIR     Helper binary directory (default: \$PREFIX/libexec)"
+    echo "  DBUS_SYSTEM_DIR D-Bus system config dir (default: /etc/dbus-1/system.d)"
+    echo "  DBUS_SERVICE_DIR D-Bus service activation dir (default: \$PREFIX/share/dbus-1/system-services)"
+    echo "  SYSTEMD_DIR     Systemd unit directory (default: /etc/systemd/system)"
+    echo "  POLKIT_DIR      Polkit policy directory (default: /usr/share/polkit-1/actions)"
+    echo "  EXPORT_DIR      Export directory for Flatpak (default: ~/.local/share/couchplay)"
 }
+
+# Check for Flatpak context and provide guidance
+if [[ "$IN_FLATPAK" == "true" ]] && [[ "${1:-}" != "export" ]] && [[ "${1:-}" != "status" ]] && [[ "${1:-}" != "-h" ]] && [[ "${1:-}" != "--help" ]]; then
+    print_warn "Running inside Flatpak. The 'install' and 'uninstall' commands require"
+    print_warn "host system access. Use the 'export' command first to prepare files for"
+    print_warn "host-side installation."
+    echo ""
+fi
 
 # Main
 case "${1:-}" in
+    export)
+        export_helper
+        ;;
     install)
         install_helper
         ;;
@@ -257,6 +365,9 @@ case "${1:-}" in
         ;;
     status)
         status_helper
+        ;;
+    -h|--help)
+        usage
         ;;
     *)
         usage

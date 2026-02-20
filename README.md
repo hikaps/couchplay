@@ -34,6 +34,20 @@ CouchPlay uses a privileged helper to manage devices and users.
 sudo ./install-helper.sh uninstall
 ```
 
+## Flatpak Installation
+
+1. **Download** the `.flatpak` bundle from the [Releases page](../../releases).
+2. **Install** the Flatpak:
+   ```bash
+   flatpak install --user couchplay.flatpak
+   ```
+3. **Install the helper service** (required for device management):
+   ```bash
+   mkdir -p ~/.local/share/couchplay && flatpak run --command=bash io.github.hikaps.couchplay -c "cp /app/libexec/couchplay-helper /app/share/couchplay/install-helper.sh ~/.local/share/couchplay/" && sudo ~/.local/share/couchplay/install-helper.sh install
+   ```
+
+> **Note**: The tarball installation method above is also available if you prefer it or your distribution doesn't support Flatpak.
+
 ## Development
 
 ### Prerequisites
