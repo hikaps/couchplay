@@ -63,19 +63,18 @@ if(BUILD_TESTING)
 endif()
 
 # Install desktop file
-install(PROGRAMS io.github.hikaps.couchplay.desktop
+install(PROGRAMS data/io.github.hikaps.couchplay.desktop
     DESTINATION ${KDE_INSTALL_APPDIR}
 )
 
 # Install metainfo
-install(FILES io.github.hikaps.couchplay.metainfo.xml
+install(FILES data/io.github.hikaps.couchplay.metainfo.xml
     DESTINATION ${KDE_INSTALL_METAINFODIR}
 )
 
 # Install icons
-install(FILES data/icons/couchplay.svg
-    DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/scalable/apps
-    RENAME io.github.hikaps.couchplay.svg
+install(FILES data/icons/io.github.hikaps.couchplay.png
+    DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/512x512/apps
 )
 
 # Install polkit policy

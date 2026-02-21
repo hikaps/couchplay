@@ -12,7 +12,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("couchplay-helper"));
-    app.setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setApplicationVersion(QStringLiteral("0.2.0"));
     app.setOrganizationDomain(QStringLiteral("io.github.hikaps"));
 
     // Create the helper service

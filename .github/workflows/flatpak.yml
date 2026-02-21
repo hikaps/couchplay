@@ -1,0 +1,59 @@
+name: Flatpak Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main branch
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor ${{ github.ref_name }} origin/main; then
+            echo "::error::Tag ${{ github.ref_name }} is not on main branch. Releases must be tagged from main."
+            exit 1
+          fi
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+
+      - name: Add Flathub remote
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install KDE SDK
+        run: |
+          flatpak install --user -y flathub org.kde.Sdk/x86_64/6.8
+
+      - name: Build Flatpak
+        run: |
+          flatpak-builder --user --install-deps-from=flathub --force-clean --repo=repo --default-branch=stable build-dir io.github.hikaps.couchplay.json
+
+      - name: Create Flatpak bundle
+        run: |
+          flatpak build-bundle repo couchplay.flatpak io.github.hikaps.couchplay stable
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: couchplay.flatpak
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: couchplay.flatpak

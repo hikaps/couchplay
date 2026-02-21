@@ -1,0 +1,48 @@
+{
+    "app-id": "io.github.hikaps.couchplay",
+    "runtime": "org.kde.Platform",
+    "runtime-version": "6.8",
+    "sdk": "org.kde.Sdk",
+    "command": "couchplay",
+    "finish-args": [
+        "--share=ipc",
+        "--share=network",
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--socket=pulseaudio",
+        "--device=dri",
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--system-talk-name=org.freedesktop.login1",
+        "--filesystem=/run/udev:ro"
+    ],
+    "modules": [
+        {
+            "name": "couchplay",
+            "buildsystem": "cmake-ninja",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DBUILD_TESTING=OFF"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/hikaps/couchplay.git",
+                    "branch": "main"
+                }
+            ],
+            "post-install": [
+                "install -Dm755 ${FLATPAK_DEST}/lib/libexec/couchplay-helper ${FLATPAK_DEST}/libexec/couchplay-helper",
+                "install -Dm755 scripts/install-helper.sh ${FLATPAK_DEST}/share/couchplay/install-helper.sh",
+                "install -Dm644 data/io.github.hikaps.couchplay.desktop ${FLATPAK_DEST}/share/applications/io.github.hikaps.couchplay.desktop",
+                "install -Dm644 data/io.github.hikaps.couchplay.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.hikaps.couchplay.metainfo.xml",
+                "install -Dm644 data/icons/io.github.hikaps.couchplay.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.hikaps.couchplay.png"
+            ],
+            "cleanup": [
+                "/lib/pkgconfig",
+                "/include",
+                "*.a",
+                "*.la"
+            ]
+        }
+    ]
+}

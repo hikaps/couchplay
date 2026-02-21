@@ -22,7 +22,7 @@
 #include <grp.h>
 
 // Version of the helper daemon
-static const QString HELPER_VERSION = QStringLiteral("0.1.0");
+static const QString HELPER_VERSION = QStringLiteral("0.2.0");
 
 // PolicyKit actions
 static const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couchplay.change-device-owner");
