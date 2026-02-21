@@ -32,6 +32,7 @@ jobs:
         run: git config --global --add safe.directory /__w/couchplay/couchplay
 
       - name: Verify tag is on main branch
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           git fetch origin main
           if ! git merge-base --is-ancestor ${{ github.ref_name }} origin/main; then

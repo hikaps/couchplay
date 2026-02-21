@@ -41,7 +41,7 @@ Kirigami.Dialog {
                 anchors.centerIn: parent
                 anchors.margins: Kirigami.Units.largeSpacing
                 text: root.isFlatpak
-                    ? "mkdir -p ~/.local/share/couchplay && flatpak run --command=bash io.github.hikaps.couchplay -c \"cp /app/libexec/couchplay-helper /app/share/couchplay/install-helper.sh ~/.local/share/couchplay/\" && sudo ~/.local/share/couchplay/install-helper.sh install"
+                    ? "flatpak run --command=bash io.github.hikaps.couchplay -c \"/app/share/couchplay/install-helper.sh export\"\nsudo ~/.local/share/couchplay/install-helper.sh install"
                     : "sudo /usr/share/couchplay/install-helper.sh"
                 font.family: "monospace"
                 wrapMode: Text.Wrap

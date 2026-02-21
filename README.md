@@ -47,10 +47,9 @@ sudo ./install-helper.sh uninstall
 ## Flatpak Installation
 
 1. **Download** the `.flatpak` bundle from the [Releases page](../../releases).
-2. **Ensure the runtime is available** (Flathub provides org.kde.Platform 6.8):
+2. **Ensure the runtime is available** (Flathub provides org.kde.Platform 6.10):
    ```bash
-   flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-   flatpak install --user -y flathub org.kde.Platform/x86_64/6.8
+   flatpak install flathub org.kde.Platform/x86_64/6.10
    ```
 3. **Install** the Flatpak:
    ```bash
@@ -58,7 +57,8 @@ sudo ./install-helper.sh uninstall
    ```
 4. **Install the helper service** (required for device management):
    ```bash
-   mkdir -p ~/.local/share/couchplay && flatpak run --command=bash io.github.hikaps.couchplay -c "cp /app/libexec/couchplay-helper /app/share/couchplay/install-helper.sh ~/.local/share/couchplay/" && sudo ~/.local/share/couchplay/install-helper.sh install
+   flatpak run --command=bash io.github.hikaps.couchplay -c "/app/share/couchplay/install-helper.sh export"
+   sudo ~/.local/share/couchplay/install-helper.sh install
    ```
 
 > **Note**: The tarball installation method above is also available if you prefer it or your distribution doesn't support Flatpak.
