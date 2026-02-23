@@ -15,7 +15,7 @@ Split-screen gaming manager for Linux, designed for KDE Plasma and Gamescope. Co
 Install the latest release with a single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
 ```
 
 > **Requirements**: Linux x86_64, root privileges (sudo). This downloads and installs the latest release from GitHub, including the privileged helper service.

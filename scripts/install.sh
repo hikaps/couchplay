@@ -5,10 +5,10 @@
 # CouchPlay One-Liner Installer
 #
 # Downloads and installs CouchPlay from GitHub releases.
-# This script must be run with root privileges (sudo).
+# This script must be run with root privileges.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
 #   sudo ./install.sh
 #
 # Requirements:
@@ -17,8 +17,16 @@
 #   - sha256sum: for verifying checksums
 #   - x86_64 architecture
 
-set -e
+# Re-run with sudo if not root (allows piped input to work with visible output)
+if [[ $EUID -ne 0 ]]; then
+    echo "Requesting sudo access to install CouchPlay..."
+    TMP_SCRIPT=$(mktemp)
+    curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh > "$TMP_SCRIPT"
+    chmod +x "$TMP_SCRIPT"
+    exec sudo "$TMP_SCRIPT"
+fi
 
+set -e
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -58,17 +66,12 @@ print_error() {
 # Pre-flight Checks
 # =============================================================================
 
+
 check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        print_error "This script must be run as root (use sudo)"
-        echo ""
-        echo "Usage:"
-        echo "  curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | sudo bash"
-        echo "  curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | sudo bash"
-        echo "  sudo ./install.sh"
-        exit 1
-    fi
+    # Already running as root due to sudo re-exec at script start
+    :
 }
+
 
 check_dependencies() {
     local missing_deps=()
