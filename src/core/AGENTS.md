@@ -10,7 +10,6 @@ Core business logic layer: device management, session orchestration, user/monito
 - `SessionManager` - Session profiles, instance configuration
 - `GamescopeInstance` - Gamescope process wrapper with arg building
 - `UserManager` - Linux user creation/management
-- `GameLibrary` - Steam game detection
 - `MonitorManager` - Display detection via RandR
 - `AudioManager` - PipeWire audio routing
 - `SettingsManager` - KConfig-based app settings

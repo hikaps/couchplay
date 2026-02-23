@@ -190,7 +190,7 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
     }
     
     int generated = generateShortcuts();
-    qDebug() << "HeroicConfigManager: Generated" << generated << "shortcuts from game library";
+    qDebug() << "HeroicConfigManager: Generated" << generated << "shortcuts from Heroic games";
 
     QStringList filters;
     filters << QStringLiteral("heroic-*.desktop");

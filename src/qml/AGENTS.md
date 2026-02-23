@@ -8,7 +8,7 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 
 ## STRUCTURE
 
-**Pages (pages/):** HomePage, SessionSetupPage, DeviceAssignmentPage, LayoutPage, ProfilesPage, GamesPage, UsersPage, SettingsPage (1023 lines)
+**Pages (pages/):** HomePage, SessionSetupPage, DeviceAssignmentPage, ProfilesPage, UsersPage, SettingsPage (612 lines)
 
 **Components (components/):** SelectableCard (selection state), ActionCard (CTA with badge), InfoCard, PresetSelector (ComboBox)
 
