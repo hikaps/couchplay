@@ -7,7 +7,6 @@ QtTest unit test suite for core manager components (11 test files, ~7.2K lines).
 | Test File | Test Class | Lines | Focus |
 |-----------|-------------|-------|-------|
 | test_devicemanager.cpp | DeviceManagerTest | 671 | Device detection, assignment, stable IDs |
-| test_gamelibrary.cpp | GameLibraryTest | 606 | Game CRUD, persistence, shortcuts |
 | test_gamescopeinstance.cpp | GamescopeInstanceTest | 446 | Process wrapping, arg building |
 | test_presetmanager.cpp | PresetManagerTest | 479 | Built-in/custom presets, app scanning |
 | test_sessionmanager.cpp | SessionManagerTest | 364 | Session profiles, layout configs |
@@ -23,7 +22,7 @@ QtTest unit test suite for core manager components (11 test files, ~7.2K lines).
 |-----------|---------------|
 | Device hotplug/reconnection | test_devicemanager.cpp: `testGenerateStableId()`, `testRestoreAssignmentsFromStableIds()` |
 | Signal emission patterns | All tests: `QSignalSpy` usage for async verification |
-| File I/O isolation | test_gamelibrary.cpp, test_heroicconfigmanager.cpp: `QTemporaryDir`, `QStandardPaths::setTestModeEnabled(true)` |
+| File I/O isolation | test_heroicconfigmanager.cpp: `QTemporaryDir`, `QStandardPaths::setTestModeEnabled(true)` |
 | D-Bus dependency | test_usermanager.cpp: Includes CouchPlayHelperClient, tests privileged operations |
 | Mock config creation | test_heroicconfigmanager.cpp: `createMockHeroicConfig()`, `createMockGameConfigs()` |
 

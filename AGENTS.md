@@ -60,7 +60,6 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 | GamescopeInstance | Gamescope process wrapper | `started`, `stopped`, `configChanged`, `statusChanged` |
 | SessionRunner | Orchestrates multiple instances | `sessionStarted`, `sessionStopped`, `instanceStarted` |
 | UserManager | Linux user management | `usersChanged`, `userCreated` |
-| GameLibrary | Steam game detection | `gamesChanged` |
 | MonitorManager | Display detection | `monitorsChanged` |
 | AudioManager | PipeWire configuration | - |
 
