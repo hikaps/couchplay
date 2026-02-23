@@ -30,8 +30,6 @@ set(TEST_MANAGER_SOURCES
     ../src/core/UserManager.h
     ../src/core/MonitorManager.cpp
     ../src/core/MonitorManager.h
-    ../src/core/GameLibrary.cpp
-    ../src/core/GameLibrary.h
     ../src/core/AudioManager.cpp
     ../src/core/AudioManager.h
     ../src/core/WindowManager.cpp
@@ -127,7 +125,6 @@ endfunction()
 # Add test executables
 add_couchplay_test(test_commandverifier)
 add_couchplay_test(test_devicemanager)
-add_couchplay_test(test_gamelibrary)
 add_couchplay_test(test_gamescopeinstance)
 add_couchplay_test(test_heroicconfigmanager)
 add_couchplay_test(test_monitormanager)

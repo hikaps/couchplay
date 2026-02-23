@@ -17,7 +17,6 @@
 #include "core/GamescopeInstance.h"
 #include "core/UserManager.h"
 #include "core/MonitorManager.h"
-#include "core/GameLibrary.h"
 #include "core/AudioManager.h"
 #include "core/PresetManager.h"
 #include "dbus/CouchPlayHelperClient.h"

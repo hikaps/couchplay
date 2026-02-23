@@ -52,9 +52,7 @@ ecm_add_qml_module(couchplay
         qml/pages/HomePage.qml
         qml/pages/SessionSetupPage.qml
         qml/pages/DeviceAssignmentPage.qml
-        qml/pages/LayoutPage.qml
         qml/pages/ProfilesPage.qml
-        qml/pages/GamesPage.qml
         qml/pages/UsersPage.qml
         qml/pages/SettingsPage.qml
         qml/components/PresetSelector.qml
@@ -83,8 +81,6 @@ target_sources(couchplay PRIVATE
     core/UserManager.h
     core/MonitorManager.cpp
     core/MonitorManager.h
-    core/GameLibrary.cpp
-    core/GameLibrary.h
     core/AudioManager.cpp
     core/AudioManager.h
     core/WindowManager.cpp

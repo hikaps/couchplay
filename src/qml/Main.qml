@@ -105,10 +105,6 @@ Kirigami.ApplicationWindow {
         id: helperClient
     }
 
-    GameLibrary {
-        id: gameLibrary
-    }
-
     MonitorManager {
         id: monitorManager
     }
@@ -184,16 +180,6 @@ Kirigami.ApplicationWindow {
                 }
             },
             Kirigami.Action {
-                icon.name: "applications-games"
-                text: i18nc("@action:button", "Games")
-                onTriggered: {
-                    pageStack.clear()
-                    pageStack.push(gamesPage, {
-                        gameLibrary: gameLibrary
-                    })
-                }
-            },
-            Kirigami.Action {
                 icon.name: "system-users"
                 text: i18nc("@action:button", "Users")
                 onTriggered: {
@@ -201,16 +187,6 @@ Kirigami.ApplicationWindow {
                     pageStack.push(usersPage, {
                         userManager: userManager,
                         helperClient: helperClient
-                    })
-                }
-            },
-            Kirigami.Action {
-                icon.name: "view-split-left-right"
-                text: i18nc("@action:button", "Layout")
-                onTriggered: {
-                    pageStack.clear()
-                    pageStack.push(layoutPage, {
-                        monitorManager: monitorManager
                     })
                 }
             },
@@ -256,18 +232,8 @@ Kirigami.ApplicationWindow {
     }
 
     Component {
-        id: layoutPage
-        LayoutPage {}
-    }
-
-    Component {
         id: profilesPage
         ProfilesPage {}
-    }
-
-    Component {
-        id: gamesPage
-        GamesPage {}
     }
 
     Component {
@@ -314,22 +280,10 @@ Kirigami.ApplicationWindow {
         })
     }
 
-    function pushGamesPage() {
-        pageStack.push(gamesPage, {
-            gameLibrary: gameLibrary
-        })
-    }
-
     function pushUsersPage() {
         pageStack.push(usersPage, {
             userManager: userManager,
             helperClient: helperClient
-        })
-    }
-
-    function pushLayoutPage() {
-        pageStack.push(layoutPage, {
-            monitorManager: monitorManager
         })
     }
 
