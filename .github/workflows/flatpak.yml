@@ -31,13 +31,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder
 
+      - name: Cache Flatpak SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/flatpak
+          key: flatpak-kde-6.10-${{ runner.os }}
+
       - name: Add Flathub remote
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
       - name: Install KDE SDK
         run: |
-          flatpak install --user -y flathub org.kde.Sdk/x86_64/6.10
+          flatpak install --user -y flathub org.kde.Sdk/x86_64/6.10 org.kde.Platform/x86_64/6.10
 
       - name: Build Flatpak
         run: |
