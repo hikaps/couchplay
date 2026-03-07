@@ -85,17 +85,22 @@ class HeroicConfigManager : public QObject
     Q_PROPERTY(int gameCount READ gameCount NOTIFY gamesLoaded)
     Q_PROPERTY(QString heroicCommand READ heroicCommand NOTIFY heroicPathsChanged)
     Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
-
+    Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY syncShortcutsEnabledChanged)
 public:
     explicit HeroicConfigManager(QObject *parent = nullptr);
     ~HeroicConfigManager() override = default;
+
+    /**
+     * Sync shortcuts enabled property
+     */
+    bool syncShortcutsEnabled() const { return m_syncShortcutsEnabled; }
+    void setSyncShortcutsEnabled(bool enabled);
 
     /**
      * Set the helper client for privileged file operations
      */
     void setHelperClient(CouchPlayHelperClient *client);
     CouchPlayHelperClient *helperClient() const { return m_helperClient; }
-
     /**
      * @brief Detect Heroic installation paths
      * Checks for native installation and Flatpak
@@ -189,10 +194,10 @@ Q_SIGNALS:
     void heroicPathsChanged();
     void gamesLoaded();
     void helperClientChanged();
+    void syncShortcutsEnabledChanged();
     void syncCompleted(const QString &username);
     void syncFailed(const QString &username, const QString &error);
     void errorOccurred(const QString &message);
-
 private:
     QList<HeroicGame> parseLegendaryGames();
     QList<HeroicGame> parseGogGames();
@@ -209,4 +214,6 @@ private:
     QList<HeroicGame> m_games;
     QString m_userHome;
     QString m_defaultInstallPath;
+    bool m_syncShortcutsEnabled = false;
+
 };

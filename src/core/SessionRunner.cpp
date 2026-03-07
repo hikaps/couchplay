@@ -712,14 +712,22 @@ bool SessionRunner::setupLauncherAccess()
         // Handle Heroic Shortcut Sync
         if (preset.launcherId == QStringLiteral("heroic")) {
              if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-                 qCDebug(couchplaySteam) << "Syncing Heroic config and shortcuts for user" << username;
+                 // Sync config (library) unconditionally
+                 qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
                  if (!m_heroicConfigManager->syncConfigToUser(username)) {
                      qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
                      allSucceeded = false;
                  }
-                 if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
-                     qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
-                     allSucceeded = false;
+                 
+                 // Only sync shortcuts if enabled
+                 if (m_heroicConfigManager->syncShortcutsEnabled()) {
+                     qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
+                     if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
+                         qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
+                         allSucceeded = false;
+                     }
+                 } else {
+                     qCDebug(couchplaySteam) << "Heroic shortcut sync disabled, skipping";
                  }
              }
         }

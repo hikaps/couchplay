@@ -15,6 +15,9 @@
 #include <QSet>
 #include <QStandardPaths>
 
+#include <KConfigGroup>
+#include <KSharedConfig>
+
 #include <pwd.h>
 #include <unistd.h>
 
@@ -34,6 +37,11 @@ HeroicConfigManager::HeroicConfigManager(QObject *parent)
     
     // Auto-detect Heroic on construction
     detectHeroicPaths();
+    
+    // Load settings from config
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Heroic"));
+    m_syncShortcutsEnabled = group.readEntry(QStringLiteral("SyncShortcutsEnabled"), false);
 }
 
 void HeroicConfigManager::detectHeroicPaths()
@@ -109,6 +117,21 @@ void HeroicConfigManager::setHelperClient(CouchPlayHelperClient *client)
     if (m_helperClient != client) {
         m_helperClient = client;
         Q_EMIT helperClientChanged();
+    }
+}
+
+void HeroicConfigManager::setSyncShortcutsEnabled(bool enabled)
+{
+    if (m_syncShortcutsEnabled != enabled) {
+        m_syncShortcutsEnabled = enabled;
+        
+        // Persist to config
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        KConfigGroup group = config->group(QStringLiteral("Heroic"));
+        group.writeEntry(QStringLiteral("SyncShortcutsEnabled"), enabled);
+        config->sync();
+        
+        Q_EMIT syncShortcutsEnabledChanged();
     }
 }
 

@@ -74,7 +74,7 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: hidePanelsCheck
-                Kirigami.FormData.label: i18nc("@option:check", "Hide KDE panels during session:")
+                Kirigami.FormData.label: i18nc("@option:check", "Hide panels during session")
                 checked: root.hidePanels
                 onToggled: if (root.settingsManager) root.settingsManager.hidePanels = checked
 
@@ -85,18 +85,18 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: killSteamOption
-                Kirigami.FormData.label: i18nc("@option:check", "Kill Steam before starting:")
+                Kirigami.FormData.label: i18nc("@option:check", "Close Steam before starting")
                 checked: root.killSteam
                 onToggled: if (root.settingsManager) root.settingsManager.killSteam = checked
 
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Close existing Steam instances before starting a session to prevent conflicts")
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Prevents conflicts by closing existing Steam instances before session start")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }
 
             Controls.CheckBox {
                 id: restoreSessionCheck
-                Kirigami.FormData.label: i18nc("@option:check", "Restore last session on startup:")
+                Kirigami.FormData.label: i18nc("@option:check", "Restore last session on startup")
                 checked: root.restoreSession
                 onToggled: if (root.settingsManager) root.settingsManager.restoreSession = checked
 
@@ -118,7 +118,7 @@ Kirigami.ScrollablePage {
 
             Controls.ComboBox {
                 id: scalingCombo
-                Kirigami.FormData.label: i18nc("@label", "Default scaling mode:")
+                Kirigami.FormData.label: i18nc("@label", "Scaling mode")
                 model: [
                     { value: "fit", text: i18nc("@item:inlistbox", "Fit (maintain aspect ratio)") },
                     { value: "fill", text: i18nc("@item:inlistbox", "Fill (crop to fill)") },
@@ -133,7 +133,7 @@ Kirigami.ScrollablePage {
 
             Controls.ComboBox {
                 id: filterCombo
-                Kirigami.FormData.label: i18nc("@label", "Default upscaling filter:")
+                Kirigami.FormData.label: i18nc("@label", "Upscaling filter")
                 model: [
                     { value: "linear", text: i18nc("@item:inlistbox", "Linear (smooth)") },
                     { value: "nearest", text: i18nc("@item:inlistbox", "Nearest (sharp/pixelated)") },
@@ -148,18 +148,18 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: steamIntegrationCheck
-                Kirigami.FormData.label: i18nc("@option:check", "Enable Steam integration (-e):")
+                Kirigami.FormData.label: i18nc("@option:check", "Steam integration")
                 checked: root.steamIntegration
                 onToggled: if (root.settingsManager) root.settingsManager.steamIntegration = checked
 
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Pass -e flag to gamescope for better Steam Deck/Big Picture integration")
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Enables Steam Deck and Big Picture compatibility mode")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }
 
             Controls.CheckBox {
                 id: borderlessCheck
-                Kirigami.FormData.label: i18nc("@option:check", "Borderless windows:")
+                Kirigami.FormData.label: i18nc("@option:check", "Borderless windows")
                 checked: root.sessionRunner ? root.sessionRunner.borderlessWindows : root.borderlessWindows
                 onToggled: {
                     if (root.settingsManager) root.settingsManager.borderlessWindows = checked
@@ -168,12 +168,11 @@ Kirigami.ScrollablePage {
                     }
                 }
 
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Use borderless windows without decorations. Disable for resizable windows with title bars.")
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Disable for resizable windows with title bars")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }
         }
-
         // Launch Presets Section
         Kirigami.FormLayout {
             Layout.alignment: Qt.AlignLeft | Qt.AlignTop
@@ -184,15 +183,9 @@ Kirigami.ScrollablePage {
                 Kirigami.FormData.label: i18nc("@title:group", "Launch Presets")
             }
 
-            Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Available presets:")
-                text: i18nc("@info", "%1 presets configured", activePresetManager.presets.length)
-                opacity: 0.7
-            }
-
             // List of current presets and add button
             ColumnLayout {
-                Kirigami.FormData.label: " "
+                Kirigami.FormData.label: i18nc("@label", "Presets")
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
 
@@ -217,7 +210,7 @@ Kirigami.ScrollablePage {
 
                         Kirigami.Chip {
                             visible: modelData.isBuiltin
-                            text: i18nc("@info", "Builtin")
+                            text: i18nc("@info", "Built-in")
                             closable: false
                             checkable: false
                         }
@@ -230,7 +223,6 @@ Kirigami.ScrollablePage {
                             checkable: false
                         }
 
-                        // Edit button for custom presets only (to manage shared directories)
                         Controls.Button {
                             icon.name: "document-edit"
                             display: Controls.AbstractButton.IconOnly
@@ -273,7 +265,6 @@ Kirigami.ScrollablePage {
                 }
             }
         }
-
         // Ignored Devices Section
         Kirigami.FormLayout {
             Layout.alignment: Qt.AlignLeft | Qt.AlignTop
@@ -285,15 +276,9 @@ Kirigami.ScrollablePage {
                 Kirigami.FormData.label: i18nc("@title:group", "Ignored Devices")
             }
 
-            Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Blacklisted devices:")
-                text: i18nc("@info", "%1 devices ignored", root.settingsManager ? root.settingsManager.ignoredDevices.length : 0)
-                opacity: 0.7
-            }
-
             // List of ignored devices
             ColumnLayout {
-                Kirigami.FormData.label: " "
+                Kirigami.FormData.label: i18nc("@label", "Devices")
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
 
@@ -319,9 +304,9 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.Button {
-                            icon.name: "edit-delete"
+                            icon.name: "list-remove"
                             display: Controls.AbstractButton.IconOnly
-                            Controls.ToolTip.text: i18nc("@info:tooltip", "Unignore device")
+                            Controls.ToolTip.text: i18nc("@info:tooltip", "Stop ignoring this device")
                             Controls.ToolTip.visible: hovered
                             Controls.ToolTip.delay: 1000
                             onClicked: {
@@ -335,7 +320,7 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Steam Shortcuts Sync Section
+        // Steam Integration Section
         Kirigami.FormLayout {
             Layout.alignment: Qt.AlignLeft | Qt.AlignTop
             wideMode: root.width > Kirigami.Units.gridUnit * 30
@@ -343,28 +328,12 @@ Kirigami.ScrollablePage {
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18nc("@title:group", "Steam Shortcuts")
-            }
-
-            Controls.CheckBox {
-                id: syncShortcutsCheck
-                Kirigami.FormData.label: i18nc("@option:check", "Sync non-Steam shortcuts:")
-                checked: root.steamConfigManager ? root.steamConfigManager.syncShortcutsEnabled : false
-                onToggled: {
-                    if (root.steamConfigManager) {
-                        root.steamConfigManager.syncShortcutsEnabled = checked
-                    }
-                }
-
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Copy your non-Steam game shortcuts to gaming users at session start. Uses ACLs to grant access to game directories.")
-                Controls.ToolTip.visible: hovered
-                Controls.ToolTip.delay: 1000
+                Kirigami.FormData.label: i18nc("@title:group", "Steam")
             }
 
             RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Steam detected:")
+                Kirigami.FormData.label: i18nc("@label", "Detected:")
                 spacing: Kirigami.Units.smallSpacing
-                visible: root.steamConfigManager !== null
 
                 Kirigami.Icon {
                     source: root.steamConfigManager && root.steamConfigManager.steamDetected ? "dialog-ok-apply" : "dialog-error"
@@ -374,7 +343,7 @@ Kirigami.ScrollablePage {
 
                 Controls.Label {
                     text: root.steamConfigManager && root.steamConfigManager.steamDetected
-                          ? i18nc("@info", "Yes (%1 shortcuts)", root.steamConfigManager.shortcutCount)
+                          ? i18nc("@info", "Yes (%1 non-Steam shortcuts)", root.steamConfigManager.shortcutCount)
                           : i18nc("@info", "Not found")
                     color: root.steamConfigManager && root.steamConfigManager.steamDetected
                            ? Kirigami.Theme.positiveTextColor
@@ -392,14 +361,21 @@ Kirigami.ScrollablePage {
                     }
                 }
             }
-        }
 
-        // Steam shortcuts info message
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            visible: root.steamConfigManager !== null
-            text: i18nc("@info", "Non-Steam shortcuts (Heroic, Lutris, etc.) are copied to gaming users. Access to game directories is granted using filesystem ACLs.")
-            type: Kirigami.MessageType.Information
+            Controls.CheckBox {
+                id: syncShortcutsCheck
+                Kirigami.FormData.label: i18nc("@option:check", "Sync shortcuts to players:")
+                checked: root.steamConfigManager ? root.steamConfigManager.syncShortcutsEnabled : false
+                onToggled: {
+                    if (root.steamConfigManager) {
+                        root.steamConfigManager.syncShortcutsEnabled = checked
+                    }
+                }
+
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Copy your non-Steam game shortcuts (Heroic, Lutris, etc. added to Steam) to gaming users at session start.")
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.delay: 1000
+            }
         }
 
         // Heroic Games Launcher Section
@@ -414,9 +390,8 @@ Kirigami.ScrollablePage {
             }
 
             RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Heroic detected:")
+                Kirigami.FormData.label: i18nc("@label", "Detected:")
                 spacing: Kirigami.Units.smallSpacing
-                visible: root.heroicConfigManager !== null
 
                 Kirigami.Icon {
                     source: root.heroicConfigManager && root.heroicConfigManager.heroicDetected ? "dialog-ok-apply" : "dialog-error"
@@ -453,24 +428,41 @@ Kirigami.ScrollablePage {
             }
 
             Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Installation type:")
+                Kirigami.FormData.label: i18nc("@label", "Installation:")
                 visible: root.heroicConfigManager && root.heroicConfigManager.heroicDetected
                 text: root.heroicConfigManager && root.heroicConfigManager.isFlatpak
                       ? i18nc("@info", "Flatpak (com.heroicgameslauncher.hgl)")
-                      : i18nc("@info", "Native installation")
+                      : i18nc("@info", "Native")
                 opacity: 0.7
+            }
+
+            Controls.CheckBox {
+                id: heroicSyncShortcutsCheck
+                Kirigami.FormData.label: i18nc("@option:check", "Sync shortcuts to players:")
+                checked: root.heroicConfigManager ? root.heroicConfigManager.syncShortcutsEnabled : false
+                onToggled: {
+                    if (root.heroicConfigManager) {
+                        root.heroicConfigManager.syncShortcutsEnabled = checked
+                    }
+                }
+
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Copy Heroic game shortcuts (.desktop files) to gaming users at session start. Game directories are shared using filesystem ACLs.")
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.delay: 1000
             }
         }
 
-        // Heroic info message
+        // Game launcher info message
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            visible: root.heroicConfigManager !== null && root.heroicConfigManager.heroicDetected
-            text: i18nc("@info", "Heroic games from Epic, GOG, and Amazon are automatically detected. Game directories are shared with gaming users using filesystem ACLs.")
+            visible: (root.steamConfigManager !== null && root.steamConfigManager.steamDetected) 
+                      || (root.heroicConfigManager !== null && root.heroicConfigManager.heroicDetected)
+            text: i18nc("@info", "When sync is enabled, shortcuts are copied to gaming users at session start. Access to game directories is granted using filesystem ACLs.")
             type: Kirigami.MessageType.Information
         }
 
-        // Audio Settings Section
+
+        // Audio Section
         Kirigami.FormLayout {
             Layout.alignment: Qt.AlignLeft | Qt.AlignTop
             wideMode: root.width > Kirigami.Units.gridUnit * 30
@@ -481,11 +473,12 @@ Kirigami.ScrollablePage {
             }
 
             RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Audio server:")
+                Kirigami.FormData.label: i18nc("@label", "Detected")
                 spacing: Kirigami.Units.smallSpacing
 
                 Kirigami.Icon {
-                    source: "audio-volume-high"
+                    source: "dialog-ok-apply"
+                    color: Kirigami.Theme.positiveTextColor
                     Layout.preferredWidth: Kirigami.Units.iconSizes.small
                     Layout.preferredHeight: Kirigami.Units.iconSizes.small
                 }
@@ -493,35 +486,28 @@ Kirigami.ScrollablePage {
                 Controls.Label {
                     text: "PipeWire"
                 }
-
-                Kirigami.Chip {
-                    text: i18nc("@info", "Detected")
-                    icon.name: "dialog-ok-apply"
-                    closable: false
-                    checkable: false
-                }
             }
 
             Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Multi-user audio:")
-                text: i18nc("@info", "PipeWire TCP forwarding will be used for secondary users")
+                Kirigami.FormData.label: i18nc("@label", "Multi-user routing")
+                text: i18nc("@info", "Audio from secondary users is routed via PipeWire TCP")
                 wrapMode: Text.WordWrap
                 opacity: 0.7
             }
         }
 
-        // Helper Service Section
+        // Privileged Helper Section
         Kirigami.FormLayout {
             Layout.alignment: Qt.AlignLeft | Qt.AlignTop
             wideMode: root.width > Kirigami.Units.gridUnit * 30
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18nc("@title:group", "Helper Service")
+                Kirigami.FormData.label: i18nc("@title:group", "Privileged Helper")
             }
 
             RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Status:")
+                Kirigami.FormData.label: i18nc("@label", "Status")
                 spacing: Kirigami.Units.smallSpacing
 
                 Kirigami.Icon {
@@ -531,7 +517,7 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Label {
-                    text: root.helperAvailable ? i18nc("@info", "Connected") : i18nc("@info", "Not available")
+                    text: root.helperAvailable ? i18nc("@info", "Connected") : i18nc("@info", "Not installed")
                     color: root.helperAvailable ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
                 }
             }
@@ -539,7 +525,7 @@ Kirigami.ScrollablePage {
             Controls.Button {
                 visible: !root.helperAvailable
                 Kirigami.FormData.label: " "
-                text: i18nc("@action:button", "Install Helper")
+                text: i18nc("@action:button", "Install Helper...")
                 icon.name: "run-install"
                 onClicked: installHelperDialog.open()
             }
@@ -556,7 +542,7 @@ Kirigami.ScrollablePage {
             }
 
             RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Stop session:")
+                Kirigami.FormData.label: i18nc("@label", "Stop session")
                 spacing: Kirigami.Units.smallSpacing
 
                 Controls.Label {
@@ -572,14 +558,13 @@ Kirigami.ScrollablePage {
                     }
                 }
             }
-        }
 
-        // Keyboard shortcuts info
-        Controls.Label {
-            Layout.fillWidth: true
-            text: i18nc("@info", "You can also use Alt+Tab to switch away from gamescope windows.")
-            wrapMode: Text.WordWrap
-            opacity: 0.7
+            Controls.Label {
+                Kirigami.FormData.label: i18nc("@label", "Tip")
+                text: i18nc("@info", "Use Alt+Tab to switch away from gamescope windows")
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+            }
         }
 
         // Helper info card
@@ -609,22 +594,22 @@ Kirigami.ScrollablePage {
             }
 
             Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Application:")
+                Kirigami.FormData.label: i18nc("@label", "Application")
                 text: "CouchPlay"
             }
 
             Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Version:")
-            text: "0.1.0-dev"
+                Kirigami.FormData.label: i18nc("@label", "Version")
+                text: "0.1.0-dev"
             }
 
             Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "License:")
+                Kirigami.FormData.label: i18nc("@label", "License")
                 text: "GPL-3.0-or-later"
             }
 
             RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Source code:")
+                Kirigami.FormData.label: i18nc("@label", "Source")
                 spacing: Kirigami.Units.smallSpacing
 
                 Controls.Label {
@@ -646,7 +631,7 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Dependencies info
+        // System Requirements Card
         Kirigami.Card {
             Layout.fillWidth: true
             Layout.bottomMargin: Kirigami.Units.largeSpacing
@@ -662,7 +647,7 @@ Kirigami.ScrollablePage {
                 columnSpacing: Kirigami.Units.largeSpacing
                 rowSpacing: Kirigami.Units.smallSpacing
 
-                // Gamescope
+                // Gamescope - Required
                 RowLayout {
                     spacing: Kirigami.Units.smallSpacing
                     Kirigami.Icon {
@@ -677,32 +662,12 @@ Kirigami.ScrollablePage {
                     }
                 }
                 Controls.Label {
-                    text: i18nc("@info", "Required for window compositing")
+                    text: i18nc("@info", "Required for multi-instance compositing")
                     opacity: 0.7
                     Layout.fillWidth: true
                 }
 
-                // Steam
-                RowLayout {
-                    spacing: Kirigami.Units.smallSpacing
-                    Kirigami.Icon {
-                        source: "dialog-ok-apply"
-                        color: Kirigami.Theme.positiveTextColor
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                    }
-                    Controls.Label {
-                        text: "Steam"
-                        font.bold: true
-                    }
-                }
-                Controls.Label {
-                    text: i18nc("@info", "For launching games")
-                    opacity: 0.7
-                    Layout.fillWidth: true
-                }
-
-                // PipeWire
+                // PipeWire - Required
                 RowLayout {
                     spacing: Kirigami.Units.smallSpacing
                     Kirigami.Icon {
@@ -717,27 +682,43 @@ Kirigami.ScrollablePage {
                     }
                 }
                 Controls.Label {
-                    text: i18nc("@info", "For multi-user audio")
+                    text: i18nc("@info", "Required for multi-user audio routing")
                     opacity: 0.7
                     Layout.fillWidth: true
                 }
 
-                // KDE Plasma
+                // KDE Plasma - Recommended
                 RowLayout {
                     spacing: Kirigami.Units.smallSpacing
                     Kirigami.Icon {
-                        source: "dialog-ok-apply"
-                        color: Kirigami.Theme.positiveTextColor
+                        source: "dialog-information"
                         Layout.preferredWidth: Kirigami.Units.iconSizes.small
                         Layout.preferredHeight: Kirigami.Units.iconSizes.small
                     }
                     Controls.Label {
                         text: "KDE Plasma"
-                        font.bold: true
                     }
                 }
                 Controls.Label {
-                    text: i18nc("@info", "Recommended desktop environment")
+                    text: i18nc("@info", "Recommended for best integration")
+                    opacity: 0.7
+                    Layout.fillWidth: true
+                }
+
+                // Steam - Optional
+                RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    Kirigami.Icon {
+                        source: "dialog-information"
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                    }
+                    Controls.Label {
+                        text: "Steam"
+                    }
+                }
+                Controls.Label {
+                    text: i18nc("@info", "Optional, for Steam games and shortcuts")
                     opacity: 0.7
                     Layout.fillWidth: true
                 }
