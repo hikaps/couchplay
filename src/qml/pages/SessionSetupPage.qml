@@ -263,7 +263,7 @@ Kirigami.ScrollablePage {
         Repeater {
             model: root.instanceCount
 
-            delegate: Kirigami.Card {
+            delegate: Kirigami.AbstractCard {
                 id: instanceCard
                 Layout.fillWidth: true
                 Layout.bottomMargin: Kirigami.Units.smallSpacing
@@ -300,11 +300,12 @@ Kirigami.ScrollablePage {
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
-                readonly property string labelDevices: i18nc("@label", "Devices:")
-                readonly property string labelOverlay: i18nc("@label", "Per-User Overlay:")
-                readonly property string textEnableOverlay: i18nc("@label", "Enable per-user config overlay")
-                readonly property string labelPatterns: i18nc("@label", "Override Patterns:")
-                readonly property string placeholderPattern: i18nc("@placeholder", "e.g., *.ini or config/*.conf")
+                readonly property string labelWindowBorders: i18nc("@label", "Window Borders:")
+
+                readonly property string labelOverlay: i18nc("@label", "Config Overrides:")
+                readonly property string tooltipOverlay: i18nc("@info:tooltip", "For games that store saves/config in their own folder (not in AppData/Documents). Each player gets their own copy of matching files.")
+                readonly property string labelPatterns: i18nc("@label", "File Patterns:")
+                readonly property string placeholderPattern: i18nc("@placeholder", "e.g., saves/*.sav or *.ini")
                 readonly property string buttonAdd: i18nc("@action:button", "Add")
                 readonly property string buttonRemove: i18nc("@action:button", "Remove")
 
@@ -402,7 +403,7 @@ Kirigami.ScrollablePage {
                                 }
                             }
 
-                            // Per-User Overlay Configuration - Pattern input
+                            // Config file override patterns - each player gets their own copy
                             RowLayout {
                                 Kirigami.FormData.label: instanceCard.labelOverlay
                                 visible: presetSelector.currentPresetId !== ""
@@ -437,6 +438,14 @@ Kirigami.ScrollablePage {
                                         }
                                     }
                                 }
+                                Controls.ToolButton {
+                                    icon.name: "help-hint"
+                                    flat: true
+                                    
+                                    Controls.ToolTip.visible: hovered
+                                    Controls.ToolTip.text: instanceCard.tooltipOverlay
+                                    Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                                }
                             }
 
                             // Resolution is auto-calculated from monitor size and layout
@@ -469,6 +478,22 @@ Kirigami.ScrollablePage {
                                 model: ["fit", "stretch", "integer", "auto"]
                                 currentIndex: 0
                                 Layout.fillWidth: true
+                            }
+
+                            Controls.CheckBox {
+                                Kirigami.FormData.label: instanceCard.labelWindowBorders
+                                checked: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).borderless : false
+                                text: i18nc("@option:check", "Borderless")
+                                
+                                onToggled: {
+                                    if (root.sessionManager) {
+                                        root.sessionManager.setInstanceBorderless(instanceCard.index, checked)
+                                    }
+                                }
+                                
+                                Controls.ToolTip.text: i18nc("@info:tooltip", "Enable for borderless windows, disable to show window decorations")
+                                Controls.ToolTip.visible: hovered
+                                Controls.ToolTip.delay: 1000
                             }
 
                             // Show assigned devices
@@ -528,7 +553,7 @@ Kirigami.ScrollablePage {
                                         Layout.preferredHeight: Kirigami.Units.iconSizes.small
                                     }
                                     Controls.Label {
-                                        text: i18nc("@title", "Configured Patterns")
+                                        text: i18nc("@title", "Active File Patterns")
                                         font.weight: Font.Medium
                                     }
                                     Controls.Label {
@@ -587,6 +612,13 @@ Kirigami.ScrollablePage {
                                 }
                                 
                                 // Help text
+                                Controls.Label {
+                                    Layout.fillWidth: true
+                                    text: i18nc("@info", "For games that store saves or config in their own folder. Each player gets their own copy of matching files. Place overrides in the preset's override folder.")
+                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                    opacity: 0.6
+                                    wrapMode: Text.WordWrap
+                                }
                                 Controls.Label {
                                     Layout.fillWidth: true
                                     text: i18nc("@info", "Place override files in the preset folder. The file path must match the pattern.")
@@ -706,7 +738,7 @@ Kirigami.ScrollablePage {
     }
 
     // Layout card component for visual selection
-    component LayoutCard: Kirigami.Card {
+    component LayoutCard: Kirigami.AbstractCard {
         id: layoutCard
 
         required property string layoutType
