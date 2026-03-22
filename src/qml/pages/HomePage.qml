@@ -63,6 +63,11 @@ Kirigami.ScrollablePage {
 
                 // Session status indicator
                 Kirigami.Chip {
+                    id: chipSessionStatus
+                    objectName: "chipSessionStatus"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@info", "%1 instances running", sessionRunner ? sessionRunner.runningInstanceCount : 0)
+                    Accessible.onPressAction: removed()
                     visible: sessionRunner?.running ?? false
                     text: i18nc("@info", "%1 instances running", sessionRunner ? sessionRunner.runningInstanceCount : 0)
                     icon.name: "media-playback-start"
@@ -85,11 +90,19 @@ Kirigami.ScrollablePage {
             
             actions: [
                 Kirigami.Action {
+                    objectName: "actionViewSession"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "View Session")
+                    Accessible.onPressAction: triggered()
                     text: i18nc("@action:button", "View Session")
                     icon.name: "view-visible"
                     onTriggered: applicationWindow().pushSessionSetupPage()
                 },
                 Kirigami.Action {
+                    objectName: "actionStopSession"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Stop")
+                    Accessible.onPressAction: triggered()
                     text: i18nc("@action:button", "Stop")
                     icon.name: "media-playback-stop"
                     onTriggered: sessionRunner.stop()
@@ -108,6 +121,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
 
             Components.ActionCard {
+                objectName: "cardNewSession"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 8
                 iconName: "list-add"
@@ -123,6 +137,7 @@ Kirigami.ScrollablePage {
             }
 
             Components.ActionCard {
+                objectName: "cardLoadProfile"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 8
                 iconName: "bookmark"
@@ -136,6 +151,7 @@ Kirigami.ScrollablePage {
             }
 
             Components.ActionCard {
+                objectName: "cardManageDevices"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 8
                 iconName: "input-gamepad"
@@ -207,6 +223,10 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.Button {
+                            objectName: "btnLaunchProfile"
+                            Accessible.role: Accessible.Button
+                            Accessible.name: i18nc("@action:button", "Launch this profile")
+                            Accessible.onPressAction: clicked()
                             icon.name: "media-playback-start"
                             flat: true
                             display: Controls.AbstractButton.IconOnly
@@ -234,6 +254,10 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
 
             helpfulAction: Kirigami.Action {
+                objectName: "actionCreateNewSession"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Create New Session")
+                Accessible.onPressAction: triggered()
                 icon.name: "list-add"
                 text: i18nc("@action:button", "Create New Session")
                 onTriggered: {
@@ -245,6 +269,10 @@ Kirigami.ScrollablePage {
 
         // View all profiles link
         Controls.Button {
+            objectName: "btnViewAllProfiles"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "View all %1 profiles...", sessionManager ? sessionManager.savedProfiles.length : 0)
+            Accessible.onPressAction: clicked()
             visible: (sessionManager?.savedProfiles?.length ?? 0) > 4
             text: i18nc("@action:button", "View all %1 profiles...", sessionManager ? sessionManager.savedProfiles.length : 0)
             flat: true
@@ -336,6 +364,10 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnSetup"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Setup")
+                    Accessible.onPressAction: clicked()
                     visible: !root.helperAvailable
                     text: i18nc("@action:button", "Setup")
                     flat: true
