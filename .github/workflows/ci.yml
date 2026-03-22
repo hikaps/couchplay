@@ -80,6 +80,10 @@ jobs:
             gobject-introspection-devel dbus-x11 \
             xcb-util-devel
           modprobe uinput || true
+          # selenium-webdriver-at-spi-run requires /usr/bin/pip3 in PATH
+          # Fedora's python3-pip only provides 'python3 -m pip', not /usr/bin/pip3
+          printf '#!/bin/sh\nexec python3 -m pip "$@"\n' > /usr/bin/pip3
+          chmod +x /usr/bin/pip3
 
       - name: Build selenium-webdriver-at-spi
         run: |
@@ -94,11 +98,7 @@ jobs:
           cmake --install /tmp/selenium-webdriver-at-spi/build
 
       - name: Install Python dependencies
-        run: |
-          # selenium-webdriver-at-spi-run requires /usr/bin/pip3 in PATH
-          printf '#!/bin/sh\nexec python3 -m pip "$@"\n' > /usr/bin/pip3
-          chmod +x /usr/bin/pip3
-          pip install -r appiumtests/requirements.txt
+        run: pip install -r appiumtests/requirements.txt
 
       - name: Configure Git safe directory
         run: git config --global --add safe.directory /__w/couchplay/couchplay
