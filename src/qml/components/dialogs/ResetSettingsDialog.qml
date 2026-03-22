@@ -8,10 +8,13 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.PromptDialog {
     id: root
+    objectName: "dialogResetSettings"
     
     required property var settingsManager
     
     title: i18nc("@title:dialog", "Reset Settings")
+    Accessible.role: Accessible.Dialog
+    Accessible.name: title
     subtitle: i18nc("@info", "Reset all settings to their default values?")
     standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel
 

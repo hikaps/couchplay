@@ -19,6 +19,10 @@ import org.kde.kirigami as Kirigami
 Controls.ComboBox {
     id: root
 
+    objectName: "comboPresetSelector"
+    Accessible.role: Accessible.ComboBox
+    Accessible.name: i18nc("@label", "Launcher")
+
     required property var presetManager
     property string currentPresetId: "steam"
 
