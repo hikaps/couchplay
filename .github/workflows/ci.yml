@@ -73,6 +73,7 @@ jobs:
             extra-cmake-modules \
             pipewire-devel polkit-devel \
             kwayland-devel kpipewire-devel plasma-wayland-protocols-devel \
+            wayland-devel wayland-protocols-devel \
             at-spi2-core at-spi2-atk-devel \
             python3-pip python3-dbus python3-evdev \
             python3-flask python3-pyatspi python3-gobject-base \
