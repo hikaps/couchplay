@@ -94,7 +94,11 @@ jobs:
           cmake --install /tmp/selenium-webdriver-at-spi/build
 
       - name: Install Python dependencies
-        run: pip install -r appiumtests/requirements.txt
+        run: |
+          # selenium-webdriver-at-spi-run requires /usr/bin/pip3 in PATH
+          printf '#!/bin/sh\nexec python3 -m pip "$@"\n' > /usr/bin/pip3
+          chmod +x /usr/bin/pip3
+          pip install -r appiumtests/requirements.txt
 
       - name: Configure Git safe directory
         run: git config --global --add safe.directory /__w/couchplay/couchplay
