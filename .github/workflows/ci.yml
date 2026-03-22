@@ -53,3 +53,57 @@ jobs:
         with:
           name: couchplay-build
           path: couchplay-*.tar.gz
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y cmake gcc-c++ git make python3-pip \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
+            kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel \
+            kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
+            kf6-kglobalaccel-devel extra-cmake-modules \
+            pipewire-devel polkit-devel \
+            kwayland-devel at-spi2-core \
+            python3-dbus systemd-loginctl \
+            selenium-webdriver-at-spi
+          modprobe uinput || true
+
+      - name: Install Python dependencies
+        run: pip install -r appiumtests/requirements.txt
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory /__w/couchplay/couchplay
+
+      - name: Configure CMake
+        run: cmake -B build -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Install desktop file
+        run: |
+          mkdir -p ~/.local/share/applications
+          sed "s|Exec=couchplay|Exec=$(pwd)/build/bin/couchplay|" \
+            data/io.github.hikaps.couchplay.desktop \
+            > ~/.local/share/applications/io.github.hikaps.couchplay.desktop
+          update-desktop-database ~/.local/share/applications || true
+
+      - name: Run e2e tests
+        run: selenium-webdriver-at-spi-run pytest appiumtests/ -v
+        env:
+          QT_LINUX_ACCESSIBILITY_ALWAYS_ON: 1
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-screenshots
+          path: appiumtests/screenshots/
+          if-no-files-found: ignore

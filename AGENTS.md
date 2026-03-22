@@ -16,10 +16,14 @@ distrobox enter fedora-dev -- cmake --build build
 # Run (on HOST - gamescope requires host environment)
 ./build/bin/couchplay
 
-# Tests
+# Unit tests
 distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 
-# Single test: ctest --test-dir build -R DeviceManagerTest --output-on-failure
+# E2E tests (requires KDE Plasma Wayland session + selenium-webdriver-at-spi)
+pip install -r appiumtests/requirements.txt
+QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 selenium-webdriver-at-spi-run pytest appiumtests/ -v
+
+# Single unit test: ctest --test-dir build -R DeviceManagerTest --output-on-failure
 # List tests: ctest --test-dir build -N
 # Direct run: ./build/bin/test_devicemanager
 ```
@@ -32,6 +36,7 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 ├── src/qml/        # UI layer (pages + components) - SEE ./src/qml/AGENTS.md
 ├── helper/         # Privileged D-Bus service - SEE ./helper/AGENTS.md
 ├── tests/          # QtTest unit tests (11 files, 7.2K lines) - SEE ./tests/AGENTS.md
+├── appiumtests/    # E2E tests (selenium-webdriver-at-spi) - SEE ./appiumtests/AGENTS.md
 ├── src/dbus/       # D-Bus client for helper service
 └── data/           # Icons, polkit policy, D-Bus service files
 ```
@@ -43,6 +48,7 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 | Manager architecture | `./src/core/AGENTS.md` | DeviceManager, SessionManager, etc. |
 | QML layer | `./src/qml/AGENTS.md` | Kirigami components, page patterns |
 | Test patterns | `./tests/AGENTS.md` | Test naming, fixtures, mocking |
+| E2E test patterns | `./appiumtests/AGENTS.md` | selenium-webdriver-at-spi, AT-SPI |
 | Privileged helper | `./helper/AGENTS.md` | D-Bus service, user mgmt, device ownership |
 | Device detection | `src/core/DeviceManager.{cpp,h}` | Parses `/proc/bus/input/devices` |
 | Session orchestration | `src/core/SessionRunner.{cpp,h}` | Starts/stops multiple GamescopeInstance |
@@ -99,6 +105,7 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 - Use `i18nc()` for user-visible strings with context
 - Component IDs: camelCase (`id: deviceManager`)
 - Properties: `required property` for mandatory injections
+- Accessibility: All interactive elements must have `objectName`, `Accessible.role`, `Accessible.name`, and `Accessible.onPressAction`
 
 ### Class Declaration Order
 1. Q_OBJECT macro
