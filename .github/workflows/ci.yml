@@ -62,18 +62,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
-          dnf install -y cmake gcc-c++ git make python3-pip \
-            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
+          dnf install -y --skip-unavailable \
+            cmake gcc-c++ git make ruby \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel qt6-qtwayland-devel \
             kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel \
             kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
-            kf6-kglobalaccel-devel extra-cmake-modules \
+            kf6-kglobalaccel-devel kf6-kwindowsystem-devel \
+            extra-cmake-modules \
             pipewire-devel polkit-devel \
-            kwayland-devel at-spi2-core \
-            python3-dbus systemd-loginctl \
-            selenium-webdriver-at-spi
+            kwayland-devel kpipewire-devel plasma-wayland-protocols-devel \
+            at-spi2-core at-spi2-atk-devel \
+            python3-pip python3-dbus python3-evdev \
+            python3-flask python3-pyatspi python3-gobject-base \
+            gobject-introspection-devel dbus-x11 \
+            xcb-util-devel
           modprobe uinput || true
+
+      - name: Build selenium-webdriver-at-spi
+        run: |
+          git clone --depth 1 https://invent.kde.org/sdk/selenium-webdriver-at-spi.git /tmp/selenium-webdriver-at-spi
+          # Patch out videorecorder — it needs Qt6GuiPrivate which conflicts with qt6-qtbase-devel on F41
+          sed -i '/add_subdirectory(videorecorder)/d' /tmp/selenium-webdriver-at-spi/CMakeLists.txt
+          cmake -B /tmp/selenium-webdriver-at-spi/build \
+            -S /tmp/selenium-webdriver-at-spi \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DQT_MIN_VERSION=6.8
+          cmake --build /tmp/selenium-webdriver-at-spi/build --parallel 2
+          cmake --install /tmp/selenium-webdriver-at-spi/build
 
       - name: Install Python dependencies
         run: pip install -r appiumtests/requirements.txt
