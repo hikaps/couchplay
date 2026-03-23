@@ -112,11 +112,11 @@ jobs:
 
       - name: Install desktop file
         run: |
-          mkdir -p ~/.local/share/applications
-          sed "s|Exec=couchplay|Exec=$(pwd)/build/bin/couchplay|" \
+          ln -sf "$(pwd)/build/bin/couchplay" /usr/local/bin/couchplay
+          sed "s|Exec=couchplay|Exec=couchplay|" \
             data/io.github.hikaps.couchplay.desktop \
-            > ~/.local/share/applications/io.github.hikaps.couchplay.desktop
-          update-desktop-database ~/.local/share/applications || true
+            > /usr/share/applications/io.github.hikaps.couchplay.desktop
+          update-desktop-database /usr/share/applications || true
 
       - name: Run e2e tests
         run: selenium-webdriver-at-spi-run pytest appiumtests/ -v
