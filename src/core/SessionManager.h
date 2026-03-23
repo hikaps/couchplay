@@ -73,11 +73,13 @@ struct SessionProfile {
     Q_GADGET
     Q_PROPERTY(QString name MEMBER name)
     Q_PROPERTY(QString layout MEMBER layout)
+    Q_PROPERTY(QString gridSubLayout MEMBER gridSubLayout)
     Q_PROPERTY(QString filePath MEMBER filePath)
 
 public:
     QString name;
-    QString layout = QStringLiteral("horizontal"); // horizontal, vertical, multi-monitor
+    QString layout = QStringLiteral("horizontal"); // horizontal, vertical, multi-monitor, grid
+    QString gridSubLayout; // "horizontal" (3×1) or "grid-2x2" (2×2 with gap) — only used when layout is "grid"
     QString filePath;
     QList<InstanceConfig> instances;
 };
@@ -93,6 +95,7 @@ class SessionManager : public QObject
     QML_ELEMENT
     Q_PROPERTY(QString currentProfileName READ currentProfileName NOTIFY currentProfileChanged)
     Q_PROPERTY(QString currentLayout READ currentLayout WRITE setCurrentLayout NOTIFY currentLayoutChanged)
+    Q_PROPERTY(QString currentGridSubLayout READ currentGridSubLayout WRITE setCurrentGridSubLayout NOTIFY currentGridSubLayoutChanged)
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
@@ -139,6 +142,8 @@ public:
     QString currentProfileName() const { return m_currentProfile.name; }
     QString currentLayout() const { return m_currentProfile.layout; }
     void setCurrentLayout(const QString &layout);
+    QString currentGridSubLayout() const { return m_currentProfile.gridSubLayout; }
+    void setCurrentGridSubLayout(const QString &subLayout);
     int instanceCount() const { return m_currentProfile.instances.size(); }
     void setInstanceCount(int count);
 
@@ -151,6 +156,7 @@ public:
 Q_SIGNALS:
     void currentProfileChanged();
     void currentLayoutChanged();
+    void currentGridSubLayoutChanged();
     void instanceCountChanged();
     void savedProfilesChanged();
     void instancesChanged();

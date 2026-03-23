@@ -124,11 +124,13 @@ public:
      * @param layout Layout type: "horizontal", "vertical", "multi-monitor", "grid"
      * @param instanceCount Number of instances
      * @param screenGeometry Available screen geometry
+     * @param gridSubLayout For "grid" layout with 3 players: "horizontal" (3×1), "grid-2x2" (2×2 with gap), or empty (defaults to horizontal)
      * @return List of QRect geometries for each instance
      */
     static QList<QRect> calculateLayout(const QString &layout, 
                                          int instanceCount,
-                                         const QRect &screenGeometry);
+                                         const QRect &screenGeometry,
+                                         const QString &gridSubLayout = QString());
 
     static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash);
 
@@ -165,6 +167,7 @@ private Q_SLOTS:
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
     void onVirtualDeviceAppeared(int eventNumber, const QString &devicePath, const QString &deviceName);
+    void startNextInstance();
 
 private:
     void setStatus(const QString &status);
@@ -203,4 +206,9 @@ private:
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
     bool m_borderlessWindows = false; // Default to decorated windows
+    
+    // Sequential instance launching state
+    int m_nextInstanceToStart = 0;
+    QList<QVariantMap> m_pendingInstanceConfigs;
+    QList<QRect> m_layouts;
 };

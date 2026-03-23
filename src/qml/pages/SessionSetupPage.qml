@@ -24,6 +24,7 @@ Kirigami.ScrollablePage {
     // Sync with session manager
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
+    property string gridSubLayout: sessionManager ? sessionManager.currentGridSubLayout : ""
 
     // Revision counter to force re-evaluation of user filtering when instances change
     property int instancesRevision: 0
@@ -80,6 +81,14 @@ Kirigami.ScrollablePage {
         if (sessionManager) {
             sessionManager.currentLayout = layoutMode
             // Recalculate output resolutions based on screen size
+            let screenSize = getPrimaryMonitorSize()
+            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+        }
+    }
+
+    onGridSubLayoutChanged: {
+        if (sessionManager && sessionManager.currentLayout === "grid") {
+            sessionManager.currentGridSubLayout = gridSubLayout
             let screenSize = getPrimaryMonitorSize()
             sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
         }
@@ -236,7 +245,13 @@ Kirigami.ScrollablePage {
                 layoutType: "grid"
                 selected: layoutMode === "grid"
                 title: i18nc("@option", "Grid")
-                description: i18nc("@info", "2x2 grid layout")
+                description: root.instanceCount === 3
+                    ? (root.gridSubLayout === "grid-2x2"
+                        ? i18nc("@info", "2×2 grid with one empty cell")
+                        : root.gridSubLayout === "left-right"
+                            ? i18nc("@info", "Player 1 left, players 2–3 right")
+                            : i18nc("@info", "3×1 horizontal layout"))
+                    : i18nc("@info", "2×2 grid layout")
                 instanceCount: root.instanceCount
                 visible: root.instanceCount > 2
                 onClicked: layoutMode = "grid"
@@ -251,6 +266,46 @@ Kirigami.ScrollablePage {
                 description: i18nc("@info", "One instance per monitor")
                 instanceCount: root.instanceCount
                 onClicked: layoutMode = "multi-monitor"
+            }
+        }
+
+        // Grid sub-layout selector (only visible when grid is selected and 3 players)
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            visible: layoutMode === "grid" && root.instanceCount === 3
+            spacing: Kirigami.Units.mediumSpacing
+
+            Controls.Label {
+                text: i18nc("@label", "Grid arrangement:")
+                opacity: 0.7
+            }
+
+            Repeater {
+                model: ListModel {
+                    ListElement { modeValue: "horizontal"; modeLabel: "3×1 Horizontal" }
+                    ListElement { modeValue: "grid-2x2"; modeLabel: "2×2 Grid" }
+                    ListElement { modeValue: "left-right"; modeLabel: "Left + Right" }
+                }
+
+                Controls.Button {
+                    text: model.modeLabel
+                    flat: true
+                    checked: root.gridSubLayout === model.modeValue
+                    checkable: true
+
+                    onClicked: root.gridSubLayout = model.modeValue
+
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: -Kirigami.Units.smallSpacing
+                        color: "transparent"
+                        border.width: parent.checked ? 2 : 0
+                        border.color: Kirigami.Theme.highlightColor
+                        radius: Kirigami.Units.smallSpacing
+                    }
+                }
             }
         }
 
@@ -856,23 +911,85 @@ Kirigami.ScrollablePage {
 
     Component {
         id: gridLayout
-        GridLayout {
-            columns: 2
-            rows: 2
-            rowSpacing: 2
-            columnSpacing: 2
-            Repeater {
-                model: Math.min(root.instanceCount, 4)
+        Item {
+            anchors.fill: parent
+
+            readonly property bool isLeftRight: root.instanceCount === 3 && root.gridSubLayout === "left-right"
+
+            readonly property int effectiveCols: {
+                if (isLeftRight) return 2;
+                if (root.instanceCount <= 2) return root.instanceCount;
+                if (root.instanceCount === 3) {
+                    return root.gridSubLayout === "grid-2x2" ? 2 : 3;
+                }
+                return 2;
+            }
+            readonly property int effectiveRows: {
+                if (isLeftRight) return 2;
+                if (root.instanceCount <= 2) return 1;
+                if (root.instanceCount === 3) {
+                    return root.gridSubLayout === "grid-2x2" ? 2 : 1;
+                }
+                return 2;
+            }
+
+            GridLayout {
+                anchors.fill: parent
+                columns: parent.effectiveCols
+                rowSpacing: 2
+                columnSpacing: 2
+                visible: !parent.isLeftRight
+                Repeater {
+                    model: root.instanceCount
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
+                        opacity: 0.5
+                        radius: 2
+                        Controls.Label {
+                            anchors.centerIn: parent
+                            text: (index + 1).toString()
+                            font.bold: true
+                        }
+                    }
+                }
+            }
+
+            Row {
+                anchors.fill: parent
+                spacing: 2
+                visible: parent.isLeftRight
                 Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
+                    width: parent.width * 2 / 5
+                    height: parent.height
+                    color: Kirigami.Theme.highlightColor
                     opacity: 0.5
                     radius: 2
                     Controls.Label {
                         anchors.centerIn: parent
-                        text: (index + 1).toString()
+                        text: "1"
                         font.bold: true
+                    }
+                }
+                Column {
+                    width: parent.width * 3 / 5 - 2
+                    height: parent.height
+                    spacing: 2
+                    Repeater {
+                        model: 2
+                        Rectangle {
+                            width: parent.width
+                            height: (parent.parent.height - 2) / 2
+                            color: Kirigami.Theme.positiveBackgroundColor
+                            opacity: 0.5
+                            radius: 2
+                            Controls.Label {
+                                anchors.centerIn: parent
+                                text: (index + 2).toString()
+                                font.bold: true
+                            }
+                        }
                     }
                 }
             }

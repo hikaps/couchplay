@@ -3,6 +3,7 @@
 
 #include "SessionManager.h"
 #include "Logging.h"
+#include "SessionRunner.h"
 
 #include <QDir>
 #include <QStandardPaths>
@@ -98,6 +99,7 @@ bool SessionManager::saveProfile(const QString &name)
     KConfigGroup general = config.group(QStringLiteral("General"));
     general.writeEntry("name", name);
     general.writeEntry("layout", m_currentProfile.layout);
+    general.writeEntry("gridSubLayout", m_currentProfile.gridSubLayout);
     general.writeEntry("instanceCount", m_currentProfile.instances.size());
 
     // Instance sections
@@ -162,6 +164,7 @@ bool SessionManager::loadProfile(const QString &name)
     m_currentProfile.name = name;
     m_currentProfile.filePath = path;
     m_currentProfile.layout = general.readEntry("layout", QStringLiteral("horizontal"));
+    m_currentProfile.gridSubLayout = general.readEntry("gridSubLayout", QString());
     int instanceCount = general.readEntry("instanceCount", 2);
 
     // Read instances
@@ -267,7 +270,19 @@ void SessionManager::setCurrentLayout(const QString &layout)
 {
     if (m_currentProfile.layout != layout) {
         m_currentProfile.layout = layout;
+        if (layout != QStringLiteral("grid")) {
+            m_currentProfile.gridSubLayout.clear();
+            Q_EMIT currentGridSubLayoutChanged();
+        }
         Q_EMIT currentLayoutChanged();
+    }
+}
+
+void SessionManager::setCurrentGridSubLayout(const QString &subLayout)
+{
+    if (m_currentProfile.gridSubLayout != subLayout) {
+        m_currentProfile.gridSubLayout = subLayout;
+        Q_EMIT currentGridSubLayoutChanged();
     }
 }
 
@@ -541,10 +556,13 @@ void SessionManager::recalculateOutputResolutions(int screenWidth, int screenHei
             inst.outputWidth = screenWidth;
             inst.outputHeight = screenHeight / count;
         } else if (layout == QStringLiteral("grid")) {
-            int cols = (count <= 2) ? count : 2;
-            int rows = (count + cols - 1) / cols;
-            inst.outputWidth = screenWidth / cols;
-            inst.outputHeight = screenHeight / rows;
+            QList<QRect> layouts = SessionRunner::calculateLayout(
+                layout, count, QRect(0, 0, screenWidth, screenHeight),
+                m_currentProfile.gridSubLayout);
+            if (i < layouts.size()) {
+                inst.outputWidth = layouts[i].width();
+                inst.outputHeight = layouts[i].height();
+            }
         } else {
             // multi-monitor or unknown: use full resolution
             inst.outputWidth = screenWidth;

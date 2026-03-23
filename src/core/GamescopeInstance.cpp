@@ -262,15 +262,8 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
         args << QStringLiteral("-F") << filterMode;
     }
 
-    // Window position for split-screen layouts
-    // NOTE: --position is not available in all gamescope versions
-    // For now, we skip positioning and let the window manager handle it
-    // TODO: Investigate using xdotool/wmctrl for window positioning after spawn
-    // int posX = config.value(QStringLiteral("positionX"), -1).toInt();
-    // int posY = config.value(QStringLiteral("positionY"), -1).toInt();
-    // if (posX >= 0 && posY >= 0) {
-    //     args << QStringLiteral("--position") << QStringLiteral("%1,%2").arg(posX).arg(posY);
-    // }
+    // Window positioning is handled by WindowManager via KWin scripting
+    // (gamescope does not have a --position flag)
 
     // Monitor selection (for multi-monitor setups)
     QString monitorName = config.value(QStringLiteral("monitorName")).toString();

@@ -225,7 +225,7 @@ bool SessionRunner::start()
 
     // Calculate window layouts
     QRect screenGeometry = getScreenGeometry();
-    QList<QRect> layouts = calculateLayout(profile.layout, instanceCount, screenGeometry);
+    m_layouts = calculateLayout(profile.layout, instanceCount, screenGeometry, profile.gridSubLayout);
 
     // Set up device ownership (requires polkit helper)
     if (!setupDeviceOwnership()) {
@@ -245,15 +245,10 @@ bool SessionRunner::start()
         qWarning() << "Failed to set up launcher access - continuing anyway";
     }
 
-    // Create and start instances
+    // Build pending configs for sequential launching (fixes race condition with window positioning)
+    m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
         const InstanceConfig &instConfig = profile.instances[i];
-        
-        // Create instance
-        auto *instance = new GamescopeInstance(this);
-        connect(instance, &GamescopeInstance::started, this, &SessionRunner::onInstanceStarted);
-        connect(instance, &GamescopeInstance::stopped, this, &SessionRunner::onInstanceStopped);
-        connect(instance, &GamescopeInstance::errorOccurred, this, &SessionRunner::onInstanceError);
 
         // Build config map for the instance
         QVariantMap config;
@@ -262,12 +257,12 @@ bool SessionRunner::start()
         
         // Derive resolution from layout - internal resolution matches output resolution
         // This ensures games render at the correct size for their window
-        config[QStringLiteral("internalWidth")] = layouts[i].width();
-        config[QStringLiteral("internalHeight")] = layouts[i].height();
-        config[QStringLiteral("outputWidth")] = layouts[i].width();
-        config[QStringLiteral("outputHeight")] = layouts[i].height();
-        config[QStringLiteral("positionX")] = layouts[i].x();
-        config[QStringLiteral("positionY")] = layouts[i].y();
+        config[QStringLiteral("internalWidth")] = m_layouts[i].width();
+        config[QStringLiteral("internalHeight")] = m_layouts[i].height();
+        config[QStringLiteral("outputWidth")] = m_layouts[i].width();
+        config[QStringLiteral("outputHeight")] = m_layouts[i].height();
+        config[QStringLiteral("positionX")] = m_layouts[i].x();
+        config[QStringLiteral("positionY")] = m_layouts[i].y();
         config[QStringLiteral("refreshRate")] = instConfig.refreshRate;
         config[QStringLiteral("scalingMode")] = instConfig.scalingMode;
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
@@ -306,18 +301,12 @@ bool SessionRunner::start()
             config[QStringLiteral("bindPaths")] = m_instanceBindPaths.value(i);
         }
 
-        m_instances.append(instance);
-
-        // Start with slight delay between instances to avoid resource contention
-        if (!instance->start(config, i)) {
-            qWarning() << "Failed to start instance" << i;
-        }
+        m_pendingInstanceConfigs.append(config);
     }
 
-    setStatus(QStringLiteral("Session running"));
-    Q_EMIT runningChanged();
-    Q_EMIT instancesChanged();
-    Q_EMIT sessionStarted();
+    // Start instances sequentially to ensure correct window positioning order
+    m_nextInstanceToStart = 0;
+    startNextInstance();
 
     QSet<int> knownEventNumbers;
     if (m_deviceManager) {
@@ -436,6 +425,42 @@ QVariantList SessionRunner::instancesAsVariant() const
     return list;
 }
 
+void SessionRunner::startNextInstance()
+{
+    // Check if all instances have been started
+    if (m_nextInstanceToStart >= m_pendingInstanceConfigs.size()) {
+        // All instances started - session is now fully running
+        setStatus(QStringLiteral("Session running"));
+        Q_EMIT runningChanged();
+        Q_EMIT instancesChanged();
+        Q_EMIT sessionStarted();
+        return;
+    }
+
+    int index = m_nextInstanceToStart;
+    const QVariantMap &config = m_pendingInstanceConfigs[index];
+
+    // Create instance
+    auto *instance = new GamescopeInstance(this);
+    connect(instance, &GamescopeInstance::started, this, &SessionRunner::onInstanceStarted);
+    connect(instance, &GamescopeInstance::stopped, this, &SessionRunner::onInstanceStopped);
+    connect(instance, &GamescopeInstance::errorOccurred, this, &SessionRunner::onInstanceError);
+
+    m_instances.append(instance);
+
+    // Start the instance
+    if (!instance->start(config, index)) {
+        qWarning() << "Failed to start instance" << index;
+    }
+
+    // If KWin is not available, start next instance immediately (no window positioning to wait for)
+    if (!m_windowManager || !m_windowManager->isAvailable()) {
+        ++m_nextInstanceToStart;
+        startNextInstance();
+    }
+    // Otherwise, wait for onWindowPositioned to trigger the next start
+}
+
 void SessionRunner::cleanupInstances()
 {
     // Cancel any pending window positioning requests
@@ -448,6 +473,11 @@ void SessionRunner::cleanupInstances()
     }
     m_instances.clear();
     m_positionedWindowIds.clear(); // Clear tracked window IDs for next session
+    
+    // Clear sequential launching state
+    m_pendingInstanceConfigs.clear();
+    m_layouts.clear();
+    m_nextInstanceToStart = 0;
 }
 
 void SessionRunner::cleanupOverrideDirs(const QStringList &overridePaths)
@@ -872,7 +902,8 @@ void SessionRunner::loadOverrideFiles(const QString &overridesRoot, const QStrin
 
 QList<QRect> SessionRunner::calculateLayout(const QString &layout,
                                              int instanceCount,
-                                             const QRect &screenGeometry)
+                                             const QRect &screenGeometry,
+                                             const QString &gridSubLayout)
 {
     QList<QRect> result;
 
@@ -898,18 +929,50 @@ QList<QRect> SessionRunner::calculateLayout(const QString &layout,
             result.append(QRect(x, y + i * instanceHeight, w, instanceHeight));
         }
     } else if (layout == QStringLiteral("grid")) {
-        // Grid layout: 2 columns for 3+ players, match count for 1-2
-        // Uses same formula as SessionManager::recalculateOutputResolutions()
-        int cols = (instanceCount <= 2) ? instanceCount : 2;
-        int rows = (instanceCount + cols - 1) / cols;
-        
-        int cellWidth = w / cols;
-        int cellHeight = h / rows;
-        
-        for (int i = 0; i < instanceCount; ++i) {
-            int col = i % cols;
-            int row = i / cols;
-            result.append(QRect(x + col * cellWidth, y + row * cellHeight, cellWidth, cellHeight));
+        // Grid layout with configurable behavior for 3 players:
+        // - gridSubLayout == "horizontal": 3×1 (each player gets full height, equal width) - DEFAULT for 3 players
+        // - gridSubLayout == "grid-2x2": 2×2 with empty cell (3 cells filled, 1 empty)
+        // - gridSubLayout == "left-right": player 1 left 40%, players 2+3 stacked right 60%
+        // - 2 players: 2×1
+        // - 4 players: 2×2
+        if (instanceCount == 3 && gridSubLayout == QStringLiteral("left-right")) {
+            int leftWidth = w * 2 / 5;  // 40% for player 1
+            int rightWidth = w - leftWidth;  // 60% for players 2+3
+            int halfHeight = h / 2;
+            // Player 1: left, full height
+            result.append(QRect(x, y, leftWidth, h));
+            // Player 2: top-right
+            result.append(QRect(x + leftWidth, y, rightWidth, halfHeight));
+            // Player 3: bottom-right
+            result.append(QRect(x + leftWidth, y + halfHeight, rightWidth, h - halfHeight));
+        } else {
+            int cols, rows;
+            if (instanceCount == 3) {
+                if (gridSubLayout == QStringLiteral("grid-2x2")) {
+                    cols = 2;
+                    rows = 2;
+                } else {
+                    // Default for 3 players: horizontal (3×1)
+                    cols = 3;
+                    rows = 1;
+                }
+            } else if (instanceCount <= 2) {
+                cols = 2;
+                rows = 1;
+            } else {
+                cols = 2;
+                rows = 2;
+            }
+
+            int cellWidth = w / cols;
+            int cellHeight = h / rows;
+
+            for (int i = 0; i < instanceCount; ++i) {
+                int col = i % cols;
+                int row = i / cols;
+                result.append(QRect(x + col * cellWidth, y + row * cellHeight, cellWidth, cellHeight));
+            }
+        }
         }
     } else if (layout == QStringLiteral("multi-monitor")) {
         // Each instance on a different monitor - just use full screen for now
@@ -997,13 +1060,20 @@ void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
     if (!m_positionedWindowIds.contains(windowId)) {
         m_positionedWindowIds.append(windowId);
     }
+
+    // Start next instance in sequential launching mode
+    if (!m_pendingInstanceConfigs.isEmpty()) {
+        ++m_nextInstanceToStart;
+        startNextInstance();
+    }
 }
 
 void SessionRunner::onWindowPositioningTimeout(int requestId)
 {
     qWarning() << "SessionRunner: Failed to position window for instance" << requestId 
-               << "after timeout";
-    Q_EMIT errorOccurred(QStringLiteral("Failed to position window for instance %1").arg(requestId));
+               << "after timeout - stopping session";
+    Q_EMIT errorOccurred(QStringLiteral("Failed to position window for instance %1. Session stopped.").arg(requestId));
+    stop();
 }
 
 void SessionRunner::setupGlobalShortcut()
