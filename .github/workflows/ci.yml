@@ -123,6 +123,8 @@ jobs:
         env:
           QT_LINUX_ACCESSIBILITY_ALWAYS_ON: 1
           XDG_RUNTIME_DIR: /tmp/runtime-runner
+          QT_QPA_PLATFORM: offscreen
+          TEST_WITH_KWIN_WAYLAND: "0"
 
       - name: Upload failure screenshots
         if: failure()
