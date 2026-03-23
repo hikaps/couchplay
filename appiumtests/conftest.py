@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(__file__))
+
 import pytest
 from appium import webdriver
 from appium.options.common.base import AppiumOptions
