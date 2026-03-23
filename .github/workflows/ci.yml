@@ -119,7 +119,7 @@ jobs:
           update-desktop-database ~/.local/share/applications || true
 
       - name: Run e2e tests
-        run: selenium-webdriver-at-spi-run pytest appiumtests/ -v
+        run: selenium-webdriver-at-spi-run pytest appiumtests/ -v --rootdir=appiumtests
         env:
           QT_LINUX_ACCESSIBILITY_ALWAYS_ON: 1
           XDG_RUNTIME_DIR: /tmp/runtime-runner
