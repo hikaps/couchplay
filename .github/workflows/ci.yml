@@ -121,6 +121,7 @@ jobs:
         run: selenium-webdriver-at-spi-run pytest appiumtests/ -v
         env:
           QT_LINUX_ACCESSIBILITY_ALWAYS_ON: 1
+          XDG_RUNTIME_DIR: /tmp/runtime-runner
 
       - name: Upload failure screenshots
         if: failure()
