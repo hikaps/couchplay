@@ -276,6 +276,7 @@ bool SessionRunner::start()
         config[QStringLiteral("gameCommand")] = instConfig.gameCommand;
         config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
         config[QStringLiteral("borderless")] = m_borderlessWindows;
+        config[QStringLiteral("overlayGamePath")] = profile.overlayGamePath;
 
         // Look up preset and add resolved command/settings
         if (m_presetManager) {
@@ -589,15 +590,16 @@ bool SessionRunner::setupOverlayMounts()
     const auto &profile = m_sessionManager->currentProfile();
     bool allSucceeded = true;
 
+    qCDebug(couchplaySharing) << "setupOverlayMounts: instances:" << profile.instances.size()
+                              << "overlayGamePath:" << profile.overlayGamePath;
+
     for (int i = 0; i < profile.instances.size(); ++i) {
         const auto &instConfig = profile.instances[i];
 
-        // Task 8: Check patterns instead of overlayEnabled
         if (instConfig.overlayPatterns.isEmpty()) {
             qCDebug(couchplaySharing) << "No overlay patterns for instance" << i << "- skipping overlay";
             continue;
         }
-        qCDebug(couchplaySharing) << "Auto-enabling overlay for instance" << i << "with" << instConfig.overlayPatterns.size() << "patterns";
 
         const QString &username = instConfig.username;
 
@@ -606,29 +608,32 @@ bool SessionRunner::setupOverlayMounts()
             continue;
         }
 
-        QString gamePath = instConfig.overlayGamePath;
+        QString gamePath = profile.overlayGamePath;
         if (gamePath.isEmpty()) {
             qCWarning(couchplaySharing) << "Instance" << i << "has patterns but no game path, skipping";
             continue;
         }
 
-        // Derive gameId from gamePath
         QString gameId = instConfig.steamAppId;
         if (gameId.isEmpty()) {
             gameId = QString::fromLatin1(QCryptographicHash::hash(
                 gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
         }
 
-        // Task 6: Expand patterns to file list
         QStringList matchedFiles = expandPatternsToFiles(gamePath, instConfig.overlayPatterns);
         qCDebug(couchplaySharing) << "Instance" << i << "matched" << matchedFiles.size() << "files from" << instConfig.overlayPatterns.size() << "patterns";
+
+        if (matchedFiles.isEmpty()) {
+            qCDebug(couchplaySharing) << "Instance" << i << "no files matched overlay patterns — skipping overlay mount";
+            continue;
+        }
 
         // Get overrides root path
         QString presetId = instConfig.presetId;
         if (presetId.isEmpty()) {
             presetId = QStringLiteral("steam");  // Default preset
         }
-        QString overridesRoot = getOverridesRootPath(presetId, gameId);
+        QString overridesRoot = getOverridesRootPath(presetId, gameId, i);
 
         qCDebug(couchplaySharing) << "Setting up overlay mount for instance" << i
                                   << "user" << username
@@ -636,7 +641,6 @@ bool SessionRunner::setupOverlayMounts()
                                   << "gameId:" << gameId
                                   << "matchedFiles:" << matchedFiles.size();
 
-        // Call helper setupOverlayMount() first
         if (!m_helperClient->setupOverlayMount(username, gamePath, gameId, matchedFiles, compositorUid)) {
             qCWarning(couchplaySharing) << "Failed to set up overlay mount for instance" << i
                                         << "user" << username << "gameId:" << gameId;
@@ -644,10 +648,8 @@ bool SessionRunner::setupOverlayMounts()
                                                  "The game will use the shared directory instead.")
                                  .arg(i + 1).arg(username));
             allSucceeded = false;
-            // Continue with other instances - graceful degradation
         }
 
-        // Task 7: Load override files from root and write to overlay upperdir
         loadOverrideFiles(overridesRoot, matchedFiles, username, gameId);
     }
 
@@ -670,7 +672,7 @@ void SessionRunner::teardownOverlayMounts()
     for (int i = 0; i < profile.instances.size(); ++i) {
         const auto &instConfig = profile.instances[i];
         
-        if (!instConfig.overlayEnabled) {
+        if (instConfig.overlayPatterns.isEmpty() || profile.overlayGamePath.isEmpty()) {
             continue;
         }
         
@@ -682,7 +684,7 @@ void SessionRunner::teardownOverlayMounts()
         
         QString gameId = instConfig.steamAppId;
         if (gameId.isEmpty()) {
-            QString gamePath = instConfig.overlayGamePath;
+            QString gamePath = profile.overlayGamePath;
             if (!gamePath.isEmpty()) {
                 gameId = QString::fromLatin1(QCryptographicHash::hash(
                     gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
@@ -819,24 +821,23 @@ QRect SessionRunner::getScreenGeometry() const
     return QRect(0, 0, 1920, 1080);
 }
 
-QString SessionRunner::getOverridesRootPath(const QString &presetId, const QString &gameKeyHash)
+QString SessionRunner::getOverridesRootPath(const QString &presetId, const QString &gameKeyHash, int instanceIndex)
 {
     QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QString path = basePath + QStringLiteral("/overrides/") + presetId + QStringLiteral("/") + gameKeyHash + QStringLiteral("/");
+    QString path = basePath + QStringLiteral("/overrides/") + presetId + QStringLiteral("/") + gameKeyHash + QStringLiteral("/") + QString::number(instanceIndex) + QStringLiteral("/");
     return path;
 }
 
-QString SessionRunner::getAndEnsureOverridesPath(const QString &presetId)
+QString SessionRunner::getInstanceOverridesPath(const QString &presetId, const QString &gameKeyHash, int instanceIndex)
 {
-    QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QString overridesPath = basePath + QStringLiteral("/overrides/") + presetId + QStringLiteral("/");
+    QString path = getOverridesRootPath(presetId, gameKeyHash, instanceIndex);
     
     QDir dir;
-    if (!dir.exists(overridesPath)) {
-        dir.mkpath(overridesPath);
+    if (!dir.exists(path)) {
+        dir.mkpath(path);
     }
     
-    return overridesPath;
+    return path;
 }
 
 QStringList SessionRunner::expandPatternsToFiles(const QString &gamePath, const QStringList &patterns)
@@ -852,15 +853,34 @@ QStringList SessionRunner::expandPatternsToFiles(const QString &gamePath, const 
         qCWarning(couchplaySharing) << "expandPatternsToFiles: gamePath does not exist:" << gamePath;
         return matchedFiles;
     }
+
+    for (const QString &pattern : patterns) {
+        if (pattern.endsWith(QLatin1Char('/'))) {
+            QString dirPath = gamePath + QLatin1Char('/') + pattern;
+            if (baseDir.exists(pattern)) {
+                matchedFiles.append(pattern);
+                qCDebug(couchplaySharing) << "Pattern" << pattern << "matched directory:" << dirPath;
+            }
+            continue;
+        }
+    }
     
     QDirIterator it(gamePath, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
     
     while (it.hasNext()) {
         QString filePath = it.next();
         QString relativePath = baseDir.relativeFilePath(filePath);
+        QString fileName = QFileInfo(filePath).fileName();
         
         for (const QString &pattern : patterns) {
-            if (QDir::match(pattern, relativePath)) {
+            if (pattern.endsWith(QLatin1Char('/'))) {
+                continue;
+            }
+            bool matched = QDir::match(pattern, relativePath);
+            if (!matched && !pattern.contains(QLatin1Char('/'))) {
+                matched = QDir::match(pattern, fileName);
+            }
+            if (matched) {
                 matchedFiles.append(relativePath);
                 qCDebug(couchplaySharing) << "Pattern" << pattern << "matched file:" << relativePath;
                 break;
@@ -869,7 +889,7 @@ QStringList SessionRunner::expandPatternsToFiles(const QString &gamePath, const 
     }
     
     qCDebug(couchplaySharing) << "expandPatternsToFiles:" << matchedFiles.size()
-                              << "files matched from" << patterns.size() << "patterns in" << gamePath;
+                              << "entries matched from" << patterns.size() << "patterns in" << gamePath;
     
     return matchedFiles;
 }
@@ -887,13 +907,25 @@ void SessionRunner::loadOverrideFiles(const QString &overridesRoot, const QStrin
 
     for (const QString &relativePath : matchedFiles) {
         QString overrideFilePath = overridesRoot + relativePath;
-        
-        QFile overrideFile(overrideFilePath);
-        if (!overrideFile.exists()) {
+        bool found = false;
+
+        if (QFile::exists(overrideFilePath)) {
+            found = true;
+        } else {
+            QString fileName = QFileInfo(relativePath).fileName();
+            QString flatPath = overridesRoot + fileName;
+            if (QFile::exists(flatPath)) {
+                overrideFilePath = flatPath;
+                found = true;
+            }
+        }
+
+        if (!found) {
             qCDebug(couchplaySharing) << "Override file not found:" << overrideFilePath;
             continue;
         }
 
+        QFile overrideFile(overrideFilePath);
         if (!overrideFile.open(QIODevice::ReadOnly)) {
             qCWarning(couchplaySharing) << "Failed to open override file:" << overrideFilePath;
             continue;

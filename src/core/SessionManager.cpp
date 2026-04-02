@@ -97,6 +97,7 @@ bool SessionManager::saveProfile(const QString &name)
     general.writeEntry("name", name);
     general.writeEntry("layout", m_currentProfile.layout);
     general.writeEntry("instanceCount", m_currentProfile.instances.size());
+    general.writeEntry("overlayGamePath", m_currentProfile.overlayGamePath);
 
     // Instance sections
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
@@ -116,11 +117,8 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
         instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
-        instGroup.writeEntry("overlayEnabled", inst.overlayEnabled);
-        instGroup.writeEntry("overlayGamePath", inst.overlayGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overlayPatterns", inst.overlayPatterns);
-        instGroup.writeEntry("borderless", inst.borderless);
 
         // Convert devices to string list (legacy - for backwards compatibility)
         QStringList deviceStrings;
@@ -161,6 +159,7 @@ bool SessionManager::loadProfile(const QString &name)
     m_currentProfile.name = name;
     m_currentProfile.filePath = path;
     m_currentProfile.layout = general.readEntry("layout", QStringLiteral("horizontal"));
+    m_currentProfile.overlayGamePath = general.readEntry("overlayGamePath", QString());
     int instanceCount = general.readEntry("instanceCount", 2);
 
     // Read instances
@@ -182,8 +181,6 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
         inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
-        inst.overlayEnabled = instGroup.readEntry("overlayEnabled", false);
-        inst.overlayGamePath = instGroup.readEntry("overlayGamePath", QString());
         inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
 
         // Read overlayPatterns (may not exist in old profiles)
@@ -194,9 +191,6 @@ bool SessionManager::loadProfile(const QString &name)
             inst.overlayPatterns = inst.overrideFiles;
             qDebug() << "Migrated overrideFiles to overlayPatterns for instance" << i;
         }
-
-        // Read borderless setting (may not exist in old profiles)
-        inst.borderless = instGroup.readEntry("borderless", false);
 
         // Read stable device IDs (primary - survives hotplug/reboot)
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
@@ -315,7 +309,6 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("overlayPatterns")] = inst.overlayPatterns;
     map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
-    map[QStringLiteral("borderless")] = inst.borderless;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -372,10 +365,6 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.presetId = config[QStringLiteral("presetId")].toString();
     if (config.contains(QStringLiteral("overlayPatterns")))
         inst.overlayPatterns = config[QStringLiteral("overlayPatterns")].toStringList();
-    if (config.contains(QStringLiteral("overlayGamePath")))
-        inst.overlayGamePath = config[QStringLiteral("overlayGamePath")].toString();
-    if (config.contains(QStringLiteral("borderless")))
-        inst.borderless = config[QStringLiteral("borderless")].toBool();
 
     Q_EMIT instancesChanged();
     
@@ -486,12 +475,14 @@ void SessionManager::setInstanceSharedDirectories(int index, const QStringList &
     }
 }
 
-void SessionManager::setInstanceBorderless(int index, bool borderless)
+
+
+void SessionManager::setOverlayGamePath(const QString &path)
 {
-    if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].borderless = borderless;
-        Q_EMIT instancesChanged();
-        
+    if (m_currentProfile.overlayGamePath != path) {
+        m_currentProfile.overlayGamePath = path;
+        Q_EMIT overlayGamePathChanged();
+
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }

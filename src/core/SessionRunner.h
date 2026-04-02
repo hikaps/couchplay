@@ -129,12 +129,11 @@ public:
                                          int instanceCount,
                                          const QRect &screenGeometry);
 
-    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash);
+    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash, int instanceIndex);
 
     static QStringList expandPatternsToFiles(const QString &gamePath, const QStringList &patterns);
     
-    // Returns override path for a preset (~/.local/share/hikaps/CouchPlay/overrides/<presetId>/), creating it if needed
-    Q_INVOKABLE static QString getAndEnsureOverridesPath(const QString &presetId);
+    Q_INVOKABLE static QString getInstanceOverridesPath(const QString &presetId, const QString &gameKeyHash, int instanceIndex);
     
     void loadOverrideFiles(const QString &overridesRoot, const QStringList &matchedFiles, const QString &username, const QString &gameId);
 
@@ -199,5 +198,5 @@ private:
     QString m_status;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
-    bool m_borderlessWindows = false; // Default to decorated windows
+    bool m_borderlessWindows = true; // Default to borderless windows
 };

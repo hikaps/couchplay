@@ -4,6 +4,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
+import QtQuick.Dialogs
 import org.kde.kirigami as Kirigami
 
 import "../components" as Components
@@ -253,6 +254,50 @@ Kirigami.ScrollablePage {
             }
         }
 
+        // Game Path for overlays
+        Kirigami.Heading {
+            text: i18nc("@title", "Game Path")
+            level: 2
+            Layout.topMargin: Kirigami.Units.largeSpacing
+        }
+
+        Controls.Label {
+            text: i18nc("@info", "Select the shared game directory for overlay mounts.")
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+            opacity: 0.7
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing
+
+            Controls.TextField {
+                id: gamePathField
+                Layout.fillWidth: true
+                text: sessionManager ? sessionManager.overlayGamePath : ""
+                placeholderText: i18nc("@info:placeholder", "/path/to/game/directory")
+                readOnly: false
+                onEditingFinished: if (sessionManager) sessionManager.overlayGamePath = text
+            }
+
+            Controls.Button {
+                icon.name: "folder-open"
+                text: i18nc("@action:button", "Browse")
+                onClicked: gamePathDialog.open()
+            }
+        }
+
+        FolderDialog {
+            id: gamePathDialog
+            title: i18nc("@title:dialog", "Select Game Directory")
+            onAccepted: {
+                if (sessionManager) {
+                    sessionManager.overlayGamePath = selectedFolder.toString().replace("file://", "")
+                }
+            }
+        }
+
         // Instance Configuration
         Kirigami.Heading {
             text: i18nc("@title", "Instance Configuration")
@@ -300,10 +345,7 @@ Kirigami.ScrollablePage {
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
-                readonly property string labelWindowBorders: i18nc("@label", "Window Borders:")
                 readonly property string labelDevices: i18nc("@label", "Devices:")
-                readonly property string textBorderless: i18nc("@option:check", "Borderless")
-                readonly property string tooltipBorderless: i18nc("@info:tooltip", "Enable for borderless windows, disable to show window decorations")
 
                 readonly property string labelOverlay: i18nc("@label", "Config Overrides:")
                 readonly property string tooltipOverlay: i18nc("@info:tooltip", "For games that store saves/config in their own folder (not in AppData/Documents). Each player gets their own copy of matching files.")
@@ -484,22 +526,6 @@ Kirigami.ScrollablePage {
                                 Layout.fillWidth: true
                             }
 
-                            Controls.CheckBox {
-                                Kirigami.FormData.label: instanceCard.labelWindowBorders
-                                checked: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).borderless : false
-                                text: instanceCard.textBorderless
-                                
-                                onToggled: {
-                                    if (root.sessionManager) {
-                                        root.sessionManager.setInstanceBorderless(instanceCard.index, checked)
-                                    }
-                                }
-                                
-                                Controls.ToolTip.text: instanceCard.tooltipBorderless
-                                Controls.ToolTip.visible: hovered
-                                Controls.ToolTip.delay: 1000
-                            }
-
                             // Show assigned devices
                             RowLayout {
                                 Kirigami.FormData.label: instanceCard.labelDevices
@@ -570,10 +596,19 @@ Kirigami.ScrollablePage {
                                         icon.name: "folder-open"
                                         flat: true
                                         onClicked: {
-                                            if (root?.sessionRunner) {
+                                            if (root?.sessionRunner && root?.sessionManager) {
                                                 let presetId = instanceCard.currentPresetId || "steam"
-                                                let overridePath = root.sessionRunner.getAndEnsureOverridesPath(presetId)
-                                                Qt.openUrlExternally("file://" + overridePath)
+                                                let gameId = root.sessionManager.getInstanceConfig(instanceCard.index).steamAppId || ""
+                                                let gamePath = root.sessionManager.overlayGamePath
+                                                if (!gameId && gamePath) {
+                                                    // Generate hash-based gameId
+                                                    // Use a simplified approach for QML
+                                                    gameId = Qt.md5(gamePath).substring(0, 16)
+                                                }
+                                                if (gameId) {
+                                                    let overridePath = root.sessionRunner.getInstanceOverridesPath(presetId, gameId, instanceCard.index)
+                                                    Qt.openUrlExternally("file://" + overridePath)
+                                                }
                                             }
                                         }
                                     }

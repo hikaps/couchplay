@@ -5,10 +5,12 @@
 
 #include <QDir>
 #include <QFile>
+#include <QProcess>
 #include <QFileInfo>
 
 #include <cerrno>
 #include <cstring>
+#include <sys/mount.h>
 #include <unistd.h>
 
 RealSystemOps::RealSystemOps(QObject *parent)
@@ -117,11 +119,78 @@ QByteArray RealSystemOps::readStandardError(QProcess *process)
     return process->readAllStandardError();
 }
 
+QByteArray RealSystemOps::readAllStandardOutput(QProcess *process)
+{
+    return process->readAllStandardOutput();
+}
+
 // Directory listing
 QStringList RealSystemOps::entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters)
 {
     QDir dir(path);
     return dir.entryList(nameFilters, filters);
+}
+
+// Mount operations
+int RealSystemOps::mount(const QString &source, const QString &target,
+                         const QString &fstype, unsigned long flags,
+                         const QString &options)
+{
+    QProcess proc;
+    QStringList args = {
+        QStringLiteral("-t"), QStringLiteral("1"), QStringLiteral("-m"), QStringLiteral("--"),
+        QStringLiteral("mount")
+    };
+
+    if (flags & MS_BIND) {
+        args << (flags & MS_REC ? QStringLiteral("--rbind") : QStringLiteral("--bind"));
+        args << source << target;
+    } else {
+        args << QStringLiteral("-t") << fstype;
+        if (!options.isEmpty()) {
+            args << QStringLiteral("-o") << options;
+        }
+        if (!source.isEmpty()) {
+            args << source;
+        }
+        args << target;
+    }
+
+    proc.start(QStringLiteral("nsenter"), args);
+    proc.waitForFinished(5000);
+    if (proc.exitCode() != 0) {
+        qWarning() << "nsenter mount failed:" << proc.readAllStandardError();
+    }
+    return proc.exitCode() == 0 ? 0 : -1;
+}
+
+int RealSystemOps::umount(const QString &target)
+{
+    QProcess proc;
+    proc.start(QStringLiteral("nsenter"), {
+        QStringLiteral("-t"), QStringLiteral("1"), QStringLiteral("-m"), QStringLiteral("--"),
+        QStringLiteral("umount"), target
+    });
+    proc.waitForFinished(5000);
+    if (proc.exitCode() != 0) {
+        qWarning() << "nsenter umount failed:" << proc.readAllStandardError();
+    }
+    return proc.exitCode() == 0 ? 0 : -1;
+}
+
+int RealSystemOps::umount2(const QString &target, int flags)
+{
+    Q_UNUSED(flags)
+    QProcess proc;
+    proc.start(QStringLiteral("nsenter"), {
+        QStringLiteral("-t"), QStringLiteral("1"), QStringLiteral("-m"), QStringLiteral("--"),
+        QStringLiteral("umount"), QStringLiteral("-l"), target
+    });
+    proc.waitForFinished(5000);
+    if (proc.exitCode() != 0) {
+        qWarning() << "nsenter umount2 failed:" << proc.readAllStandardError();
+    }
+    return proc.exitCode() == 0 ? 0 : -1;
 }
 
 // Process signaling

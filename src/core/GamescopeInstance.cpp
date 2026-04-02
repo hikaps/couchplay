@@ -101,7 +101,8 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         static_cast<uint>(compositorUid),
         gamescopeArgs,
         gameCommand,
-        envVars
+        envVars,
+        config.value(QStringLiteral("overlayGamePath")).toString()
     );
     
     if (!reply.isValid()) {
@@ -354,9 +355,9 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     return envVars;
 }
 
-qint64 GamescopeInstance::resolveGamescopePid(qint64 launchedPid)
+qint64 GamescopeInstance::resolveGamescopePid(qint64 launchedPid, int maxDepth)
 {
-    if (launchedPid <= 0) {
+    if (launchedPid <= 0 || maxDepth <= 0) {
         return 0;
     }
 
@@ -382,6 +383,12 @@ qint64 GamescopeInstance::resolveGamescopePid(qint64 launchedPid)
             if (comm == QLatin1String("gamescope")) {
                 return childPid;
             }
+        }
+
+        // Recurse into grandchildren (systemd-run → bash → gamescope)
+        qint64 found = resolveGamescopePid(childPid, maxDepth - 1);
+        if (found > 0) {
+            return found;
         }
     }
 

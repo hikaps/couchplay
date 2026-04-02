@@ -77,7 +77,8 @@ public:
     Q_INVOKABLE qint64 launchInstance(const QString &username, uint compositorUid,
                                        const QStringList &gamescopeArgs,
                                        const QString &gameCommand,
-                                       const QStringList &environment);
+                                       const QStringList &environment,
+                                       const QString &gamePath);
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)

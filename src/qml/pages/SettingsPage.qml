@@ -49,7 +49,7 @@ Kirigami.ScrollablePage {
     readonly property string scalingMode: settingsManager?.scalingMode ?? "fit"
     readonly property string filterMode: settingsManager?.filterMode ?? "linear"
     readonly property bool steamIntegration: settingsManager?.steamIntegration ?? true
-    readonly property bool borderlessWindows: settingsManager?.borderlessWindows ?? false
+    readonly property bool borderlessWindows: settingsManager?.borderlessWindows ?? true
 
     actions: [
         Kirigami.Action {

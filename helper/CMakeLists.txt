@@ -14,9 +14,8 @@ add_executable(couchplay-helper
 target_link_libraries(couchplay-helper PRIVATE
     Qt6::Core
     Qt6::DBus
-)
+    )
 
-# Install to libexec
 install(TARGETS couchplay-helper
     DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}
-)
+    )

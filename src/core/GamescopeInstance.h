@@ -122,7 +122,7 @@ private Q_SLOTS:
 
 private:
     void setStatus(const QString &status);
-    static qint64 resolveGamescopePid(qint64 launchedPid);
+    static qint64 resolveGamescopePid(qint64 launchedPid, int maxDepth = 4);
 
     QProcess *m_process = nullptr;
     int m_index = -1;
