@@ -129,8 +129,6 @@ public:
                                          int instanceCount,
                                          const QRect &screenGeometry);
 
-    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash, int instanceIndex);
-
     static QStringList expandPatternsToFiles(const QString &gamePath, const QStringList &patterns);
     
     Q_INVOKABLE static QString getInstanceOverridesPath(const QString &presetId, const QString &gameKeyHash, int instanceIndex);
@@ -175,6 +173,7 @@ private:
     void teardownOverlayMounts();
     bool setupLauncherAccess();
     QRect getScreenGeometry() const;
+    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash, int instanceIndex);
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
 

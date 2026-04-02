@@ -180,12 +180,17 @@ int RealSystemOps::umount(const QString &target)
 
 int RealSystemOps::umount2(const QString &target, int flags)
 {
-    Q_UNUSED(flags)
-    QProcess proc;
-    proc.start(QStringLiteral("nsenter"), {
+    QStringList umountArgs = {
         QStringLiteral("-t"), QStringLiteral("1"), QStringLiteral("-m"), QStringLiteral("--"),
-        QStringLiteral("umount"), QStringLiteral("-l"), target
-    });
+        QStringLiteral("umount")
+    };
+    if (flags & MNT_DETACH) {
+        umountArgs << QStringLiteral("-l");
+    }
+    umountArgs << target;
+
+    QProcess proc;
+    proc.start(QStringLiteral("nsenter"), umountArgs);
     proc.waitForFinished(5000);
     if (proc.exitCode() != 0) {
         qWarning() << "nsenter umount2 failed:" << proc.readAllStandardError();

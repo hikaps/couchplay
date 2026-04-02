@@ -60,7 +60,7 @@ fi
 
 # Binary name
 HELPER_BINARY="couchplay-helper"
-INTERCEPTOR_LIB="libcouchplay-intercept.so"
+
 
 # Export directory for Flatpak (user's local share)
 EXPORT_DIR="${EXPORT_DIR:-${HOME}/.local/share/couchplay}"
@@ -89,18 +89,6 @@ else
     DATA_DIR="${PROJECT_DIR}/data"
 fi
 
-# Detect interceptor library
-if [[ -n "${PROJECT_DIR:-}" ]] && [[ -f "${PROJECT_DIR}/build/bin/${INTERCEPTOR_LIB}" ]]; then
-    INTERCEPTOR_PATH="${PROJECT_DIR}/build/bin/${INTERCEPTOR_LIB}"
-elif [[ -n "${RELEASE_DIR:-}" ]] && [[ -f "${RELEASE_DIR}/bin/${INTERCEPTOR_LIB}" ]]; then
-    INTERCEPTOR_PATH="${RELEASE_DIR}/bin/${INTERCEPTOR_LIB}"
-elif [[ -n "${PROJECT_DIR:-}" ]] && [[ -f "${PROJECT_DIR}/build/lib/${INTERCEPTOR_LIB}" ]]; then
-    INTERCEPTOR_PATH="${PROJECT_DIR}/build/lib/${INTERCEPTOR_LIB}"
-elif [[ -f "/usr/local/lib/${INTERCEPTOR_LIB}" ]]; then
-    INTERCEPTOR_PATH="/usr/local/lib/${INTERCEPTOR_LIB}"
-else
-    INTERCEPTOR_PATH=""
-fi
 
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -155,13 +143,6 @@ export_helper() {
     print_info "Copying install script to ${EXPORT_DIR}/"
     install -m755 "${BASH_SOURCE[0]}" "${EXPORT_DIR}/install-helper.sh"
 
-    # Copy interceptor library if available
-    if [[ -n "${INTERCEPTOR_PATH}" ]]; then
-        mkdir -p "${EXPORT_DIR}/lib"
-        print_info "Copying interceptor library to ${EXPORT_DIR}/lib/"
-        install -m755 "${INTERCEPTOR_PATH}" "${EXPORT_DIR}/lib/${INTERCEPTOR_LIB}"
-    fi
-    
     # Copy data files (D-Bus config, systemd service, polkit policy)
     if [[ -d "${DATA_DIR}" ]]; then
         print_info "Copying configuration files..."
@@ -207,14 +188,6 @@ install_helper() {
     # Install binary
     print_info "Installing binary to ${LIBEXEC_DIR}/"
     install -Dm755 "${BINARY_PATH}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
-
-    # Install LD_PRELOAD interceptor library
-    if [[ -n "${INTERCEPTOR_PATH}" ]]; then
-        print_info "Installing interceptor library to /usr/local/lib/"
-        install -Dm755 "${INTERCEPTOR_PATH}" "/usr/local/lib/${INTERCEPTOR_LIB}"
-    else
-        print_warn "Interceptor library not found — flatpak overlay isolation will not work"
-    fi
 
     # Install D-Bus configuration
     print_info "Installing D-Bus configuration..."
@@ -267,7 +240,6 @@ uninstall_helper() {
     # Remove files
     print_info "Removing installed files..."
     rm -f "${LIBEXEC_DIR}/${HELPER_BINARY}"
-    rm -f "/usr/local/lib/${INTERCEPTOR_LIB}"
     rm -f "${DBUS_SYSTEM_DIR}/io.github.hikaps.CouchPlayHelper.conf"
     rm -f "${DBUS_SERVICE_DIR}/io.github.hikaps.CouchPlayHelper.service"
     rm -f "${SYSTEMD_DIR}/couchplay-helper.service"

@@ -718,7 +718,7 @@ bool CouchPlayHelper::isValidDevicePath(const QString &path)
 QString CouchPlayHelper::hashGamePath(const QString &gamePath)
 {
     return QString::fromLatin1(QCryptographicHash::hash(
-        gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
+        QDir::cleanPath(gamePath).toUtf8(), QCryptographicHash::Md5).toHex().left(16));
 }
 
 qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint compositorUid,
@@ -1726,10 +1726,10 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username, const QString &
                                           uint compositorUid)
 {
     Q_UNUSED(compositorUid)
-    qWarning() << "SetupOverlayMount: user" << username
-               << "gamePath:" << gamePath
-               << "gameId:" << gameId
-                << "overrideFiles:" << overrideFiles.size();
+    qInfo() << "SetupOverlayMount: user" << username
+             << "gamePath:" << gamePath
+             << "gameId:" << gameId
+             << "overrideFiles:" << overrideFiles.size();
 
     static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
     if (!validUsername.match(username).hasMatch()) {
@@ -1810,6 +1810,21 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username, const QString &
     QString workDir = overlayBase + QStringLiteral("/work");
     QString mountPoint = QStringLiteral("/run/couchplay/mounts/%1/%2").arg(username, gameId);
 
+    // Check if mount point is already active (from a crashed previous session)
+    QFile mountInfoFile(QStringLiteral("/proc/mounts"));
+    if (mountInfoFile.open(QIODevice::ReadOnly)) {
+        QByteArray mounts = mountInfoFile.readAll();
+        mountInfoFile.close();
+        QByteArray needle = (mountPoint + QLatin1Char(' ')).toUtf8();
+        if (mounts.contains(needle)) {
+            qInfo() << "Mount point already active, tearing down existing overlay:" << mountPoint;
+            TeardownOverlayMount(username, gameId);
+        }
+    }
+
+    // Clean stale workdir (overlayfs requires empty workdir)
+    QDir(workDir).removeRecursively();
+
     if (!m_ops->mkpath(upperDir)) {
         qWarning() << "Failed to create upper directory:" << upperDir << "for user" << username;
         sendErrorReply(QDBusError::Failed,
@@ -1844,7 +1859,7 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username, const QString &
         int lastSlash = dstFile.lastIndexOf(QLatin1Char('/'));
         if (lastSlash > 0) {
             QString dstDir = dstFile.left(lastSlash);
-            if (!m_ops->isDirectory(dstDir) && !m_ops->mkpath(dstDir)) {
+            if (!m_ops->mkpath(dstDir)) {
                 continue;
             }
             QString dirWalker = upperDir;
@@ -1877,10 +1892,10 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username, const QString &
         qWarning() << "overlayfs mount failed for user" << username
                    << "gameId" << gameId
                    << "mount point:" << mountPoint
-                   << "options:" << options
-                   << "errno:" << errno << strerror(errno);
+                   << "options:" << options;
         sendErrorReply(QDBusError::Failed,
-            QStringLiteral("overlayfs mount failed: %1").arg(strerror(errno)));
+            QStringLiteral("overlayfs mount failed for user '%1' game '%2' (check helper logs)")
+                .arg(username, gameId));
          return false;
     }
 

@@ -229,22 +229,22 @@ bool SessionRunner::start()
 
     // Set up device ownership (requires polkit helper)
     if (!setupDeviceOwnership()) {
-        qWarning() << "Failed to set up device ownership - continuing anyway";
+        qCWarning(couchplayCore) << "Failed to set up device ownership - continuing anyway";
     }
 
     // Set up shared directory mounts (requires polkit helper)
     if (!setupSharedDirectories()) {
-        qWarning() << "Failed to set up shared directories - continuing anyway";
+        qCWarning(couchplaySharing) << "Failed to set up shared directories - continuing anyway";
     }
 
     // Set up overlay mounts (requires polkit helper)
     if (!setupOverlayMounts()) {
-        qWarning() << "Failed to set up overlay mounts - continuing anyway";
+        qCWarning(couchplaySharing) << "Failed to set up overlay mounts - continuing anyway";
     }
 
     // Set up launcher access (ACLs, shortcut sync)
     if (!setupLauncherAccess()) {
-        qWarning() << "Failed to set up launcher access - continuing anyway";
+        qCWarning(couchplayCore) << "Failed to set up launcher access - continuing anyway";
     }
 
     // Create and start instances
