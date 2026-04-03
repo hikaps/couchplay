@@ -175,8 +175,8 @@ public:
 
     int chmod(const QString &path, mode_t mode) override {
         Q_UNUSED(path)
- Q_UNUSED(mode)
- return m_chmodResult;
+        Q_UNUSED(mode)
+        return m_chmodResult;
     }
 
     // Process operations

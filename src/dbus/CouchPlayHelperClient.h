@@ -210,12 +210,12 @@ public:
     /**
      * @brief Write a per-user override file into an overlay's upperdir
      *
-     * Used for customizing configuration files for specific players (e.g.,
-     * steam_emu.ini with different account IDs for each player).
+     * Used for writing per-user override files into an overlay mount (e.g.,
+     * config files or save data unique to each player).
      *
      * @param username Target user (must have overlay set up for this game)
      * @param gameId Game identifier (must match SetupOverlayMount call)
-     * @param relativePath Path relative to game root (e.g., "steam_emu.ini")
+     * @param relativePath Path relative to game root
      * @param content Binary content of the file
      * @return true if successful
      */

@@ -933,7 +933,7 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username, uint composi
     QStringList cmdArgs;
     cmdArgs << QStringLiteral("/usr/bin/gamescope") << gamescopeArgs;
 
-    QStringList gameParts = gameCommand.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    QStringList gameParts = QProcess::splitCommand(gameCommand);
     cmdArgs << QStringLiteral("--") << gameParts;
 
     systemdRunArgs << QStringLiteral("--property=Environment=%1").arg(envParts.join(QLatin1Char(' ')));
@@ -1936,13 +1936,12 @@ bool CouchPlayHelper::TeardownOverlayMount(const QString &username, const QStrin
     int result = m_ops->umount(mountPoint);
     if (result != 0) {
         qWarning() << "umount failed for" << mountPoint
-                   << "errno:" << errno << strerror(errno)
                    << "- trying lazy unmount";
         result = m_ops->umount2(mountPoint, MNT_DETACH);
         if (result != 0) {
             qWarning() << "lazy umount also failed for" << mountPoint;
             sendErrorReply(QDBusError::Failed,
-                QStringLiteral("Failed to unmount overlay: %1").arg(strerror(errno)));
+                QStringLiteral("Failed to unmount overlay at %1").arg(mountPoint));
             return false;
         }
     }
