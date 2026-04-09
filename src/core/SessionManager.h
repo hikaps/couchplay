@@ -35,11 +35,8 @@ struct InstanceConfig {
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
     Q_PROPERTY(QString presetId MEMBER presetId)
     Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
-    Q_PROPERTY(bool overlayEnabled MEMBER overlayEnabled)
-    Q_PROPERTY(QString overlayGamePath MEMBER overlayGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
     Q_PROPERTY(QStringList overlayPatterns MEMBER overlayPatterns)
-    Q_PROPERTY(bool borderless MEMBER borderless)
 
 
 public:
@@ -59,11 +56,8 @@ public:
     QString steamAppId;                              // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam");      // ID of the launch preset to use
     QStringList sharedDirectories;                   // Per-instance shared directories (from preset)
-    bool overlayEnabled = false;
-    QString overlayGamePath;
     QStringList overrideFiles;
     QStringList overlayPatterns;                      // Glob patterns for per-user overrides
-    bool borderless = false;                           // Window border visibility (false = show borders)
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)
@@ -76,11 +70,13 @@ struct SessionProfile {
     Q_PROPERTY(QString name MEMBER name)
     Q_PROPERTY(QString layout MEMBER layout)
     Q_PROPERTY(QString filePath MEMBER filePath)
+    Q_PROPERTY(QString overlayGamePath MEMBER overlayGamePath)
 
 public:
     QString name;
     QString layout = QStringLiteral("horizontal"); // horizontal, vertical, multi-monitor
     QString filePath;
+    QString overlayGamePath;
     QList<InstanceConfig> instances;
 };
 
@@ -98,6 +94,7 @@ class SessionManager : public QObject
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
+    Q_PROPERTY(QString overlayGamePath READ overlayGamePath WRITE setOverlayGamePath NOTIFY overlayGamePathChanged)
 
 public:
     explicit SessionManager(QObject *parent = nullptr);
@@ -132,7 +129,6 @@ public:
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
     Q_INVOKABLE void setInstanceSharedDirectories(int index, const QStringList &directories);
-    Q_INVOKABLE void setInstanceBorderless(int index, bool borderless);
 
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;
@@ -150,6 +146,10 @@ public:
 
     const SessionProfile &currentProfile() const { return m_currentProfile; }
 
+    // Overlay game path (profile-level)
+    QString overlayGamePath() const { return m_currentProfile.overlayGamePath; }
+    void setOverlayGamePath(const QString &path);
+
 Q_SIGNALS:
     void currentProfileChanged();
     void currentLayoutChanged();
@@ -166,6 +166,7 @@ Q_SIGNALS:
      * @param deviceInfoByInstance Map of instance index to {stableIds: [...], names: [...]}
      */
     void profileLoaded(const QVariantMap &deviceInfoByInstance);
+    void overlayGamePathChanged();
 
 private:
     QString profilesDir() const;

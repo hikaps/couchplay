@@ -16,6 +16,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <signal.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -57,9 +58,17 @@ public:
     virtual bool waitForFinished(QProcess *process, int msecs) = 0;
     virtual int processExitCode(QProcess *process) = 0;
     virtual QByteArray readStandardError(QProcess *process) = 0;
+    virtual QByteArray readAllStandardOutput(QProcess *process) = 0;
 
     // Directory listing
     virtual QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) = 0;
+
+    // Mount operations (for overlayfs)
+    virtual int mount(const QString &source, const QString &target,
+                      const QString &fstype, unsigned long flags,
+                      const QString &options) = 0;
+    virtual int umount(const QString &target) = 0;
+    virtual int umount2(const QString &target, int flags) = 0;
 
     // Process signaling
     virtual bool killProcess(pid_t pid, int signal) = 0;
@@ -105,9 +114,17 @@ public:
     bool waitForFinished(QProcess *process, int msecs) override;
     int processExitCode(QProcess *process) override;
     QByteArray readStandardError(QProcess *process) override;
+    QByteArray readAllStandardOutput(QProcess *process) override;
 
     // Directory listing
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override;
+
+    // Mount operations (for overlayfs)
+    int mount(const QString &source, const QString &target,
+              const QString &fstype, unsigned long flags,
+              const QString &options) override;
+    int umount(const QString &target) override;
+    int umount2(const QString &target, int flags) override;
 
     // Process signaling
     bool killProcess(pid_t pid, int signal) override;

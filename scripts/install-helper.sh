@@ -61,6 +61,7 @@ fi
 # Binary name
 HELPER_BINARY="couchplay-helper"
 
+
 # Export directory for Flatpak (user's local share)
 EXPORT_DIR="${EXPORT_DIR:-${HOME}/.local/share/couchplay}"
 
@@ -87,6 +88,7 @@ else
     BINARY_PATH="${PROJECT_DIR}/build/bin/${HELPER_BINARY}"
     DATA_DIR="${PROJECT_DIR}/data"
 fi
+
 
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -140,7 +142,7 @@ export_helper() {
     # Copy this script
     print_info "Copying install script to ${EXPORT_DIR}/"
     install -m755 "${BASH_SOURCE[0]}" "${EXPORT_DIR}/install-helper.sh"
-    
+
     # Copy data files (D-Bus config, systemd service, polkit policy)
     if [[ -d "${DATA_DIR}" ]]; then
         print_info "Copying configuration files..."

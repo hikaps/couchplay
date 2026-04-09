@@ -6,7 +6,6 @@
 #include <QObject>
 #include <QDBusContext>
 #include <QMap>
-#include <QProcess>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -175,7 +174,8 @@ public Q_SLOTS:
     qint64 LaunchInstance(const QString &username, uint compositorUid,
                           const QStringList &gamescopeArgs,
                           const QString &gameCommand,
-                          const QStringList &environment);
+                          const QStringList &environment,
+                          const QString &gamePath);
 
     /**
      * Stop a launched instance
@@ -369,17 +369,21 @@ private:
     uint getUserUid(const QString &username);
     QString getUserHome(const QString &username);
     QString getUserHomeByUid(uint uid);
-    QString buildInstanceCommand(const QString &username, uint compositorUid,
-                                  const QStringList &gamescopeArgs,
-                                  const QString &gameCommand,
-                                  const QStringList &environment);
     QString computeMountTarget(const QString &source, const QString &alias,
                                const QString &userHome, const QString &compositorHome);
     bool validateUserPath(const QString &path, const QString &username,
                           const QString &callerName, QStringList &dirsToChown);
 
+    // Systemd transient unit management for per-instance launching
+    QString generateServiceName(const QString &username);
+    qint64 startTransientUnit(const QString &username, uint compositorUid,
+                              const QStringList &gamescopeArgs,
+                              const QString &gameCommand,
+                              const QStringList &environment,
+                              const QStringList &bindPaths);
+    bool stopServiceInstance(const QString &serviceName);
+
     QStringList m_modifiedDevices;
-    QMap<qint64, QProcess *> m_launchedProcesses;  // PID -> QProcess
 
     // Track active mounts per user for cleanup
     struct MountInfo {
@@ -388,18 +392,13 @@ private:
     };
     QMap<QString, QList<MountInfo>> m_activeMounts;  // username -> list of mounts
 
-    // Track active overlay mounts per user for cleanup
-    struct OverlayInfo {
-        QString gameId;
-        QString gamePath;
-        QString mountPoint;
-        QString upperDir;
-        QString workDir;
-    };
-    QMap<QString, QList<OverlayInfo>> m_activeOverlays;  // username -> list of overlays
+    // Derive a gameId hash from a gamePath
+    static QString hashGamePath(const QString &gamePath);
 
     // Track which compositor UIDs have runtime access set up
     QSet<uint> m_runtimeAccessSetForUid;
+
+    QMap<qint64, QString> m_pidToServiceName;
 
     // System operations abstraction (for testing/mocking)
     SystemOps *m_ops;

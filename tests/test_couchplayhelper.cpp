@@ -7,8 +7,11 @@
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
+#include <algorithm>
 
+#define private public
 #include "../helper/CouchPlayHelper.h"
+#undef private
 #include "../helper/SystemOps.h"
 
 // Mock SystemOps for testing - no real system calls
@@ -53,16 +56,28 @@ public:
         m_grEntries.clear();
         m_files.clear();
         m_directories.clear();
+        m_writtenFiles.clear();
         m_authorized = true;
         m_processExitCode = 0;
         m_chownResult = 0;
         m_chmodResult = 0;
         m_processArgs.clear();
+        m_processCommand.clear();
+        m_processCalls.clear();
+        m_systemctlShowPid = 0;
+        m_mountResult = 0;
+        m_umountResult = 0;
+        m_umount2Result = 0;
+        m_mountCalls.clear();
+        m_umountCalls.clear();
+        m_umount2Calls.clear();
     }
 
-    // Get last process arguments for verification
     QStringList getLastProcessArgs() const { return m_processArgs; }
     QString getLastProcessCommand() const { return m_processCommand; }
+    QList<QPair<QString, QStringList>> getAllProcessCalls() const { return m_processCalls; }
+
+    void setSystemctlShowPid(int pid) { m_systemctlShowPid = pid; }
 
     // User/group lookup operations
     struct passwd *getpwnam(const char *name) override {
@@ -124,10 +139,16 @@ public:
     }
 
     bool writeFile(const QString &path, const QByteArray &content) override {
-        Q_UNUSED(path)
-        Q_UNUSED(content)
-        // Always succeed for tests
+        m_writtenFiles[path] = content;
         return true;
+    }
+
+    QByteArray getWrittenFile(const QString &path) const {
+        return m_writtenFiles.value(path);
+    }
+
+    QMap<QString, QByteArray> getAllWrittenFiles() const {
+        return m_writtenFiles;
     }
 
     // Device path validation
@@ -166,21 +187,32 @@ public:
     void startProcess(QProcess *process, const QString &program, const QStringList &arguments) override {
         m_processCommand = program;
         m_processArgs = arguments;
-        process->start(program, arguments);
+        m_processCalls.append({program, arguments});
+        Q_UNUSED(process)
     }
 
     bool waitForFinished(QProcess *process, int msecs) override {
-        return process->waitForFinished(msecs);
-    }
-
-    int processExitCode(QProcess *process) override {
         Q_UNUSED(process)
-        return m_processExitCode;
+        Q_UNUSED(msecs)
+        return true;
     }
 
     QByteArray readStandardError(QProcess *process) override {
         Q_UNUSED(process)
         return QByteArray();
+    }
+
+    QByteArray readAllStandardOutput(QProcess *process) override {
+        Q_UNUSED(process)
+        if (m_processCommand == QStringLiteral("systemctl") && m_processArgs.contains(QStringLiteral("--value"))) {
+            return QByteArray::number(m_systemctlShowPid);
+        }
+        return {};
+    }
+
+    int processExitCode(QProcess *process) override {
+        Q_UNUSED(process)
+        return m_processExitCode;
     }
 
     // Directory listing
@@ -203,6 +235,40 @@ public:
         Q_UNUSED(action)
         return m_authorized;
     }
+
+    // Mount operations
+    struct MountCall {
+        QString source;
+        QString target;
+        QString fstype;
+        QString options;
+    };
+
+    int mount(const QString &source, const QString &target,
+              const QString &fstype, unsigned long flags,
+              const QString &options) override {
+        m_mountCalls.append({source, target, fstype, options});
+        Q_UNUSED(flags)
+        return m_mountResult;
+    }
+
+    int umount(const QString &target) override {
+        m_umountCalls.append(target);
+        return m_umountResult;
+    }
+
+    int umount2(const QString &target, int flags) override {
+        m_umount2Calls.append({target, flags});
+        return m_umount2Result;
+    }
+
+    void setMountResult(int result) { m_mountResult = result; }
+    void setUmountResult(int result) { m_umountResult = result; }
+    void setUmount2Result(int result) { m_umount2Result = result; }
+
+    QList<MountCall> getMountCalls() const { return m_mountCalls; }
+    QStringList getUmountCalls() const { return m_umountCalls; }
+    QList<QPair<QString, int>> getUmount2Calls() const { return m_umount2Calls; }
 
 private:
     struct PwEntry {
@@ -252,12 +318,21 @@ private:
     QMap<QString, GrEntry> m_grEntries;
     QMap<QString, bool> m_files;
     QMap<QString, bool> m_directories;
+    QMap<QString, QByteArray> m_writtenFiles;
     bool m_authorized = true;
     int m_processExitCode = 0;
     int m_chownResult = 0;
     int m_chmodResult = 0;
     QString m_processCommand;
     QStringList m_processArgs;
+    QList<QPair<QString, QStringList>> m_processCalls;
+    int m_systemctlShowPid = 0;
+    int m_mountResult = 0;
+    int m_umountResult = 0;
+    int m_umount2Result = 0;
+    QList<MountCall> m_mountCalls;
+    QStringList m_umountCalls;
+    QList<QPair<QString, int>> m_umount2Calls;
 };
 
 // Test class for CouchPlayHelper
@@ -330,6 +405,22 @@ private Q_SLOTS:
 
     // Version test
     void testVersion();
+
+    // Overlay / service file tests
+    void testTransientUnitSingleBindPath();
+    void testTransientUnitFlatpakBindInjection();
+    void testTransientUnitEnvironmentVars();
+    void testTransientUnitSystemdRunFailure();
+    void testTransientUnitMultipleBindPaths();
+
+    // OverlayFS mount tests
+    void testSetupOverlayMountCallsMount();
+    void testSetupOverlayMountMountFailure();
+    void testTeardownOverlayMountCallsUmount();
+    void testTeardownOverlayMountLazyFallback();
+    void testTeardownOverlayMountNonexistent();
+    void testGetOverlayMountPointReturnsMountPath();
+    void testGetOverlayMountPointNonexistent();
 
 private:
     CouchPlayHelper *m_helper = nullptr;
@@ -1319,6 +1410,272 @@ void TestCouchPlayHelper::testVersion()
 
     QVERIFY(reply.isValid());
     QVERIFY(!reply.value().isEmpty());
+}
+
+// ============ Transient Unit Tests ============
+
+void TestCouchPlayHelper::testTransientUnitSingleBindPath()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1001, 1001);
+    m_ops->setProcessExitCode(0);
+    m_ops->setSystemctlShowPid(12345);
+
+    QStringList bindPaths = {
+        QStringLiteral("/run/couchplay/mounts/testuser/de88e4b03a2a1224:/var/home/testuser/games/palworld")
+    };
+
+    qint64 pid = m_helper->startTransientUnit(
+        QStringLiteral("testuser"), 1000u,
+        {QStringLiteral("-W"), QStringLiteral("1920x1080")},
+        QStringLiteral("steam -tenfoot"),
+        {},
+        bindPaths);
+
+    QCOMPARE(pid, 12345);
+
+    auto calls = m_ops->getAllProcessCalls();
+    QVERIFY(!calls.isEmpty());
+    QCOMPARE(calls.first().first, QStringLiteral("systemd-run"));
+
+    QStringList args = calls.first().second;
+    QVERIFY(args.contains(QStringLiteral("--unit")));
+    QVERIFY(args.contains(QStringLiteral("couchplay-testuser.service")));
+    QVERIFY(args.contains(QStringLiteral("--uid")));
+    QVERIFY(args.contains(QStringLiteral("testuser")));
+    QVERIFY(args.contains(QStringLiteral("--property=Type=simple")));
+    QVERIFY(args.contains(QStringLiteral("--property=Delegate=yes")));
+    QVERIFY(args.contains(QStringLiteral("--property=MemoryDenyWriteExecute=false")));
+    QVERIFY(args.contains(QStringLiteral("--property=BindReadOnlyPaths=/run/user/1000")));
+    QVERIFY(std::any_of(args.begin(), args.end(), [](const QString &a) {
+        return a.contains(QLatin1String("BindPaths=")) && a.contains(QLatin1String("/run/couchplay/mounts/"));
+    }));
+    QVERIFY(args.contains(QStringLiteral("/usr/bin/gamescope")));
+}
+
+void TestCouchPlayHelper::testTransientUnitFlatpakBindInjection()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1001, 1001);
+    m_ops->setProcessExitCode(0);
+    m_ops->setSystemctlShowPid(54321);
+
+    QStringList bindPaths = {
+        QStringLiteral("/run/couchplay/mounts/testuser/de88e4b03a2a1224:/var/home/testuser/games/palworld")
+    };
+
+    qint64 pid = m_helper->startTransientUnit(
+        QStringLiteral("testuser"), 1000u,
+        {QStringLiteral("-W"), QStringLiteral("960")},
+        QStringLiteral("flatpak run com.heroicgameslauncher.hgl --launch game123"),
+        {QStringLiteral("STEAM_RUNTIME=1")},
+        bindPaths);
+
+    QCOMPARE(pid, 54321);
+
+    auto calls = m_ops->getAllProcessCalls();
+    QStringList args = calls.first().second;
+
+    QVERIFY(std::any_of(args.begin(), args.end(), [](const QString &a) {
+        return a.contains(QLatin1String("--property=BindPaths="));
+    }));
+    QVERIFY(std::any_of(args.begin(), args.end(), [](const QString &a) {
+        return a.contains(QLatin1String("Environment=")) && a.contains(QLatin1String("STEAM_RUNTIME=1"));
+    }));
+    QVERIFY(std::any_of(args.begin(), args.end(), [](const QString &a) {
+        return a.contains(QLatin1String("com.heroicgameslauncher.hgl"));
+    }));
+}
+
+void TestCouchPlayHelper::testTransientUnitEnvironmentVars()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1001, 1001);
+    m_ops->setProcessExitCode(0);
+    m_ops->setSystemctlShowPid(99999);
+
+    qint64 pid = m_helper->startTransientUnit(
+        QStringLiteral("testuser"), 1000u,
+        {},
+        QStringLiteral("game"),
+        {},
+        {});
+
+    QCOMPARE(pid, 99999);
+
+    auto calls = m_ops->getAllProcessCalls();
+    QStringList args = calls.first().second;
+
+    auto envArg = std::find_if(args.begin(), args.end(), [](const QString &a) {
+        return a.startsWith(QLatin1String("--property=Environment="));
+    });
+    QVERIFY(envArg != args.end());
+    QString envValue = (*envArg).mid(QStringLiteral("--property=Environment=").length());
+    QVERIFY(envValue.contains(QLatin1String("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus")));
+    QVERIFY(envValue.contains(QLatin1String("WAYLAND_DISPLAY=/run/user/1000/wayland-0")));
+    QVERIFY(envValue.contains(QLatin1String("XDG_RUNTIME_DIR=/run/user/1001")));
+    QVERIFY(envValue.contains(QLatin1String("PULSE_SERVER=unix:/run/user/1000/pulse/native")));
+}
+
+void TestCouchPlayHelper::testTransientUnitSystemdRunFailure()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1001, 1001);
+    m_ops->setProcessExitCode(1);
+
+    qint64 pid = m_helper->startTransientUnit(
+        QStringLiteral("testuser"), 1000u,
+        {},
+        QStringLiteral("game"),
+        {},
+        {});
+
+    QCOMPARE(pid, 0);
+}
+
+void TestCouchPlayHelper::testTransientUnitMultipleBindPaths()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1001, 1001);
+    m_ops->setProcessExitCode(0);
+    m_ops->setSystemctlShowPid(11111);
+
+    QStringList bindPaths = {
+        QStringLiteral("/run/couchplay/mounts/testuser/de88e4b03a2a1224:/mnt/game")
+    };
+
+    qint64 pid = m_helper->startTransientUnit(
+        QStringLiteral("testuser"), 1000u,
+        {},
+        QStringLiteral("steam"),
+        {},
+        bindPaths);
+
+    QCOMPARE(pid, 11111);
+
+    auto calls = m_ops->getAllProcessCalls();
+    QStringList args = calls.first().second;
+    int bindCount = std::count_if(args.begin(), args.end(), [](const QString &a) {
+        return a.contains(QLatin1String("--property=BindPaths="));
+    });
+    QCOMPARE(bindCount, 1);
+}
+
+void TestCouchPlayHelper::testSetupOverlayMountCallsMount()
+{
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001);
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1001, 1001, QStringLiteral("/home/testuser"));
+    m_ops->setFileExists(QStringLiteral("/mnt/game"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/mnt/game"), true);
+    m_ops->setMountResult(0);
+
+    bool result = m_helper->SetupOverlayMount(
+        QStringLiteral("testuser"),
+        QStringLiteral("/mnt/game"),
+        QStringLiteral("testgameid"),
+        {QStringLiteral("config.ini")},
+        1000u);
+
+    QVERIFY(result);
+
+    auto mountCalls = m_ops->getMountCalls();
+    QCOMPARE(mountCalls.size(), 1);
+
+    auto call = mountCalls.first();
+    QCOMPARE(call.fstype, QStringLiteral("overlay"));
+    QVERIFY(call.options.contains(QLatin1String("lowerdir=/mnt/game")));
+    QVERIFY(call.options.contains(QLatin1String("upperdir=")));
+    QVERIFY(call.options.contains(QLatin1String("workdir=")));
+    QVERIFY(call.options.contains(QLatin1String("metacopy=on")));
+    QVERIFY(call.target.contains(QLatin1String("/run/couchplay/mounts/testuser/testgameid")));
+}
+
+void TestCouchPlayHelper::testSetupOverlayMountMountFailure()
+{
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001);
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1001, 1001, QStringLiteral("/home/testuser"));
+    m_ops->setFileExists(QStringLiteral("/mnt/game"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/mnt/game"), true);
+    m_ops->setMountResult(-1);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(
+        QStringLiteral("SetupOverlayMount"),
+        QStringLiteral("testuser"),
+        QStringLiteral("/mnt/game"),
+        QStringLiteral("testgameid"),
+        QStringList{},
+        static_cast<uint>(1000));
+
+    QVERIFY(!reply.isValid());
+}
+
+void TestCouchPlayHelper::testTeardownOverlayMountCallsUmount()
+{
+    m_ops->clear();
+    m_ops->setDirectoryExists(QStringLiteral("/run/couchplay/mounts/testuser/testgameid"), true);
+    m_ops->setUmountResult(0);
+
+    bool result = m_helper->TeardownOverlayMount(
+        QStringLiteral("testuser"),
+        QStringLiteral("testgameid"));
+
+    QVERIFY(result);
+    QCOMPARE(m_ops->getUmountCalls().size(), 1);
+    QCOMPARE(m_ops->getUmountCalls().first(), QStringLiteral("/run/couchplay/mounts/testuser/testgameid"));
+    QCOMPARE(m_ops->getUmount2Calls().size(), 0);
+}
+
+void TestCouchPlayHelper::testTeardownOverlayMountLazyFallback()
+{
+    m_ops->clear();
+    m_ops->setDirectoryExists(QStringLiteral("/run/couchplay/mounts/testuser/testgameid"), true);
+    m_ops->setUmountResult(-1);
+    m_ops->setUmount2Result(0);
+
+    bool result = m_helper->TeardownOverlayMount(
+        QStringLiteral("testuser"),
+        QStringLiteral("testgameid"));
+
+    QVERIFY(result);
+    QCOMPARE(m_ops->getUmountCalls().size(), 1);
+    QCOMPARE(m_ops->getUmount2Calls().size(), 1);
+}
+
+void TestCouchPlayHelper::testTeardownOverlayMountNonexistent()
+{
+    m_ops->clear();
+
+    bool result = m_helper->TeardownOverlayMount(
+        QStringLiteral("testuser"),
+        QStringLiteral("testgameid"));
+
+    QVERIFY(result);
+    QCOMPARE(m_ops->getUmountCalls().size(), 0);
+}
+
+void TestCouchPlayHelper::testGetOverlayMountPointReturnsMountPath()
+{
+    m_ops->clear();
+    m_ops->setDirectoryExists(QStringLiteral("/run/couchplay/mounts/testuser/testgameid"), true);
+
+    QString mountPoint = m_helper->GetOverlayMountPoint(
+        QStringLiteral("testuser"),
+        QStringLiteral("testgameid"));
+
+    QCOMPARE(mountPoint, QStringLiteral("/run/couchplay/mounts/testuser/testgameid"));
+}
+
+void TestCouchPlayHelper::testGetOverlayMountPointNonexistent()
+{
+    m_ops->clear();
+
+    QString mountPoint = m_helper->GetOverlayMountPoint(
+        QStringLiteral("testuser"),
+        QStringLiteral("testgameid"));
+
+    QVERIFY(mountPoint.isEmpty());
 }
 
 QTEST_MAIN(TestCouchPlayHelper)

@@ -176,7 +176,8 @@ bool CouchPlayHelperClient::isInCouchPlayGroup(const QString &username)
 qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compositorUid,
                                               const QStringList &gamescopeArgs,
                                               const QString &gameCommand,
-                                              const QStringList &environment)
+                                              const QStringList &environment,
+                                              const QString &gamePath)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -189,7 +190,8 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compo
         compositorUid,
         gamescopeArgs,
         gameCommand,
-        environment
+        environment,
+        gamePath
     );
 
     if (!reply.isValid()) {

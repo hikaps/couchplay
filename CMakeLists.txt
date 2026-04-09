@@ -45,7 +45,6 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     CoreAddons
     Config
     IconThemes
-    QQC2DesktopStyle
     GlobalAccel
 )
 
