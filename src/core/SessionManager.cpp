@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include "SessionManager.h"
+#include "Logging.h"
 
 #include <QDir>
 #include <QStandardPaths>
@@ -10,6 +11,7 @@
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
 {
+
     // Ensure profiles directory exists
     QDir().mkpath(profilesDir());
 
@@ -24,7 +26,7 @@ SessionManager::~SessionManager() = default;
 
 QString SessionManager::profilesDir() const
 {
-    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) 
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) 
            + QStringLiteral("/profiles");
 }
 
@@ -116,10 +118,9 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
         instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
-        instGroup.writeEntry("overlayEnabled", inst.overlayEnabled);
-        instGroup.writeEntry("overlayGamePath", inst.overlayGamePath);
+        instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
-        instGroup.writeEntry("overlayPatterns", inst.overlayPatterns);
+        instGroup.writeEntry("overridePatterns", inst.overridePatterns);
         instGroup.writeEntry("borderless", inst.borderless);
 
         // Convert devices to string list (legacy - for backwards compatibility)
@@ -182,17 +183,18 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
         inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
-        inst.overlayEnabled = instGroup.readEntry("overlayEnabled", false);
-        inst.overlayGamePath = instGroup.readEntry("overlayGamePath", QString());
+        inst.overrideGamePath = instGroup.readEntry("overrideGamePath",
+            instGroup.readEntry("overlayGamePath", QString()));
         inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
 
-        // Read overlayPatterns (may not exist in old profiles)
-        inst.overlayPatterns = instGroup.readEntry("overlayPatterns", QStringList());
+        // Read overridePatterns (may not exist in old profiles)
+        inst.overridePatterns = instGroup.readEntry("overridePatterns",
+            instGroup.readEntry("overlayPatterns", QStringList()));
 
-        // Migration: copy legacy overrideFiles to overlayPatterns if overlayPatterns is empty
-        if (inst.overlayPatterns.isEmpty() && !inst.overrideFiles.isEmpty()) {
-            inst.overlayPatterns = inst.overrideFiles;
-            qDebug() << "Migrated overrideFiles to overlayPatterns for instance" << i;
+        // Migration: copy legacy overrideFiles to overridePatterns if overridePatterns is empty
+        if (inst.overridePatterns.isEmpty() && !inst.overrideFiles.isEmpty()) {
+            inst.overridePatterns = inst.overrideFiles;
+            qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
         }
 
         // Read borderless setting (may not exist in old profiles)
@@ -313,7 +315,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("gameCommand")] = inst.gameCommand;
     map[QStringLiteral("steamAppId")] = inst.steamAppId;
     map[QStringLiteral("presetId")] = inst.presetId;
-    map[QStringLiteral("overlayPatterns")] = inst.overlayPatterns;
+    map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
     map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
     map[QStringLiteral("borderless")] = inst.borderless;
 
@@ -370,10 +372,10 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.steamAppId = config[QStringLiteral("steamAppId")].toString();
     if (config.contains(QStringLiteral("presetId")))
         inst.presetId = config[QStringLiteral("presetId")].toString();
-    if (config.contains(QStringLiteral("overlayPatterns")))
-        inst.overlayPatterns = config[QStringLiteral("overlayPatterns")].toStringList();
-    if (config.contains(QStringLiteral("overlayGamePath")))
-        inst.overlayGamePath = config[QStringLiteral("overlayGamePath")].toString();
+    if (config.contains(QStringLiteral("overridePatterns")))
+        inst.overridePatterns = config[QStringLiteral("overridePatterns")].toStringList();
+    if (config.contains(QStringLiteral("overrideGamePath")))
+        inst.overrideGamePath = config[QStringLiteral("overrideGamePath")].toString();
     if (config.contains(QStringLiteral("borderless")))
         inst.borderless = config[QStringLiteral("borderless")].toBool();
 
@@ -571,3 +573,5 @@ QStringList SessionManager::getAssignedUsers(int excludeIndex) const
     }
     return assigned;
 }
+
+

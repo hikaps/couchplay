@@ -3,6 +3,7 @@
 
 #include "PresetManager.h"
 #include "HeroicConfigManager.h"
+#include "Logging.h"
 #include "SteamConfigManager.h"
 
 #include <QDir>
@@ -13,6 +14,9 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUuid>
+
+#include <KSharedConfig>
+#include <KConfigGroup>
 
 PresetManager::PresetManager(QObject *parent)
     : QObject(parent)
@@ -479,59 +483,32 @@ QString PresetManager::generateCustomId()
            QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
 }
 
-QString PresetManager::configFilePath() const
-{
-    QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    return configDir + QStringLiteral("/presets.json");
-}
-
 void PresetManager::loadCustomPresets()
 {
     m_customPresets.clear();
 
-    QString filePath = configFilePath();
-    QFile file(filePath);
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    const QStringList groups = config->groupList();
 
-    if (!file.exists()) {
-        return;
-    }
+    static const QString prefix = QStringLiteral("Preset: ");
 
-    if (!file.open(QIODevice::ReadOnly)) {
-        qWarning() << "Failed to open presets file:" << filePath;
-        return;
-    }
+    for (const QString &groupName : groups) {
+        if (!groupName.startsWith(prefix)) {
+            continue;
+        }
 
-    QByteArray data = file.readAll();
-    file.close();
-
-    QJsonParseError error;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &error);
-
-    if (error.error != QJsonParseError::NoError) {
-        qWarning() << "Failed to parse presets JSON:" << error.errorString();
-        return;
-    }
-
-    QJsonObject root = doc.object();
-    QJsonArray presetsArray = root[QStringLiteral("customPresets")].toArray();
-
-    for (const QJsonValue &value : presetsArray) {
-        QJsonObject obj = value.toObject();
+        KConfigGroup group = config->group(groupName);
 
         LaunchPreset preset;
-        preset.id = obj[QStringLiteral("id")].toString();
-        preset.name = obj[QStringLiteral("name")].toString();
-        preset.command = obj[QStringLiteral("command")].toString();
-        preset.workingDirectory = obj[QStringLiteral("workingDirectory")].toString();
-        preset.iconName = obj[QStringLiteral("iconName")].toString();
-        preset.desktopFilePath = obj[QStringLiteral("desktopFilePath")].toString();
+        preset.id = group.readEntry(QStringLiteral("id"), QString());
+        preset.name = group.readEntry(QStringLiteral("name"), QString());
+        preset.command = group.readEntry(QStringLiteral("command"), QString());
+        preset.workingDirectory = group.readEntry(QStringLiteral("workingDirectory"), QString());
+        preset.iconName = group.readEntry(QStringLiteral("iconName"), QString());
+        preset.desktopFilePath = group.readEntry(QStringLiteral("desktopFilePath"), QString());
         preset.isBuiltin = false;
-        preset.steamIntegration = obj[QStringLiteral("steamIntegration")].toBool();
-
-        QJsonArray dirsArray = obj[QStringLiteral("sharedDirectories")].toArray();
-        for (const QJsonValue &dirValue : dirsArray) {
-            preset.sharedDirectories.append(dirValue.toString());
-        }
+        preset.steamIntegration = group.readEntry(QStringLiteral("steamIntegration"), false);
+        preset.sharedDirectories = group.readEntry(QStringLiteral("sharedDirectories"), QStringList());
 
         if (!preset.id.isEmpty() && !preset.name.isEmpty()) {
             m_customPresets.append(preset);
@@ -541,44 +518,30 @@ void PresetManager::loadCustomPresets()
 
 void PresetManager::saveCustomPresets()
 {
-    QString filePath = configFilePath();
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
 
-    // Ensure directory exists
-    QFileInfo fileInfo(filePath);
-    QDir().mkpath(fileInfo.absolutePath());
+    static const QString prefix = QStringLiteral("Preset: ");
 
-    QJsonArray presetsArray;
-    for (const LaunchPreset &preset : m_customPresets) {
-        QJsonObject obj;
-        obj[QStringLiteral("id")] = preset.id;
-        obj[QStringLiteral("name")] = preset.name;
-        obj[QStringLiteral("command")] = preset.command;
-        obj[QStringLiteral("workingDirectory")] = preset.workingDirectory;
-        obj[QStringLiteral("iconName")] = preset.iconName;
-        obj[QStringLiteral("desktopFilePath")] = preset.desktopFilePath;
-        obj[QStringLiteral("steamIntegration")] = preset.steamIntegration;
-        
-        QJsonArray dirsArray;
-        for (const QString &dir : preset.sharedDirectories) {
-            dirsArray.append(dir);
+    QStringList existingGroups = config->groupList();
+    for (const QString &groupName : existingGroups) {
+        if (groupName.startsWith(prefix)) {
+            config->deleteGroup(groupName);
         }
-        obj[QStringLiteral("sharedDirectories")] = dirsArray;
-        
-        presetsArray.append(obj);
     }
 
-    QJsonObject root;
-    root[QStringLiteral("customPresets")] = presetsArray;
+    for (const LaunchPreset &preset : m_customPresets) {
+        QString groupName = prefix + preset.id;
+        KConfigGroup group = config->group(groupName);
 
-    QJsonDocument doc(root);
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly)) {
-        qWarning() << "Failed to save presets file:" << filePath;
-        Q_EMIT errorOccurred(QStringLiteral("Failed to save presets"));
-        return;
+        group.writeEntry(QStringLiteral("id"), preset.id);
+        group.writeEntry(QStringLiteral("name"), preset.name);
+        group.writeEntry(QStringLiteral("command"), preset.command);
+        group.writeEntry(QStringLiteral("workingDirectory"), preset.workingDirectory);
+        group.writeEntry(QStringLiteral("iconName"), preset.iconName);
+        group.writeEntry(QStringLiteral("desktopFilePath"), preset.desktopFilePath);
+        group.writeEntry(QStringLiteral("steamIntegration"), preset.steamIntegration);
+        group.writeEntry(QStringLiteral("sharedDirectories"), preset.sharedDirectories);
     }
 
-    file.write(doc.toJson(QJsonDocument::Indented));
-    file.close();
+    config->sync();
 }

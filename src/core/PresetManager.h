@@ -94,7 +94,7 @@ Q_DECLARE_METATYPE(LaunchPreset)
  * 
  * Provides builtin presets (Steam, Lutris), discovery of installed
  * applications via .desktop files, and custom preset management.
- * Custom presets are persisted to ~/.config/couchplay/presets.json.
+ * Custom presets are persisted to ~/.config/couchplayrc as KConfig groups.
  */
 class PresetManager : public QObject
 {
@@ -283,8 +283,6 @@ private:
      * @brief Generate a unique ID for a custom preset
      */
     static QString generateCustomId();
-
-    QString configFilePath() const;
 
     /**
      * @brief Get default shared directories for a built-in preset

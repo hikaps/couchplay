@@ -36,6 +36,22 @@ WindowManager::WindowManager(QObject *parent)
     m_monitorTimer = new QTimer(this);
     m_monitorTimer->setInterval(MONITOR_INTERVAL_MS);
     connect(m_monitorTimer, &QTimer::timeout, this, &WindowManager::checkForNewWindows);
+
+    // Clean up stale KWin scripts from previous runs that may have crashed
+    QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    QString couchplayRuntimeDir = runtimeDir + QStringLiteral("/couchplay");
+    QDir staleDir(couchplayRuntimeDir);
+    if (staleDir.exists()) {
+        QStringList staleScripts = staleDir.entryList(
+            QStringList{QStringLiteral("couchplay-position-*.js")},
+            QDir::Files);
+        for (const QString &script : staleScripts) {
+            staleDir.remove(script);
+        }
+        if (!staleScripts.isEmpty()) {
+            qDebug() << "WindowManager: Cleaned up" << staleScripts.size() << "stale positioning scripts";
+        }
+    }
 }
 
 WindowManager::~WindowManager() = default;
@@ -414,9 +430,11 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
         .arg(geometry.width())
         .arg(geometry.height());
     
-    // Write script to a temporary file
-    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    QString scriptPath = tempDir + QStringLiteral("/couchplay-position-%1.js")
+    // Use XDG_RUNTIME_DIR — auto-cleaned on session end, not shared across users
+    QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    QString couchplayRuntimeDir = runtimeDir + QStringLiteral("/couchplay");
+    QDir().mkpath(couchplayRuntimeDir);
+    QString scriptPath = couchplayRuntimeDir + QStringLiteral("/couchplay-position-%1.js")
         .arg(QString::number(reinterpret_cast<quintptr>(this), 16));
     
     QFile scriptFile(scriptPath);

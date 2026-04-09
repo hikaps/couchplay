@@ -35,10 +35,9 @@ struct InstanceConfig {
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
     Q_PROPERTY(QString presetId MEMBER presetId)
     Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
-    Q_PROPERTY(bool overlayEnabled MEMBER overlayEnabled)
-    Q_PROPERTY(QString overlayGamePath MEMBER overlayGamePath)
+    Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
-    Q_PROPERTY(QStringList overlayPatterns MEMBER overlayPatterns)
+    Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
     Q_PROPERTY(bool borderless MEMBER borderless)
 
 
@@ -59,10 +58,9 @@ public:
     QString steamAppId;                              // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam");      // ID of the launch preset to use
     QStringList sharedDirectories;                   // Per-instance shared directories (from preset)
-    bool overlayEnabled = false;
-    QString overlayGamePath;
+    QString overrideGamePath;
     QStringList overrideFiles;
-    QStringList overlayPatterns;                      // Glob patterns for per-user overrides
+    QStringList overridePatterns;                     // Glob patterns for per-user overrides
     bool borderless = false;                           // Window border visibility (false = show borders)
 };
 
