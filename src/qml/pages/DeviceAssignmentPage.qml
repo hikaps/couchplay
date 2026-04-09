@@ -6,8 +6,6 @@ import QtQuick.Layouts
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
 
-import "../components" as Components
-
 Kirigami.ScrollablePage {
     id: root
     
@@ -18,6 +16,11 @@ Kirigami.ScrollablePage {
     property int instanceCount: 2
 
     actions: [
+        Kirigami.Action {
+            text: i18nc("@action:button", "Back to Session")
+            icon.name: "go-previous"
+            onTriggered: applicationWindow().pushSessionSetupPage()
+        },
         Kirigami.Action {
             text: i18nc("@action:button", "Refresh")
             icon.name: "view-refresh"
@@ -46,8 +49,12 @@ Kirigami.ScrollablePage {
         }
     ]
 
-    header: QQC2.ToolBar {
-        contentItem: RowLayout {
+    ColumnLayout {
+        spacing: Kirigami.Units.largeSpacing
+
+        // Player count and filter controls
+        RowLayout {
+            Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
 
             QQC2.Label {
@@ -73,10 +80,6 @@ Kirigami.ScrollablePage {
                 onToggled: { if (deviceManager) deviceManager.showVirtualDevices = checked }
             }
         }
-    }
-
-    ColumnLayout {
-        spacing: Kirigami.Units.largeSpacing
 
         // Instructions
         Kirigami.InlineMessage {
@@ -97,7 +100,8 @@ Kirigami.ScrollablePage {
                 delegate: PlayerDropZone {
                     id: dropZoneDelegate
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 200
+                    Layout.minimumHeight: 150
+                    Layout.fillHeight: true
                     
                     required property int index
                     playerIndex: dropZoneDelegate.index
@@ -203,7 +207,7 @@ Kirigami.ScrollablePage {
     }
 
     // Player drop zone component
-    component PlayerDropZone: Kirigami.Card {
+    component PlayerDropZone: Kirigami.AbstractCard {
         id: dropZone
         
         required property int playerIndex
@@ -214,9 +218,10 @@ Kirigami.ScrollablePage {
 
         property bool isDragHover: false
 
-        banner {
-            title: i18nc("@title", "Player %1", playerIndex + 1)
-            titleIcon: "user-identity"
+        header: Kirigami.Heading {
+            text: i18nc("@title", "Player %1", playerIndex + 1)
+            level: 3
+            padding: Kirigami.Units.smallSpacing
         }
 
         background: Rectangle {
@@ -236,6 +241,7 @@ Kirigami.ScrollablePage {
 
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
+            clip: true
 
             // Show assigned devices
             Repeater {
@@ -363,6 +369,7 @@ Kirigami.ScrollablePage {
 
         contentItem: RowLayout {
             spacing: Kirigami.Units.smallSpacing
+            clip: true
 
             Kirigami.Icon {
                 source: {

@@ -78,11 +78,11 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Info about current user not being shown
+        // Consolidated info: user count + desktop user
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            text: i18nc("@info", "Your current desktop user (%1) is not listed here. CouchPlay only manages dedicated gaming accounts in the 'couchplay' group.", userManager?.currentUser ?? "")
-            type: Kirigami.MessageType.Information
+            text: i18nc("@info", "%1 gaming user(s) available. Your desktop user (%2) is managed separately.", userManager?.users?.length ?? 0, userManager?.currentUser ?? "")
+            type: (userManager?.users?.length ?? 0) < 2 ? Kirigami.MessageType.Warning : Kirigami.MessageType.Positive
             visible: true
         }
 
@@ -94,32 +94,18 @@ Kirigami.ScrollablePage {
             visible: !(helperClient?.available ?? false)
         }
 
-        // User count summary
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            text: {
-                const count = userManager?.users?.length ?? 0
-                if (count === 0) {
-                    return i18nc("@info", "No CouchPlay users found. Create gaming users to enable split-screen multiplayer.")
-                } else if (count === 1) {
-                    return i18nc("@info", "1 gaming user available. Create more users for split-screen sessions.")
-                } else {
-                    return i18nc("@info", "%1 gaming users available for split-screen sessions.", count)
-                }
-            }
-            type: (userManager?.users?.length ?? 0) < 2 ? Kirigami.MessageType.Warning : Kirigami.MessageType.Positive
-            visible: true
-        }
-
         // User list
         Repeater {
             model: userManager?.users ?? []
 
-            delegate: Kirigami.Card {
+            delegate: Kirigami.AbstractCard {
                 Layout.fillWidth: true
 
-                banner.title: modelData.username
-                banner.titleIcon: "user"
+                header: Kirigami.Heading {
+                    text: modelData.username
+                    level: 3
+                    padding: Kirigami.Units.smallSpacing
+                }
 
                 contentItem: ColumnLayout {
                     spacing: Kirigami.Units.smallSpacing
@@ -344,13 +330,6 @@ Kirigami.ScrollablePage {
                 id: validationMessage
                 Layout.fillWidth: true
                 visible: text.length > 0
-            }
-
-            Kirigami.InlineMessage {
-                Layout.fillWidth: true
-                text: i18nc("@info", "Suggested usernames: player2, player3, player4, couch2, gamer2")
-                type: Kirigami.MessageType.Information
-                visible: usernameField.text.length === 0
             }
         }
     }

@@ -11,12 +11,18 @@ Kirigami.Dialog {
     title: i18nc("@title:dialog", "Add Preset from Application")
     standardButtons: Kirigami.Dialog.Close
     preferredWidth: Kirigami.Units.gridUnit * 30
-    preferredHeight: Kirigami.Units.gridUnit * 25
 
     required property var presetManager
 
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
+
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            text: i18nc("@info", "Select an installed application to add as a launch preset. You can then select it when configuring session instances.")
+            type: Kirigami.MessageType.Information
+            visible: true
+        }
 
         Controls.TextField {
             id: appSearchField
@@ -104,13 +110,6 @@ Kirigami.Dialog {
                     icon.name: "application-x-executable"
                 }
             }
-        }
-
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            text: i18nc("@info", "Select an installed application to add as a launch preset. You can then select it when configuring session instances.")
-            type: Kirigami.MessageType.Information
-            visible: true
         }
     }
 }

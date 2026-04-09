@@ -12,7 +12,6 @@ Kirigami.Dialog {
     title: i18nc("@title:dialog", "Edit Preset: %1", presetName)
     standardButtons: Kirigami.Dialog.Close
     preferredWidth: Kirigami.Units.gridUnit * 30
-    preferredHeight: Kirigami.Units.gridUnit * 25
 
     required property var presetManager
     property var steamConfigManager: null

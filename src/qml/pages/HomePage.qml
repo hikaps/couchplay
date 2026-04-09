@@ -117,7 +117,9 @@ Kirigami.ScrollablePage {
                     if (sessionManager) {
                         sessionManager.newSession()
                     }
-                    applicationWindow().pageStack.clear()
+                    if (deviceManager) {
+                        deviceManager.unassignAll()
+                    }
                     applicationWindow().pushSessionSetupPage()
                 }
             }
@@ -130,21 +132,7 @@ Kirigami.ScrollablePage {
                 description: i18nc("@info", "Launch a saved session profile")
                 badgeCount: sessionManager ? sessionManager.savedProfiles.length : 0
                 onClicked: {
-                    applicationWindow().pageStack.clear()
                     applicationWindow().pushProfilesPage()
-                }
-            }
-
-            Components.ActionCard {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 8
-                iconName: "input-gamepad"
-                title: i18nc("@action", "Manage Devices")
-                description: i18nc("@info", "View and configure input devices")
-                badgeCount: deviceManager ? deviceManager.controllers.length : 0
-                onClicked: {
-                    applicationWindow().pageStack.clear()
-                    applicationWindow().pushDeviceAssignmentPage()
                 }
             }
         }
@@ -237,7 +225,6 @@ Kirigami.ScrollablePage {
                 icon.name: "list-add"
                 text: i18nc("@action:button", "Create New Session")
                 onTriggered: {
-                    applicationWindow().pageStack.clear()
                     applicationWindow().pushSessionSetupPage()
                 }
             }
@@ -250,7 +237,6 @@ Kirigami.ScrollablePage {
             flat: true
             Layout.alignment: Qt.AlignRight
             onClicked: {
-                applicationWindow().pageStack.clear()
                 applicationWindow().pushProfilesPage()
             }
         }

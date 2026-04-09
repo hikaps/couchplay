@@ -126,7 +126,7 @@ Kirigami.ScrollablePage {
     }
 
     // Profile card component - Minimal Modern Design
-    component ProfileCard: Kirigami.Card {
+    component ProfileCard: Kirigami.AbstractCard {
         id: profileCard
 
         required property var profile

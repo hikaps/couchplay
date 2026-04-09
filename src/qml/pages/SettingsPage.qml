@@ -632,7 +632,7 @@ Kirigami.ScrollablePage {
         }
 
         // System Requirements Card
-        Kirigami.Card {
+        Kirigami.AbstractCard {
             Layout.fillWidth: true
             Layout.bottomMargin: Kirigami.Units.largeSpacing
 

@@ -57,8 +57,8 @@ Kirigami.ApplicationWindow {
         // When a profile is loaded, restore device assignments from stableIds
         onProfileLoaded: function(deviceInfoByInstance) {
             if (deviceManager) {
-                // Clear any existing pending devices before restoring
-                deviceManager.clearPendingDevicesForInstance(-1)
+                // Clear ALL existing assignments before restoring (prevents stale assignments from previous session/profile)
+                deviceManager.unassignAll()
                 
                 // Restore assignments for each instance that has saved stableIds
                 for (let instanceStr in deviceInfoByInstance) {
@@ -248,7 +248,9 @@ Kirigami.ApplicationWindow {
     }
 
     // Helper functions to push pages with required properties
+    // All use clear() + push() to prevent split-view stacking
     function pushHomePage() {
+        pageStack.clear()
         pageStack.push(homePage, {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
@@ -258,6 +260,7 @@ Kirigami.ApplicationWindow {
     }
 
     function pushSessionSetupPage() {
+        pageStack.clear()
         pageStack.push(sessionSetupPage, {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
@@ -269,12 +272,15 @@ Kirigami.ApplicationWindow {
     }
 
     function pushDeviceAssignmentPage() {
+        pageStack.clear()
         pageStack.push(deviceAssignmentPage, {
-            deviceManager: deviceManager
+            deviceManager: deviceManager,
+            instanceCount: sessionManager.instanceCount
         })
     }
 
     function pushProfilesPage() {
+        pageStack.clear()
         pageStack.push(profilesPage, {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner
@@ -282,6 +288,7 @@ Kirigami.ApplicationWindow {
     }
 
     function pushUsersPage() {
+        pageStack.clear()
         pageStack.push(usersPage, {
             userManager: userManager,
             helperClient: helperClient
@@ -289,6 +296,7 @@ Kirigami.ApplicationWindow {
     }
 
     function pushSettingsPage() {
+        pageStack.clear()
         pageStack.push(settingsPage, {
             sessionRunner: sessionRunner,
             helperClient: helperClient,
