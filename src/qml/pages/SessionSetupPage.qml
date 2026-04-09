@@ -55,8 +55,9 @@ Kirigami.ScrollablePage {
         if (!root.userManager || !root.sessionManager) return []
         let allUsers = root.userManager.users
         let assignedToOthers = root.sessionManager.getAssignedUsers(forIndex)
-        // Exclude compositor (current) user - they run the app and can't be a session instance
-        return allUsers.filter(user => !user.isCurrent && !assignedToOthers.includes(user.username))
+        let filtered = allUsers.filter(user => !user.isCurrent && !assignedToOthers.includes(user.username))
+        // Prepend a "None" entry so users can deselect their choice
+        return [{ username: "" }].concat(filtered)
     }
 
     // Helper function to get primary monitor size
@@ -286,11 +287,11 @@ Kirigami.ScrollablePage {
                 }
                 
                 // Overlay patterns for this instance
-                property var overlayPatternsModel: {
+                property var overridePatternsModel: {
                     void(cardRevision)
                     if (!cardSessionManager) return []
                     let config = cardSessionManager.getInstanceConfig(instanceCard.index)
-                    let patterns = config?.overlayPatterns
+                    let patterns = config?.overridePatterns
                     return patterns ? patterns : []
                 }
                 
@@ -350,9 +351,12 @@ Kirigami.ScrollablePage {
                                 onModelChanged: {
                                     let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
                                     let currentUsername = config?.username ?? ""
-                                    if (currentUsername && model) {
-                                        // Manual search - indexOfValue doesn't work with JS arrays of objects
-                                        // We need to iterate through the model to find the matching username
+                                    if (model && model.length > 0) {
+                                        // Empty username matches the "None" entry at index 0
+                                        if (!currentUsername) {
+                                            currentIndex = 0
+                                            return
+                                        }
                                         for (let i = 0; i < model.length; i++) {
                                             if (model[i].username === currentUsername) {
                                                 currentIndex = i
@@ -363,15 +367,17 @@ Kirigami.ScrollablePage {
                                     currentIndex = -1
                                 }
                                 
-                                // Show placeholder when no users available
+                                // Show placeholder when no users available, "None" for deselected, or prompt
                                 displayText: count === 0 
                                     ? i18nc("@info", "No users available") 
-                                    : (currentIndex >= 0 ? currentText : i18nc("@info", "Select a user..."))
+                                    : (currentIndex >= 0 
+                                        ? (currentValue === "" ? i18nc("@item:inlistbox", "None") : currentText) 
+                                        : i18nc("@info", "Select a user..."))
                                 
-                                // Update session manager when user selects a different user
+                                // Update session manager when user selects a different user (including "None" to deselect)
                                 onActivated: {
-                                    if (root.sessionManager && currentValue) {
-                                        root.sessionManager.setInstanceUser(instanceCard.index, currentValue)
+                                    if (root.sessionManager) {
+                                        root.sessionManager.setInstanceUser(instanceCard.index, currentValue ?? "")
                                     }
                                 }
                             }
@@ -420,9 +426,9 @@ Kirigami.ScrollablePage {
                                     onAccepted: {
                                         if (text.trim() !== "" && instanceCard.cardSessionManager) {
                                             let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                            let patterns = [...(config.overlayPatterns || [])]
+                                            let patterns = [...(config.overridePatterns || [])]
                                             patterns.push(text.trim())
-                                            config.overlayPatterns = patterns
+                                            config.overridePatterns = patterns
                                             instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                             text = ""
                                         }
@@ -434,9 +440,9 @@ Kirigami.ScrollablePage {
                                     onClicked: {
                                         if (patternInput.text.trim() !== "" && instanceCard.cardSessionManager) {
                                             let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                            let patterns = [...(config.overlayPatterns || [])]
+                                            let patterns = [...(config.overridePatterns || [])]
                                             patterns.push(patternInput.text.trim())
-                                            config.overlayPatterns = patterns
+                                            config.overridePatterns = patterns
                                             instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                             patternInput.text = ""
                                         }
@@ -532,7 +538,7 @@ Kirigami.ScrollablePage {
                             Layout.fillWidth: true
                             Layout.topMargin: Kirigami.Units.smallSpacing
                             implicitHeight: patternColumn.implicitHeight + Kirigami.Units.largeSpacing
-                            visible: presetSelector.currentPresetId !== "" && instanceCard.overlayPatternsModel.length > 0
+                            visible: presetSelector.currentPresetId !== "" && instanceCard.overridePatternsModel.length > 0
                             color: Kirigami.Theme.backgroundColor
                             radius: Kirigami.Units.cornerRadius
                             border.color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
@@ -561,7 +567,7 @@ Kirigami.ScrollablePage {
                                         font.weight: Font.Medium
                                     }
                                     Controls.Label {
-                                        text: "(" + instanceCard.overlayPatternsModel.length + ")"
+                                        text: "(" + instanceCard.overridePatternsModel.length + ")"
                                         opacity: 0.7
                                     }
                                     Item { Layout.fillWidth: true }
@@ -581,7 +587,7 @@ Kirigami.ScrollablePage {
                                 
                                 // Pattern items
                                 Repeater {
-                                    model: instanceCard.overlayPatternsModel
+                                    model: instanceCard.overridePatternsModel
                                     delegate: RowLayout {
                                         Layout.fillWidth: true
                                         spacing: Kirigami.Units.smallSpacing
@@ -603,9 +609,9 @@ Kirigami.ScrollablePage {
                                             onClicked: {
                                                 if (!instanceCard.cardSessionManager) return
                                                 let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                                let patterns = [...config.overlayPatterns]
+                                                let patterns = [...config.overridePatterns]
                                                 patterns.splice(index, 1)
-                                                config.overlayPatterns = patterns
+                                                config.overridePatterns = patterns
                                                 instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                             }
                                             
