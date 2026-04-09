@@ -237,10 +237,8 @@ bool SessionRunner::start()
         qWarning() << "Failed to set up shared directories - continuing anyway";
     }
 
-    // Set up overlay mounts (requires polkit helper)
-    if (!setupOverlayMounts()) {
-        qWarning() << "Failed to set up overlay mounts - continuing anyway";
-    }
+    // Build bind paths for per-instance config overrides
+    buildBindPaths();
 
     // Set up launcher access (ACLs, shortcut sync)
     if (!setupLauncherAccess()) {
@@ -304,6 +302,10 @@ bool SessionRunner::start()
             config[QStringLiteral("devicePaths")] = pathList;
         }
 
+        if (m_instanceBindPaths.contains(i)) {
+            config[QStringLiteral("bindPaths")] = m_instanceBindPaths.value(i);
+        }
+
         m_instances.append(instance);
 
         // Start with slight delay between instances to avoid resource contention
@@ -338,6 +340,28 @@ void SessionRunner::stop()
 
     m_virtualDeviceWatcher->stopWatching();
 
+    // Collect override staging dirs before cleaning up instances
+    QStringList overridePaths;
+    if (m_sessionManager) {
+        const auto &profile = m_sessionManager->currentProfile();
+        for (int i = 0; i < profile.instances.size(); ++i) {
+            const auto &instConfig = profile.instances[i];
+            if (instConfig.overridePatterns.isEmpty() || instConfig.overrideGamePath.isEmpty()) {
+                continue;
+            }
+            QString gameId = instConfig.steamAppId;
+            if (gameId.isEmpty()) {
+                gameId = QString::fromLatin1(QCryptographicHash::hash(
+                    instConfig.overrideGamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
+            }
+            QString presetId = instConfig.presetId;
+            if (presetId.isEmpty()) {
+                presetId = QStringLiteral("steam");
+            }
+            overridePaths.append(getOverridesRootPath(presetId, gameId));
+        }
+    }
+
     // Stop all instances
     for (auto *instance : m_instances) {
         if (instance->isRunning()) {
@@ -348,13 +372,13 @@ void SessionRunner::stop()
     // Restore device ownership
     restoreDeviceOwnership();
 
-    // Teardown overlay mounts
-    teardownOverlayMounts();
-
     // Teardown shared directory mounts
     teardownSharedDirectories();
 
     cleanupInstances();
+
+    // Clean up override staging directories
+    cleanupOverrideDirs(overridePaths);
 
     setStatus(QStringLiteral("Stopped"));
     Q_EMIT runningChanged();
@@ -424,6 +448,20 @@ void SessionRunner::cleanupInstances()
     }
     m_instances.clear();
     m_positionedWindowIds.clear(); // Clear tracked window IDs for next session
+}
+
+void SessionRunner::cleanupOverrideDirs(const QStringList &overridePaths)
+{
+    for (const QString &path : overridePaths) {
+        QDir dir(path);
+        if (dir.exists()) {
+            if (dir.removeRecursively()) {
+                qCDebug(couchplayCore) << "Cleaned up override staging directory:" << path;
+            } else {
+                qCWarning(couchplayCore) << "Failed to clean up override staging directory:" << path;
+            }
+        }
+    }
 }
 
 bool SessionRunner::setupDeviceOwnership()
@@ -573,40 +611,32 @@ void SessionRunner::teardownSharedDirectories()
     m_helperClient->unmountAllSharedDirectories();
 }
 
-bool SessionRunner::setupOverlayMounts()
+bool SessionRunner::buildBindPaths()
 {
-    if (!m_helperClient || !m_sessionManager) {
+    m_instanceBindPaths.clear();
+
+    if (!m_sessionManager) {
         return true;
     }
-
-    if (!m_helperClient->isAvailable()) {
-        qCWarning(couchplaySharing) << "Helper not available, skipping overlay mount setup";
-        return true;
-    }
-
-    uint compositorUid = static_cast<uint>(getuid());
 
     const auto &profile = m_sessionManager->currentProfile();
-    bool allSucceeded = true;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const auto &instConfig = profile.instances[i];
 
-        // Task 8: Check patterns instead of overlayEnabled
-        if (instConfig.overlayPatterns.isEmpty()) {
-            qCDebug(couchplaySharing) << "No overlay patterns for instance" << i << "- skipping overlay";
+        if (instConfig.overridePatterns.isEmpty()) {
+            qCDebug(couchplaySharing) << "No override patterns for instance" << i << "- skipping bind paths";
             continue;
         }
-        qCDebug(couchplaySharing) << "Auto-enabling overlay for instance" << i << "with" << instConfig.overlayPatterns.size() << "patterns";
+        qCDebug(couchplaySharing) << "Building bind paths for instance" << i << "with" << instConfig.overridePatterns.size() << "patterns";
 
         const QString &username = instConfig.username;
-
         if (username.isEmpty()) {
-            qCDebug(couchplaySharing) << "Instance" << i << "has no username, skipping overlay mount";
+            qCDebug(couchplaySharing) << "Instance" << i << "has no username, skipping bind paths";
             continue;
         }
 
-        QString gamePath = instConfig.overlayGamePath;
+        QString gamePath = instConfig.overrideGamePath;
         if (gamePath.isEmpty()) {
             qCWarning(couchplaySharing) << "Instance" << i << "has patterns but no game path, skipping";
             continue;
@@ -619,88 +649,33 @@ bool SessionRunner::setupOverlayMounts()
                 gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
         }
 
-        // Task 6: Expand patterns to file list
-        QStringList matchedFiles = expandPatternsToFiles(gamePath, instConfig.overlayPatterns);
-        qCDebug(couchplaySharing) << "Instance" << i << "matched" << matchedFiles.size() << "files from" << instConfig.overlayPatterns.size() << "patterns";
+        QStringList matchedFiles = expandPatternsToFiles(gamePath, instConfig.overridePatterns);
+        qCDebug(couchplaySharing) << "Instance" << i << "matched" << matchedFiles.size() << "files from" << instConfig.overridePatterns.size() << "patterns";
 
-        // Get overrides root path
         QString presetId = instConfig.presetId;
         if (presetId.isEmpty()) {
             presetId = QStringLiteral("steam");  // Default preset
         }
         QString overridesRoot = getOverridesRootPath(presetId, gameId);
 
-        qCDebug(couchplaySharing) << "Setting up overlay mount for instance" << i
-                                  << "user" << username
-                                  << "gamePath:" << gamePath
-                                  << "gameId:" << gameId
-                                  << "matchedFiles:" << matchedFiles.size();
-
-        // Call helper setupOverlayMount() first
-        if (!m_helperClient->setupOverlayMount(username, gamePath, gameId, matchedFiles, compositorUid)) {
-            qCWarning(couchplaySharing) << "Failed to set up overlay mount for instance" << i
-                                        << "user" << username << "gameId:" << gameId;
-            Q_EMIT errorOccurred(QStringLiteral("Overlay mount failed for instance %1 (user: %2). "
-                                                 "The game will use the shared directory instead.")
-                                 .arg(i + 1).arg(username));
-            allSucceeded = false;
-            // Continue with other instances - graceful degradation
+        // Build bind path entries: "<stagingDir>/<relativeFile>:<gamePath>/<relativeFile>"
+        QStringList bindPaths;
+        for (const QString &relativePath : matchedFiles) {
+            QString bindEntry = overridesRoot + relativePath
+                                + QLatin1Char(':')
+                                + gamePath + QLatin1Char('/') + relativePath;
+            bindPaths.append(bindEntry);
         }
 
-        // Task 7: Load override files from root and write to overlay upperdir
+        if (!bindPaths.isEmpty()) {
+            m_instanceBindPaths[i] = bindPaths;
+            qCDebug(couchplaySharing) << "Instance" << i << "has" << bindPaths.size() << "bind paths";
+        }
+
         loadOverrideFiles(overridesRoot, matchedFiles, username, gameId);
     }
 
-    return allSucceeded;
-}
-
-void SessionRunner::teardownOverlayMounts()
-{
-    if (!m_helperClient || !m_sessionManager) {
-        return;
-    }
-
-    if (!m_helperClient->isAvailable()) {
-        qCWarning(couchplaySharing) << "Helper not available, cannot teardown overlay mounts";
-        return;
-    }
-
-    const auto &profile = m_sessionManager->currentProfile();
-
-    for (int i = 0; i < profile.instances.size(); ++i) {
-        const auto &instConfig = profile.instances[i];
-        
-        if (!instConfig.overlayEnabled) {
-            continue;
-        }
-        
-        const QString &username = instConfig.username;
-        
-        if (username.isEmpty()) {
-            continue;
-        }
-        
-        QString gameId = instConfig.steamAppId;
-        if (gameId.isEmpty()) {
-            QString gamePath = instConfig.overlayGamePath;
-            if (!gamePath.isEmpty()) {
-                gameId = QString::fromLatin1(QCryptographicHash::hash(
-                    gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
-            }
-        }
-        
-        if (gameId.isEmpty()) {
-            continue;
-        }
-        
-        qCDebug(couchplaySharing) << "Tearing down overlay mount for instance" << i
-                                  << "user" << username << "gameId:" << gameId;
-        
-        if (!m_helperClient->teardownOverlayMount(username, gameId)) {
-            qCWarning(couchplaySharing) << "Failed to teardown overlay mount for instance" << i
-                                        << "user" << username << "gameId:" << gameId;
-        }
-    }
+    return true;
 }
 
 bool SessionRunner::setupLauncherAccess()
@@ -876,40 +851,23 @@ QStringList SessionRunner::expandPatternsToFiles(const QString &gamePath, const 
 
 void SessionRunner::loadOverrideFiles(const QString &overridesRoot, const QStringList &matchedFiles, const QString &username, const QString &gameId)
 {
-    if (overridesRoot.isEmpty() || matchedFiles.isEmpty() || username.isEmpty() || gameId.isEmpty()) {
+    Q_UNUSED(username)
+    Q_UNUSED(gameId)
+
+    if (overridesRoot.isEmpty() || matchedFiles.isEmpty()) {
         return;
     }
 
-    if (!m_helperClient || !m_helperClient->isAvailable()) {
-        qCWarning(couchplaySharing) << "Helper not available, cannot load override files";
-        return;
-    }
-
-    for (const QString &relativePath : matchedFiles) {
-        QString overrideFilePath = overridesRoot + relativePath;
-        
-        QFile overrideFile(overrideFilePath);
-        if (!overrideFile.exists()) {
-            qCDebug(couchplaySharing) << "Override file not found:" << overrideFilePath;
-            continue;
-        }
-
-        if (!overrideFile.open(QIODevice::ReadOnly)) {
-            qCWarning(couchplaySharing) << "Failed to open override file:" << overrideFilePath;
-            continue;
-        }
-
-        QByteArray content = overrideFile.readAll();
-        overrideFile.close();
-
-        if (m_helperClient->writeOverrideFile(username, gameId, relativePath, content)) {
-            qCDebug(couchplaySharing) << "Loaded override file:" << overrideFilePath
-                                      << "for user" << username << "gameId" << gameId;
-        } else {
-            qCWarning(couchplaySharing) << "Failed to write override file:" << relativePath
-                                        << "for user" << username << "gameId" << gameId;
+    QDir dir(overridesRoot);
+    if (!dir.exists()) {
+        if (!dir.mkpath(QStringLiteral("."))) {
+            qCWarning(couchplaySharing) << "Failed to create overrides directory:" << overridesRoot;
+            return;
         }
     }
+
+    qCDebug(couchplaySharing) << "Override staging ready:" << overridesRoot
+                               << "with" << matchedFiles.size() << "files for bind paths";
 }
 
 QList<QRect> SessionRunner::calculateLayout(const QString &layout,

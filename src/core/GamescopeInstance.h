@@ -119,6 +119,7 @@ private Q_SLOTS:
     void onProcessError(QProcess::ProcessError error);
     void onReadyReadStandardOutput();
     void onReadyReadStandardError();
+    void onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason);
 
 private:
     void setStatus(const QString &status);

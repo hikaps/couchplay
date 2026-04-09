@@ -40,6 +40,14 @@ CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
         qWarning() << "CouchPlay helper call failed:" << reply.error().message();
         m_available = false;
     }
+
+    QDBusConnection::systemBus().connect(
+        SERVICE_NAME,
+        OBJECT_PATH,
+        INTERFACE_NAME,
+        QStringLiteral("instanceStopped"),
+        this, SLOT(onInstanceStopped(QString, qint64, QString))
+    );
 }
 
 CouchPlayHelperClient::~CouchPlayHelperClient()
@@ -57,6 +65,11 @@ void CouchPlayHelperClient::checkAvailability()
     if (m_available != wasAvailable) {
         Q_EMIT availabilityChanged();
     }
+}
+
+void CouchPlayHelperClient::onInstanceStopped(const QString &username, qint64 pid, const QString &reason)
+{
+    Q_EMIT instanceStopped(username, pid, reason);
 }
 
 bool CouchPlayHelperClient::setDeviceOwner(const QString &devicePath, int uid)
@@ -176,7 +189,8 @@ bool CouchPlayHelperClient::isInCouchPlayGroup(const QString &username)
 qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compositorUid,
                                               const QStringList &gamescopeArgs,
                                               const QString &gameCommand,
-                                              const QStringList &environment)
+                                              const QStringList &environment,
+                                              const QStringList &bindPaths)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -189,7 +203,8 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compo
         compositorUid,
         gamescopeArgs,
         gameCommand,
-        environment
+        environment,
+        bindPaths
     );
 
     if (!reply.isValid()) {
@@ -302,73 +317,6 @@ int CouchPlayHelperClient::unmountAllSharedDirectories()
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
         return -1;
-    }
-
-    return reply.value();
-}
-
-bool CouchPlayHelperClient::setupOverlayMount(const QString &username, const QString &gamePath,
-                                                const QString &gameId, const QStringList &overrideFiles,
-                                                uint compositorUid)
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
-    }
-
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("SetupOverlayMount"),
-        username,
-        gamePath,
-        gameId,
-        overrideFiles,
-        compositorUid
-    );
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return false;
-    }
-
-    return reply.value();
-}
-
-bool CouchPlayHelperClient::teardownOverlayMount(const QString &username, const QString &gameId)
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
-    }
-
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("TeardownOverlayMount"),
-        username,
-        gameId
-    );
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return false;
-    }
-
-    return reply.value();
-}
-
-bool CouchPlayHelperClient::teardownAllUserOverlays(const QString &username)
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
-    }
-
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("TeardownAllUserOverlays"),
-        username
-    );
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return false;
     }
 
     return reply.value();
@@ -554,73 +502,4 @@ bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content, const QSt
     }
 
     return result;
-}
-
-bool CouchPlayHelperClient::writeOverrideFile(const QString &username, const QString &gameId,
-                                               const QString &relativePath, const QByteArray &content)
-{
-    qCDebug(couchplayHelper) << "writeOverrideFile:" << relativePath << "for" << username << "gameId" << gameId;
-
-    if (!m_available) {
-        qCWarning(couchplayHelper) << "writeOverrideFile: Helper not available";
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
-    }
-
-    if (!m_interface->isValid()) {
-        qCWarning(couchplayHelper) << "writeOverrideFile: Interface not valid:"
-                                   << m_interface->lastError().message();
-        Q_EMIT errorOccurred(QStringLiteral("Helper interface not valid"));
-        return false;
-    }
-
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        SERVICE_NAME,
-        OBJECT_PATH,
-        INTERFACE_NAME,
-        QStringLiteral("WriteOverrideFile")
-    );
-    msg << username << gameId << relativePath << content;
-
-    QDBusMessage replyMsg = QDBusConnection::systemBus().call(msg, QDBus::Block, 30000);
-
-    if (replyMsg.type() == QDBusMessage::ErrorMessage) {
-        qCWarning(couchplayHelper) << "writeOverrideFile failed:" << replyMsg.errorMessage();
-        Q_EMIT errorOccurred(replyMsg.errorMessage());
-        return false;
-    }
-
-    if (replyMsg.type() != QDBusMessage::ReplyMessage) {
-        qCWarning(couchplayHelper) << "writeOverrideFile: Unexpected reply type:" << replyMsg.type();
-        Q_EMIT errorOccurred(QStringLiteral("Unexpected D-Bus reply type"));
-        return false;
-    }
-
-    bool result = replyMsg.arguments().value(0).toBool();
-    if (!result) {
-        qCWarning(couchplayHelper) << "writeOverrideFile: Helper returned false";
-    }
-
-    return result;
-}
-
-QString CouchPlayHelperClient::getOverlayMountPoint(const QString &username, const QString &gameId)
-{
-    if (!m_available) {
-        qCWarning(couchplayHelper) << "getOverlayMountPoint: Helper not available";
-        return QString();
-    }
-
-    QDBusReply<QString> reply = m_interface->call(
-        QStringLiteral("GetOverlayMountPoint"),
-        username,
-        gameId
-    );
-
-    if (!reply.isValid()) {
-        qCWarning(couchplayHelper) << "getOverlayMountPoint failed:" << reply.error().message();
-        return QString();
-    }
-
-    return reply.value();
 }

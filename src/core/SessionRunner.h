@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QMap>
 #include <QObject>
 #include <QString>
 #include <QList>
@@ -172,12 +173,14 @@ private:
     void restoreDeviceOwnership();
     bool setupSharedDirectories();
     void teardownSharedDirectories();
-    bool setupOverlayMounts();
-    void teardownOverlayMounts();
+    bool buildBindPaths();
     bool setupLauncherAccess();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
+    void cleanupOverrideDirs(const QStringList &overridePaths);
+
+    QMap<int, QStringList> m_instanceBindPaths;
 
     // Steam process discovery helpers
     qint64 findSteamProcess(qint64 gamescopePid, int maxDepth = 6) const;

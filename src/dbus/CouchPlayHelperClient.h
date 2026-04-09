@@ -72,12 +72,14 @@ public:
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Command to run inside gamescope
      * @param environment Additional environment variables (VAR=value format)
+     * @param bindPaths Bind mount entries for per-instance config overrides (source:target format)
      * @return PID of launched process, or 0 on failure
      */
     Q_INVOKABLE qint64 launchInstance(const QString &username, uint compositorUid,
                                        const QStringList &gamescopeArgs,
                                        const QString &gameCommand,
-                                       const QStringList &environment);
+                                       const QStringList &environment,
+                                       const QStringList &bindPaths);
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)
@@ -120,34 +122,6 @@ public:
      * @return Number of successful unmounts, or -1 on error
      */
     Q_INVOKABLE int unmountAllSharedDirectories();
-
-    /**
-     * @brief Set up overlay filesystem mount for a game
-     * @param username Target user (must exist, in couchplay group)
-     * @param gamePath Absolute path to shared game directory
-     * @param gameId Unique game identifier (e.g., steam app ID)
-     * @param overrideFiles List of relative paths for files needing per-user copies
-     * @param compositorUid UID of compositor user (for ACL setup)
-     * @return true if successful, false on failure
-     */
-    Q_INVOKABLE bool setupOverlayMount(const QString &username, const QString &gamePath,
-                                        const QString &gameId, const QStringList &overrideFiles,
-                                        uint compositorUid);
-
-    /**
-     * @brief Tear down overlay mount for a specific game
-     * @param username Target user
-     * @param gameId Game identifier to tear down
-     * @return true if successful, false on failure
-     */
-    Q_INVOKABLE bool teardownOverlayMount(const QString &username, const QString &gameId);
-
-    /**
-     * @brief Tear down all overlay mounts for a user
-     * @param username Target user
-     * @return true if successful, false on failure
-     */
-    Q_INVOKABLE bool teardownAllUserOverlays(const QString &username);
 
     /**
      * @brief Copy a file to a user's directory with proper ownership
@@ -206,36 +180,13 @@ public:
     Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath,
                                       const QString &username);
 
-    /**
-     * @brief Write a per-user override file into an overlay's upperdir
-     *
-     * Used for customizing configuration files for specific players (e.g.,
-     * steam_emu.ini with different account IDs for each player).
-     *
-     * @param username Target user (must have overlay set up for this game)
-     * @param gameId Game identifier (must match SetupOverlayMount call)
-     * @param relativePath Path relative to game root (e.g., "steam_emu.ini")
-     * @param content Binary content of the file
-     * @return true if successful
-     */
-    Q_INVOKABLE bool writeOverrideFile(const QString &username, const QString &gameId,
-                                        const QString &relativePath, const QByteArray &content);
-
-    /**
-     * @brief Get the mount point path for a user's game overlay
-     *
-     * Returns the path where the overlay is mounted, which can be passed
-     * to gamescope or the game as the working directory.
-     *
-     * @param username Target user
-     * @param gameId Game identifier
-     * @return Mount point path, or empty string if not found
-     */
-    Q_INVOKABLE QString getOverlayMountPoint(const QString &username, const QString &gameId);
-
 Q_SIGNALS:
     void availabilityChanged();
     void errorOccurred(const QString &message);
+    void instanceStopped(const QString &username, qint64 pid, const QString &reason);
+
+private Q_SLOTS:
+    void onInstanceStopped(const QString &username, qint64 pid, const QString &reason);
 
 private:
     QDBusInterface *m_interface = nullptr;
