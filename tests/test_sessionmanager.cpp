@@ -5,6 +5,11 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QDir>
+#include <QStandardPaths>
+#include <QFile>
+
+#include <KConfig>
+#include <KConfigGroup>
 
 #include "SessionManager.h"
 

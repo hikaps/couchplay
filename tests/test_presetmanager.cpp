@@ -7,6 +7,12 @@
 #include <QStandardPaths>
 #include <QFile>
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+
+#include <KSharedConfig>
+#include <KConfigGroup>
 
 #include "PresetManager.h"
 
@@ -48,20 +54,26 @@ void TestPresetManager::cleanupTestCase()
 
 void TestPresetManager::init()
 {
-    // Create temporary directory for each test
     m_tempDir = new QTemporaryDir();
     QVERIFY(m_tempDir->isValid());
 
-    // Set test mode to use temp directory
     QStandardPaths::setTestModeEnabled(true);
 
-    // Create the config directory
     QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     QDir().mkpath(configDir);
 
-    // Remove any existing presets.json to ensure clean state
     QString presetsPath = configDir + QStringLiteral("/presets.json");
     QFile::remove(presetsPath);
+    QFile::remove(presetsPath + QStringLiteral(".bak"));
+
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    static const QString prefix = QStringLiteral("Preset: ");
+    for (const QString &groupName : config->groupList()) {
+        if (groupName.startsWith(prefix)) {
+            config->deleteGroup(groupName);
+        }
+    }
+    config->sync();
 }
 
 void TestPresetManager::cleanup()
