@@ -7,11 +7,17 @@
 #include <QCryptographicHash>
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QDBusArgument>
+#include <QDBusVariant>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QThread>
 #include <QDebug>
 
@@ -20,6 +26,114 @@
 #include <signal.h>
 #include <pwd.h>
 #include <grp.h>
+
+class UnitMonitor : public QObject
+{
+    Q_OBJECT
+public:
+    UnitMonitor(const QString &unitPath, const QString &serviceName,
+                const QString &username, qint64 pid, CouchPlayHelper *helper)
+        : QObject(helper), m_unitPath(unitPath), m_serviceName(serviceName),
+          m_username(username), m_pid(pid), m_helper(helper)
+    {
+        QDBusConnection::systemBus().connect(
+            QStringLiteral("org.freedesktop.systemd1"),
+            m_unitPath,
+            QStringLiteral("org.freedesktop.DBus.Properties"),
+            QStringLiteral("PropertiesChanged"),
+            this, SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
+    }
+
+    ~UnitMonitor() override
+    {
+        QDBusConnection::systemBus().disconnect(
+            QStringLiteral("org.freedesktop.systemd1"),
+            m_unitPath,
+            QStringLiteral("org.freedesktop.DBus.Properties"),
+            QStringLiteral("PropertiesChanged"),
+            this, SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
+    }
+
+    QString serviceName() const { return m_serviceName; }
+
+public Q_SLOTS:
+    void onPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &)
+    {
+        if (interface != QStringLiteral("org.freedesktop.systemd1.Unit")) {
+            return;
+        }
+        if (!changed.contains(QStringLiteral("ActiveState"))) {
+            return;
+        }
+
+        QString activeState = changed.value(QStringLiteral("ActiveState")).toString();
+        if (activeState != QStringLiteral("inactive") &&
+            activeState != QStringLiteral("failed") &&
+            activeState != QStringLiteral("dead")) {
+            return;
+        }
+
+        if (m_helper->m_stoppingUnits.contains(m_serviceName)) {
+            return;
+        }
+
+        QString result = queryResultProperty();
+        QString reason = mapResultToReason(result);
+
+        m_helper->m_usernameToUnitName.remove(m_username);
+        m_helper->m_pidToUsername.remove(m_pid);
+
+        m_helper->saveState();
+
+        qInfo() << "Unit" << m_serviceName << "(user:" << m_username << ", PID:" << m_pid << ") stopped unexpectedly:" << reason;
+
+        Q_EMIT m_helper->instanceStopped(m_username, m_pid, reason);
+
+        deleteLater();
+    }
+
+private:
+    QString queryResultProperty() const
+    {
+        QDBusMessage msg = QDBusMessage::createMethodCall(
+            QStringLiteral("org.freedesktop.systemd1"),
+            m_unitPath,
+            QStringLiteral("org.freedesktop.DBus.Properties"),
+            QStringLiteral("Get")
+        );
+        msg << QStringLiteral("org.freedesktop.systemd1.Service")
+            << QStringLiteral("Result");
+
+        QDBusMessage reply = QDBusConnection::systemBus().call(msg);
+        if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
+            QVariant result = reply.arguments().at(0);
+            if (result.canConvert<QDBusVariant>()) {
+                return result.value<QDBusVariant>().variant().toString();
+            }
+        }
+        return QStringLiteral("exit-code");
+    }
+
+    static QString mapResultToReason(const QString &result)
+    {
+        if (result == QStringLiteral("signal") || result == QStringLiteral("core-dump")) {
+            return QStringLiteral("crashed");
+        }
+        if (result == QStringLiteral("exit-code")) {
+            return QStringLiteral("exited");
+        }
+        return QStringLiteral("failed");
+    }
+
+    QString m_unitPath;
+    QString m_serviceName;
+    QString m_username;
+    qint64 m_pid;
+    CouchPlayHelper *m_helper;
+};
+
+// Username validation: lowercase, starts with letter, 1-32 chars, letters/digits/underscore/hyphen
+static const QRegularExpression s_validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
 
 // Version of the helper daemon
 static const QString HELPER_VERSION = QStringLiteral("0.2.0");
@@ -39,7 +153,9 @@ static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     : QObject(parent)
     , m_ops(ops ? ops : new RealSystemOps(this))
+    , m_stateFilePath(QStringLiteral("/run/couchplay/state.json"))
 {
+    loadAndReconcileState();
 }
 
 CouchPlayHelper::~CouchPlayHelper()
@@ -76,59 +192,36 @@ CouchPlayHelper::~CouchPlayHelper()
     }
     m_runtimeAccessSetForUid.clear();
 
-    // Clean up: unmount all overlay mounts
-    if (!m_activeOverlays.isEmpty()) {
-        for (const QString &username : m_activeOverlays.keys()) {
-            for (const OverlayInfo &overlay : m_activeOverlays[username]) {
-                QProcess *umountProcess = m_ops->createProcess();
-                m_ops->startProcess(umountProcess, QStringLiteral("umount"), {overlay.mountPoint});
-                m_ops->waitForFinished(umountProcess, 5000);
-                if (m_ops->processExitCode(umountProcess) != 0) {
-                    QProcess *lazyProcess = m_ops->createProcess();
-                    m_ops->startProcess(lazyProcess, QStringLiteral("umount"),
-                        {QStringLiteral("-l"), overlay.mountPoint});
-                    m_ops->waitForFinished(lazyProcess, 5000);
-                    delete lazyProcess;
-                }
-                delete umountProcess;
-            }
-        }
-        m_activeOverlays.clear();
-    }
-
     // Clean up: unmount all shared directories
     if (!m_activeMounts.isEmpty()) {
         for (const QString &username : m_activeMounts.keys()) {
             for (const MountInfo &mount : m_activeMounts[username]) {
-                QProcess *umountProcess = m_ops->createProcess();
-                m_ops->startProcess(umountProcess, QStringLiteral("umount"), {mount.target});
-                m_ops->waitForFinished(umountProcess, 5000);
-                if (m_ops->processExitCode(umountProcess) != 0) {
-                    // Try lazy unmount
-                    QProcess *lazyProcess = m_ops->createProcess();
-                    m_ops->startProcess(lazyProcess, QStringLiteral("umount"), {QStringLiteral("-l"), mount.target});
-                    m_ops->waitForFinished(lazyProcess, 5000);
-                    delete lazyProcess;
+                QProcess *umountProc = m_ops->createProcess();
+                m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
+                m_ops->waitForFinished(umountProc, 5000);
+                if (m_ops->processExitCode(umountProc) != 0) {
+                    QProcess *lazyProc = m_ops->createProcess();
+                    m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"),
+                        {QStringLiteral("-l"), mount.target});
+                    m_ops->waitForFinished(lazyProc, 5000);
+                    delete lazyProc;
                 }
-                delete umountProcess;
+                delete umountProc;
             }
         }
         m_activeMounts.clear();
     }
 
-    // Clean up: stop all launched processes
-    for (auto it = m_launchedProcesses.begin(); it != m_launchedProcesses.end(); ++it) {
-        QProcess *process = it.value();
-        if (process && process->state() != QProcess::NotRunning) {
-            process->terminate();
-            process->waitForFinished(3000);
-            if (process->state() != QProcess::NotRunning) {
-                process->kill();
-            }
-        }
-        delete process;
+    // Clean up: stop all launched transient units
+    for (const QString &serviceName : m_usernameToUnitName) {
+        m_stoppingUnits.insert(serviceName);
+        stopServiceInstance(serviceName);
     }
-    m_launchedProcesses.clear();
+    m_usernameToUnitName.clear();
+    m_pidToUsername.clear();
+
+    qDeleteAll(m_monitors);
+    m_monitors.clear();
 
     // Clean up: reset all modified devices on shutdown
     if (!m_modifiedDevices.isEmpty()) {
@@ -182,6 +275,8 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
         m_modifiedDevices.append(devicePath);
     }
 
+    saveState();
+
     return true;
 }
 
@@ -229,6 +324,7 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
     }
 
     m_modifiedDevices.removeAll(devicePath);
+    saveState();
     return true;
 }
 
@@ -250,6 +346,8 @@ int CouchPlayHelper::ResetAllDevices()
             m_modifiedDevices.removeAll(path);
         }
     }
+
+    saveState();
     
     return successCount;
 }
@@ -257,8 +355,7 @@ int CouchPlayHelper::ResetAllDevices()
 uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullName)
 {
     // Validate username (alphanumeric, lowercase, starts with letter)
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return 0;
@@ -317,7 +414,7 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     }
 
     // Enable linger for the new user so their systemd user session starts at boot
-    // This is required for machinectl shell to work properly
+    // This is required for systemd-run transient units to access the user's D-Bus session
     QProcess *lingerProcess = m_ops->createProcess();
     m_ops->startProcess(lingerProcess, QStringLiteral("loginctl"),
         {QStringLiteral("enable-linger"), username});
@@ -411,8 +508,7 @@ bool CouchPlayHelper::IsInCouchPlayGroup(const QString &username)
 bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return false;
@@ -533,8 +629,7 @@ bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
 bool CouchPlayHelper::EnableLinger(const QString &username)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return false;
@@ -614,13 +709,13 @@ bool CouchPlayHelper::SetupRuntimeAccess(uint compositorUid)
         m_ops->startProcess(proc, QStringLiteral("setfacl"),
             {QStringLiteral("-m"), QStringLiteral("g:%1:%2").arg(group, perm), path});
         m_ops->waitForFinished(proc, 5000);
-        bool success = (m_ops->processExitCode(proc) == 0);
-        if (!success) {
+        bool aclOk = (m_ops->processExitCode(proc) == 0);
+        if (!aclOk) {
             qWarning() << "Failed to set ACL on" << path << ":"
                        << QString::fromLocal8Bit(m_ops->readStandardError(proc));
         }
         delete proc;
-        return success;
+        return aclOk;
     };
 
     // Runtime directory - traverse permission
@@ -667,6 +762,7 @@ bool CouchPlayHelper::SetupRuntimeAccess(uint compositorUid)
 
     if (success) {
         m_runtimeAccessSetForUid.insert(compositorUid);
+        saveState();
     }
 
     return success;
@@ -714,6 +810,7 @@ bool CouchPlayHelper::RemoveRuntimeAccess(uint compositorUid)
     success &= removeAcl(runtimeDir);
 
     m_runtimeAccessSetForUid.remove(compositorUid);
+    saveState();
 
     return success;
 }
@@ -768,30 +865,27 @@ bool CouchPlayHelper::isValidDevicePath(const QString &path)
 qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint compositorUid,
                                         const QStringList &gamescopeArgs,
                                         const QString &gameCommand,
-                                        const QStringList &environment)
+                                        const QStringList &environment,
+                                        const QStringList &bindPaths)
 {
-    // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
+    if (!s_validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs,
             QStringLiteral("Invalid username format"));
         return 0;
     }
 
     if (!checkAuthorization(ACTION_LAUNCH_INSTANCE)) {
-        sendErrorReply(QDBusError::AccessDenied, 
+        sendErrorReply(QDBusError::AccessDenied,
             QStringLiteral("Not authorized to launch instances"));
         return 0;
     }
 
-    // Check if user exists
     if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
+        sendErrorReply(QDBusError::InvalidArgs,
             QStringLiteral("User '%1' does not exist").arg(username));
         return 0;
     }
 
-    // Verify compositor user exists
     struct passwd *pw = m_ops->getpwuid(compositorUid);
     if (!pw) {
         sendErrorReply(QDBusError::InvalidArgs,
@@ -799,176 +893,278 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint compositorU
         return 0;
     }
 
-    // Set up runtime access for couchplay group (once per compositor)
-    // This grants access to Wayland, PipeWire, and PulseAudio sockets
     if (!m_runtimeAccessSetForUid.contains(compositorUid)) {
         if (!SetupRuntimeAccess(compositorUid)) {
             qWarning() << "Failed to set up runtime access for compositor" << compositorUid;
-            // Continue anyway - may already be set from previous session
         }
     }
 
-    // Build the command to execute
-    QString command = buildInstanceCommand(username, compositorUid, gamescopeArgs,
-                                            gameCommand, environment);
-
-    // Create and start the process
-    QProcess *process = m_ops->createProcess(this);
-    
-    // Connect to finished signal to clean up
-    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process](int exitCode, QProcess::ExitStatus exitStatus) {
-        Q_UNUSED(exitCode)
-        Q_UNUSED(exitStatus)
-        qint64 pid = process->processId();
-        
-        // Clean up from our tracking map
-        m_launchedProcesses.remove(pid);
-        process->deleteLater();
-    });
-
-    // Start the process
-    m_ops->startProcess(process, QStringLiteral("/bin/bash"), {QStringLiteral("-c"), command});
-
-    if (!process->waitForStarted(5000)) {
+    qint64 pid = startTransientUnit(username, compositorUid, gamescopeArgs,
+                                     gameCommand, environment, bindPaths);
+    if (pid <= 0) {
         sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Failed to start process: %1").arg(process->errorString()));
-        delete process;
+            QStringLiteral("Failed to launch instance for user '%1'").arg(username));
         return 0;
     }
-
-    qint64 pid = process->processId();
-    m_launchedProcesses.insert(pid, process);
-    
-    qDebug() << "LaunchInstance: Started PID" << pid << "for user" << username;
     return pid;
 }
 
 bool CouchPlayHelper::StopInstance(qint64 pid)
 {
     if (!checkAuthorization(ACTION_LAUNCH_INSTANCE)) {
-        sendErrorReply(QDBusError::AccessDenied, 
+        sendErrorReply(QDBusError::AccessDenied,
             QStringLiteral("Not authorized to stop instances"));
         return false;
     }
 
     if (pid <= 0) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid PID"));
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid PID"));
         return false;
     }
 
-    // Check if we have this process
-    if (m_launchedProcesses.contains(pid)) {
-        QProcess *process = m_launchedProcesses.value(pid);
-        if (process && process->state() != QProcess::NotRunning) {
-            process->terminate();
+    if (m_pidToUsername.contains(pid)) {
+        QString username = m_pidToUsername.value(pid);
+        QString serviceName = m_usernameToUnitName.value(username);
+        if (!serviceName.isEmpty()) {
+            m_stoppingUnits.insert(serviceName);
+            delete m_monitors.take(serviceName);
+            stopServiceInstance(serviceName);
+            m_usernameToUnitName.remove(username);
+            m_pidToUsername.remove(pid);
+            m_stoppingUnits.remove(serviceName);
+            saveState();
             return true;
         }
     }
 
-    // Process not in our map - try to signal it directly
-    // This allows stopping processes that might have been launched before a restart
     if (m_ops->killProcess(static_cast<pid_t>(pid), SIGTERM)) {
         return true;
     }
 
-    sendErrorReply(QDBusError::Failed, 
-        QStringLiteral("Failed to stop process %1: %2")
-            .arg(pid).arg(QString::fromLocal8Bit(strerror(errno))));
+    sendErrorReply(QDBusError::Failed,
+        QStringLiteral("Failed to stop process %1").arg(pid));
     return false;
 }
 
 bool CouchPlayHelper::KillInstance(qint64 pid)
 {
     if (!checkAuthorization(ACTION_LAUNCH_INSTANCE)) {
-        sendErrorReply(QDBusError::AccessDenied, 
+        sendErrorReply(QDBusError::AccessDenied,
             QStringLiteral("Not authorized to kill instances"));
         return false;
     }
 
     if (pid <= 0) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid PID"));
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid PID"));
         return false;
     }
 
-    // Check if we have this process
-    if (m_launchedProcesses.contains(pid)) {
-        QProcess *process = m_launchedProcesses.value(pid);
-        if (process && process->state() != QProcess::NotRunning) {
-            process->kill();
+    if (m_pidToUsername.contains(pid)) {
+        QString username = m_pidToUsername.value(pid);
+        QString serviceName = m_usernameToUnitName.value(username);
+        if (!serviceName.isEmpty()) {
+            m_stoppingUnits.insert(serviceName);
+            delete m_monitors.take(serviceName);
+            QProcess *killProc = m_ops->createProcess();
+            m_ops->startProcess(killProc, QStringLiteral("systemctl"),
+                {QStringLiteral("kill"), serviceName, QStringLiteral("--signal=SIGKILL")});
+            m_ops->waitForFinished(killProc, 10000);
+            delete killProc;
+
+            stopServiceInstance(serviceName);
+            m_usernameToUnitName.remove(username);
+            m_pidToUsername.remove(pid);
+            m_stoppingUnits.remove(serviceName);
+            saveState();
             return true;
         }
     }
 
-    // Process not in our map - try to signal it directly
     if (m_ops->killProcess(static_cast<pid_t>(pid), SIGKILL)) {
         return true;
     }
 
-    sendErrorReply(QDBusError::Failed, 
-        QStringLiteral("Failed to kill process %1: %2")
-            .arg(pid).arg(QString::fromLocal8Bit(strerror(errno))));
+    sendErrorReply(QDBusError::Failed,
+        QStringLiteral("Failed to kill process %1").arg(pid));
     return false;
 }
 
-QString CouchPlayHelper::buildInstanceCommand(const QString &username, uint compositorUid,
-                                               const QStringList &gamescopeArgs,
-                                               const QString &gameCommand,
-                                               const QStringList &environment)
+QString CouchPlayHelper::generateServiceName(const QString &username)
 {
-    // Build environment exports for the user
-    // Key insight: Let the user use their OWN XDG_RUNTIME_DIR
-    // (so gamescope can create lockfiles there), but point WAYLAND_DISPLAY
-    // to the compositor user's Wayland socket as an absolute path.
-    
-    QStringList exports;
-    
-    // Compositor user's runtime directory for Wayland socket
+    return QStringLiteral("couchplay-%1.service").arg(username);
+}
+
+qint64 CouchPlayHelper::startTransientUnit(const QString &username, uint compositorUid,
+                                           const QStringList &gamescopeArgs,
+                                           const QString &gameCommand,
+                                           const QStringList &environment,
+                                           const QStringList &bindPaths)
+{
+    QString serviceName = generateServiceName(username);
+
+    struct passwd *pwd = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!pwd) {
+        qWarning() << "startTransientUnit: failed to resolve UID for user" << username;
+        return 0;
+    }
+    QString userUid = QString::number(pwd->pw_uid);
     QString compositorRuntimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
-    QString compositorWaylandSocket = compositorRuntimeDir + QStringLiteral("/wayland-0");
-    
-    // Set WAYLAND_DISPLAY to the absolute path of the compositor user's Wayland socket
-    // The user has ACL access to this socket (set up by SetupWaylandAccess)
-    exports << QStringLiteral("export WAYLAND_DISPLAY=%1").arg(compositorWaylandSocket);
-    
+
+    QStringList systemdRunArgs;
+    systemdRunArgs << QStringLiteral("--unit") << serviceName;
+    systemdRunArgs << QStringLiteral("--uid") << username;
+    systemdRunArgs << QStringLiteral("--property=Type=simple");
+    systemdRunArgs << QStringLiteral("--property=Delegate=yes");
+    systemdRunArgs << QStringLiteral("--property=MemoryDenyWriteExecute=false");
+
+    // Use -E flag for each environment variable (cleaner escaping than --property=Environment=)
+    auto addEnv = [&](const QString &assignment) {
+        systemdRunArgs << QStringLiteral("-E") << assignment;
+    };
+    addEnv(QStringLiteral("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%1/bus").arg(userUid));
+    addEnv(QStringLiteral("WAYLAND_DISPLAY=%1/wayland-0").arg(compositorRuntimeDir));
+    addEnv(QStringLiteral("XDG_RUNTIME_DIR=/run/user/%1").arg(userUid));
     // For audio, point to the compositor user's PipeWire and PulseAudio sockets
-    // PipeWire uses PIPEWIRE_RUNTIME_DIR if set, otherwise XDG_RUNTIME_DIR
-    exports << QStringLiteral("export PIPEWIRE_RUNTIME_DIR=%1").arg(compositorRuntimeDir);
+    addEnv(QStringLiteral("PIPEWIRE_RUNTIME_DIR=%1").arg(compositorRuntimeDir));
     // PulseAudio clients (including games via SDL) need PULSE_SERVER to find the socket
-    exports << QStringLiteral("export PULSE_SERVER=unix:%1/pulse/native").arg(compositorRuntimeDir);
-    
-    // Add any additional environment variables from the caller
+    addEnv(QStringLiteral("PULSE_SERVER=unix:%1/pulse/native").arg(compositorRuntimeDir));
     for (const QString &var : environment) {
-        exports << QStringLiteral("export %1").arg(var);
+        int eqPos = var.indexOf(QLatin1Char('='));
+        if (eqPos > 0) {
+            addEnv(var);
+        }
     }
 
-    // Build the gamescope command with logging
-    QString logFile = QStringLiteral("/tmp/couchplay-%1.log").arg(username);
-    
-    // Escape the game command for embedding in bash -c
-    QString gameCommandForBash = gameCommand;
-    gameCommandForBash.replace(QLatin1Char('"'), QStringLiteral("\\\""));
-    gameCommandForBash.replace(QLatin1Char('$'), QStringLiteral("\\$"));
-    gameCommandForBash.replace(QLatin1Char('`'), QStringLiteral("\\`"));
-    
-    QString gamescopeCmd = QStringLiteral("/usr/bin/gamescope %1 -- /bin/bash -c \"%2\" 2>&1 | tee %3")
-                               .arg(gamescopeArgs.join(QLatin1Char(' ')), gameCommandForBash, logFile);
+    systemdRunArgs << QStringLiteral("--property=BindReadOnlyPaths=%1").arg(compositorRuntimeDir);
 
-    // Escape the entire gamescopeCmd for embedding in single quotes
-    QString escapedGamescopeCmd = gamescopeCmd;
-    escapedGamescopeCmd.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+    for (const QString &bp : bindPaths) {
+        systemdRunArgs << QStringLiteral("--property=BindPaths=%1").arg(bp);
+    }
 
-    // Join exports with semicolons
-    QString exportStr = exports.join(QStringLiteral("; "));
+    QStringList cmdArgs;
+    cmdArgs << QStringLiteral("/usr/bin/gamescope") << gamescopeArgs;
+    cmdArgs << QStringLiteral("--") << QStringLiteral("/bin/bash")
+            << QStringLiteral("-c") << gameCommand;
+    systemdRunArgs << QStringLiteral("--") << cmdArgs;
 
-    // Use machinectl shell to run in the user's systemd session
-    // This requires linger to be enabled for the user (done by CreateUser)
-    QString command = QStringLiteral("machinectl shell %1@ /bin/bash -c '%2; %3'")
-                          .arg(username, exportStr, escapedGamescopeCmd);
+    QProcess *proc = m_ops->createProcess();
+    m_ops->startProcess(proc, QStringLiteral("systemd-run"), systemdRunArgs);
+    m_ops->waitForFinished(proc, 10000);
+    int exitCode = m_ops->processExitCode(proc);
+    if (exitCode != 0) {
+        QByteArray errOutput = m_ops->readStandardError(proc);
+        delete proc;
 
-    return command;
+        if (errOutput.contains("already loaded")) {
+            qInfo() << "Stale unit" << serviceName << "found - stopping and retrying";
+            QProcess *stopProc = m_ops->createProcess();
+            m_ops->startProcess(stopProc, QStringLiteral("systemctl"), {QStringLiteral("stop"), serviceName});
+            m_ops->waitForFinished(stopProc, 5000);
+            delete stopProc;
+
+            QProcess *resetProc = m_ops->createProcess();
+            m_ops->startProcess(resetProc, QStringLiteral("systemctl"), {QStringLiteral("reset-failed"), serviceName});
+            m_ops->waitForFinished(resetProc, 5000);
+            delete resetProc;
+
+            QThread::msleep(200);
+
+            proc = m_ops->createProcess();
+            m_ops->startProcess(proc, QStringLiteral("systemd-run"), systemdRunArgs);
+            m_ops->waitForFinished(proc, 10000);
+            exitCode = m_ops->processExitCode(proc);
+            if (exitCode != 0) {
+                errOutput = m_ops->readStandardError(proc);
+                qWarning() << "systemd-run retry failed for" << serviceName
+                            << "exit code:" << exitCode << errOutput;
+                delete proc;
+                return 0;
+            }
+            delete proc;
+        } else {
+            qWarning() << "systemd-run failed for" << serviceName
+                        << "exit code:" << exitCode << errOutput;
+            return 0;
+        }
+    } else {
+        delete proc;
+    }
+
+    // Wait briefly for systemd to register the unit, then poll for MainPID (max 3 attempts)
+    qint64 mainPid = 0;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        QThread::msleep(500);
+        QProcess *showProc = m_ops->createProcess();
+        m_ops->startProcess(showProc, QStringLiteral("systemctl"),
+            {QStringLiteral("show"), serviceName, QStringLiteral("-p"), QStringLiteral("MainPID"), QStringLiteral("--value")});
+        m_ops->waitForFinished(showProc, 5000);
+        QByteArray output = m_ops->readAllStandardOutput(showProc).trimmed();
+        delete showProc;
+
+        if (!output.isEmpty()) {
+            bool ok = false;
+            mainPid = output.toLongLong(&ok);
+            if (ok && mainPid > 0) break;
+        }
+    }
+
+    if (mainPid <= 0) {
+        qWarning() << "Could not get MainPID for transient unit" << serviceName;
+        return 0;
+    }
+
+    m_usernameToUnitName[username] = serviceName;
+    m_pidToUsername[mainPid] = username;
+
+    saveState();
+
+    monitorUnitState(serviceName, username, mainPid);
+
+    qInfo() << "Started transient unit" << serviceName << "with PID" << mainPid;
+    return mainPid;
+}
+
+void CouchPlayHelper::stopServiceInstance(const QString &serviceName)
+{
+    QProcess *stopProc = m_ops->createProcess();
+    m_ops->startProcess(stopProc, QStringLiteral("systemctl"), {QStringLiteral("stop"), serviceName});
+    m_ops->waitForFinished(stopProc, 10000);
+    delete stopProc;
+
+    QProcess *resetProc = m_ops->createProcess();
+    m_ops->startProcess(resetProc, QStringLiteral("systemctl"), {QStringLiteral("reset-failed"), serviceName});
+    m_ops->waitForFinished(resetProc, 5000);
+    delete resetProc;
+}
+
+void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString &username, qint64 mainPid)
+{
+    QDBusMessage getUnitMsg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.systemd1"),
+        QStringLiteral("/org/freedesktop/systemd1"),
+        QStringLiteral("org.freedesktop.systemd1.Manager"),
+        QStringLiteral("GetUnit")
+    );
+    getUnitMsg << serviceName;
+
+    QDBusMessage reply = QDBusConnection::systemBus().call(getUnitMsg);
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        qWarning() << "monitorUnitState: GetUnit failed for" << serviceName << ":" << reply.errorMessage();
+        return;
+    }
+
+    QDBusObjectPath unitPath;
+    const QDBusArgument &arg = reply.arguments().at(0).value<QDBusArgument>();
+    arg >> unitPath;
+
+    QString path = unitPath.path();
+    if (path.isEmpty()) {
+        qWarning() << "monitorUnitState: empty unit path for" << serviceName;
+        return;
+    }
+
+    auto *monitor = new UnitMonitor(path, serviceName, username, mainPid, this);
+    m_monitors.insert(serviceName, monitor);
 }
 
 QString CouchPlayHelper::computeMountTarget(const QString &source, const QString &alias,
@@ -997,8 +1193,7 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
                                              const QStringList &directories)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return 0;
@@ -1074,7 +1269,7 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
 
         // Perform bind mount
         QProcess *mountProcess = m_ops->createProcess();
-        m_ops->startProcess(mountProcess, QStringLiteral("mount"),
+        m_ops->startProcess(mountProcess, QStringLiteral("/usr/bin/mount"),
             {QStringLiteral("--bind"), source, target});
         m_ops->waitForFinished(mountProcess, 10000);
 
@@ -1095,14 +1290,15 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
         successCount++;
     }
 
+    saveState();
+
     return successCount;
 }
 
 int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return 0;
@@ -1121,35 +1317,34 @@ int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
     int successCount = 0;
     QList<MountInfo> mounts = m_activeMounts[username];
 
-    // Unmount in reverse order (in case of nested mounts)
     for (int i = mounts.size() - 1; i >= 0; --i) {
         const MountInfo &mount = mounts.at(i);
 
-        QProcess *umountProcess = m_ops->createProcess();
-        m_ops->startProcess(umountProcess, QStringLiteral("umount"), {mount.target});
-        m_ops->waitForFinished(umountProcess, 10000);
+        QProcess *umountProc = m_ops->createProcess();
+        m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
+        m_ops->waitForFinished(umountProc, 10000);
 
-        if (m_ops->processExitCode(umountProcess) == 0) {
-            successCount++;
-            delete umountProcess;
-        } else {
-            // Try lazy unmount as fallback
-            QProcess *lazyUmount = m_ops->createProcess();
-            m_ops->startProcess(lazyUmount, QStringLiteral("umount"), {QStringLiteral("-l"), mount.target});
-            m_ops->waitForFinished(lazyUmount, 10000);
+        if (m_ops->processExitCode(umountProc) != 0) {
+            qWarning() << "UnmountSharedDirectories: umount failed for" << mount.target
+                       << "- trying lazy unmount";
+            delete umountProc;
 
-            if (m_ops->processExitCode(lazyUmount) == 0) {
+            QProcess *lazyProc = m_ops->createProcess();
+            m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"),
+                {QStringLiteral("-l"), mount.target});
+            m_ops->waitForFinished(lazyProc, 10000);
+            if (m_ops->processExitCode(lazyProc) == 0) {
                 successCount++;
-            } else {
-                qWarning() << "UnmountSharedDirectories: Failed to unmount" << mount.target
-                           << ":" << QString::fromLocal8Bit(m_ops->readStandardError(umountProcess));
             }
-            delete umountProcess;
-            delete lazyUmount;
+            delete lazyProc;
+        } else {
+            successCount++;
+            delete umountProc;
         }
     }
 
     m_activeMounts.remove(username);
+    saveState();
     return successCount;
 }
 
@@ -1161,51 +1356,47 @@ int CouchPlayHelper::UnmountAllSharedDirectories()
         return 0;
     }
 
-    int totalCount = 0;
+    int successCount = 0;
     QStringList users = m_activeMounts.keys();
 
     for (const QString &username : users) {
-        // Call without auth check since we already checked above
         QList<MountInfo> mounts = m_activeMounts[username];
         
         for (int i = mounts.size() - 1; i >= 0; --i) {
             const MountInfo &mount = mounts.at(i);
 
-            QProcess *umountProcess = m_ops->createProcess();
-            m_ops->startProcess(umountProcess, QStringLiteral("umount"), {mount.target});
-            m_ops->waitForFinished(umountProcess, 10000);
+            QProcess *umountProc = m_ops->createProcess();
+            m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
+            m_ops->waitForFinished(umountProc, 10000);
 
-            if (m_ops->processExitCode(umountProcess) == 0) {
-                totalCount++;
-                delete umountProcess;
-            } else {
-                // Try lazy unmount as fallback
-                QProcess *lazyUmount = m_ops->createProcess();
-                m_ops->startProcess(lazyUmount, QStringLiteral("umount"), {QStringLiteral("-l"), mount.target});
-                m_ops->waitForFinished(lazyUmount, 10000);
-
-                if (m_ops->processExitCode(lazyUmount) == 0) {
-                    totalCount++;
-                } else {
-                    qWarning() << "UnmountAllSharedDirectories: Failed to unmount" << mount.target;
-                }
-                delete umountProcess;
-                delete lazyUmount;
+            bool unmounted = (m_ops->processExitCode(umountProc) == 0);
+            if (!unmounted) {
+                QProcess *lazyProc = m_ops->createProcess();
+                m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"),
+                    {QStringLiteral("-l"), mount.target});
+                m_ops->waitForFinished(lazyProc, 10000);
+                unmounted = (m_ops->processExitCode(lazyProc) == 0);
+                delete lazyProc;
+            }
+            delete umountProc;
+            if (unmounted) {
+                successCount++;
             }
         }
         
         m_activeMounts.remove(username);
     }
 
-    return totalCount;
+    saveState();
+
+    return successCount;
 }
 
 bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &targetPath,
                                       const QString &username)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return false;
@@ -1293,8 +1484,7 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
                                        const QString &username)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return false;
@@ -1368,8 +1558,7 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
 bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &username)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return false;
@@ -1419,8 +1608,7 @@ bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &us
 bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &username, bool recursive)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return false;
@@ -1482,8 +1670,7 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
 bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return false;
@@ -1600,8 +1787,7 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
 QString CouchPlayHelper::GetUserSteamId(const QString &username)
 {
     // Validate username
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
+    if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, 
             QStringLiteral("Invalid username format"));
         return QString();
@@ -1644,409 +1830,206 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
     return QString();
 }
 
-bool CouchPlayHelper::SetupOverlayMount(const QString &username, const QString &gamePath,
-                                          const QString &gameId, const QStringList &overrideFiles,
-                                          uint compositorUid)
+void CouchPlayHelper::saveState()
 {
-    Q_UNUSED(compositorUid)
-    qDebug() << "Setting up overlay mount for user" << username
-                               << "gamePath:" << gamePath
-                               << "gameId:" << gameId
-                               << "overrideFiles:" << overrideFiles.size();
+    QJsonObject root;
+    root[QStringLiteral("version")] = 1;
 
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
-        qWarning() << "Invalid username format for user" << username;
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("Invalid username format"));
-        return false;
+    QJsonArray devicesArray;
+    for (const QString &device : m_modifiedDevices) {
+        devicesArray.append(device);
     }
+    root[QStringLiteral("modifiedDevices")] = devicesArray;
 
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        qWarning() << "User" << username << "not authorized to manage mounts";
-        sendErrorReply(QDBusError::AccessDenied,
-            QStringLiteral("Not authorized to manage mounts"));
-        return false;
-    }
-
-    if (!userExists(username)) {
-        qWarning() << "User" << username << "does not exist";
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("User '%1' does not exist").arg(username));
-        return false;
-    }
-
-    if (!IsInCouchPlayGroup(username)) {
-        qWarning() << "User" << username << "is not a CouchPlay user";
-        sendErrorReply(QDBusError::AccessDenied,
-            QStringLiteral("User '%1' is not a CouchPlay user").arg(username));
-        return false;
-    }
-
-    if (!gamePath.startsWith(QLatin1Char('/'))) {
-        qWarning() << "gamePath must be an absolute path for user" << username;
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("gamePath must be an absolute path"));
-        return false;
-    }
-
-    if (!m_ops->fileExists(gamePath)) {
-        qWarning() << "gamePath does not exist:" << gamePath << "for user" << username;
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("gamePath does not exist: %1").arg(gamePath));
-        return false;
-    }
-
-    if (!m_ops->isDirectory(gamePath)) {
-        qWarning() << "gamePath is not a directory:" << gamePath << "for user" << username;
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("gamePath is not a directory: %1").arg(gamePath));
-        return false;
-    }
-
-    if (gameId.isEmpty()) {
-        qWarning() << "gameId cannot be empty for user" << username;
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("gameId cannot be empty"));
-        return false;
-    }
-
-    for (const OverlayInfo &info : m_activeOverlays.value(username)) {
-        if (info.gameId == gameId) {
-            qWarning() << "Overlay already exists for user" << username << "gameId" << gameId;
-            sendErrorReply(QDBusError::Failed,
-                QStringLiteral("Overlay already exists for user '%1' and gameId '%2'").arg(username, gameId));
-            return false;
+    QJsonObject mountsObject;
+    for (auto it = m_activeMounts.constBegin(); it != m_activeMounts.constEnd(); ++it) {
+        QJsonArray mountsArray;
+        for (const MountInfo &info : it.value()) {
+            QJsonObject mountObj;
+            mountObj[QStringLiteral("source")] = info.source;
+            mountObj[QStringLiteral("target")] = info.target;
+            mountsArray.append(mountObj);
         }
+        mountsObject[it.key()] = mountsArray;
+    }
+    root[QStringLiteral("activeMounts")] = mountsObject;
+
+    QJsonObject unitsObject;
+    for (auto it = m_usernameToUnitName.constBegin(); it != m_usernameToUnitName.constEnd(); ++it) {
+        unitsObject[it.key()] = it.value();
+    }
+    root[QStringLiteral("activeUnits")] = unitsObject;
+
+    QJsonObject pidObject;
+    for (auto it = m_pidToUsername.constBegin(); it != m_pidToUsername.constEnd(); ++it) {
+        pidObject[QString::number(it.key())] = it.value();
+    }
+    root[QStringLiteral("pidToUsername")] = pidObject;
+
+    QJsonArray runtimeUids;
+    for (uint uid : m_runtimeAccessSetForUid) {
+        runtimeUids.append(static_cast<qint64>(uid));
+    }
+    root[QStringLiteral("runtimeAccessUids")] = runtimeUids;
+
+    QJsonDocument doc(root);
+    QByteArray data = doc.toJson(QJsonDocument::Compact);
+
+    QDir().mkpath(QFileInfo(m_stateFilePath).absolutePath());
+
+    QSaveFile file(m_stateFilePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        qWarning() << "saveState: Failed to open" << m_stateFilePath << ":" << file.errorString();
+        return;
+    }
+    file.write(data);
+    file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+    if (!file.commit()) {
+        qWarning() << "saveState: Failed to commit" << m_stateFilePath << ":" << file.errorString();
+    }
+}
+
+void CouchPlayHelper::loadAndReconcileState()
+{
+    QDir().mkpath(QStringLiteral("/run/couchplay"));
+
+    QFile file(m_stateFilePath);
+    if (!file.exists()) {
+        qDebug() << "loadAndReconcileState: No state file found at" << m_stateFilePath << "- starting fresh";
+        return;
     }
 
-    QString userHome = getUserHome(username);
-    if (userHome.isEmpty()) {
-        qWarning() << "Could not determine home directory for user" << username;
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Could not determine home directory for user '%1'").arg(username));
-        return false;
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "loadAndReconcileState: Failed to open" << m_stateFilePath << "- starting fresh";
+        return;
     }
 
-    uint userUid = getUserUid(username);
-    struct passwd *pw = m_ops->getpwuid(userUid);
-    if (!pw) {
-        qWarning() << "Could not get user info for" << username;
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Could not get user info for '%1'").arg(username));
-        return false;
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning() << "loadAndReconcileState: Failed to parse state file:" << parseError.errorString() << "- starting fresh";
+        return;
     }
 
-    QString baseDir = userHome + QStringLiteral("/.couchplay/overlays/") + gameId;
-    QString upperDir = baseDir + QStringLiteral("/upper");
-    QString workDir = baseDir + QStringLiteral("/work");
-
-    QByteArray gamePathHash = QCryptographicHash::hash(gamePath.toUtf8(), QCryptographicHash::Md5).toHex();
-    QString mountPoint = userHome + QStringLiteral("/.couchplay/mounts/") + QString::fromLatin1(gamePathHash.left(16));
-
-    if (!m_ops->mkpath(upperDir)) {
-        qWarning() << "Failed to create upper directory:" << upperDir << "for user" << username;
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Failed to create upper directory: %1").arg(upperDir));
-        return false;
-    }
-    if (!m_ops->mkpath(workDir)) {
-        qWarning() << "Failed to create work directory:" << workDir << "for user" << username;
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Failed to create work directory: %1").arg(workDir));
-        return false;
-    }
-    if (!m_ops->mkpath(mountPoint)) {
-        qWarning() << "Failed to create mount point:" << mountPoint << "for user" << username;
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Failed to create mount point: %1").arg(mountPoint));
-        return false;
+    QJsonObject root = doc.object();
+    int version = root.value(QStringLiteral("version")).toInt(0);
+    if (version != 1) {
+        qWarning() << "loadAndReconcileState: Unknown state version" << version << "- starting fresh";
+        return;
     }
 
-    QString currentPath = userHome;
-    for (const QString &part : {QStringLiteral(".couchplay"), QStringLiteral("overlays"), gameId, QStringLiteral("upper")}) {
-        currentPath += QStringLiteral("/") + part;
-        m_ops->chown(currentPath, userUid, pw->pw_gid);
-    }
-    currentPath = baseDir;
-    m_ops->chown(workDir, userUid, pw->pw_gid);
-    m_ops->chown(mountPoint, userUid, pw->pw_gid);
+    bool changed = false;
 
-    for (const QString &relPath : overrideFiles) {
-        if (relPath.contains(QStringLiteral("..")) || relPath.startsWith(QLatin1Char('/'))) {
-            continue;
-        }
-        QString srcFile = gamePath + QStringLiteral("/") + relPath;
-        QString dstFile = upperDir + QStringLiteral("/") + relPath;
-        if (m_ops->fileExists(srcFile) && !m_ops->fileExists(dstFile)) {
-            int lastSlash = dstFile.lastIndexOf(QLatin1Char('/'));
-            if (lastSlash > 0) {
-                QString dstDir = dstFile.left(lastSlash);
-                if (m_ops->mkpath(dstDir)) {
-                    QString dirWalker = upperDir;
-                    for (const QString &part : dstDir.mid(upperDir.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
-                        dirWalker += QStringLiteral("/") + part;
-                        m_ops->chown(dirWalker, userUid, pw->pw_gid);
-                    }
-                }
-            }
-            if (m_ops->copyFile(srcFile, dstFile)) {
-                m_ops->chown(dstFile, userUid, pw->pw_gid);
+    QSet<QString> activeSystemdUnits;
+    {
+        QProcess proc;
+        proc.start(QStringLiteral("systemctl"), {QStringLiteral("list-units"), QStringLiteral("couchplay-*.service"), QStringLiteral("--no-legend"), QStringLiteral("--no-pager")});
+        proc.waitForFinished(5000);
+        QByteArray output = proc.readAllStandardOutput();
+        for (const QByteArray &line : output.split('\n')) {
+            QByteArray trimmed = line.trimmed();
+            if (trimmed.isEmpty()) continue;
+            int spacePos = trimmed.indexOf(' ');
+            if (spacePos > 0) {
+                activeSystemdUnits.insert(QString::fromUtf8(trimmed.left(spacePos)));
             }
         }
     }
 
-    QStringList mountArgs;
-    mountArgs << QStringLiteral("-t") << QStringLiteral("overlay")
-              << QStringLiteral("overlay")
-              << QStringLiteral("-o") << QStringLiteral("lowerdir=%1,upperdir=%2,workdir=%3")
-                                         .arg(gamePath, upperDir, workDir)
-              << mountPoint;
-
-    QProcess *mountProcess = m_ops->createProcess();
-    m_ops->startProcess(mountProcess, QStringLiteral("mount"), mountArgs);
-    m_ops->waitForFinished(mountProcess, 10000);
-
-    if (m_ops->processExitCode(mountProcess) != 0) {
-        QString errorMsg = QString::fromLocal8Bit(m_ops->readStandardError(mountProcess));
-        qWarning() << "Overlay mount failed for user" << username
-                                     << "gameId" << gameId << ":" << errorMsg;
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Failed to mount overlay: %1").arg(errorMsg));
-        delete mountProcess;
-        return false;
+    QJsonObject unitsObject = root.value(QStringLiteral("activeUnits")).toObject();
+    QMap<QString, QString> loadedUsernameToUnit;
+    for (auto it = unitsObject.constBegin(); it != unitsObject.constEnd(); ++it) {
+        QString unitName = it.value().toString();
+        if (activeSystemdUnits.contains(unitName)) {
+            loadedUsernameToUnit[it.key()] = unitName;
+        } else {
+            qDebug() << "loadAndReconcileState: Removing stale unit" << unitName << "for user" << it.key();
+            changed = true;
+        }
     }
-    delete mountProcess;
+    m_usernameToUnitName = loadedUsernameToUnit;
 
-    OverlayInfo info;
-    info.gameId = gameId;
-    info.gamePath = gamePath;
-    info.mountPoint = mountPoint;
-    info.upperDir = upperDir;
-    info.workDir = workDir;
-    m_activeOverlays[username].append(info);
-
-    qDebug() << "Overlay mount succeeded for user" << username
-                               << "gameId" << gameId
-                               << "at" << mountPoint;
-    return true;
-}
-
-bool CouchPlayHelper::TeardownOverlayMount(const QString &username, const QString &gameId)
-{
-    qDebug() << "Tearing down overlay mount for user" << username << "gameId" << gameId;
-
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
-        qWarning() << "Invalid username format for user" << username;
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("Invalid username format"));
-        return false;
+    QJsonObject pidObject = root.value(QStringLiteral("pidToUsername")).toObject();
+    QMap<qint64, QString> loadedPidToUsername;
+    QSet<QString> activeUsernames;
+    for (const QString &unitName : m_usernameToUnitName) {
+        activeUsernames.insert(m_usernameToUnitName.key(unitName));
     }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        qWarning() << "User" << username << "not authorized to manage mounts";
-        sendErrorReply(QDBusError::AccessDenied,
-            QStringLiteral("Not authorized to manage mounts"));
-        return false;
+    for (auto it = pidObject.constBegin(); it != pidObject.constEnd(); ++it) {
+        bool ok = false;
+        qint64 pid = it.key().toLongLong(&ok);
+        if (!ok) { changed = true; continue; }
+        QString username = it.value().toString();
+        if (activeUsernames.contains(username)) {
+            loadedPidToUsername[pid] = username;
+        } else {
+            qDebug() << "loadAndReconcileState: Removing stale PID" << pid << "for user" << username;
+            changed = true;
+        }
     }
+    m_pidToUsername = loadedPidToUsername;
 
-    if (!m_activeOverlays.contains(username)) {
-        qDebug() << "No overlay mounts found for user" << username;
-        return true;
+    QJsonArray devicesArray = root.value(QStringLiteral("modifiedDevices")).toArray();
+    QStringList loadedDevices;
+    for (const QJsonValue &val : devicesArray) {
+        QString device = val.toString();
+        if (m_ops->fileExists(device)) {
+            loadedDevices.append(device);
+        } else {
+            qDebug() << "loadAndReconcileState: Removing gone device" << device;
+            changed = true;
+        }
     }
+    m_modifiedDevices = loadedDevices;
 
-    QList<OverlayInfo> &overlays = m_activeOverlays[username];
-    for (int i = 0; i < overlays.size(); ++i) {
-        if (overlays[i].gameId == gameId) {
-            const QString &mountPoint = overlays[i].mountPoint;
+    QJsonObject mountsObject = root.value(QStringLiteral("activeMounts")).toObject();
+    QMap<QString, QList<MountInfo>> loadedMounts;
+    for (auto it = mountsObject.constBegin(); it != mountsObject.constEnd(); ++it) {
+        QString username = it.key();
+        QJsonArray mountsArray = it.value().toArray();
+        QList<MountInfo> userMounts;
+        for (const QJsonValue &mountVal : mountsArray) {
+            QJsonObject mountObj = mountVal.toObject();
+            QString target = mountObj.value(QStringLiteral("target")).toString();
 
-            QProcess *umountProcess = m_ops->createProcess();
-            m_ops->startProcess(umountProcess, QStringLiteral("umount"), {mountPoint});
-            m_ops->waitForFinished(umountProcess, 10000);
-
-            if (m_ops->processExitCode(umountProcess) != 0) {
-                QProcess *lazyProcess = m_ops->createProcess();
-                m_ops->startProcess(lazyProcess, QStringLiteral("umount"),
-                    {QStringLiteral("-l"), mountPoint});
-                m_ops->waitForFinished(lazyProcess, 10000);
-                if (m_ops->processExitCode(lazyProcess) != 0) {
-                    QString errorMsg = QString::fromLocal8Bit(m_ops->readStandardError(lazyProcess));
-                    qWarning() << "Failed to unmount" << mountPoint
-                                                << "for user" << username << "gameId" << gameId
-                                                << ":" << errorMsg;
-                }
-                delete lazyProcess;
+            QFile mountsFile(QStringLiteral("/proc/mounts"));
+            bool isMounted = false;
+            if (mountsFile.open(QIODevice::ReadOnly)) {
+                QByteArray mountsData = mountsFile.readAll();
+                mountsFile.close();
+                isMounted = mountsData.contains(target.toUtf8());
             }
-            delete umountProcess;
 
-            overlays.removeAt(i);
-            if (overlays.isEmpty()) {
-                m_activeOverlays.remove(username);
+            if (isMounted) {
+                MountInfo info;
+                info.source = mountObj.value(QStringLiteral("source")).toString();
+                info.target = target;
+                userMounts.append(info);
+            } else {
+                qDebug() << "loadAndReconcileState: Removing inactive mount" << target;
+                changed = true;
             }
-            qDebug() << "Overlay mount torn down successfully for user" << username
-                                       << "gameId" << gameId;
-            return true;
+        }
+        if (!userMounts.isEmpty()) {
+            loadedMounts[username] = userMounts;
         }
     }
+    m_activeMounts = loadedMounts;
 
-    qDebug() << "No overlay mount found for user" << username << "gameId" << gameId;
-    return true;
+    QJsonArray runtimeUids = root.value(QStringLiteral("runtimeAccessUids")).toArray();
+    QSet<uint> loadedRuntimeUids;
+    for (const QJsonValue &val : runtimeUids) {
+        loadedRuntimeUids.insert(static_cast<uint>(val.toInteger()));
+    }
+    m_runtimeAccessSetForUid = loadedRuntimeUids;
+
+    if (changed) {
+        saveState();
+    }
+
+    qDebug() << "loadAndReconcileState: Restored" << m_usernameToUnitName.size() << "units,"
+             << m_modifiedDevices.size() << "devices," << m_activeMounts.size() << "mount users,"
+             << m_runtimeAccessSetForUid.size() << "runtime UIDs";
 }
 
-bool CouchPlayHelper::TeardownAllUserOverlays(const QString &username)
-{
-    qDebug() << "Tearing down all overlay mounts for user" << username;
-
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
-        qWarning() << "Invalid username format for user" << username;
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        qWarning() << "User" << username << "not authorized to manage mounts";
-        sendErrorReply(QDBusError::AccessDenied,
-            QStringLiteral("Not authorized to manage mounts"));
-        return false;
-    }
-
-    if (!m_activeOverlays.contains(username)) {
-        qDebug() << "No overlay mounts found for user" << username;
-        return true;
-    }
-
-    bool allSuccess = true;
-    QList<OverlayInfo> overlays = m_activeOverlays[username];
-
-    for (int i = overlays.size() - 1; i >= 0; --i) {
-        const OverlayInfo &info = overlays[i];
-
-        QProcess *umountProcess = m_ops->createProcess();
-        m_ops->startProcess(umountProcess, QStringLiteral("umount"), {info.mountPoint});
-        m_ops->waitForFinished(umountProcess, 10000);
-
-        if (m_ops->processExitCode(umountProcess) != 0) {
-            QProcess *lazyProcess = m_ops->createProcess();
-            m_ops->startProcess(lazyProcess, QStringLiteral("umount"),
-                {QStringLiteral("-l"), info.mountPoint});
-            m_ops->waitForFinished(lazyProcess, 10000);
-            if (m_ops->processExitCode(lazyProcess) != 0) {
-                QString errorMsg = QString::fromLocal8Bit(m_ops->readStandardError(lazyProcess));
-                qWarning() << "Failed to unmount" << info.mountPoint
-                                            << "for user" << username << ":" << errorMsg;
-                allSuccess = false;
-            }
-            delete lazyProcess;
-        }
-        delete umountProcess;
-    }
-
-    m_activeOverlays.remove(username);
-    qDebug() << "All overlay mounts torn down for user" << username;
-    return allSuccess;
-}
-
-bool CouchPlayHelper::WriteOverrideFile(const QString &username, const QString &gameId,
-                                         const QString &relativePath, const QByteArray &content)
-{
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied,
-            QStringLiteral("Not authorized to manage mounts"));
-        return false;
-    }
-
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("User '%1' does not exist").arg(username));
-        return false;
-    }
-
-    if (!IsInCouchPlayGroup(username)) {
-        sendErrorReply(QDBusError::AccessDenied,
-            QStringLiteral("User '%1' is not a CouchPlay user").arg(username));
-        return false;
-    }
-
-    if (relativePath.contains(QStringLiteral("..")) || relativePath.startsWith(QLatin1Char('/'))) {
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("Invalid relativePath: path traversal not allowed"));
-        return false;
-    }
-
-    QString upperDir;
-    for (const OverlayInfo &info : m_activeOverlays.value(username)) {
-        if (info.gameId == gameId) {
-            upperDir = info.upperDir;
-            break;
-        }
-    }
-
-    if (upperDir.isEmpty()) {
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("No overlay found for user '%1' and gameId '%2'").arg(username, gameId));
-        return false;
-    }
-
-    uint userUid = getUserUid(username);
-    struct passwd *pw = m_ops->getpwuid(userUid);
-    if (!pw) {
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Could not get user info for '%1'").arg(username));
-        return false;
-    }
-
-    QString targetPath = upperDir + QStringLiteral("/") + relativePath;
-
-    int lastSlash = targetPath.lastIndexOf(QLatin1Char('/'));
-    if (lastSlash > 0) {
-        QString targetDir = targetPath.left(lastSlash);
-        if (!m_ops->mkpath(targetDir)) {
-            sendErrorReply(QDBusError::Failed,
-                QStringLiteral("Failed to create directory: %1").arg(targetDir));
-            return false;
-        }
-        QString dirWalker = upperDir;
-        for (const QString &part : targetDir.mid(upperDir.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
-            dirWalker += QStringLiteral("/") + part;
-            m_ops->chown(dirWalker, userUid, pw->pw_gid);
-        }
-    }
-
-    if (!m_ops->writeFile(targetPath, content)) {
-        sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Failed to write file: %1").arg(targetPath));
-        return false;
-    }
-
-    m_ops->chown(targetPath, userUid, pw->pw_gid);
-    m_ops->chmod(targetPath, 0644);
-
-    qDebug() << "WriteOverrideFile: Wrote" << targetPath << "for" << username;
-    return true;
-}
-
-QString CouchPlayHelper::GetOverlayMountPoint(const QString &username, const QString &gameId)
-{
-    static QRegularExpression validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-    if (!validUsername.match(username).hasMatch()) {
-        return QString();
-    }
-
-    for (const OverlayInfo &info : m_activeOverlays.value(username)) {
-        if (info.gameId == gameId) {
-            return info.mountPoint;
-        }
-    }
-
-    return QString();
-}
+#include "CouchPlayHelper.moc"

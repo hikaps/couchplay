@@ -57,6 +57,7 @@ public:
     virtual bool waitForFinished(QProcess *process, int msecs) = 0;
     virtual int processExitCode(QProcess *process) = 0;
     virtual QByteArray readStandardError(QProcess *process) = 0;
+    virtual QByteArray readAllStandardOutput(QProcess *process) = 0;
 
     // Directory listing
     virtual QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) = 0;
@@ -105,6 +106,7 @@ public:
     bool waitForFinished(QProcess *process, int msecs) override;
     int processExitCode(QProcess *process) override;
     QByteArray readStandardError(QProcess *process) override;
+    QByteArray readAllStandardOutput(QProcess *process) override;
 
     // Directory listing
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override;

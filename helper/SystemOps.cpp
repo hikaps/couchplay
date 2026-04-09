@@ -117,6 +117,11 @@ QByteArray RealSystemOps::readStandardError(QProcess *process)
     return process->readAllStandardError();
 }
 
+QByteArray RealSystemOps::readAllStandardOutput(QProcess *process)
+{
+    return process->readAllStandardOutput();
+}
+
 // Directory listing
 QStringList RealSystemOps::entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters)
 {

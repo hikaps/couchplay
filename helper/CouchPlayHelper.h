@@ -10,11 +10,12 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 
 #include "SystemOps.h"
 
 // Forward declaration
-class RealSystemOps;
+class UnitMonitor;
 
 /**
  * CouchPlayHelper - Privileged D-Bus service for split-screen gaming
@@ -33,6 +34,8 @@ class CouchPlayHelper : public QObject, protected QDBusContext
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "io.github.hikaps.CouchPlayHelper")
+
+    friend class UnitMonitor;
 
 public:
     explicit CouchPlayHelper(SystemOps *ops = nullptr, QObject *parent = nullptr);
@@ -69,7 +72,7 @@ public Q_SLOTS:
 
     /**
      * Enable systemd linger for a user
-     * Required for machinectl shell to work properly
+     * Required for systemd-run to work properly
      *
      * @param username Username to enable linger for
      * @return true if successful
@@ -158,24 +161,26 @@ public Q_SLOTS:
     QString Version();
 
     /**
-     * Launch a gamescope instance as a specified user
+     * Launch a gamescope instance as a specified user via systemd-run
      *
      * This method handles all the complexity of running gamescope as any user:
      * - Sets up runtime access for couchplay group (once per compositor)
-     * - Spawns the process via machinectl shell
-     * - Returns the PID for tracking
+     * - Spawns the process via systemd-run transient unit
+     * - Returns the MainPID for tracking
      *
      * @param username User to run as
      * @param compositorUid UID of compositor user (for runtime access setup)
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Command to run inside gamescope (e.g., "steam -tenfoot")
      * @param environment Additional environment variables (VAR=value format)
-     * @return PID of launched process, or 0 on failure
+     * @param bindPaths Paths to bind-mount into the unit via --property=BindPaths=
+     * @return MainPID of launched process, or 0 on failure
      */
     qint64 LaunchInstance(const QString &username, uint compositorUid,
                           const QStringList &gamescopeArgs,
                           const QString &gameCommand,
-                          const QStringList &environment);
+                          const QStringList &environment,
+                          const QStringList &bindPaths);
 
     /**
      * Stop a launched instance
@@ -291,62 +296,6 @@ public Q_SLOTS:
     QString GetUserSteamId(const QString &username);
 
     /**
-     * Set up an overlay filesystem for a game
-     *
-     * Creates an overlay mount that merges a shared game directory with a
-     * user-specific upper layer. This allows multiple users to share game
-     * binaries while having isolated configuration files.
-     *
-     * @param username Target user (must exist, in couchplay group)
-     * @param gamePath Absolute path to shared game directory
-     * @param gameId Unique game identifier (e.g., "steam_12345")
-     * @param overrideFiles Relative paths to files needing per-user copies
-     * @param compositorUid UID of compositor user for ACL setup
-     * @return true if overlay mounted successfully
-     */
-    bool SetupOverlayMount(const QString &username, const QString &gamePath,
-                           const QString &gameId, const QStringList &overrideFiles,
-                           uint compositorUid);
-
-    /**
-     * Tear down a specific overlay mount
-     *
-     * @param username Target user
-     * @param gameId Game identifier to teardown
-     * @return true if unmounted successfully (or didn't exist)
-     */
-    bool TeardownOverlayMount(const QString &username, const QString &gameId);
-
-    /**
-     * Tear down all overlay mounts for a user
-     *
-     * @param username Target user
-     * @return true if all overlays unmounted successfully
-     */
-    bool TeardownAllUserOverlays(const QString &username);
-
-    /**
-     * Write a per-user override file into the overlay's upperdir
-     *
-     * @param username Target user
-     * @param gameId Game identifier
-     * @param relativePath Path relative to game root (validated for traversal)
-     * @param content File content to write
-     * @return true if file written successfully
-     */
-    bool WriteOverrideFile(const QString &username, const QString &gameId,
-                           const QString &relativePath, const QByteArray &content);
-
-    /**
-     * Get the mount point path for a user's game overlay
-     *
-     * @param username Target user
-     * @param gameId Game identifier
-     * @return Mount point path, or empty string if not found
-     */
-    QString GetOverlayMountPoint(const QString &username, const QString &gameId);
-
-    /**
      * Write content directly to a file in a user's directory
      *
      * Used for writing generated config files (e.g., shortcuts.vdf) directly
@@ -360,6 +309,16 @@ public Q_SLOTS:
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath,
                          const QString &username);
 
+Q_SIGNALS:
+    /**
+     * Emitted when a transient unit stops unexpectedly (crash, failure)
+     *
+     * @param username User whose instance stopped
+     * @param pid PID of the stopped process
+     * @param reason "crashed", "failed", or "exited" based on unit Result
+     */
+    void instanceStopped(const QString &username, qint64 pid, const QString &reason);
+
 private:
     bool checkAuthorization(const QString &action);
     bool isValidDevicePath(const QString &path);
@@ -369,17 +328,20 @@ private:
     uint getUserUid(const QString &username);
     QString getUserHome(const QString &username);
     QString getUserHomeByUid(uint uid);
-    QString buildInstanceCommand(const QString &username, uint compositorUid,
-                                  const QStringList &gamescopeArgs,
-                                  const QString &gameCommand,
-                                  const QStringList &environment);
+    QString generateServiceName(const QString &username);
+    qint64 startTransientUnit(const QString &username, uint compositorUid,
+                              const QStringList &gamescopeArgs,
+                              const QString &gameCommand,
+                              const QStringList &environment,
+                              const QStringList &bindPaths);
+    void stopServiceInstance(const QString &serviceName);
+    void monitorUnitState(const QString &serviceName, const QString &username, qint64 mainPid);
     QString computeMountTarget(const QString &source, const QString &alias,
                                const QString &userHome, const QString &compositorHome);
     bool validateUserPath(const QString &path, const QString &username,
                           const QString &callerName, QStringList &dirsToChown);
 
     QStringList m_modifiedDevices;
-    QMap<qint64, QProcess *> m_launchedProcesses;  // PID -> QProcess
 
     // Track active mounts per user for cleanup
     struct MountInfo {
@@ -388,19 +350,23 @@ private:
     };
     QMap<QString, QList<MountInfo>> m_activeMounts;  // username -> list of mounts
 
-    // Track active overlay mounts per user for cleanup
-    struct OverlayInfo {
-        QString gameId;
-        QString gamePath;
-        QString mountPoint;
-        QString upperDir;
-        QString workDir;
-    };
-    QMap<QString, QList<OverlayInfo>> m_activeOverlays;  // username -> list of overlays
+    // Track launched transient units
+    QMap<QString, QString> m_usernameToUnitName;  // username -> service name
+    QMap<qint64, QString> m_pidToUsername;         // PID -> username (reverse lookup for Stop/Kill)
+
+    // Units being explicitly stopped (suppresses crash detection)
+    QSet<QString> m_stoppingUnits;
+
+    // Per-unit D-Bus monitors for crash detection
+    QMap<QString, UnitMonitor*> m_monitors;
 
     // Track which compositor UIDs have runtime access set up
     QSet<uint> m_runtimeAccessSetForUid;
 
     // System operations abstraction (for testing/mocking)
     SystemOps *m_ops;
+
+    QString m_stateFilePath;
+    void saveState();
+    void loadAndReconcileState();
 };

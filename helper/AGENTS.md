@@ -6,7 +6,7 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 ## STRUCTURE
 
-**CouchPlayHelper.cpp (1595 lines):** Main service implementation - Polkit authorization, D-Bus slots, machinectl process spawning, device ownership, mount management
+**CouchPlayHelper.cpp (1595 lines):** Main service implementation - Polkit authorization, D-Bus slots, systemd-run transient unit spawning, device ownership, mount management
 
 **CouchPlayHelper.h (330 lines):** D-Bus interface definition - 15 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
 
@@ -19,7 +19,7 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 | D-Bus interface | CouchPlayHelper.h:30 | Q_CLASSINFO declares D-Bus interface name |
 | User creation | CouchPlayHelper.cpp:CreateUser() | useradd + systemd linger + group add |
 | Device ownership | CouchPlayHelper.cpp:ChangeDeviceOwner() | chown /dev/input/event* to gaming user |
-| Process spawning | CouchPlayHelper.cpp:LaunchInstance() | machinectl shell --user command |
+| Process spawning | CouchPlayHelper.cpp:LaunchInstance() | systemd-run --uid transient unit launch |
 | Mount management | CouchPlayHelper.cpp:MountSharedDirectories() | bind-mount for shared game directories |
 | ACL management | CouchPlayHelper.cpp:SetRuntimeAccess() | setfacl on wayland-0, pipewire-0 sockets |
 | Authorization | CouchPlayHelper.cpp:658 | TODO: Implement proper PolicyKit check |
@@ -39,8 +39,7 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 **Resource Tracking:**
 - m_modifiedDevices: QStringList of changed device paths
-- m_launchedProcesses: QMap<PID, QProcess*> for spawned instances
-- m_activeMounts: QMap<username, QList<MountInfo>> for tracking mounts
+- m_usernameToUnitName: QMap<username, serviceName> for tracking transient units
 - Cleanup in destructor: reset all devices, unmount all mounts
 
 **Error Handling:**
@@ -58,7 +57,7 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 ## UNIQUE PATTERNS
 
-**machinectl Spawning:** LaunchInstance() uses `machinectl shell --user <username> -- bash -c <command>` to run gamescope as any user while inheriting compositor's Wayland session.
+**systemd-run Spawning:** LaunchInstance() uses `systemd-run --uid <username> --unit couchplay-<username>.service` to launch gamescope as any user in a transient systemd unit.
 
 **Runtime ACL Dance:** SetRuntimeAccess() grants couchplay group read+execute on XDG_RUNTIME_DIR sockets (wayland-0, pipewire-0) so secondary players can access compositor resources.
 
