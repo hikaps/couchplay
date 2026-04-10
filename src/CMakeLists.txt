@@ -58,6 +58,7 @@ ecm_add_qml_module(couchplay
         qml/components/PresetSelector.qml
         qml/components/SelectableCard.qml
         qml/components/InfoCard.qml
+        qml/components/CollapsibleSection.qml
         qml/components/ActionCard.qml
         qml/components/dialogs/ResetSettingsDialog.qml
         qml/components/dialogs/InstallHelperDialog.qml
