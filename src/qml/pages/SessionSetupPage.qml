@@ -328,6 +328,7 @@ Kirigami.ScrollablePage {
                 contentItem: ColumnLayout {
                     id: cardContentLayout
                     spacing: Kirigami.Units.smallSpacing
+                    clip: true
 
                     Kirigami.FormLayout {
                         Layout.fillWidth: true

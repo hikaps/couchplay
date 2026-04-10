@@ -28,14 +28,34 @@ ColumnLayout {
 
     default property alias content: contentContainer.data
 
-    Controls.Button {
+    RowLayout {
         Layout.fillWidth: true
-        Layout.alignment: Qt.AlignLeft
-        flat: true
-        display: Controls.AbstractButton.TextBesideIcon
-        icon.name: root.expanded ? "arrow-down" : "arrow-right"
-        text: root.title
-        onClicked: root.expanded = !root.expanded
+        spacing: Kirigami.Units.smallSpacing
+
+        Kirigami.Icon {
+            source: root.expanded ? "arrow-down" : "arrow-right"
+            Layout.preferredWidth: Kirigami.Units.iconSizes.small
+            Layout.preferredHeight: Kirigami.Units.iconSizes.small
+            opacity: 0.7
+        }
+
+        Controls.Label {
+            text: root.title
+            font.weight: Font.Medium
+            opacity: 0.8
+        }
+
+        Kirigami.Separator {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            opacity: 0.3
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.expanded = !root.expanded
+        }
     }
 
     ColumnLayout {
