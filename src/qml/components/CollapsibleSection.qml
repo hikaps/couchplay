@@ -61,15 +61,10 @@ ColumnLayout {
     ColumnLayout {
         id: contentContainer
         Layout.fillWidth: true
-        Layout.topMargin: Kirigami.Units.smallSpacing
+        Layout.topMargin: root.expanded ? Kirigami.Units.smallSpacing : 0
+        Layout.preferredHeight: root.expanded ? -1 : 0
+        Layout.minimumHeight: root.expanded ? -1 : 0
         visible: root.expanded
-        opacity: root.expanded ? 1.0 : 0.0
         spacing: Kirigami.Units.smallSpacing
-
-        Behavior on opacity {
-            OpacityAnimator {
-                duration: Kirigami.Units.shortDuration
-            }
-        }
     }
 }
