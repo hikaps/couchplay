@@ -34,6 +34,9 @@ Kirigami.ScrollablePage {
     // Reference to heroic config manager for Heroic detection
     property var heroicConfigManager: null
 
+    // Reference to audio manager for audio status
+    property var audioManager: null
+
     // Internal preset manager if not provided externally
     PresetManager {
         id: internalPresetManager
@@ -477,22 +480,44 @@ Kirigami.ScrollablePage {
                 spacing: Kirigami.Units.smallSpacing
 
                 Kirigami.Icon {
-                    source: "dialog-ok-apply"
-                    color: Kirigami.Theme.positiveTextColor
+                    source: root.audioManager && root.audioManager.audioServer !== "" ? "dialog-ok-apply" : "dialog-error"
+                    color: root.audioManager && root.audioManager.audioServer !== "" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
                     Layout.preferredWidth: Kirigami.Units.iconSizes.small
                     Layout.preferredHeight: Kirigami.Units.iconSizes.small
                 }
 
                 Controls.Label {
-                    text: "PipeWire"
+                    text: root.audioManager && root.audioManager.audioServer !== ""
+                          ? root.audioManager.audioServer
+                          : i18nc("@info", "Not detected")
+                    color: root.audioManager && root.audioManager.audioServer !== ""
+                           ? Kirigami.Theme.positiveTextColor
+                           : Kirigami.Theme.negativeTextColor
                 }
             }
 
             Controls.Label {
                 Kirigami.FormData.label: i18nc("@label", "Multi-user routing")
-                text: i18nc("@info", "Audio from secondary users is routed via PipeWire TCP")
+                text: {
+                    if (!root.audioManager || root.audioManager.audioServer === "") {
+                        return i18nc("@info", "Not available — no audio server detected")
+                    }
+                    if (root.audioManager.multiUserConfigured) {
+                        return i18nc("@info", "Ready — socket ACLs configured")
+                    }
+                    return i18nc("@info", "Will be configured automatically at session start")
+                }
                 wrapMode: Text.WordWrap
                 opacity: 0.7
+                color: {
+                    if (!root.audioManager || root.audioManager.audioServer === "") {
+                        return Kirigami.Theme.negativeTextColor
+                    }
+                    if (root.audioManager.multiUserConfigured) {
+                        return Kirigami.Theme.positiveTextColor
+                    }
+                    return Kirigami.Theme.textColor
+                }
             }
         }
 

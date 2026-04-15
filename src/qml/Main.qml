@@ -133,6 +133,10 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    AudioManager {
+        id: audioManager
+    }
+
     globalDrawer: Kirigami.GlobalDrawer {
         id: drawer
         title: i18nc("@title", "CouchPlay")
@@ -202,7 +206,8 @@ Kirigami.ApplicationWindow {
                         presetManager: presetManager,
                         steamConfigManager: steamConfigManager,
                         settingsManager: settingsManager,
-                        heroicConfigManager: heroicConfigManager
+                        heroicConfigManager: heroicConfigManager,
+                        audioManager: audioManager
                     })
                 }
             }
@@ -303,7 +308,8 @@ Kirigami.ApplicationWindow {
             presetManager: presetManager,
             steamConfigManager: steamConfigManager,
             settingsManager: settingsManager,
-            heroicConfigManager: heroicConfigManager
+            heroicConfigManager: heroicConfigManager,
+            audioManager: audioManager
         })
     }
 }

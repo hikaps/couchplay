@@ -333,13 +333,6 @@ bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath, const QStr
         return false;
     }
 
-    if (!m_interface->isValid()) {
-        qCWarning(couchplayHelper) << "copyFileToUser: Interface not valid:"
-                                   << m_interface->lastError().message();
-        Q_EMIT errorOccurred(QStringLiteral("Helper interface not valid"));
-        return false;
-    }
-
     // Use QDBusMessage directly (more reliable than QDBusInterface::call)
     QDBusMessage msg = QDBusMessage::createMethodCall(
         SERVICE_NAME,
@@ -463,13 +456,6 @@ bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content, const QSt
     if (!m_available) {
         qCWarning(couchplayHelper) << "writeFileToUser: Helper not available";
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
-    }
-
-    if (!m_interface->isValid()) {
-        qCWarning(couchplayHelper) << "writeFileToUser: Interface not valid:"
-                                   << m_interface->lastError().message();
-        Q_EMIT errorOccurred(QStringLiteral("Helper interface not valid"));
         return false;
     }
 
