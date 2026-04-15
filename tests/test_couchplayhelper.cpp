@@ -1385,6 +1385,7 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
     m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
     m_ops->setFileExists(QStringLiteral("/run/user/1000"), true);
     m_ops->setFileExists(QStringLiteral("/run/user/1000/wayland-0"), true);
+    m_ops->setFileExists(QStringLiteral("/usr/bin/gamescope"), true);
     m_ops->setProcessExitCode(0);
     m_ops->setMockProcessStart(true);
     m_ops->setStandardOutput(QByteArray("12345\n"));

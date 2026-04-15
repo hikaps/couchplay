@@ -125,6 +125,7 @@ function(add_helper_test TEST_NAME)
 endfunction()
 
 # Add test executables
+add_couchplay_test(test_audiomanager)
 add_couchplay_test(test_commandverifier)
 add_couchplay_test(test_devicemanager)
 add_couchplay_test(test_gamescopeinstance)
