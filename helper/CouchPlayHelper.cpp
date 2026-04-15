@@ -163,31 +163,7 @@ CouchPlayHelper::~CouchPlayHelper()
     // Clean up: remove runtime access for all compositor UIDs
     for (uint uid : m_runtimeAccessSetForUid) {
         QString runtimeDir = QStringLiteral("/run/user/%1").arg(uid);
-        static const QString group = QStringLiteral("couchplay");
-        
-        // Helper lambda for removing ACL (can't call RemoveRuntimeAccess as it needs auth)
-        auto removeAcl = [&](const QString &path) {
-            if (!m_ops->fileExists(path)) return;
-            QProcess *proc = m_ops->createProcess();
-            m_ops->startProcess(proc, QStringLiteral("setfacl"),
-                {QStringLiteral("-x"), QStringLiteral("g:%1").arg(group), path});
-            m_ops->waitForFinished(proc, 5000);
-            delete proc;
-        };
-        
-        removeAcl(runtimeDir + QStringLiteral("/pulse/native"));
-        removeAcl(runtimeDir + QStringLiteral("/pulse"));
-        removeAcl(runtimeDir + QStringLiteral("/pipewire-0-manager"));
-        removeAcl(runtimeDir + QStringLiteral("/pipewire-0"));
-        
-        QDir dir(runtimeDir);
-        for (const QString &xauthFile : dir.entryList({QStringLiteral("xauth_*")}, QDir::Files)) {
-            removeAcl(runtimeDir + QStringLiteral("/") + xauthFile);
-        }
-        
-        removeAcl(runtimeDir + QStringLiteral("/wayland-0"));
-        removeAcl(runtimeDir);
-        
+        removeRuntimeAcls(runtimeDir);
         qDebug() << "Cleaned up runtime access for compositor UID" << uid;
     }
     m_runtimeAccessSetForUid.clear();
@@ -375,11 +351,8 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     }
 
     // Ensure couchplay group exists (create if needed)
-    QProcess *groupProcess = m_ops->createProcess();
-    m_ops->startProcess(groupProcess, QStringLiteral("groupadd"), {QStringLiteral("-f"), COUCHPLAY_GROUP});
-    m_ops->waitForFinished(groupProcess, 10000);
-    delete groupProcess;
     // -f flag means no error if group exists, so we don't check exit code
+    runCommand(QStringLiteral("groupadd"), {QStringLiteral("-f"), COUCHPLAY_GROUP});
 
     // Create user with useradd
     QProcess *process = m_ops->createProcess();
@@ -507,23 +480,7 @@ bool CouchPlayHelper::IsInCouchPlayGroup(const QString &username)
 
 bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_DELETE_USER)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to delete users"));
-        return false;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_DELETE_USER)) {
         return false;
     }
 
@@ -539,19 +496,12 @@ bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
     uid_t userUid = pw ? pw->pw_uid : 0;
 
     // Disable linger first
-    QProcess *lingerProcess = m_ops->createProcess();
-    m_ops->startProcess(lingerProcess, QStringLiteral("loginctl"),
-        {QStringLiteral("disable-linger"), username});
-    m_ops->waitForFinished(lingerProcess, 10000);
-    delete lingerProcess;
     // Don't fail if this doesn't work
+    runCommand(QStringLiteral("loginctl"), {QStringLiteral("disable-linger"), username});
 
     // Kill any running processes for the user
-    QProcess *pkillProcess = m_ops->createProcess();
-    m_ops->startProcess(pkillProcess, QStringLiteral("pkill"), {QStringLiteral("-u"), username});
-    m_ops->waitForFinished(pkillProcess, 10000);
-    delete pkillProcess;
     // Don't fail if there are no processes to kill
+    runCommand(QStringLiteral("pkill"), {QStringLiteral("-u"), username});
 
     // Wait a moment for processes to terminate
     QThread::msleep(500);
@@ -561,44 +511,29 @@ bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
     // but a different UID, and tries to access stale IPC resources from the old user.
     if (userUid > 0) {
         // Remove semaphores owned by the user
-        QProcess *ipcrm = m_ops->createProcess();
-        m_ops->startProcess(ipcrm, QStringLiteral("/bin/bash"),
+        runCommand(QStringLiteral("/bin/bash"),
             {QStringLiteral("-c"),
              QStringLiteral("ipcs -s | awk '$3 == %1 {print $2}' | xargs -r ipcrm -s").arg(userUid)});
-        m_ops->waitForFinished(ipcrm, 10000);
-        delete ipcrm;
 
         // Remove shared memory segments owned by the user
-        QProcess *shmrm = m_ops->createProcess();
-        m_ops->startProcess(shmrm, QStringLiteral("/bin/bash"),
+        runCommand(QStringLiteral("/bin/bash"),
             {QStringLiteral("-c"),
              QStringLiteral("ipcs -m | awk '$3 == %1 {print $2}' | xargs -r ipcrm -m").arg(userUid)});
-        m_ops->waitForFinished(shmrm, 10000);
-        delete shmrm;
 
         // Remove message queues owned by the user
-        QProcess *msgrm = m_ops->createProcess();
-        m_ops->startProcess(msgrm, QStringLiteral("/bin/bash"),
+        runCommand(QStringLiteral("/bin/bash"),
             {QStringLiteral("-c"),
              QStringLiteral("ipcs -q | awk '$3 == %1 {print $2}' | xargs -r ipcrm -q").arg(userUid)});
-        m_ops->waitForFinished(msgrm, 10000);
-        delete msgrm;
 
         // Clean up /tmp files owned by the user (Steam dumps, etc.)
-        QProcess *tmprm = m_ops->createProcess();
-        m_ops->startProcess(tmprm, QStringLiteral("find"),
+        runCommand(QStringLiteral("find"),
             {QStringLiteral("/tmp"), QStringLiteral("-user"), QString::number(userUid),
-             QStringLiteral("-delete")});
-        m_ops->waitForFinished(tmprm, 30000);
-        delete tmprm;
+             QStringLiteral("-delete")}, 30000);
 
         // Clean up /dev/shm files owned by the user
-        QProcess *shmfilerm = m_ops->createProcess();
-        m_ops->startProcess(shmfilerm, QStringLiteral("find"),
+        runCommand(QStringLiteral("find"),
             {QStringLiteral("/dev/shm"), QStringLiteral("-user"), QString::number(userUid),
              QStringLiteral("-delete")});
-        m_ops->waitForFinished(shmfilerm, 10000);
-        delete shmfilerm;
     }
 
     // Delete user with userdel
@@ -628,23 +563,7 @@ bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
 
 bool CouchPlayHelper::EnableLinger(const QString &username)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_ENABLE_LINGER)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to enable linger"));
-        return false;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_ENABLE_LINGER)) {
         return false;
     }
 
@@ -697,17 +616,23 @@ bool CouchPlayHelper::SetupRuntimeAccess(uint compositorUid)
         return false;
     }
 
-    static const QString group = QStringLiteral("couchplay");
     bool success = true;
 
-    // Helper lambda for setfacl
+    // Helper lambda for setfacl — removes stale entries first to avoid
+    // "Duplicate entries" errors from leftover GIDs across reinstalls.
     auto setAcl = [&](const QString &path, const QString &perm) -> bool {
         if (!m_ops->fileExists(path)) {
             return true;  // Not an error - optional paths
         }
+        QProcess *removeProc = m_ops->createProcess();
+        m_ops->startProcess(removeProc, QStringLiteral("setfacl"),
+            {QStringLiteral("-x"), QStringLiteral("g:%1").arg(COUCHPLAY_GROUP), path});
+        m_ops->waitForFinished(removeProc, 5000);
+        delete removeProc;
+
         QProcess *proc = m_ops->createProcess();
         m_ops->startProcess(proc, QStringLiteral("setfacl"),
-            {QStringLiteral("-m"), QStringLiteral("g:%1:%2").arg(group, perm), path});
+            {QStringLiteral("-m"), QStringLiteral("g:%1:%2").arg(COUCHPLAY_GROUP, perm), path});
         m_ops->waitForFinished(proc, 5000);
         bool aclOk = (m_ops->processExitCode(proc) == 0);
         if (!aclOk) {
@@ -749,7 +674,7 @@ bool CouchPlayHelper::SetupRuntimeAccess(uint compositorUid)
     if (m_ops->fileExists(pulseDir)) {
         QProcess *proc = m_ops->createProcess();
         m_ops->startProcess(proc, QStringLiteral("setfacl"),
-            {QStringLiteral("-m"), QStringLiteral("g:%1:x,m::x").arg(group), pulseDir});
+            {QStringLiteral("-m"), QStringLiteral("g:%1:x,m::x").arg(COUCHPLAY_GROUP), pulseDir});
         m_ops->waitForFinished(proc, 5000);
         if (m_ops->processExitCode(proc) != 0) {
             qWarning() << "Failed to set ACL on" << pulseDir << ":"
@@ -777,42 +702,55 @@ bool CouchPlayHelper::RemoveRuntimeAccess(uint compositorUid)
     }
 
     QString runtimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
-    static const QString group = QStringLiteral("couchplay");
-    bool success = true;
 
-    // Helper lambda for removing ACL
-    auto removeAcl = [&](const QString &path) -> bool {
-        if (!m_ops->fileExists(path)) {
-            return true;
-        }
-        QProcess *proc = m_ops->createProcess();
-        m_ops->startProcess(proc, QStringLiteral("setfacl"),
-            {QStringLiteral("-x"), QStringLiteral("g:%1").arg(group), path});
-        m_ops->waitForFinished(proc, 5000);
-        bool result = (m_ops->processExitCode(proc) == 0);
-        delete proc;
-        // Don't fail on removal errors - file may have been deleted
-        return result;
-    };
-
-    // Remove all ACLs we set (reverse order)
-    removeAcl(runtimeDir + QStringLiteral("/pulse/native"));
-    removeAcl(runtimeDir + QStringLiteral("/pulse"));
-    removeAcl(runtimeDir + QStringLiteral("/pipewire-0-manager"));
-    removeAcl(runtimeDir + QStringLiteral("/pipewire-0"));
-    
-    QDir dir(runtimeDir);
-    for (const QString &xauthFile : dir.entryList({QStringLiteral("xauth_*")}, QDir::Files)) {
-        removeAcl(runtimeDir + QStringLiteral("/") + xauthFile);
-    }
-    
-    removeAcl(runtimeDir + QStringLiteral("/wayland-0"));
-    success &= removeAcl(runtimeDir);
+    removeRuntimeAcls(runtimeDir);
 
     m_runtimeAccessSetForUid.remove(compositorUid);
     saveState();
 
-    return success;
+    return true;
+}
+
+void CouchPlayHelper::removeRuntimeAcls(const QString &runtimeDir)
+{
+    auto removeAcl = [&](const QString &path) {
+        if (!m_ops->fileExists(path)) return;
+        QProcess *proc = m_ops->createProcess();
+        m_ops->startProcess(proc, QStringLiteral("setfacl"),
+            {QStringLiteral("-x"), QStringLiteral("g:%1").arg(COUCHPLAY_GROUP), path});
+        m_ops->waitForFinished(proc, 5000);
+        if (m_ops->processExitCode(proc) != 0) {
+            qWarning() << "Failed to remove ACL on" << path << ":"
+                       << QString::fromLocal8Bit(m_ops->readStandardError(proc));
+        }
+        delete proc;
+    };
+
+    removeAcl(runtimeDir + QStringLiteral("/pulse/native"));
+
+    QString pulseDir = runtimeDir + QStringLiteral("/pulse");
+    if (m_ops->fileExists(pulseDir)) {
+        removeAcl(pulseDir);
+        QProcess *maskProc = m_ops->createProcess();
+        m_ops->startProcess(maskProc, QStringLiteral("setfacl"),
+            {QStringLiteral("-m"), QStringLiteral("m::---"), pulseDir});
+        m_ops->waitForFinished(maskProc, 5000);
+        if (m_ops->processExitCode(maskProc) != 0) {
+            qWarning() << "Failed to reset ACL mask on" << pulseDir << ":"
+                       << QString::fromLocal8Bit(m_ops->readStandardError(maskProc));
+        }
+        delete maskProc;
+    }
+
+    removeAcl(runtimeDir + QStringLiteral("/pipewire-0-manager"));
+    removeAcl(runtimeDir + QStringLiteral("/pipewire-0"));
+
+    for (const QString &xauthFile : m_ops->entryList(runtimeDir, {QStringLiteral("xauth_*")}, QDir::Files)) {
+        removeAcl(runtimeDir + QStringLiteral("/") + xauthFile);
+    }
+
+    removeAcl(runtimeDir + QStringLiteral("/wayland-0"));
+    removeAcl(runtimeDir);
 }
 
 QString CouchPlayHelper::Version()
@@ -823,6 +761,36 @@ QString CouchPlayHelper::Version()
 bool CouchPlayHelper::checkAuthorization(const QString &action)
 {
     return m_ops->checkAuthorization(action);
+}
+
+bool CouchPlayHelper::validateUserAndAuth(const QString &username, const QString &action)
+{
+    if (!s_validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs,
+            QStringLiteral("Invalid username format"));
+        return false;
+    }
+    if (!checkAuthorization(action)) {
+        sendErrorReply(QDBusError::AccessDenied,
+            QStringLiteral("Not authorized"));
+        return false;
+    }
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs,
+            QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+    return true;
+}
+
+bool CouchPlayHelper::runCommand(const QString &program, const QStringList &args, int timeoutMs)
+{
+    QProcess *proc = m_ops->createProcess();
+    m_ops->startProcess(proc, program, args);
+    m_ops->waitForFinished(proc, timeoutMs);
+    bool ok = (m_ops->processExitCode(proc) == 0);
+    delete proc;
+    return ok;
 }
 
 bool CouchPlayHelper::isValidDevicePath(const QString &path)
@@ -868,21 +836,7 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username, uint compositorU
                                         const QStringList &environment,
                                         const QStringList &bindPaths)
 {
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("Invalid username format"));
-        return 0;
-    }
-
-    if (!checkAuthorization(ACTION_LAUNCH_INSTANCE)) {
-        sendErrorReply(QDBusError::AccessDenied,
-            QStringLiteral("Not authorized to launch instances"));
-        return 0;
-    }
-
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_LAUNCH_INSTANCE)) {
         return 0;
     }
 
@@ -1009,6 +963,16 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username, uint composi
     }
     QString userUid = QString::number(pwd->pw_uid);
     QString compositorRuntimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
+    QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
+
+    // Ensure the gaming user's runtime directory exists (requires linger to be enabled).
+    // Without this, XDG_RUNTIME_DIR points to a non-existent path and PipeWire clients
+    // as well as gamescope (lockfiles) will fail silently.
+    if (!m_ops->fileExists(userRuntimeDir)) {
+        qInfo() << "Creating missing runtime directory" << userRuntimeDir << "for" << username;
+        m_ops->mkpath(userRuntimeDir);
+        m_ops->chown(userRuntimeDir, pwd->pw_uid, pwd->pw_gid);
+    }
 
     QStringList systemdRunArgs;
     systemdRunArgs << QStringLiteral("--unit") << serviceName;
@@ -1024,10 +988,15 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username, uint composi
     addEnv(QStringLiteral("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%1/bus").arg(userUid));
     addEnv(QStringLiteral("WAYLAND_DISPLAY=%1/wayland-0").arg(compositorRuntimeDir));
     addEnv(QStringLiteral("XDG_RUNTIME_DIR=/run/user/%1").arg(userUid));
-    // For audio, point to the compositor user's PipeWire and PulseAudio sockets
+    // For audio, point to the compositor user's PipeWire socket
     addEnv(QStringLiteral("PIPEWIRE_RUNTIME_DIR=%1").arg(compositorRuntimeDir));
-    // PulseAudio clients (including games via SDL) need PULSE_SERVER to find the socket
-    addEnv(QStringLiteral("PULSE_SERVER=unix:%1/pulse/native").arg(compositorRuntimeDir));
+    // PulseAudio compatibility: only set PULSE_SERVER if the pulse socket exists.
+    // SDL tries PulseAudio first when PULSE_SERVER is set; if the socket is missing,
+    // some SDL versions fail to fall back to PipeWire native, causing silent audio.
+    QString pulseSocket = compositorRuntimeDir + QStringLiteral("/pulse/native");
+    if (m_ops->fileExists(pulseSocket)) {
+        addEnv(QStringLiteral("PULSE_SERVER=unix:%1").arg(pulseSocket));
+    }
     for (const QString &var : environment) {
         int eqPos = var.indexOf(QLatin1Char('='));
         if (eqPos > 0) {
@@ -1041,8 +1010,25 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username, uint composi
         systemdRunArgs << QStringLiteral("--property=BindPaths=%1").arg(bp);
     }
 
+    // Resolve gamescope binary path dynamically — on immutable distros (Bazzite/rpm-ostree)
+    // the location may differ from /usr/bin/gamescope.
+    QString gamescopePath = QStringLiteral("/usr/bin/gamescope");
+    if (!m_ops->fileExists(gamescopePath)) {
+        QProcess *whichProc = m_ops->createProcess();
+        m_ops->startProcess(whichProc, QStringLiteral("which"),
+            {QStringLiteral("gamescope")});
+        m_ops->waitForFinished(whichProc, 3000);
+        if (m_ops->processExitCode(whichProc) == 0) {
+            QString resolved = QString::fromLocal8Bit(m_ops->readAllStandardOutput(whichProc)).trimmed();
+            if (!resolved.isEmpty()) {
+                gamescopePath = resolved;
+            }
+        }
+        delete whichProc;
+    }
+
     QStringList cmdArgs;
-    cmdArgs << QStringLiteral("/usr/bin/gamescope") << gamescopeArgs;
+    cmdArgs << gamescopePath << gamescopeArgs;
     cmdArgs << QStringLiteral("--") << QStringLiteral("/bin/bash")
             << QStringLiteral("-c") << gameCommand;
     systemdRunArgs << QStringLiteral("--") << cmdArgs;
@@ -1192,23 +1178,7 @@ QString CouchPlayHelper::computeMountTarget(const QString &source, const QString
 int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compositorUid,
                                              const QStringList &directories)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return 0;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to manage mounts"));
-        return 0;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return 0;
     }
 
@@ -1395,23 +1365,7 @@ int CouchPlayHelper::UnmountAllSharedDirectories()
 bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &targetPath,
                                       const QString &username)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to copy files"));
-        return false;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return false;
     }
 
@@ -1483,23 +1437,7 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
 bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &targetPath,
                                        const QString &username)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to write files"));
-        return false;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return false;
     }
 
@@ -1557,23 +1495,7 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
 
 bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &username)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to create directories"));
-        return false;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return false;
     }
 
@@ -1607,23 +1529,7 @@ bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &us
 
 bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &username, bool recursive)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to set directory ACLs"));
-        return false;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs,
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return false;
     }
 
@@ -1669,23 +1575,7 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
 
 bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
 {
-    // Validate username
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("Invalid username format"));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, 
-            QStringLiteral("Not authorized to set directory ACLs"));
-        return false;
-    }
-
-    // Check if user exists
-    if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
-            QStringLiteral("User '%1' does not exist").arg(username));
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return false;
     }
 
@@ -1757,6 +1647,12 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
             continue;
         }
 
+        QProcess *removeProc = m_ops->createProcess();
+        m_ops->startProcess(removeProc, QStringLiteral("setfacl"),
+            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), p});
+        m_ops->waitForFinished(removeProc, 5000);
+        delete removeProc;
+
         QStringList args;
         args << QStringLiteral("-m");
         args << QStringLiteral("u:%1:rx").arg(username);
@@ -1788,14 +1684,13 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
 {
     // Validate username
     if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, 
+        sendErrorReply(QDBusError::InvalidArgs,
             QStringLiteral("Invalid username format"));
         return QString();
     }
 
-    // Check if user exists
     if (!userExists(username)) {
-        sendErrorReply(QDBusError::InvalidArgs, 
+        sendErrorReply(QDBusError::InvalidArgs,
             QStringLiteral("User '%1' does not exist").arg(username));
         return QString();
     }
@@ -2019,7 +1914,22 @@ void CouchPlayHelper::loadAndReconcileState()
     QJsonArray runtimeUids = root.value(QStringLiteral("runtimeAccessUids")).toArray();
     QSet<uint> loadedRuntimeUids;
     for (const QJsonValue &val : runtimeUids) {
-        loadedRuntimeUids.insert(static_cast<uint>(val.toInteger()));
+        uint uid = static_cast<uint>(val.toInteger());
+        QString waylandSocket = QStringLiteral("/run/user/%1/wayland-0").arg(uid);
+        if (m_ops->fileExists(waylandSocket)) {
+            QProcess getfaclProc;
+            getfaclProc.start(QStringLiteral("getfacl"),
+                {QStringLiteral("-q"), QStringLiteral("-c"), waylandSocket});
+            getfaclProc.waitForFinished(3000);
+            QString aclOutput = QString::fromLocal8Bit(getfaclProc.readAllStandardOutput());
+            if (!aclOutput.contains(QStringLiteral("group:%1:").arg(COUCHPLAY_GROUP))) {
+                qDebug() << "loadAndReconcileState: Runtime ACLs missing on" << waylandSocket
+                         << "- will re-apply on next launch";
+                changed = true;
+                continue;
+            }
+        }
+        loadedRuntimeUids.insert(uid);
     }
     m_runtimeAccessSetForUid = loadedRuntimeUids;
 

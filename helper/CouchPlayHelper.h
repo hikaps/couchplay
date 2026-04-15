@@ -322,6 +322,8 @@ Q_SIGNALS:
 private:
     bool checkAuthorization(const QString &action);
     bool isValidDevicePath(const QString &path);
+    bool validateUserAndAuth(const QString &username, const QString &action);
+    bool runCommand(const QString &program, const QStringList &args, int timeoutMs = 10000);
 
     // Internal helpers (not exposed via D-Bus)
     bool userExists(const QString &username);
@@ -369,4 +371,5 @@ private:
     QString m_stateFilePath;
     void saveState();
     void loadAndReconcileState();
+    void removeRuntimeAcls(const QString &runtimeDir);
 };
