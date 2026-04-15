@@ -24,7 +24,7 @@ GamescopeInstance::~GamescopeInstance()
 
 bool GamescopeInstance::start(const QVariantMap &config, int index)
 {
-    if (m_helperPid > 0 || (m_process && m_process->state() != QProcess::NotRunning)) {
+    if (m_helperPid > 0) {
         Q_EMIT errorOccurred(QStringLiteral("Instance already running"));
         return false;
     }
@@ -55,16 +55,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         gameCommand = QStringLiteral("steam -tenfoot -steamdeck");
     }
     
-    // Create process
-    m_process = new QProcess(this);
-
-    connect(m_process, &QProcess::started, this, &GamescopeInstance::onProcessStarted);
-    connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, &GamescopeInstance::onProcessFinished);
-    connect(m_process, &QProcess::errorOccurred, this, &GamescopeInstance::onProcessError);
-    connect(m_process, &QProcess::readyReadStandardOutput, this, &GamescopeInstance::onReadyReadStandardOutput);
-    connect(m_process, &QProcess::readyReadStandardError, this, &GamescopeInstance::onReadyReadStandardError);
-
     // All instances go through the D-Bus helper service
     // This provides uniform handling for all users, including the compositor user
     
@@ -79,8 +69,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     if (!helper.isValid()) {
         qWarning() << "Instance" << m_index << "helper service not available";
         Q_EMIT errorOccurred(QStringLiteral("CouchPlay Helper service is not available. Please run: sudo ./scripts/install-helper.sh install"));
-        m_process->deleteLater();
-        m_process = nullptr;
         return false;
     }
     
@@ -103,8 +91,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     if (!reply.isValid()) {
         qWarning() << "Instance" << m_index << "helper LaunchInstance failed:" << reply.error().message();
         Q_EMIT errorOccurred(QStringLiteral("Failed to launch instance: %1").arg(reply.error().message()));
-        m_process->deleteLater();
-        m_process = nullptr;
         return false;
     }
     
@@ -112,8 +98,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     if (m_helperPid == 0) {
         qWarning() << "Instance" << m_index << "helper returned PID 0";
         Q_EMIT errorOccurred(QStringLiteral("Helper service failed to launch instance"));
-        m_process->deleteLater();
-        m_process = nullptr;
         return false;
     }
     
@@ -142,6 +126,8 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
 
 void GamescopeInstance::stop(int timeoutMs)
 {
+    Q_UNUSED(timeoutMs)
+
     // Handle helper-launched instances
     if (m_helperPid > 0) {
         setStatus(QStringLiteral("Stopping..."));
@@ -176,31 +162,6 @@ void GamescopeInstance::stop(int timeoutMs)
         Q_EMIT stopped();
         return;
     }
-
-    if (!m_process) {
-        return;
-    }
-
-    if (m_process->state() != QProcess::NotRunning) {
-        setStatus(QStringLiteral("Stopping..."));
-
-        m_process->terminate();
-
-        if (!m_process->waitForFinished(timeoutMs)) {
-            qWarning() << "Instance" << m_index << "did not stop gracefully, killing...";
-            m_process->kill();
-            m_process->waitForFinished(2000);
-        }
-    }
-
-    m_process->deleteLater();
-    m_process = nullptr;
-
-    m_gamescopePid = 0;
-
-    setStatus(QStringLiteral("Stopped"));
-    Q_EMIT runningChanged();
-    Q_EMIT stopped();
 }
 
 void GamescopeInstance::kill()
@@ -235,34 +196,11 @@ void GamescopeInstance::kill()
         Q_EMIT stopped();
         return;
     }
-
-    if (!m_process) {
-        return;
-    }
-
-    if (m_process->state() != QProcess::NotRunning) {
-        setStatus(QStringLiteral("Killing..."));
-        m_process->kill();
-        m_process->waitForFinished(2000);
-    }
-
-    m_process->deleteLater();
-    m_process = nullptr;
-
-    m_gamescopePid = 0;
-
-    setStatus(QStringLiteral("Killed"));
-    Q_EMIT runningChanged();
-    Q_EMIT stopped();
 }
 
 bool GamescopeInstance::isRunning() const
 {
-    // Check helper-launched instances
-    if (m_helperPid > 0) {
-        return true;  // Assume running if we have a PID (we can't easily check)
-    }
-    return m_process && m_process->state() == QProcess::Running;
+    return m_helperPid > 0;
 }
 
 void GamescopeInstance::setStatus(const QString &status)
@@ -406,75 +344,6 @@ qint64 GamescopeInstance::resolveGamescopePid(qint64 launchedPid)
     }
 
     return 0;
-}
-
-void GamescopeInstance::onProcessStarted()
-{
-    m_gamescopePid = m_process->processId();
-    Q_EMIT gamescopePidChanged();
-    setStatus(QStringLiteral("Running"));
-    Q_EMIT runningChanged();
-    Q_EMIT started();
-}
-
-void GamescopeInstance::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)
-{
-    QString statusStr;
-    if (exitStatus == QProcess::CrashExit) {
-        statusStr = QStringLiteral("Crashed (code %1)").arg(exitCode);
-    } else if (exitCode == 0) {
-        statusStr = QStringLiteral("Exited normally");
-    } else {
-        statusStr = QStringLiteral("Exited (code %1)").arg(exitCode);
-    }
-
-    setStatus(statusStr);
-    Q_EMIT runningChanged();
-    Q_EMIT stopped();
-}
-
-void GamescopeInstance::onProcessError(QProcess::ProcessError error)
-{
-    QString errorMsg;
-    switch (error) {
-    case QProcess::FailedToStart:
-        errorMsg = QStringLiteral("Failed to start gamescope - is it installed?");
-        break;
-    case QProcess::Crashed:
-        errorMsg = QStringLiteral("Gamescope crashed unexpectedly");
-        break;
-    case QProcess::Timedout:
-        errorMsg = QStringLiteral("Gamescope operation timed out");
-        break;
-    case QProcess::WriteError:
-        errorMsg = QStringLiteral("Failed to write to gamescope process");
-        break;
-    case QProcess::ReadError:
-        errorMsg = QStringLiteral("Failed to read from gamescope process");
-        break;
-    default:
-        errorMsg = QStringLiteral("Unknown process error");
-    }
-
-    setStatus(errorMsg);
-    Q_EMIT errorOccurred(errorMsg);
-    qWarning() << "Instance" << m_index << "error:" << errorMsg;
-}
-
-void GamescopeInstance::onReadyReadStandardOutput()
-{
-    QString output = QString::fromUtf8(m_process->readAllStandardOutput());
-    if (!output.trimmed().isEmpty()) {
-        Q_EMIT outputReceived(output);
-    }
-}
-
-void GamescopeInstance::onReadyReadStandardError()
-{
-    QString output = QString::fromUtf8(m_process->readAllStandardError());
-    if (!output.trimmed().isEmpty()) {
-        Q_EMIT outputReceived(QStringLiteral("[stderr] ") + output);
-    }
 }
 
 void GamescopeInstance::onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason)

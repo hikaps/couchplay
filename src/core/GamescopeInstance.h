@@ -4,7 +4,6 @@
 #pragma once
 
 #include <QObject>
-#include <QProcess>
 #include <QString>
 #include <QStringList>
 #include <QList>
@@ -79,7 +78,7 @@ public:
 
     // Property getters
     int index() const { return m_index; }
-    qint64 pid() const { return m_helperPid > 0 ? m_helperPid : (m_process ? m_process->processId() : 0); }
+    qint64 pid() const { return m_helperPid; }
     /**
      * @brief Get the PID of the gamescope process
      * @return PID, or 0 if not running
@@ -111,21 +110,14 @@ Q_SIGNALS:
     void started();
     void stopped();
     void errorOccurred(const QString &message);
-    void outputReceived(const QString &output);
 
 private Q_SLOTS:
-    void onProcessStarted();
-    void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void onProcessError(QProcess::ProcessError error);
-    void onReadyReadStandardOutput();
-    void onReadyReadStandardError();
     void onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason);
 
 private:
     void setStatus(const QString &status);
     static qint64 resolveGamescopePid(qint64 launchedPid);
 
-    QProcess *m_process = nullptr;
     int m_index = -1;
     QString m_status;
     QString m_username;
