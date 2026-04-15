@@ -2,13 +2,13 @@
 
 ## OVERVIEW
 
-D-Bus privileged service for split-screen gaming: user creation, device ownership, IPC orchestration (2 files, 1910 lines)
+D-Bus privileged service for split-screen gaming: user creation, device ownership, IPC orchestration, state persistence (2 files, 2320 lines)
 
 ## STRUCTURE
 
-**CouchPlayHelper.cpp (1595 lines):** Main service implementation - Polkit authorization, D-Bus slots, systemd-run transient unit spawning, device ownership, mount management
+**CouchPlayHelper.cpp (1945 lines):** Main service implementation - Polkit authorization, D-Bus slots, systemd-run transient unit spawning, device ownership, mount management, state persistence, runtime ACL cache verification, dynamic gamescope path resolution
 
-**CouchPlayHelper.h (330 lines):** D-Bus interface definition - 15 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
+**CouchPlayHelper.h (375 lines):** D-Bus interface definition - 15 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
 
 **SystemOps.h/cpp:** Abstraction layer for system calls (getpwnam, chown, mount, etc.) - enables mocking in tests
 
@@ -22,30 +22,23 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 | Process spawning | CouchPlayHelper.cpp:LaunchInstance() | systemd-run --uid transient unit launch |
 | Mount management | CouchPlayHelper.cpp:MountSharedDirectories() | bind-mount for shared game directories |
 | ACL management | CouchPlayHelper.cpp:SetRuntimeAccess() | setfacl on wayland-0, pipewire-0 sockets |
+| Runtime ACL cache | CouchPlayHelper.cpp:loadAndReconcileState() | Verifies ACLs on wayland-0 via getfacl, evicts stale UIDs |
+| Dynamic gamescope path | CouchPlayHelper.cpp:startTransientUnit() | Falls back to `which gamescope` if /usr/bin/gamescope missing |
+| Validation helpers | CouchPlayHelper.cpp:validateUserAndAuth() | Shared username+auth+userExists check (12 call sites) |
+| Process helper | CouchPlayHelper.cpp:runCommand() | Shared QProcess spawn/await (8 call sites) |
+| ACL cleanup | CouchPlayHelper.cpp:removeRuntimeAcls() | Shared method for runtime directory ACL reset |
+| State persistence | CouchPlayHelper.cpp:saveState()/loadAndReconcileState() | JSON at /run/couchplay/state.json |
 | Authorization | CouchPlayHelper.cpp:658 | TODO: Implement proper PolicyKit check |
 
 ## CONVENTIONS
 
-**D-Bus Pattern:**
-- Q_CLASSINFO("D-Bus Interface", "io.github.hikaps.CouchPlayHelper")
-- public Q_SLOTS: all methods exposed via D-Bus
-- QDBusContext: inherited for checking caller identity
+**D-Bus Pattern:** Q_CLASSINFO declares interface name. public Q_SLOTS exposed via D-Bus. QDBusContext inherited for caller identity.
 
-**Privileged Operations:**
-- User management via QProcess calling useradd/userdel/usermod
-- Device ownership via QProcess calling chown/chgrp
-- Mount operations via QProcess calling mount/umount
-- ACL operations via QProcess calling setfacl/getfacl
+**Privileged Operations:** All via QProcess calling useradd/userdel/usermod, chown/chgrp, mount/umount, setfacl/getfacl.
 
-**Resource Tracking:**
-- m_modifiedDevices: QStringList of changed device paths
-- m_usernameToUnitName: QMap<username, serviceName> for tracking transient units
-- Cleanup in destructor: reset all devices, unmount all mounts
+**Resource Tracking:** m_modifiedDevices (changed device paths), m_usernameToUnitName (transient units). Destructor resets all devices + unmounts all mounts.
 
-**Error Handling:**
-- Return false/0 for failure, true/non-zero for success
-- qWarning() for logged errors (helper runs as daemon)
-- No user-facing UI - all errors return to GUI via D-Bus
+**Error Handling:** Return false/0 for failure. qWarning() for logged errors. No UI, all errors return via D-Bus.
 
 ## ANTI-PATTERNS
 
@@ -63,13 +56,19 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 **Mount Aliasing:** MountSharedDirectories() supports both home-relative paths (mounted at same relative location) and absolute paths with explicit aliases or ~/.couchplay/mounts/ default.
 
-**Cleanup Contract:** Helper destructor removes all device ownership changes and unmounts all mounts - ensures no lingering privileged state after app exit.
+**Cleanup Contract:** Destructor removes all device ownership changes and unmounts all mounts, ensuring no lingering privileged state.
 
 **IPC Cleanup on DeleteUser:** Removes semaphores, shared memory, message queues owned by user to prevent "Permission denied" errors if new user gets same name.
 
-**Reverse Mount Unmounting:** UnmountSharedDirectories() processes mounts in reverse order for nested mount handling.
+**Reverse Mount Unmounting:** Processes mounts in reverse order for nested mount handling. Falls back to `umount -l` on failure.
 
-**Lazy Umount Fallback:** Tries `umount` first, falls back to `umount -l` on failure.
+**Runtime ACL Verification:** On helper restart, validates cached runtime UIDs by checking actual ACLs on wayland socket via getfacl. Evicts stale entries to force re-application.
+
+**Dynamic Gamescope Resolution:** Checks /usr/bin/gamescope first, falls back to `which gamescope` for immutable distros where gamescope lives outside /usr/bin.
+
+**Stale Unit Recovery:** When systemd-run fails with "already loaded", stops + resets the failed unit, then retries after 200ms.
+
+**Remove-Before-Set ACL Pattern:** Before setting ACLs (setfacl -m), removes stale entries (setfacl -x) to avoid "Duplicate entries" errors from unresolved GIDs.
 
 ## NOTES
 

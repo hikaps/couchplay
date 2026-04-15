@@ -4,19 +4,21 @@
 Core business logic layer: device management, session orchestration, user/monitor/audio management
 
 ## STRUCTURE
-**14 Manager Classes:**
-- `DeviceManager` (954 lines) - Input device detection from /proc/bus/input/devices
-- `SessionRunner` (823 lines) - Orchestrates multiple GamescopeInstance launches
+**15 Manager Classes:**
+- `DeviceManager` (~1008 lines) - Input device detection from /proc/bus/input/devices
+- `SessionRunner` (~1229 lines) - Orchestrates multiple GamescopeInstance launches
 - `SessionManager` - Session profiles, instance configuration
-- `GamescopeInstance` - Gamescope process wrapper with arg building
+- `GamescopeInstance` (~380 lines) - Gamescope arg building, delegates execution to D-Bus helper
 - `UserManager` - Linux user creation/management
 - `MonitorManager` - Display detection via RandR
-- `AudioManager` - PipeWire audio routing
+- `AudioManager` - PipeWire/PulseAudio audio routing and socket ACL checks
 - `SettingsManager` - KConfig-based app settings
 - `PresetManager` - Launch preset profiles
 - `WindowManager` - Window positioning via KWin
 - `SteamConfigManager` (599 lines) - VDF parsing, shortcuts syncing
+- `HeroicConfigManager` (621 lines) - Heroic launcher config management
 - `CommandVerifier` - Steam game command detection
+- `VirtualDeviceWatcher` - Virtual device monitoring
 - `Logging` - Application logging
 
 **Data Structures:** `InputDevice`, `InstanceConfig`, `SessionProfile`, `SteamPaths`, `SteamShortcut` (Q_GADGET structs)
@@ -37,16 +39,13 @@ Core business logic layer: device management, session orchestration, user/monito
 | Gamescope args | `GamescopeInstance::buildGamescopeArgs()` | Constructs command line |
 | VDF parsing | `SteamConfigManager::parseShortcutsVdf()` | Steam format parser |
 | Profile persistence | `SessionManager::saveProfile()` / `loadProfile()` | JSON in ~/.local/share/couchplay/profiles/ |
+| Audio routing | `AudioManager::checkConfiguration()` | Detects PipeWire/PulseAudio, checks socket ACLs |
 
 ## CONVENTIONS
 
 **Manager Pattern:** QObject → QML_ELEMENT, Q_PROPERTY for data, Q_INVOKABLE for actions, dependency injection with `*Changed` signals, emit `errorOccurred(QString)` for errors
 
 **Struct Pattern (Q_GADGET):** Plain data structs, Q_PROPERTY with MEMBER, Q_DECLARE_METATYPE for QVariant conversion, no logic
-
-**Signal Naming:** Past tense state changes (`devicesChanged()`), event-based (`deviceAssigned()`), `errorOccurred(QString message)`
-
-**Member Variables:** `m_` prefix, pointers = `nullptr`, bools = `false`
 
 ## ANTI-PATTERNS
 
@@ -55,9 +54,8 @@ Core business logic layer: device management, session orchestration, user/monito
 - No blocking I/O in main thread
 - No hardcoded paths: use QStandardPaths (~/.local/share/couchplay/)
 - No QML logic: business logic in C++ only
+- No direct process management: GamescopeInstance delegates to D-Bus helper only
 - No circular dependencies: SessionRunner → SessionManager (unidirectional)
-- No direct process management: use `QProcess` via `GamescopeInstance`
-- No manual signal/slot connects: prefer Qt5 connect syntax
 
 ## ARCHITECTURE NOTES
 
@@ -66,19 +64,22 @@ Core business logic layer: device management, session orchestration, user/monito
 SessionRunner (orchestrator)
   ├─> SessionManager, DeviceManager, GamescopeInstance (N)
   ├─> UserManager, WindowManager
-  └─> SteamConfigManager, CouchPlayHelperClient
+  ├─> SteamConfigManager, HeroicConfigManager
+  └─> CouchPlayHelperClient (D-Bus, all process execution)
 ```
+
+GamescopeInstance no longer manages QProcess directly. All process launch/stop goes through CouchPlayHelperClient → helper/ D-Bus service.
 
 **Device Assignment Flow:** DeviceManager detects → stableId → user assigns via QML → SessionRunner starts → Helper transfers ownership via D-Bus → hotplug reconnection → auto-restore
 
 ## COMPLEXITY HOTSPOTS
 
-**DeviceManager.cpp (954 lines):**
+**DeviceManager.cpp (~1008 lines):**
 - `onDebounceTimeout()` (lines 72-181): 4-phase hotplug state machine (store old → parse new → detect disconnection → detect reconnection)
 - `parseDevices()` (lines 190-340): Regex-based `/proc/bus/input/devices` parser
 - `detectDeviceType()`: Ghost device filtering (opens device, queries EVIOCGBIT)
 
-**SessionRunner.cpp (837 lines):**
+**SessionRunner.cpp (~1229 lines):**
 - `start()` (lines 145-300): 6-phase orchestration (validation → layout → device ownership → mounts → ACLs → instance creation)
 - `setupLauncherAccess()`: Conditional ACL + Steam shortcuts sync
 

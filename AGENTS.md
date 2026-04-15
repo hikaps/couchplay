@@ -4,20 +4,20 @@
 
 ## Build Environment
 
-Developed on **Bazzite** (immutable Fedora with Wayland/KDE). Build in distrobox container, run on host.
+Developed on **Bazzite** (immutable Fedora with Wayland/KDE). Build directly on the host or in a development container.
 
 ```bash
 # Configure (run from project root)
-distrobox enter fedora-dev -- cmake -B build
+cmake -B build
 
 # Build
-distrobox enter fedora-dev -- cmake --build build
+cmake --build build
 
 # Run (on HOST - gamescope requires host environment)
 ./build/bin/couchplay
 
 # Tests
-distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure
 
 # Single test: ctest --test-dir build -R DeviceManagerTest --output-on-failure
 # List tests: ctest --test-dir build -N
@@ -28,10 +28,10 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 
 ```
 ./
-├── src/core/       # 15 manager classes (30 files, 11.5K lines) - SEE ./src/core/AGENTS.md
+├── src/core/       # 15 manager classes (30 files, ~10.5K lines) - SEE ./src/core/AGENTS.md
 ├── src/qml/        # UI layer (pages + components) - SEE ./src/qml/AGENTS.md
-├── helper/         # Privileged D-Bus service - SEE ./helper/AGENTS.md
-├── tests/          # QtTest unit tests (11 files, 7.2K lines) - SEE ./tests/AGENTS.md
+├── helper/         # Privileged D-Bus service (CouchPlayHelper.cpp 1945 lines) - SEE ./helper/AGENTS.md
+├── tests/          # QtTest unit tests (14 files, ~9.6K lines) - SEE ./tests/AGENTS.md
 ├── src/dbus/       # D-Bus client for helper service
 └── data/           # Icons, polkit policy, D-Bus service files
 ```
@@ -46,7 +46,7 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 | Privileged helper | `./helper/AGENTS.md` | D-Bus service, user mgmt, device ownership |
 | Device detection | `src/core/DeviceManager.{cpp,h}` | Parses `/proc/bus/input/devices` |
 | Session orchestration | `src/core/SessionRunner.{cpp,h}` | Starts/stops multiple GamescopeInstance |
-| Gamescope wrapping | `src/core/GamescopeInstance.{cpp,h}` | Process + argument building |
+| Gamescope wrapping | `src/core/GamescopeInstance.{cpp,h}` | Argument building + D-Bus launch |
 | D-Bus client | `src/dbus/CouchPlayHelperClient.{cpp,h}` | Communicates with helper service |
 | QML entry point | `src/qml/Main.qml` | Creates all manager instances |
 | Privileged actions | `data/polkit/io.github.hikaps.couchplay.policy` | Polkit action definitions |
@@ -57,7 +57,7 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 |---------|---------|-------------|
 | DeviceManager | Input device detection/assignment | `deviceAssigned`, `devicesChanged`, `deviceReconnected` |
 | SessionManager | Session profiles, instance config | `currentLayoutChanged`, `instancesChanged`, `profileLoaded` |
-| GamescopeInstance | Gamescope process wrapper | `started`, `stopped`, `configChanged`, `statusChanged` |
+| GamescopeInstance | Gamescope launch (args + D-Bus) | `started`, `stopped`, `configChanged`, `statusChanged` |
 | SessionRunner | Orchestrates multiple instances | `sessionStarted`, `sessionStopped`, `instanceStarted` |
 | UserManager | Linux user management | `usersChanged`, `userCreated` |
 | MonitorManager | Display detection | `monitorsChanged` |
@@ -118,12 +118,17 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 - Emit `errorOccurred(QString)` for user-facing errors
 - Clean up in destructors
 
+### Extracted Helpers (helper/)
+- `validateUserAndAuth()` — shared 3-check pattern for D-Bus slots (username validity, user exists, Polkit auth)
+- `runCommand()` — shared QProcess spawn/await pattern (start, waitForFinished, return output)
+
 ## ANTI-PATTERNS (Project-Specific)
 
 - **No linting config**: No `.clang-format`, `.clang-tidy`, `.editorconfig`
 - **Test source inclusion**: Tests include source files directly instead of linking targets (see `tests/CMakeLists.txt`)
 - **Gamescope host requirement**: App must run on host, not in container (gamescope needs host display)
 - **Incomplete Polkit**: Helper service has `TODO: Implement proper PolicyKit authorization check`
+- **Missing i18n infrastructure**: `KF6::I18n` linked but no `po/` directory or translation files exist
 
 ## UNIQUE PATTERNS
 
@@ -132,9 +137,9 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 - Loads QML with `engine.loadFromModule()` instead of `load("qrc:/Main.qml")`
 
 ### D-Bus Helper Pattern
-- Main GUI (`couchplay`) communicates with privileged helper (`couchplay-helper`) via D-Bus
+- GUI (`couchplay`) communicates with privileged helper (`couchplay-helper`) via D-Bus
 - Helper uses Polkit for authorization (see `data/polkit/io.github.hikaps.couchplay.policy`)
-- Helper performs device ownership transfer, user creation, PipeWire configuration
+- Performs device ownership transfer, user creation, PipeWire configuration
 
 ### Device Stable IDs
 - DeviceManager generates stable device IDs from physical path info (vendor/product IDs, phys path)
@@ -146,16 +151,18 @@ distrobox enter fedora-dev -- ctest --test-dir build --output-on-failure
 - **develop**: Main development branch, all PRs merge here
 - **main**: Stable releases only
 - **Feature branches**: Pattern `feature/<feature-name>`
-- **Releases**: Tag and release only from `main`, never from `develop`
-  1. Merge `develop` into `main`
-  2. Tag release on `main`
-  3. Push tag to trigger release workflow
+- **Releases**: Tag and release only from `main`, never from `develop`. Merge develop into main, tag, push.
 
 ## NOTES
 
-- **App ID**: `io.github.hikaps.couchplay` (used in D-Bus, QML module, desktop file)
-- **Local docs**: `PLAN.md` contains architecture overview and feature roadmap
+- **App ID**: `io.github.hikaps.couchplay` (D-Bus, QML module, desktop file)
+- **Local docs**: `PLAN.md` has architecture overview and feature roadmap
 - **Build artifacts**: Ignore `build/` directory
-- **Test files in root**: `test_*.cpp` files are temporary/experimental, not part of test suite
-- **CI exclusions**: CI skips 6/13 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
+- **Root test files**: `test_*.cpp` are temporary/experimental, not part of test suite
+- **CI exclusions**: CI skips 7/14 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
 - **Security TODO**: `helper/SystemOps.cpp:checkAuthorization()` stub returns true (Polkit not implemented)
+
+## GIT META
+
+- **Commit**: `8d9a171`
+- **Branch**: `fix/ui`

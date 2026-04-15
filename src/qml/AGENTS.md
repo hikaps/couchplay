@@ -23,7 +23,8 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 | Form layouts | SettingsPage.qml | Kirigami.FormLayout patterns |
 | Custom delegates | PresetSelector.qml | ComboBox with icons |
 | Hover effects | SelectableCard.qml | HoverHandler + animations |
-| Theme system | All files | Kirigami.Theme properties |
+| Audio settings UI | SettingsPage.qml:468-522 | 3-state audio detection (no server / detected / configured) |
+| Session launch | HomePage.qml | Gamescope availability check, session start/stop buttons |
 
 ## CONVENTIONS
 
@@ -32,29 +33,16 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 - Pages declare `required property var managerName`
 - Navigation: `pageStack.push(pageComponent, { manager: instance })`
 
+**Computed Properties:** Extract repeated null checks into named bool properties.
+- Example: `property bool audioServerDetected: root.audioManager && root.audioManager.audioServer !== ""`
+- Use in bindings instead of re-checking the same condition 5 times (see SettingsPage audio section)
+
 **Component Design:**
 - Use `Kirigami.AbstractCard` (not Kirigami.Card) to avoid clipping
 - Document with `/** */` usage block
 - `default property alias content: container.data` for slots
 - Hover via `HoverHandler`, not MouseArea
 - Signals: `clicked()`, `presetSelected(string id)`
-
-**Layout & Spacing:**
-- `Kirigami.Units` for sizing (gridUnit, largeSpacing, smallSpacing)
-- Forms: `Kirigami.FormLayout` with `Kirigami.FormData.isSection: true`
-- Responsive: `wideMode: root.width > Kirigami.Units.gridUnit * 30`
-- Grid: `Math.floor(root.width / (Kirigami.Units.gridUnit * 16))`
-
-**Kirigami Components:**
-- Page: `Kirigami.ScrollablePage` with `title: i18nc("@title", "...")`
-- Nav: `Kirigami.GlobalDrawer` in `globalDrawer`
-- Cards: `Kirigami.AbstractCard` (never Kirigami.Card)
-- Messages: `Kirigami.PlaceholderMessage`, `Kirigami.InlineMessage`, `Kirigami.Chip`
-
-**Styling:**
-- Colors: `Kirigami.Theme.backgroundColor`, `Kirigami.Theme.highlightColor`, `Kirigami.Theme.hoverColor`
-- Animations: `Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }`
-- Secondary text opacity: `0.7`
 
 ## ANTI-PATTERNS
 
@@ -64,6 +52,7 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 - Kirigami.Card: Always use AbstractCard
 - String i18n: Use i18nc with context, not + operator
 - Page stacking: Use Main.qml helpers, don't pageStack.push() directly
+- Repeated null checks: Extract to computed property (e.g., `audioServerDetected`)
 
 ## UNIQUE PATTERNS
 
@@ -88,14 +77,4 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 - `@info` — Explanatory text
 - `@action:button` — Button labels
 
-**Common Patterns:**
-```qml
-// Notification
-applicationWindow().showPassiveNotification(i18nc("@info", "Message"), "long")
-
-// Empty state
-Kirigami.PlaceholderMessage { visible: listView.count === 0 }
-
-// Footer button
-footerLeadingComponent: Controls.Button { icon.name: "folder-add" }
-```
+**Common Patterns:** `applicationWindow().showPassiveNotification()` for toasts, `Kirigami.PlaceholderMessage` for empty states, `footerLeadingComponent` for footer actions.
