@@ -17,7 +17,6 @@
 WindowManager::WindowManager(QObject *parent)
     : QObject(parent)
 {
-    // Check if KWin is available
     QDBusInterface kwin(
         QStringLiteral("org.kde.KWin"),
         QStringLiteral("/KWin"),
@@ -32,12 +31,11 @@ WindowManager::WindowManager(QObject *parent)
         qDebug() << "WindowManager: KWin D-Bus interface available";
     }
     
-    // Create the monitoring timer (but don't start it yet)
     m_monitorTimer = new QTimer(this);
     m_monitorTimer->setInterval(MONITOR_INTERVAL_MS);
     connect(m_monitorTimer, &QTimer::timeout, this, &WindowManager::checkForNewWindows);
 
-    // Clean up stale KWin scripts from previous runs that may have crashed
+    // Clean up stale KWin scripts from previous runs
     QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
     QString couchplayRuntimeDir = runtimeDir + QStringLiteral("/couchplay");
     QDir staleDir(couchplayRuntimeDir);
@@ -86,8 +84,6 @@ QStringList WindowManager::findAllGamescopeWindows()
         return results;
     }
 
-    // Use WindowsRunner to search for windows
-    // The Match method returns windows matching a search query
     QDBusInterface windowsRunner(
         QStringLiteral("org.kde.KWin"),
         QStringLiteral("/WindowsRunner"),
@@ -137,7 +133,6 @@ QStringList WindowManager::findAllGamescopeWindows()
         quint32 relevance;
         double score;
         
-        // Read the first 5 fields we care about
         arg >> matchId >> caption >> iconName >> relevance >> score;
         
         // Skip the properties dict - it contains complex types that are hard to parse
@@ -151,7 +146,6 @@ QStringList WindowManager::findAllGamescopeWindows()
         if (matchId.contains(QLatin1Char('{'))) {
             QString uuid = matchId.mid(matchId.indexOf(QLatin1Char('{')));
             
-            // Get window info to check if it's a gamescope window
             QVariantMap info = getWindowInfo(uuid);
             QString desktopFile = info.value(QStringLiteral("desktopFile")).toString();
             QString resourceClass = info.value(QStringLiteral("resourceClass")).toString();
@@ -225,7 +219,6 @@ bool WindowManager::positionWindow(const QString &windowId, const QRect &geometr
 
     qDebug() << "WindowManager: Positioning window" << windowId << "to" << geometry;
 
-    // Use KWin scripting to position the window
     return executePositionScript(windowId, geometry);
 }
 
@@ -239,7 +232,6 @@ void WindowManager::queuePositionRequest(int requestId, const QRect &geometry,
         return;
     }
     
-    // Check if a request with this ID already exists
     for (int i = 0; i < m_pendingRequests.size(); ++i) {
         if (m_pendingRequests[i].requestId == requestId) {
             qWarning() << "WindowManager: Replacing existing request" << requestId;
@@ -261,10 +253,7 @@ void WindowManager::queuePositionRequest(int requestId, const QRect &geometry,
              << "excluding" << excludeWindowIds.size() << "windows"
              << "timeout:" << timeoutMs << "ms";
     
-    // Start monitoring if not already running
     startMonitoring();
-    
-    // Do an immediate check in case the window is already there
     checkForNewWindows();
 }
 
@@ -305,7 +294,6 @@ void WindowManager::checkForNewWindows()
     
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     
-    // Check for expired requests first
     QList<int> expiredRequestIds;
     for (int i = m_pendingRequests.size() - 1; i >= 0; --i) {
         if (m_pendingRequests[i].expiresAt <= now) {
@@ -314,7 +302,6 @@ void WindowManager::checkForNewWindows()
         }
     }
     
-    // Emit timeout signals for expired requests
     for (int requestId : expiredRequestIds) {
         qWarning() << "WindowManager: Position request" << requestId << "timed out";
         Q_EMIT positioningTimedOut(requestId);
@@ -325,16 +312,13 @@ void WindowManager::checkForNewWindows()
         return;
     }
     
-    // Find all current gamescope windows
     QStringList currentWindows = findAllGamescopeWindows();
     
-    // Process pending requests in order (FIFO)
-    // We iterate carefully since we may remove elements
+    // Process pending requests in order (FIFO) — we may remove elements during iteration
     int i = 0;
     while (i < m_pendingRequests.size() && !currentWindows.isEmpty()) {
         const PositionRequest &request = m_pendingRequests[i];
         
-        // Find a window that matches this request (not in exclude list and not already known)
         QString matchedWindowId;
         for (const QString &windowId : currentWindows) {
             if (!request.excludeWindowIds.contains(windowId) && 
@@ -345,19 +329,15 @@ void WindowManager::checkForNewWindows()
         }
         
         if (!matchedWindowId.isEmpty()) {
-            // Found a match - position the window
             qDebug() << "WindowManager: Matched window" << matchedWindowId 
                      << "to request" << request.requestId;
             
             bool success = positionWindow(matchedWindowId, request.geometry);
             
-            // Track this window as known (positioned)
             m_knownWindowIds.append(matchedWindowId);
             
-            // Remove from available windows for subsequent requests
             currentWindows.removeAll(matchedWindowId);
             
-            // Remove this request and emit signal
             int requestId = request.requestId;
             m_pendingRequests.removeAt(i);
             
@@ -369,7 +349,6 @@ void WindowManager::checkForNewWindows()
             
             // Don't increment i since we removed the current element
         } else {
-            // No match for this request, try next
             ++i;
         }
     }
@@ -395,9 +374,6 @@ void WindowManager::stopMonitoringIfEmpty()
 
 bool WindowManager::executePositionScript(const QString &windowId, const QRect &geometry)
 {
-    // Create a temporary KWin script to position the window
-    // KWin scripts use JavaScript and can access window properties
-    
     QString scriptContent = QStringLiteral(R"(
 (function() {
     var targetUuid = "%1";
@@ -447,7 +423,6 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
     scriptFile.write(scriptContent.toUtf8());
     scriptFile.close();
     
-    // Load the script via KWin D-Bus
     QDBusInterface scripting(
         QStringLiteral("org.kde.KWin"),
         QStringLiteral("/Scripting"),
@@ -462,11 +437,9 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
         return false;
     }
     
-    // Generate a unique plugin name for this positioning operation
     QString pluginName = QStringLiteral("couchplay-position-%1").arg(
         QString::number(QDateTime::currentMSecsSinceEpoch()));
     
-    // Load the script
     QDBusReply<int> loadReply = scripting.call(QStringLiteral("loadScript"), scriptPath, pluginName);
     
     if (!loadReply.isValid()) {
@@ -479,17 +452,14 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
     int scriptId = loadReply.value();
     qDebug() << "WindowManager: Loaded positioning script with ID" << scriptId;
     
-    // Start the scripts (this actually executes them)
     scripting.call(QStringLiteral("start"));
     
     // Give the script a moment to execute - use QTimer for non-blocking delay would be better
     // but for simplicity we use a short blocking wait here
     QThread::msleep(100);
     
-    // Unload the script
     scripting.call(QStringLiteral("unloadScript"), pluginName);
     
-    // Clean up the temporary file
     QFile::remove(scriptPath);
     
     Q_EMIT windowPositioned(windowId, geometry);

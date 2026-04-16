@@ -40,7 +40,6 @@ struct InstanceConfig {
     Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
     Q_PROPERTY(bool borderless MEMBER borderless)
 
-
 public:
     QString username;
     int monitor = 0;

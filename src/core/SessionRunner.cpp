@@ -29,25 +29,22 @@
 #include <grp.h>
 #include <unistd.h>
 
-// Name of the couchplay group for managed users
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 
-// Helper function to check if a user is in the couchplay group
 static bool isUserInCouchPlayGroup(const QString &username)
 {
     struct group *grp = getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
     if (!grp) {
-        return false;  // Group doesn't exist
+        return false;
     }
 
-    // Check if username is in the group's member list
     for (char **member = grp->gr_mem; *member != nullptr; ++member) {
         if (username == QString::fromLocal8Bit(*member)) {
             return true;
         }
     }
 
-    // Also check if couchplay is the user's primary group
+    // Primary group check: getgrnam(3) only returns supplementary members in gr_mem
     struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
     if (pw && pw->pw_gid == grp->gr_gid) {
         return true;
@@ -61,15 +58,12 @@ SessionRunner::SessionRunner(QObject *parent)
     , m_windowManager(new WindowManager(this))
 {
     setStatus(QStringLiteral("Ready"));
-    
-    // Set up global shortcut for stopping session
     setupGlobalShortcut();
     
     m_virtualDeviceWatcher = new VirtualDeviceWatcher(this);
     connect(m_virtualDeviceWatcher, &VirtualDeviceWatcher::virtualDeviceAppeared,
             this, &SessionRunner::onVirtualDeviceAppeared);
     
-    // Connect to window positioning signals
     connect(m_windowManager, &WindowManager::gamescopeWindowPositioned,
             this, &SessionRunner::onWindowPositioned);
     connect(m_windowManager, &WindowManager::positioningTimedOut,
@@ -108,7 +102,6 @@ void SessionRunner::setDeviceManager(DeviceManager *manager)
         
         m_deviceManager = manager;
         
-        // Connect to new manager for device reconnection handling
         if (m_deviceManager) {
             connect(m_deviceManager, &DeviceManager::deviceReconnected,
                    this, &SessionRunner::onDeviceReconnected);
@@ -172,10 +165,8 @@ bool SessionRunner::start()
 
     setStatus(QStringLiteral("Starting session..."));
 
-    // Clean up any previous instances
     cleanupInstances();
 
-    // Get session configuration
     const SessionProfile &profile = m_sessionManager->currentProfile();
     int instanceCount = profile.instances.size();
 
@@ -185,7 +176,7 @@ bool SessionRunner::start()
         return false;
     }
 
-    // Check for duplicate users - Steam can't run multiple instances under same user
+    // Steam can't run multiple instances under the same user
     QSet<QString> usedUsers;
     for (int i = 0; i < instanceCount; ++i) {
         const QString &username = profile.instances[i].username;
@@ -199,23 +190,18 @@ bool SessionRunner::start()
         }
     }
 
-    // Validate that all users either are the compositor user or are in the couchplay group
-    // This ensures only CouchPlay-managed users can be assigned to sessions
     struct passwd *compositorPw = getpwuid(getuid());
     QString compositorUser = compositorPw ? QString::fromLocal8Bit(compositorPw->pw_name) : QString();
     
     for (int i = 0; i < instanceCount; ++i) {
         const QString &username = profile.instances[i].username;
         if (username.isEmpty()) {
-            continue;  // No username assigned, will use default behavior
-        }
-        
-        // Compositor user is always allowed (they own the display)
-        if (username == compositorUser) {
             continue;
         }
         
-        // Other users must be in the couchplay group
+        if (username == compositorUser) {
+            continue;
+        }
         if (!isUserInCouchPlayGroup(username)) {
             Q_EMIT errorOccurred(QStringLiteral("User '%1' is not a CouchPlay managed user. Please create the user via CouchPlay or add them to the 'couchplay' group.").arg(username));
             setStatus(QStringLiteral("Error"));
@@ -227,36 +213,29 @@ bool SessionRunner::start()
     QRect screenGeometry = getScreenGeometry();
     m_layouts = calculateLayout(profile.layout, instanceCount, screenGeometry, profile.gridSubLayout);
 
-    // Set up device ownership (requires polkit helper)
     if (!setupDeviceOwnership()) {
         qWarning() << "Failed to set up device ownership - continuing anyway";
     }
 
-    // Set up shared directory mounts (requires polkit helper)
     if (!setupSharedDirectories()) {
         qWarning() << "Failed to set up shared directories - continuing anyway";
     }
 
-    // Build bind paths for per-instance config overrides
     buildBindPaths();
 
-    // Set up launcher access (ACLs, shortcut sync)
     if (!setupLauncherAccess()) {
         qWarning() << "Failed to set up launcher access - continuing anyway";
     }
 
-    // Build pending configs for sequential launching (fixes race condition with window positioning)
+    // Sequential launch: fixes race condition with window positioning
     m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
         const InstanceConfig &instConfig = profile.instances[i];
 
-        // Build config map for the instance
         QVariantMap config;
         config[QStringLiteral("username")] = instConfig.username;
         config[QStringLiteral("monitor")] = instConfig.monitor;
         
-        // Derive resolution from layout - internal resolution matches output resolution
-        // This ensures games render at the correct size for their window
         config[QStringLiteral("internalWidth")] = m_layouts[i].width();
         config[QStringLiteral("internalHeight")] = m_layouts[i].height();
         config[QStringLiteral("outputWidth")] = m_layouts[i].width();
@@ -270,7 +249,6 @@ bool SessionRunner::start()
         config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
         config[QStringLiteral("borderless")] = m_borderlessWindows;
 
-        // Look up preset and add resolved command/settings
         if (m_presetManager) {
             QString presetId = instConfig.presetId;
             if (presetId.isEmpty()) {
@@ -281,13 +259,11 @@ bool SessionRunner::start()
             config[QStringLiteral("presetWorkingDirectory")] = m_presetManager->getWorkingDirectory(presetId);
             config[QStringLiteral("steamIntegration")] = m_presetManager->getSteamIntegration(presetId);
         } else {
-            // Fallback if no PresetManager
             config[QStringLiteral("presetId")] = QStringLiteral("steam");
             config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
             config[QStringLiteral("steamIntegration")] = true;
         }
 
-        // Get device paths for this instance
         if (m_deviceManager) {
             QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
             QVariantList pathList;
@@ -329,7 +305,6 @@ void SessionRunner::stop()
 
     m_virtualDeviceWatcher->stopWatching();
 
-    // Collect override staging dirs before cleaning up instances
     QStringList overridePaths;
     if (m_sessionManager) {
         const auto &profile = m_sessionManager->currentProfile();
@@ -351,22 +326,16 @@ void SessionRunner::stop()
         }
     }
 
-    // Stop all instances
     for (auto *instance : m_instances) {
         if (instance->isRunning()) {
             instance->stop();
         }
     }
 
-    // Restore device ownership
     restoreDeviceOwnership();
-
-    // Teardown shared directory mounts
     teardownSharedDirectories();
 
     cleanupInstances();
-
-    // Clean up override staging directories
     cleanupOverrideDirs(overridePaths);
 
     setStatus(QStringLiteral("Stopped"));
@@ -427,9 +396,7 @@ QVariantList SessionRunner::instancesAsVariant() const
 
 void SessionRunner::startNextInstance()
 {
-    // Check if all instances have been started
     if (m_nextInstanceToStart >= m_pendingInstanceConfigs.size()) {
-        // All instances started - session is now fully running
         setStatus(QStringLiteral("Session running"));
         Q_EMIT runningChanged();
         Q_EMIT instancesChanged();
@@ -440,7 +407,6 @@ void SessionRunner::startNextInstance()
     int index = m_nextInstanceToStart;
     const QVariantMap &config = m_pendingInstanceConfigs[index];
 
-    // Create instance
     auto *instance = new GamescopeInstance(this);
     connect(instance, &GamescopeInstance::started, this, &SessionRunner::onInstanceStarted);
     connect(instance, &GamescopeInstance::stopped, this, &SessionRunner::onInstanceStopped);
@@ -448,7 +414,6 @@ void SessionRunner::startNextInstance()
 
     m_instances.append(instance);
 
-    // Start the instance
     if (!instance->start(config, index)) {
         qWarning() << "Failed to start instance" << index;
     }
@@ -458,12 +423,11 @@ void SessionRunner::startNextInstance()
         ++m_nextInstanceToStart;
         startNextInstance();
     }
-    // Otherwise, wait for onWindowPositioned to trigger the next start
+    // Otherwise wait for onWindowPositioned to trigger the next start
 }
 
 void SessionRunner::cleanupInstances()
 {
-    // Cancel any pending window positioning requests
     if (m_windowManager) {
         m_windowManager->cancelAllRequests();
     }
@@ -472,9 +436,8 @@ void SessionRunner::cleanupInstances()
         instance->deleteLater();
     }
     m_instances.clear();
-    m_positionedWindowIds.clear(); // Clear tracked window IDs for next session
+    m_positionedWindowIds.clear();
     
-    // Clear sequential launching state
     m_pendingInstanceConfigs.clear();
     m_layouts.clear();
     m_nextInstanceToStart = 0;
@@ -497,7 +460,7 @@ void SessionRunner::cleanupOverrideDirs(const QStringList &overridePaths)
 bool SessionRunner::setupDeviceOwnership()
 {
     if (!m_deviceManager || !m_helperClient) {
-        return true; // No helper, skip ownership setup
+        return true;
     }
 
     if (!m_helperClient->isAvailable()) {
@@ -505,10 +468,8 @@ bool SessionRunner::setupDeviceOwnership()
         return true;
     }
 
-    // Clear previous ownership tracking
     m_ownedDevicePaths.clear();
 
-    // For each instance, get its assigned devices and set ownership
     if (!m_sessionManager) {
         return true;
     }
@@ -522,7 +483,6 @@ bool SessionRunner::setupDeviceOwnership()
             continue;
         }
         
-        // Get UID for this user
         struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
         if (!pw) {
             qWarning() << "SessionRunner: User" << username << "not found, skipping device ownership for instance" << i;
@@ -530,7 +490,6 @@ bool SessionRunner::setupDeviceOwnership()
         }
         int uid = static_cast<int>(pw->pw_uid);
         
-        // Get device paths assigned to this instance
         QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
         
         for (const QString &path : devicePaths) {
@@ -572,7 +531,6 @@ void SessionRunner::restoreDeviceOwnership()
         return;
     }
 
-    // Use restoreAllDevices() which resets all modified devices tracked by the helper
     m_helperClient->restoreAllDevices();
     
     m_ownedDevicePaths.clear();
@@ -637,7 +595,6 @@ void SessionRunner::teardownSharedDirectories()
         return;
     }
 
-    // Unmount all shared directories for all users
     m_helperClient->unmountAllSharedDirectories();
 }
 
@@ -672,7 +629,6 @@ bool SessionRunner::buildBindPaths()
             continue;
         }
 
-        // Derive gameId from gamePath
         QString gameId = instConfig.steamAppId;
         if (gameId.isEmpty()) {
             gameId = QString::fromLatin1(QCryptographicHash::hash(
@@ -688,7 +644,7 @@ bool SessionRunner::buildBindPaths()
         }
         QString overridesRoot = getOverridesRootPath(presetId, gameId);
 
-        // Build bind path entries: "<stagingDir>/<relativeFile>:<gamePath>/<relativeFile>"
+        // Bind format: "<stagingDir>/<relativeFile>:<gamePath>/<relativeFile>"
         QStringList bindPaths;
         for (const QString &relativePath : matchedFiles) {
             QString bindEntry = overridesRoot + relativePath
@@ -740,19 +696,16 @@ bool SessionRunner::setupLauncherAccess()
             }
         }
 
-        // Handle Heroic Shortcut Sync
         if (preset.launcherId == QStringLiteral("heroic")) {
              if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-                 // Sync config (library) unconditionally
-                 qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
-                 if (!m_heroicConfigManager->syncConfigToUser(username)) {
+                  qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
+                  if (!m_heroicConfigManager->syncConfigToUser(username)) {
                      qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
                      allSucceeded = false;
                  }
                  
-                 // Only sync shortcuts if enabled
-                 if (m_heroicConfigManager->syncShortcutsEnabled()) {
-                     qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
+                  if (m_heroicConfigManager->syncShortcutsEnabled()) {
+                      qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
                      if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
                          qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
                          allSucceeded = false;
@@ -814,13 +767,12 @@ bool SessionRunner::setupLauncherAccess()
 
 QRect SessionRunner::getScreenGeometry() const
 {
-    // Get the primary screen geometry
     QScreen *screen = QGuiApplication::primaryScreen();
     if (screen) {
         return screen->geometry();
     }
 
-    // Fallback to a reasonable default
+    // Fallback: headless or no screen available
     return QRect(0, 0, 1920, 1080);
 }
 
@@ -929,21 +881,16 @@ QList<QRect> SessionRunner::calculateLayout(const QString &layout,
             result.append(QRect(x, y + i * instanceHeight, w, instanceHeight));
         }
     } else if (layout == QStringLiteral("grid")) {
-        // Grid layout with configurable behavior for 3 players:
-        // - gridSubLayout == "horizontal": 3×1 (each player gets full height, equal width) - DEFAULT for 3 players
-        // - gridSubLayout == "grid-2x2": 2×2 with empty cell (3 cells filled, 1 empty)
-        // - gridSubLayout == "left-right": player 1 left 40%, players 2+3 stacked right 60%
-        // - 2 players: 2×1
-        // - 4 players: 2×2
+        // 3-player grid sub-layouts:
+        //   "horizontal" (default): 3x1
+        //   "grid-2x2": 2x2 with empty cell
+        //   "left-right": player 1 left 40%, players 2+3 stacked right 60%
         if (instanceCount == 3 && gridSubLayout == QStringLiteral("left-right")) {
-            int leftWidth = w * 2 / 5;  // 40% for player 1
-            int rightWidth = w - leftWidth;  // 60% for players 2+3
+            int leftWidth = w * 2 / 5;
+            int rightWidth = w - leftWidth;
             int halfHeight = h / 2;
-            // Player 1: left, full height
             result.append(QRect(x, y, leftWidth, h));
-            // Player 2: top-right
             result.append(QRect(x + leftWidth, y, rightWidth, halfHeight));
-            // Player 3: bottom-right
             result.append(QRect(x + leftWidth, y + halfHeight, rightWidth, h - halfHeight));
         } else {
             int cols, rows;
@@ -973,15 +920,11 @@ QList<QRect> SessionRunner::calculateLayout(const QString &layout,
                 result.append(QRect(x + col * cellWidth, y + row * cellHeight, cellWidth, cellHeight));
             }
         }
-        }
     } else if (layout == QStringLiteral("multi-monitor")) {
-        // Each instance on a different monitor - just use full screen for now
-        // In a real implementation, we'd get each monitor's geometry
         for (int i = 0; i < instanceCount; ++i) {
             result.append(screenGeometry);
         }
     } else {
-        // Default to horizontal
         int instanceWidth = w / instanceCount;
         for (int i = 0; i < instanceCount; ++i) {
             result.append(QRect(x + i * instanceWidth, y, instanceWidth, h));
@@ -995,7 +938,6 @@ void SessionRunner::onInstanceStarted()
 {
     auto *instance = qobject_cast<GamescopeInstance*>(sender());
     if (instance) {
-        // Position the window after a short delay to allow it to appear
         positionInstanceWindow(instance);
         
         Q_EMIT instanceStarted(instance->index());
@@ -1012,7 +954,6 @@ void SessionRunner::onInstanceStopped()
         Q_EMIT instancesChanged();
         Q_EMIT runningInstanceCountChanged();
 
-        // Check if all instances have stopped
         if (!isRunning()) {
             setStatus(QStringLiteral("Session ended"));
             restoreDeviceOwnership();
@@ -1043,8 +984,6 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
     QRect targetGeometry = instance->windowGeometry();
     int instanceIndex = instance->index();
 
-    // Queue a position request - the WindowManager will find and position
-    // the next gamescope window that appears (excluding already-positioned ones)
     m_windowManager->queuePositionRequest(
         instanceIndex,
         targetGeometry,
@@ -1056,12 +995,11 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
 {
     Q_UNUSED(requestId)
-    // Track this window so it's excluded from future positioning
     if (!m_positionedWindowIds.contains(windowId)) {
         m_positionedWindowIds.append(windowId);
     }
 
-    // Start next instance in sequential launching mode
+    // Trigger next sequential instance launch
     if (!m_pendingInstanceConfigs.isEmpty()) {
         ++m_nextInstanceToStart;
         startNextInstance();
@@ -1083,21 +1021,19 @@ void SessionRunner::setupGlobalShortcut()
     m_stopAction->setText(i18nc("@action", "Stop CouchPlay Session"));
     m_stopAction->setProperty("componentName", QStringLiteral("couchplay"));
     
-    // Only stop if session is actually running
     connect(m_stopAction, &QAction::triggered, this, [this]() {
         if (isRunning()) {
             stop();
         }
     });
     
-    // Set default shortcut: Meta+Shift+Escape
+    // Default shortcut: Meta+Shift+Escape
     KGlobalAccel::setGlobalShortcut(m_stopAction, 
         QList<QKeySequence>() << QKeySequence(Qt::META | Qt::SHIFT | Qt::Key_Escape));
 }
 
 void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex)
 {
-    // Only handle if session is running
     if (!isRunning()) {
         return;
     }
@@ -1111,7 +1047,6 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
         return;
     }
     
-    // Get the username for this instance
     const auto &profile = m_sessionManager->currentProfile();
     if (instanceIndex < 0 || instanceIndex >= profile.instances.size()) {
         qWarning() << "SessionRunner: Invalid instance index" << instanceIndex << "for reconnected device";
@@ -1124,7 +1059,6 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
         return;
     }
     
-    // Get UID for this user
     struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
     if (!pw) {
         qWarning() << "SessionRunner: User" << username << "not found";
@@ -1132,13 +1066,11 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
     }
     int uid = static_cast<int>(pw->pw_uid);
     
-    // Construct the new device path
     QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
     
     qDebug() << "SessionRunner: Device reconnected, restoring ownership:"
              << devicePath << "(stableId:" << stableId << ") to user" << username;
     
-    // Set ownership on the reconnected device
     if (m_helperClient->setDeviceOwner(devicePath, uid)) {
         if (!m_ownedDevicePaths.contains(devicePath)) {
             m_ownedDevicePaths.append(devicePath);
@@ -1208,9 +1140,8 @@ qint64 SessionRunner::findSteamProcess(qint64 gamescopePid, int maxDepth) const
     return 0;
 }
 
-// DEVIATION: Synchronous /proc/<pid>/fd/ traversal (see AGENTS.md anti-patterns).
+// Synchronous /proc/<pid>/fd/ traversal (see AGENTS.md anti-patterns).
 // Steam has bounded FDs and VirtualDeviceWatcher debounces, so impact is minimal.
-// TODO: Move to QThread if latency becomes measurable.
 bool SessionRunner::hasUinputOpen(qint64 pid) const
 {
     QString fdDir = QStringLiteral("/proc/%1/fd").arg(pid);

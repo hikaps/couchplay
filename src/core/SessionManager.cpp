@@ -12,24 +12,18 @@
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
 {
-
-    // Ensure profiles directory exists
     QDir().mkpath(profilesDir());
-
-    // Start with a new session
     newSession();
-
-    // Load existing profiles
     refreshProfiles();
 }
-
-SessionManager::~SessionManager() = default;
 
 QString SessionManager::profilesDir() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) 
            + QStringLiteral("/profiles");
 }
+
+SessionManager::~SessionManager() = default;
 
 QString SessionManager::profilePath(const QString &name) const
 {
@@ -42,13 +36,10 @@ void SessionManager::newSession()
     m_currentProfile.name = QString();
     m_currentProfile.layout = QStringLiteral("horizontal");
 
-    // Default: 2 instances with no user assignment
-    // Users must be explicitly selected for all instances
     m_currentProfile.instances.clear();
     for (int i = 0; i < 2; ++i) {
         InstanceConfig config;
         config.monitor = 0;
-        // No default user assignment - user must select explicitly
         m_currentProfile.instances.append(config);
     }
 
@@ -102,7 +93,6 @@ bool SessionManager::saveProfile(const QString &name)
     general.writeEntry("gridSubLayout", m_currentProfile.gridSubLayout);
     general.writeEntry("instanceCount", m_currentProfile.instances.size());
 
-    // Instance sections
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
         const InstanceConfig &inst = m_currentProfile.instances[i];
         KConfigGroup instGroup = config.group(QStringLiteral("Instance%1").arg(i));
@@ -125,14 +115,12 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
         instGroup.writeEntry("borderless", inst.borderless);
 
-        // Convert devices to string list (legacy - for backwards compatibility)
+        // Convert devices to string list for backwards compatibility
         QStringList deviceStrings;
         for (int dev : inst.devices) {
             deviceStrings << QString::number(dev);
         }
         instGroup.writeEntry("devices", deviceStrings);
-        
-        // Save stable device IDs (primary - survives hotplug/reboot)
         instGroup.writeEntry("deviceStableIds", inst.deviceStableIds);
         instGroup.writeEntry("deviceStableIdNames", inst.deviceStableIdNames);
     }
@@ -159,7 +147,6 @@ bool SessionManager::loadProfile(const QString &name)
 
     KConfig config(path);
 
-    // Read general section
     KConfigGroup general = config.group(QStringLiteral("General"));
     m_currentProfile.name = name;
     m_currentProfile.filePath = path;
@@ -167,7 +154,6 @@ bool SessionManager::loadProfile(const QString &name)
     m_currentProfile.gridSubLayout = general.readEntry("gridSubLayout", QString());
     int instanceCount = general.readEntry("instanceCount", 2);
 
-    // Read instances
     m_currentProfile.instances.clear();
     for (int i = 0; i < instanceCount; ++i) {
         KConfigGroup instGroup = config.group(QStringLiteral("Instance%1").arg(i));
@@ -190,7 +176,6 @@ bool SessionManager::loadProfile(const QString &name)
             instGroup.readEntry("overlayGamePath", QString()));
         inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
 
-        // Read overridePatterns (may not exist in old profiles)
         inst.overridePatterns = instGroup.readEntry("overridePatterns",
             instGroup.readEntry("overlayPatterns", QStringList()));
 
@@ -200,15 +185,11 @@ bool SessionManager::loadProfile(const QString &name)
             qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
         }
 
-        // Read borderless setting (may not exist in old profiles)
         inst.borderless = instGroup.readEntry("borderless", false);
 
-        // Read stable device IDs (primary - survives hotplug/reboot)
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
         inst.deviceStableIdNames = instGroup.readEntry("deviceStableIdNames", QStringList());
-        
-        // Read legacy device event numbers (for backwards compatibility)
-        // These are only used if no stableIds are present, or for migration
+
         QStringList deviceStrings = instGroup.readEntry("devices", QStringList());
         for (const QString &devStr : deviceStrings) {
             inst.devices << devStr.toInt();
@@ -222,7 +203,6 @@ bool SessionManager::loadProfile(const QString &name)
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
 
-    // Build map of stable device IDs and names for each instance and emit signal
     QVariantMap deviceInfoByInstance;
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
         const QStringList &stableIds = m_currentProfile.instances[i].deviceStableIds;
@@ -255,7 +235,6 @@ bool SessionManager::deleteProfile(const QString &name)
         return false;
     }
 
-    // Clear current profile name if we just deleted the current profile
     if (m_currentProfile.name == name) {
         m_currentProfile.name = QString();
         m_currentProfile.filePath = QString();
@@ -288,11 +267,11 @@ void SessionManager::setCurrentGridSubLayout(const QString &subLayout)
 
 void SessionManager::setInstanceCount(int count)
 {
-    if (count < 2) count = 2; // Minimum 2 for split-screen
-    if (count > 4) count = 4; // Max 4 for now
+    if (count < 2) count = 2;
+    if (count > 4) count = 4;
 
     if (m_currentProfile.instances.size() == count) {
-        return; // No change
+        return;
     }
 
     while (m_currentProfile.instances.size() < count) {
@@ -339,13 +318,13 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
         deviceList << dev;
     }
     map[QStringLiteral("devices")] = deviceList;
-    
+
     QVariantList stableIdList;
     for (const QString &id : inst.deviceStableIds) {
         stableIdList << id;
     }
     map[QStringLiteral("deviceStableIds")] = stableIdList;
-    
+
     QVariantList stableIdNameList;
     for (const QString &name : inst.deviceStableIdNames) {
         stableIdNameList << name;
@@ -395,8 +374,7 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.borderless = config[QStringLiteral("borderless")].toBool();
 
     Q_EMIT instancesChanged();
-    
-    // Auto-save if a profile is loaded
+
     if (!m_currentProfile.name.isEmpty()) {
         saveProfile(m_currentProfile.name);
     }
@@ -407,7 +385,6 @@ void SessionManager::setInstanceUser(int index, const QString &username)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].username = username;
         Q_EMIT instancesChanged();
-        
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -419,7 +396,6 @@ void SessionManager::setInstanceMonitor(int index, int monitor)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].monitor = monitor;
         Q_EMIT instancesChanged();
-        
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -435,7 +411,6 @@ void SessionManager::setInstanceResolution(int index, int internalW, int interna
         inst.outputWidth = outputW;
         inst.outputHeight = outputH;
         Q_EMIT instancesChanged();
-        
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -569,8 +544,6 @@ void SessionManager::recalculateOutputResolutions(int screenWidth, int screenHei
             inst.outputHeight = screenHeight;
         }
 
-        // Also set internal resolution to match output by default
-        // This avoids unnecessary scaling and gives best performance
         inst.internalWidth = inst.outputWidth;
         inst.internalHeight = inst.outputHeight;
     }
