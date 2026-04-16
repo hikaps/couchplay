@@ -31,7 +31,6 @@ CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
         return;
     }
 
-    // Verify we can actually call a method
     QDBusReply<QString> reply = m_interface->call(QStringLiteral("Version"));
     if (reply.isValid()) {
         qWarning() << "CouchPlay helper connected, version:" << reply.value();
@@ -128,8 +127,6 @@ bool CouchPlayHelperClient::createUser(const QString &username)
         return false;
     }
 
-    // The helper expects username and fullName parameters
-    // Use a default fullName based on the username
     QString fullName = QStringLiteral("CouchPlay Player (%1)").arg(username);
 
     QDBusReply<uint> reply = m_interface->call(
@@ -143,7 +140,6 @@ bool CouchPlayHelperClient::createUser(const QString &username)
         return false;
     }
 
-    // CreateUser returns the UID of the new user, or 0 on failure
     return reply.value() > 0;
 }
 
@@ -264,7 +260,6 @@ int CouchPlayHelperClient::mountSharedDirectories(const QString &username, uint 
     }
 
     if (directories.isEmpty()) {
-        // Nothing to mount, that's fine
         return 0;
     }
 

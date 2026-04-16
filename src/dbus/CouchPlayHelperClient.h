@@ -22,14 +22,8 @@ public:
     explicit CouchPlayHelperClient(QObject *parent = nullptr);
     ~CouchPlayHelperClient() override;
 
-    /**
-     * @brief Check if the helper is available
-     */
     virtual bool isAvailable() const { return m_available; }
 
-    /**
-     * @brief Set device ownership for a specific user
-     */
     Q_INVOKABLE bool setDeviceOwner(const QString &devicePath, int uid);
 
     /**
@@ -37,14 +31,8 @@ public:
      */
     Q_INVOKABLE bool restoreDeviceOwner(const QString &devicePath);
 
-    /**
-     * @brief Restore all modified devices
-     */
     Q_INVOKABLE void restoreAllDevices();
 
-    /**
-     * @brief Create a new user account
-     */
     Q_INVOKABLE bool createUser(const QString &username);
 
     /**
@@ -57,12 +45,6 @@ public:
      */
     Q_INVOKABLE bool deleteUser(const QString &username, bool removeHome);
 
-    /**
-     * @brief Check if a user is in the couchplay group
-     * 
-     * @param username Username to check
-     * @return true if user is in couchplay group
-     */
     Q_INVOKABLE bool isInCouchPlayGroup(const QString &username);
 
     /**
@@ -95,9 +77,6 @@ public:
      */
     Q_INVOKABLE bool killInstance(qint64 pid);
 
-    /**
-     * @brief Check helper availability
-     */
     Q_INVOKABLE void checkAvailability();
 
     /**
