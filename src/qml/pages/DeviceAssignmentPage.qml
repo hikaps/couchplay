@@ -11,7 +11,6 @@ Kirigami.ScrollablePage {
     
     title: i18nc("@title", "Assign Devices")
     
-    // Reference to DeviceManager (injected from parent)
     required property var deviceManager
     property int instanceCount: 2
 
@@ -52,7 +51,6 @@ Kirigami.ScrollablePage {
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
 
-        // Player count and filter controls
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
@@ -81,7 +79,6 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Instructions
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             type: Kirigami.MessageType.Information
@@ -89,7 +86,6 @@ Kirigami.ScrollablePage {
             visible: true
         }
 
-        // Player drop zones
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.largeSpacing
@@ -121,13 +117,11 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
         }
 
-        // Available devices section
         Kirigami.Heading {
             level: 3
             text: i18nc("@title:group", "Available Devices")
         }
 
-        // Device type tabs
         QQC2.TabBar {
             id: deviceTypeBar
             Layout.fillWidth: true
@@ -150,7 +144,6 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             currentIndex: deviceTypeBar.currentIndex
 
-            // Controllers list
             DeviceList {
                 deviceModel: deviceManager?.controllers ?? []
                 deviceType: "controller"
@@ -163,7 +156,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Keyboards list
             DeviceList {
                 deviceModel: deviceManager?.keyboards ?? []
                 deviceType: "keyboard"
@@ -176,7 +168,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Mice list
             DeviceList {
                 deviceModel: deviceManager?.mice ?? []
                 deviceType: "mouse"
@@ -190,7 +181,6 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Empty state
         Kirigami.PlaceholderMessage {
             Layout.fillWidth: true
             visible: (deviceManager?.visibleDevices?.length ?? 0) === 0
@@ -206,7 +196,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Player drop zone component
     component PlayerDropZone: Kirigami.AbstractCard {
         id: dropZone
         
@@ -243,7 +232,6 @@ Kirigami.ScrollablePage {
             spacing: Kirigami.Units.smallSpacing
             clip: true
 
-            // Show assigned devices
             Repeater {
                 model: dropZone.assignedDevices
 
@@ -263,7 +251,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Empty state for drop zone
             Kirigami.PlaceholderMessage {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -293,7 +280,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Device list component
     component DeviceList: ColumnLayout {
         id: deviceListRoot
         
@@ -328,7 +314,6 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Empty state for this device type
         Kirigami.PlaceholderMessage {
             Layout.fillWidth: true
             visible: deviceListRoot.deviceModel.length === 0
@@ -351,7 +336,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Draggable device card component
     component DraggableDeviceCard: Kirigami.AbstractCard {
         id: deviceCard
         
@@ -364,7 +348,6 @@ Kirigami.ScrollablePage {
 
         property bool isDragging: false
         
-        // Guard against undefined device
         visible: deviceCard.device !== undefined && deviceCard.device !== null
 
         contentItem: RowLayout {
@@ -404,7 +387,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Assignment indicator
             Kirigami.Chip {
                 visible: deviceCard.device?.assigned ?? false
                 text: i18nc("@info", "Player %1", (deviceCard.device?.assignedInstance ?? 0) + 1)
@@ -416,7 +398,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Quick assign buttons
             Repeater {
                 model: deviceCard.instanceCount
                 
@@ -437,7 +418,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Identify button (controllers only)
             QQC2.Button {
                 icon.name: "flashlight-on"
                 flat: true
@@ -453,7 +433,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Ignore button
             QQC2.Button {
                 icon.name: "dialog-cancel"
                 flat: true
@@ -470,7 +449,6 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Drag support
         Drag.active: dragArea.drag.active
         Drag.keys: ["application/x-couchplay-device"]
         Drag.mimeData: { "text/plain": (deviceCard.device?.eventNumber ?? 0).toString() }

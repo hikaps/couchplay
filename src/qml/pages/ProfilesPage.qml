@@ -10,11 +10,9 @@ Kirigami.ScrollablePage {
     id: root
     title: i18nc("@title", "Profiles")
 
-    // Backend managers (from Main.qml)
     required property var sessionManager
     required property var sessionRunner
 
-    // Refresh profiles when page becomes visible
     Component.onCompleted: {
         if (sessionManager) {
             sessionManager.refreshProfiles()
@@ -36,7 +34,6 @@ Kirigami.ScrollablePage {
         }
     ]
 
-    // Delete confirmation dialog
     Kirigami.PromptDialog {
         id: deleteDialog
         title: i18nc("@title:dialog", "Delete Profile")
@@ -53,12 +50,10 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Main content
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
         visible: (sessionManager?.savedProfiles?.length ?? 0) > 0
 
-        // Profile grid
         GridLayout {
             Layout.fillWidth: true
             columns: Math.max(1, Math.floor(root.width / (Kirigami.Units.gridUnit * 20)))
@@ -106,7 +101,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Empty state
     Kirigami.PlaceholderMessage {
         anchors.centerIn: parent
         visible: (sessionManager?.savedProfiles?.length ?? 0) === 0
@@ -125,7 +119,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Profile card component - Minimal Modern Design
     component ProfileCard: Kirigami.AbstractCard {
         id: profileCard
 
@@ -150,12 +143,10 @@ Kirigami.ScrollablePage {
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
 
-            // Top section: Icon and title
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.mediumSpacing
 
-                // Large profile icon
                 Rectangle {
                     Layout.preferredWidth: Kirigami.Units.iconSizes.large
                     Layout.preferredHeight: Kirigami.Units.iconSizes.large
@@ -171,7 +162,6 @@ Kirigami.ScrollablePage {
                     }
                 }
 
-                // Title and subtitle
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 2
@@ -221,7 +211,6 @@ Kirigami.ScrollablePage {
                     }
                 }
 
-                // Status indicator (top right)
                 Kirigami.Chip {
                     visible: profileCard.isCurrentProfile
                     text: i18nc("@info", "Loaded")
@@ -231,7 +220,6 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            // Action buttons row
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing

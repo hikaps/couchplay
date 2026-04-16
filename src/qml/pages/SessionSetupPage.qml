@@ -21,7 +21,6 @@ Kirigami.ScrollablePage {
     required property var userManager
     required property var presetManager
 
-    // Sync with session manager
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
     property string gridSubLayout: sessionManager ? sessionManager.currentGridSubLayout : ""
@@ -61,7 +60,6 @@ Kirigami.ScrollablePage {
         return [{ username: "" }].concat(filtered)
     }
 
-    // Helper function to get primary monitor size
     function getPrimaryMonitorSize() {
         if (!monitorManager) return { width: 1920, height: 1080 }
         let monitors = monitorManager.monitors
@@ -70,7 +68,6 @@ Kirigami.ScrollablePage {
                 return { width: monitors[i].width, height: monitors[i].height }
             }
         }
-        // Fallback to first monitor or default
         if (monitors.length > 0) {
             return { width: monitors[0].width, height: monitors[0].height }
         }
@@ -80,7 +77,6 @@ Kirigami.ScrollablePage {
     onLayoutModeChanged: {
         if (sessionManager) {
             sessionManager.currentLayout = layoutMode
-            // Recalculate output resolutions based on screen size
             let screenSize = getPrimaryMonitorSize()
             sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
         }
@@ -97,7 +93,6 @@ Kirigami.ScrollablePage {
     onInstanceCountChanged: {
         if (sessionManager && sessionManager.instanceCount !== instanceCount) {
             sessionManager.instanceCount = instanceCount
-            // Recalculate output resolutions when instance count changes
             let screenSize = getPrimaryMonitorSize()
             sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
         }
@@ -131,7 +126,6 @@ Kirigami.ScrollablePage {
         }
     ]
 
-    // Save profile dialog
     Kirigami.PromptDialog {
         id: saveProfileDialog
         title: i18nc("@title:dialog", "Save Profile")
@@ -164,7 +158,6 @@ Kirigami.ScrollablePage {
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
 
-        // Running session status
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             visible: sessionRunner?.running ?? false
@@ -181,7 +174,6 @@ Kirigami.ScrollablePage {
             ]
         }
 
-        // Layout Selection
         Kirigami.Heading {
             text: i18nc("@title", "Screen Layout")
             level: 2
@@ -194,7 +186,6 @@ Kirigami.ScrollablePage {
             opacity: 0.7
         }
 
-        // Player count selector
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.largeSpacing
@@ -217,7 +208,6 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.smallSpacing
 
-            // Horizontal split
             LayoutCard {
                 Layout.fillWidth: true
                 layoutType: "horizontal"
@@ -228,7 +218,6 @@ Kirigami.ScrollablePage {
                 onClicked: layoutMode = "horizontal"
             }
 
-            // Vertical split
             LayoutCard {
                 Layout.fillWidth: true
                 layoutType: "vertical"
@@ -239,7 +228,6 @@ Kirigami.ScrollablePage {
                 onClicked: layoutMode = "vertical"
             }
 
-            // Grid (for 3-4 players)
             LayoutCard {
                 Layout.fillWidth: true
                 layoutType: "grid"
@@ -257,7 +245,6 @@ Kirigami.ScrollablePage {
                 onClicked: layoutMode = "grid"
             }
 
-            // Multi-monitor
             LayoutCard {
                 Layout.fillWidth: true
                 layoutType: "multi-monitor"
@@ -269,7 +256,6 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Grid sub-layout selector (only visible when grid is selected and 3 players)
         RowLayout {
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.smallSpacing
@@ -309,7 +295,6 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Instance Configuration
         Kirigami.Heading {
             text: i18nc("@title", "Instance Configuration")
             level: 2
@@ -333,7 +318,6 @@ Kirigami.ScrollablePage {
                 // Copy revision counter for reliable binding
                 property int cardRevision: root?.instancesRevision ?? 0
                 
-                // Current preset ID (updated when instances change)
                 property string currentPresetId: {
                     void(cardRevision)
                     if (!cardSessionManager) return "steam"
@@ -341,7 +325,6 @@ Kirigami.ScrollablePage {
                     return config?.presetId || "steam"
                 }
                 
-                // Overlay patterns for this instance
                 property var overridePatternsModel: {
                     void(cardRevision)
                     if (!cardSessionManager) return []
@@ -394,7 +377,6 @@ Kirigami.ScrollablePage {
                             Kirigami.FormData.label: instanceCard.labelUser
                             Layout.fillWidth: true
 
-                            // Filtered model: excludes users already assigned to other instances
                             model: root.getAvailableUsers(instanceCard.index)
                             textRole: "username"
                             valueRole: "username"
@@ -414,12 +396,10 @@ Kirigami.ScrollablePage {
                                 currentIndex = -1
                             }
 
-                            // Show placeholder when no users available
                             displayText: count === 0
                                 ? i18nc("@info", "No users available")
                                 : (currentIndex >= 0 ? currentText : i18nc("@info", "Select a user..."))
 
-                            // Update session manager when user selects a different user
                             onActivated: {
                                 if (root.sessionManager && currentValue) {
                                     root.sessionManager.setInstanceUser(instanceCard.index, currentValue)
@@ -427,7 +407,6 @@ Kirigami.ScrollablePage {
                             }
                         }
 
-                        // Warning when no user selected
                         Controls.Label {
                             visible: userCombo.currentIndex < 0 && userCombo.count > 0
                             text: i18nc("@info:status", "Please select a user for this instance")
@@ -437,7 +416,6 @@ Kirigami.ScrollablePage {
                             Layout.fillWidth: true
                         }
 
-                        // Launch preset selector
                         Components.PresetSelector {
                             id: presetSelector
                             Kirigami.FormData.label: instanceCard.labelLauncher
@@ -465,7 +443,6 @@ Kirigami.ScrollablePage {
                             opacity: 0.8
                         }
 
-                        // Show assigned devices
                         RowLayout {
                             Kirigami.FormData.label: instanceCard.labelDevices
                             spacing: Kirigami.Units.smallSpacing
@@ -502,7 +479,6 @@ Kirigami.ScrollablePage {
                             wideMode: (root?.width ?? 0) > Kirigami.Units.gridUnit * 30
 
 
-                            // Config file override patterns - each player gets their own copy
                             RowLayout {
                                 Kirigami.FormData.label: instanceCard.labelOverlay
                                 visible: presetSelector.currentPresetId !== ""
@@ -583,7 +559,6 @@ Kirigami.ScrollablePage {
                             }
                         }
 
-                        // Pattern list display (related to Config Overrides)
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.topMargin: Kirigami.Units.smallSpacing
@@ -602,7 +577,6 @@ Kirigami.ScrollablePage {
                                 anchors.margins: Kirigami.Units.largeSpacing
                                 spacing: Kirigami.Units.smallSpacing
 
-                                // Header
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: Kirigami.Units.smallSpacing
@@ -635,7 +609,6 @@ Kirigami.ScrollablePage {
                                     }
                                 }
 
-                                // Pattern items
                                 Repeater {
                                     model: instanceCard.overridePatternsModel
                                     delegate: RowLayout {
@@ -671,7 +644,6 @@ Kirigami.ScrollablePage {
                                     }
                                 }
 
-                                // Help text
                                 Controls.Label {
                                     Layout.fillWidth: true
                                     text: i18nc("@info", "For games that store saves or config in their own folder. Each player gets their own copy of matching files. Place overrides in the preset's override folder.")
@@ -723,7 +695,6 @@ Kirigami.ScrollablePage {
                         }
                     }
 
-                    // Info message when no device is assigned at all
                     Kirigami.InlineMessage {
                         Layout.fillWidth: true
                         visible: {
@@ -732,7 +703,6 @@ Kirigami.ScrollablePage {
                             void(root.devicesRevision)
                             if (!root.deviceManager) return false
 
-                            // Check if any devices are assigned to this instance
                             let assignedPaths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
                             if (assignedPaths.length > 0) return false
 
@@ -742,7 +712,7 @@ Kirigami.ScrollablePage {
                                 if (pending[i].instanceIndex == instanceCard.index) return false
                             }
 
-                            // No devices assigned and no pending devices
+                            // No devices assigned and no pending devices — show info
                             return true
                         }
                         type: Kirigami.MessageType.Information
@@ -752,7 +722,6 @@ Kirigami.ScrollablePage {
             }
         }
 
-        // Quick actions
         Kirigami.Separator {
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.largeSpacing
@@ -779,7 +748,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Layout card component for visual selection
     component LayoutCard: Kirigami.AbstractCard {
         id: layoutCard
 
@@ -814,7 +782,6 @@ Kirigami.ScrollablePage {
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
 
-            // Visual representation
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 4
@@ -829,7 +796,6 @@ Kirigami.ScrollablePage {
                     ColorAnimation { duration: Kirigami.Units.shortDuration }
                 }
 
-                // Dynamic layout visualization
                 Loader {
                     anchors.fill: parent
                     anchors.margins: 2
@@ -864,7 +830,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Layout visualization components
     Component {
         id: horizontalLayout
         RowLayout {
