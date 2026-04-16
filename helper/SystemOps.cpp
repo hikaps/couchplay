@@ -16,7 +16,6 @@ RealSystemOps::RealSystemOps(QObject *parent)
 {
 }
 
-// User/group lookup operations
 struct passwd *RealSystemOps::getpwnam(const char *name)
 {
     return ::getpwnam(name);
@@ -32,7 +31,6 @@ struct group *RealSystemOps::getgrnam(const char *name)
     return ::getgrnam(name);
 }
 
-// Filesystem operations
 bool RealSystemOps::fileExists(const QString &path)
 {
     return QFile::exists(path);
@@ -69,7 +67,6 @@ bool RealSystemOps::writeFile(const QString &path, const QByteArray &content)
     return written == content.size();
 }
 
-// Device path validation
 bool RealSystemOps::statPath(const QString &path, struct stat *buf)
 {
     return stat(path.toLocal8Bit().constData(), buf) == 0;
@@ -80,7 +77,6 @@ bool RealSystemOps::isCharDevice(mode_t mode)
     return S_ISCHR(mode);
 }
 
-// Ownership and permissions
 int RealSystemOps::chown(const QString &path, uid_t owner, gid_t group)
 {
     return ::chown(path.toLocal8Bit().constData(), owner, group);
@@ -91,7 +87,6 @@ int RealSystemOps::chmod(const QString &path, mode_t mode)
     return ::chmod(path.toLocal8Bit().constData(), mode);
 }
 
-// Process operations
 QProcess *RealSystemOps::createProcess(QObject *parent)
 {
     return new QProcess(parent);
@@ -122,29 +117,22 @@ QByteArray RealSystemOps::readAllStandardOutput(QProcess *process)
     return process->readAllStandardOutput();
 }
 
-// Directory listing
 QStringList RealSystemOps::entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters)
 {
     QDir dir(path);
     return dir.entryList(nameFilters, filters);
 }
 
-// Process signaling
 bool RealSystemOps::killProcess(pid_t pid, int signal)
 {
     return ::kill(pid, signal) == 0;
 }
 
-// Authorization check
 bool RealSystemOps::checkAuthorization(const QString &action)
 {
-    // In a full implementation, this would check PolicyKit
-    // For now, we trust the D-Bus system bus ACL
-    // TODO: Implement proper PolicyKit authorization check
-
     Q_UNUSED(action)
 
-    // Check if caller is root or in appropriate group
-    // The system D-Bus policy should restrict who can call us
+    // TODO: Implement proper PolicyKit authorization check
+    // Currently trusts the D-Bus system bus ACL for access control
     return true;
 }
