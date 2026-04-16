@@ -32,7 +32,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     m_index = index;
     m_username = config.value(QStringLiteral("username")).toString();
 
-    // Store window geometry for UI display
     int posX = config.value(QStringLiteral("positionX"), 0).toInt();
     int posY = config.value(QStringLiteral("positionY"), 0).toInt();
     int outputW = config.value(QStringLiteral("outputWidth"), 960).toInt();
@@ -40,25 +39,16 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     m_windowGeometry = QRect(posX, posY, outputW, outputH);
     Q_EMIT configChanged();
 
-    // Build gamescope arguments
     QStringList gamescopeArgs = buildGamescopeArgs(config);
-
-    // Build environment
     QStringList envVars = buildEnvironment(config);
 
-    // Get preset command from SessionRunner (resolved from PresetManager)
-    // Fallback to Steam Big Picture if no preset command provided
+    // Fallback to Steam Big Picture if no preset configured
     QString gameCommand = config.value(QStringLiteral("presetCommand")).toString();
-    
     if (gameCommand.isEmpty()) {
-        // Fallback to Steam Big Picture if no preset configured
         gameCommand = QStringLiteral("steam -tenfoot -steamdeck");
     }
-    
-    // All instances go through the D-Bus helper service
-    // This provides uniform handling for all users, including the compositor user
-    
-    // Use the D-Bus helper to launch the instance
+
+    // Launch via D-Bus helper for uniform handling across all users (including compositor user)
     QDBusInterface helper(
         QStringLiteral("io.github.hikaps.CouchPlayHelper"),
         QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
@@ -72,7 +62,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         return false;
     }
     
-    // Use the helper service to launch the instance
     // compositorUid is the UID of the user running CouchPlay (owns the Wayland socket)
     uid_t compositorUid = getuid();
     
@@ -117,7 +106,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
     );
     
-    // Signal running immediately since helper-launched instances don't use QProcess signals
     Q_EMIT runningChanged();
     Q_EMIT started();
 
@@ -128,7 +116,6 @@ void GamescopeInstance::stop(int timeoutMs)
 {
     Q_UNUSED(timeoutMs)
 
-    // Handle helper-launched instances
     if (m_helperPid > 0) {
         setStatus(QStringLiteral("Stopping..."));
 
@@ -166,7 +153,6 @@ void GamescopeInstance::stop(int timeoutMs)
 
 void GamescopeInstance::kill()
 {
-    // Handle helper-launched instances
     if (m_helperPid > 0) {
         setStatus(QStringLiteral("Killing..."));
 
@@ -215,15 +201,12 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
 {
     QStringList args;
 
-    // Steam integration - expose Steam-specific window properties
-    // Only enable for presets that require it (e.g., Steam Big Picture mode)
+    // Steam integration - only enable for presets that require it (e.g., Steam Big Picture)
     bool steamIntegration = config.value(QStringLiteral("steamIntegration"), false).toBool();
     if (steamIntegration) {
         args << QStringLiteral("-e");
     }
 
-    // Borderless window (optional - allows positioning but removes decorations)
-    // Default is false (decorated windows for resizing)
     bool borderless = config.value(QStringLiteral("borderless"), false).toBool();
     if (borderless) {
         args << QStringLiteral("-b");
@@ -244,7 +227,6 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     args << QStringLiteral("-W") << QString::number(outputW);
     args << QStringLiteral("-H") << QString::number(outputH);
 
-    // Refresh rate
     int refreshRate = config.value(QStringLiteral("refreshRate"), 60).toInt();
     if (refreshRate > 0) {
         args << QStringLiteral("-r") << QString::number(refreshRate);
@@ -265,7 +247,6 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     // Window positioning is handled by WindowManager via KWin scripting
     // (gamescope does not have a --position flag)
 
-    // Monitor selection (for multi-monitor setups)
     QString monitorName = config.value(QStringLiteral("monitorName")).toString();
     if (!monitorName.isEmpty()) {
         args << QStringLiteral("--prefer-output") << monitorName;
@@ -295,11 +276,8 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     // Mesa threading for better performance
     envVars << QStringLiteral("mesa_glthread=true");
     
-    // Set desktop environment for XDG portal integration
-    // This enables native file dialogs in Steam and other applications
+    // Set desktop environment for XDG portal integration (native file dialogs in Steam etc.)
     envVars << QStringLiteral("XDG_CURRENT_DESKTOP=KDE");
-    
-    // Force GTK applications to use XDG portals for file dialogs
     envVars << QStringLiteral("GTK_USE_PORTAL=1");
     
     return envVars;

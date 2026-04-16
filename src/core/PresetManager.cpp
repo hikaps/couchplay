@@ -87,7 +87,6 @@ void PresetManager::initBuiltinPresets()
 {
     m_builtinPresets.clear();
 
-    // Steam Big Picture preset
     LaunchPreset steam;
     steam.id = QStringLiteral("steam");
     steam.name = QStringLiteral("Steam Big Picture");
@@ -99,7 +98,6 @@ void PresetManager::initBuiltinPresets()
     steam.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("steam"));
     m_builtinPresets.append(steam);
 
-    // Heroic Games preset
     LaunchPreset heroic;
     heroic.id = QStringLiteral("heroic");
     heroic.name = QStringLiteral("Heroic Games");
@@ -108,7 +106,6 @@ void PresetManager::initBuiltinPresets()
     heroic.steamIntegration = false;
     heroic.launcherId = QStringLiteral("heroic");
 
-        // Auto-detect Heroic and populate info
         if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
             heroic.command = m_heroicConfigManager->heroicCommand();
             heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
@@ -126,7 +123,6 @@ void PresetManager::initBuiltinPresets()
         heroic.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("heroic"));
         m_builtinPresets.append(heroic);
 
-    // Lutris preset
     LaunchPreset lutris;
     lutris.id = QStringLiteral("lutris");
     lutris.name = QStringLiteral("Lutris");
@@ -199,7 +195,6 @@ LaunchPreset PresetManager::getPreset(const QString &id) const
             return preset;
         }
     }
-    // Return default (Steam) if not found
     if (!m_builtinPresets.isEmpty()) {
         return m_builtinPresets.first();
     }
@@ -289,7 +284,6 @@ QString PresetManager::addPresetFromDesktopFile(const QString &desktopFilePath)
         return QString();
     }
 
-    // Check if already exists
     for (const LaunchPreset &existing : m_customPresets) {
         if (existing.desktopFilePath == desktopFilePath) {
             return existing.id;
@@ -352,19 +346,16 @@ void PresetManager::scanApplications()
 {
     m_availableApplications.clear();
 
-    // Standard .desktop file locations
     QStringList searchPaths = {
         QStringLiteral("/usr/share/applications"),
         QStringLiteral("/usr/local/share/applications"),
         QDir::homePath() + QStringLiteral("/.local/share/applications"),
-        // Flatpak
         QDir::homePath() + QStringLiteral("/.local/share/flatpak/exports/share/applications"),
         QStringLiteral("/var/lib/flatpak/exports/share/applications"),
-        // Snap
         QStringLiteral("/var/lib/snapd/desktop/applications")
     };
 
-    QSet<QString> seenNames;  // Avoid duplicates by name
+    QSet<QString> seenNames;
 
     for (const QString &searchPath : searchPaths) {
         QDir dir(searchPath);
@@ -377,12 +368,10 @@ void PresetManager::scanApplications()
             QString filePath = dir.absoluteFilePath(fileName);
             LaunchPreset app = parseDesktopFile(filePath);
 
-            // Skip invalid or already seen
             if (app.name.isEmpty() || seenNames.contains(app.name)) {
                 continue;
             }
 
-            // Skip if already added as a custom preset
             bool alreadyAdded = false;
             for (const LaunchPreset &custom : m_customPresets) {
                 if (custom.desktopFilePath == filePath) {
@@ -399,7 +388,6 @@ void PresetManager::scanApplications()
         }
     }
 
-    // Sort by name
     std::sort(m_availableApplications.begin(), m_availableApplications.end(),
               [](const LaunchPreset &a, const LaunchPreset &b) {
                   return a.name.toLower() < b.name.toLower();
@@ -426,19 +414,16 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
     QSettings desktop(filePath, QSettings::IniFormat);
     desktop.beginGroup(QStringLiteral("Desktop Entry"));
 
-    // Check if it's an application
     QString type = desktop.value(QStringLiteral("Type")).toString();
     if (type != QStringLiteral("Application")) {
         return preset;
     }
 
-    // Skip hidden entries
     if (desktop.value(QStringLiteral("Hidden"), false).toBool() ||
         desktop.value(QStringLiteral("NoDisplay"), false).toBool()) {
         return preset;
     }
 
-    // Extract fields
     preset.name = desktop.value(QStringLiteral("Name")).toString();
     preset.command = cleanExecCommand(desktop.value(QStringLiteral("Exec")).toString());
     preset.workingDirectory = desktop.value(QStringLiteral("Path")).toString();
@@ -471,7 +456,6 @@ QString PresetManager::cleanExecCommand(const QString &exec)
         cleaned.remove(code);
     }
 
-    // Clean up any double spaces and trim
     cleaned = cleaned.simplified();
 
     return cleaned;

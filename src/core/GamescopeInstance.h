@@ -14,14 +14,7 @@
 struct InstanceConfig;
 
 /**
- * @brief Manages a single gamescope instance running a game
- * 
- * Handles starting gamescope with appropriate arguments for:
- * - Resolution (internal and output)
- * - Window positioning for split-screen layouts
- * - Input device isolation
- * - User execution via D-Bus helper service
- * - Direct Proton/Wine game launching
+ * @brief Manages a single gamescope instance
  */
 class GamescopeInstance : public QObject
 {
@@ -39,67 +32,22 @@ public:
     explicit GamescopeInstance(QObject *parent = nullptr);
     ~GamescopeInstance() override;
 
-    /**
-     * @brief Start the gamescope instance
-     * @param config Instance configuration containing:
-     *   - username: Linux user to run as (empty = current user)
-     *   - internalWidth/Height: Game render resolution
-     *   - outputWidth/Height: Window size
-     *   - refreshRate: Target refresh rate
-     *   - scalingMode: fit, stretch, integer, etc.
-     *   - filterMode: linear, nearest, FSR, NIS
-     *   - monitor: Monitor index for multi-monitor
-     *   - positionX/Y: Window position for split-screen
-     *   - devicePaths: List of /dev/input/eventN paths for input isolation
-     *   - executablePath: Path to game executable (.exe or native binary)
-     *   - protonPath: Path to Proton installation (for Windows games)
-     *   - prefixPath: Path to Wine/Proton prefix (WINEPREFIX/STEAM_COMPAT_DATA_PATH)
-     *   - workingDirectory: Working directory for the game (optional)
-     * @param index Instance index (0 = primary, 1+ = secondary)
-     * @return true if started successfully
-     */
     Q_INVOKABLE bool start(const QVariantMap &config, int index);
 
-    /**
-     * @brief Stop the gamescope instance gracefully
-     * @param timeoutMs Timeout before force kill (default 5000ms)
-     */
     Q_INVOKABLE void stop(int timeoutMs = 5000);
-
-    /**
-     * @brief Force kill the gamescope instance
-     */
     Q_INVOKABLE void kill();
 
-    /**
-     * @brief Check if instance is running
-     */
     bool isRunning() const;
 
-    // Property getters
     int index() const { return m_index; }
     qint64 pid() const { return m_helperPid; }
-    /**
-     * @brief Get the PID of the gamescope process
-     * @return PID, or 0 if not running
-     */
     qint64 gamescopePid() const { return m_gamescopePid; }
     QString status() const { return m_status; }
     QString username() const { return m_username; }
     QRect windowGeometry() const { return m_windowGeometry; }
 
-    /**
-     * @brief Build gamescope command line arguments from config
-     * @param config Configuration map
-     * @return List of command line arguments
-     */
     static QStringList buildGamescopeArgs(const QVariantMap &config);
 
-    /**
-     * @brief Build environment variables for the instance
-     * @param config Configuration map
-     * @return Environment variable assignments as strings
-     */
     static QStringList buildEnvironment(const QVariantMap &config);
 
 Q_SIGNALS:
@@ -122,6 +70,6 @@ private:
     QString m_status;
     QString m_username;
     QRect m_windowGeometry;
-    qint64 m_helperPid = 0;        // PID from helper service
+    qint64 m_helperPid = 0;
     qint64 m_gamescopePid = 0;
 };
