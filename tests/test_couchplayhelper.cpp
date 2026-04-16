@@ -13,14 +13,12 @@
 #undef private
 #include "../helper/SystemOps.h"
 
-// Mock SystemOps for testing - no real system calls
 class MockSystemOps : public SystemOps
 {
 public:
     MockSystemOps() = default;
     ~MockSystemOps() override = default;
 
-    // Configuration methods for test setup
     void setAuthResult(bool authorized) { m_authorized = authorized; }
     void setProcessExitCode(int exitCode) { m_processExitCode = exitCode; }
     void setMockProcessStart(bool mock) { m_mockProcessStart = mock; }
@@ -37,7 +35,6 @@ public:
         }
     }
 
-
     void setGroupExists(const QString &groupname, bool exists, gid_t gid = 0, const QStringList &members = {}) {
         if (exists) {
             struct group gr;
@@ -52,7 +49,6 @@ public:
     void setChownResult(int result) { m_chownResult = result; }
     void setChmodResult(int result) { m_chmodResult = result; }
 
-    // Clear all mock data
     void clear() {
         m_pwEntries.clear();
         m_grEntries.clear();
@@ -69,7 +65,6 @@ public:
         m_standardError.clear();
     }
 
-    // Get last process arguments for verification
     QStringList getLastProcessArgs() const { return m_processArgs; }
     QString getLastProcessCommand() const { return m_processCommand; }
 
@@ -79,7 +74,6 @@ public:
     };
     QList<ProcessInvocation> m_processInvocations;
 
-    // User/group lookup operations
     struct passwd *getpwnam(const char *name) override {
         QString username = QString::fromLocal8Bit(name);
         if (m_pwEntries.contains(username)) {
@@ -110,7 +104,6 @@ public:
         return nullptr;
     }
 
-    // Filesystem operations
     bool fileExists(const QString &path) override {
         return m_files.value(path, false);
     }
@@ -121,45 +114,37 @@ public:
 
     bool mkpath(const QString &path) override {
         Q_UNUSED(path)
-        // Always succeed for tests
         return true;
     }
 
     bool removeFile(const QString &path) override {
         Q_UNUSED(path)
-        // Always succeed for tests
         return true;
     }
 
     bool copyFile(const QString &source, const QString &dest) override {
         Q_UNUSED(source)
         Q_UNUSED(dest)
-        // Always succeed for tests
         return true;
     }
 
     bool writeFile(const QString &path, const QByteArray &content) override {
         Q_UNUSED(path)
         Q_UNUSED(content)
-        // Always succeed for tests
         return true;
     }
 
-    // Device path validation
     bool statPath(const QString &path, struct stat *buf) override {
         Q_UNUSED(path)
         Q_UNUSED(buf)
-        // Assume valid for tests
         return true;
     }
 
     bool isCharDevice(mode_t mode) override {
         Q_UNUSED(mode)
-        // Assume valid for tests
         return true;
     }
 
-    // Ownership and permissions
     int chown(const QString &path, uid_t owner, gid_t group) override {
         Q_UNUSED(path)
         Q_UNUSED(owner)
@@ -173,7 +158,6 @@ public:
         return m_chmodResult;
     }
 
-    // Process operations
     QProcess *createProcess(QObject *parent = nullptr) override {
         return new QProcess(parent);
     }
@@ -211,7 +195,6 @@ public:
         return m_standardOutput;
     }
 
-    // Directory listing
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override {
         Q_UNUSED(path)
         Q_UNUSED(nameFilters)
@@ -219,14 +202,12 @@ public:
         return QStringList();
     }
 
-    // Process signaling
     bool killProcess(pid_t pid, int signal) override {
         Q_UNUSED(pid)
         Q_UNUSED(signal)
         return true;
     }
 
-    // Authorization check
     bool checkAuthorization(const QString &action) override {
         Q_UNUSED(action)
         return m_authorized;
@@ -261,7 +242,6 @@ private:
             gr.gr_name = groupBytes.data();
             gr.gr_gid = gid;
 
-            // Build member list
             m_memberPtrs.clear();
             m_memberStrings.clear();
             for (const QString &member : members) {
@@ -292,7 +272,6 @@ private:
     QByteArray m_standardError;
 };
 
-// Test class for CouchPlayHelper
 class TestCouchPlayHelper : public QObject
 {
     Q_OBJECT
@@ -384,26 +363,22 @@ private:
 
 void TestCouchPlayHelper::initTestCase()
 {
-    // Register helper on session bus with unique service name
     m_serviceName = QStringLiteral("io.github.hikaps.CouchPlayHelper.Test");
     m_objectPath = QStringLiteral("/io/github/hikaps/CouchPlayHelper");
 
     m_ops = new MockSystemOps();
     m_ops->clear();
 
-    // Set up default mock data
     m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
     m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
 
     m_helper = new CouchPlayHelper(m_ops);
 
-    // Register object on session bus with ExportAllSlots flag
     if (!QDBusConnection::sessionBus().registerObject(m_objectPath, m_helper,
             QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals)) {
         qFatal("Failed to register CouchPlayHelper on session bus");
     }
 
-    // Register service name on session bus
     if (!QDBusConnection::sessionBus().registerService(m_serviceName)) {
         qFatal("Failed to register service name %s on session bus", qUtf8Printable(m_serviceName));
     }
@@ -411,7 +386,6 @@ void TestCouchPlayHelper::initTestCase()
 
 void TestCouchPlayHelper::cleanupTestCase()
 {
-    // Unregister from session bus
     QDBusConnection::sessionBus().unregisterObject(m_objectPath);
     QDBusConnection::sessionBus().unregisterService(m_serviceName);
 
@@ -425,7 +399,6 @@ void TestCouchPlayHelper::cleanupTestCase()
 
 void TestCouchPlayHelper::init()
 {
-    // Create QDBusInterface for each test
     m_dbusInterface = new QDBusInterface(
         m_serviceName,
         m_objectPath,
@@ -444,8 +417,6 @@ void TestCouchPlayHelper::cleanup()
     m_dbusInterface = nullptr;
     m_ops->clear();
 }
-
-// ============ CreateUser Tests ============
 
 void TestCouchPlayHelper::testCreateUserSuccess()
 {
@@ -555,8 +526,6 @@ void TestCouchPlayHelper::testCreateUserLingerFailure()
     QCOMPARE(reply.error().type(), QDBusError::Failed);
 }
 
-// ============ DeleteUser Tests ============
-
 void TestCouchPlayHelper::testDeleteUserSuccess()
 {
     m_ops->clear();
@@ -659,8 +628,6 @@ void TestCouchPlayHelper::testDeleteUserProcessFailure()
     QCOMPARE(reply.error().type(), QDBusError::Failed);
 }
 
-// ============ IsInCouchPlayGroup Tests ============
-
 void TestCouchPlayHelper::testIsInCouchPlayGroupTrue()
 {
     m_ops->clear();
@@ -716,8 +683,6 @@ void TestCouchPlayHelper::testIsInCouchPlayGroupNonexistentGroup()
     QVERIFY(reply.isValid());
     QVERIFY(!reply.value());
 }
-
-// ============ EnableLinger Tests ============
 
 void TestCouchPlayHelper::testEnableLingerSuccess()
 {
@@ -790,8 +755,6 @@ void TestCouchPlayHelper::testEnableLingerProcessFailure()
     QCOMPARE(reply.error().type(), QDBusError::Failed);
 }
 
-// ============ IsLingerEnabled Tests ============
-
 void TestCouchPlayHelper::testIsLingerEnabledTrue()
 {
     m_ops->clear();
@@ -819,8 +782,6 @@ void TestCouchPlayHelper::testIsLingerEnabledFalse()
     QVERIFY(reply.isValid());
     QVERIFY(!reply.value());
 }
-
-// ============ Device Ownership Tests ============
 
 void TestCouchPlayHelper::testChangeDeviceOwnerInvalidPathNotUnderDevInput()
 {
@@ -1232,8 +1193,6 @@ void TestCouchPlayHelper::testChangeDeviceOwnerBatchAllFailure()
     QVERIFY(!reply.isValid());
 }
 
-// ============ Runtime Access Tests (Polkit + D-Bus Integration) ============
-
 void TestCouchPlayHelper::testSetupRuntimeAccessSuccess()
 {
     m_ops->clear();
@@ -1350,8 +1309,6 @@ void TestCouchPlayHelper::testRemoveRuntimeAccessUserNotFound()
     QVERIFY(reply.value());
 }
 
-// ============ Version Test ============
-
 void TestCouchPlayHelper::testVersion()
 {
     m_ops->clear();
@@ -1363,8 +1320,6 @@ void TestCouchPlayHelper::testVersion()
     QVERIFY(reply.isValid());
     QVERIFY(!reply.value().isEmpty());
 }
-
-// ============ Launch/Stop/Kill Instance Tests ============
 
 void TestCouchPlayHelper::testGenerateServiceName()
 {

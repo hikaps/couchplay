@@ -13,7 +13,6 @@
 
 #include "SessionManager.h"
 
-// Helper macro for QVariantMap key access with proper QString conversion
 #define KEY(x) QStringLiteral(x)
 
 class TestSessionManager : public QObject
@@ -60,7 +59,6 @@ private:
 
 void TestSessionManager::initTestCase()
 {
-    // Create a temporary directory for test profiles
     m_tempDir = new QTemporaryDir();
     QVERIFY(m_tempDir->isValid());
 }
@@ -92,14 +90,11 @@ void TestSessionManager::testInitialization()
 
 void TestSessionManager::testNewSession()
 {
-    // First, set some values
     m_sessionManager->setInstanceCount(3);
     m_sessionManager->setCurrentLayout(QStringLiteral("vertical"));
     
-    // Now start a new session
     m_sessionManager->newSession();
     
-    // Should reset to defaults
     QCOMPARE(m_sessionManager->instanceCount(), 2);
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("horizontal"));
     QVERIFY(m_sessionManager->currentProfileName().isEmpty());
@@ -138,10 +133,7 @@ void TestSessionManager::testCurrentLayout()
 
 void TestSessionManager::testGetInstanceConfig()
 {
-    // Get config for instance 0
     QVariantMap config = m_sessionManager->getInstanceConfig(0);
-    
-    // Should have default values
     QVERIFY(config.contains(KEY("internalWidth")));
     QVERIFY(config.contains(KEY("internalHeight")));
     QVERIFY(config.contains(KEY("refreshRate")));
@@ -197,11 +189,9 @@ void TestSessionManager::testSaveProfile()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
     
-    // Configure session
     m_sessionManager->setInstanceCount(3);
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
     
-    // Save profile
     bool result = m_sessionManager->saveProfile(QStringLiteral("TestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(spy.count(), 1);
@@ -212,16 +202,14 @@ void TestSessionManager::testSaveProfile()
 
 void TestSessionManager::testLoadProfile()
 {
-    // First save a profile
     m_sessionManager->setInstanceCount(4);
     m_sessionManager->setCurrentLayout(QStringLiteral("vertical"));
     m_sessionManager->saveProfile(QStringLiteral("LoadTestProfile"));
     
-    // Reset session
+    // Reset session before loading
     m_sessionManager->newSession();
     QCOMPARE(m_sessionManager->instanceCount(), 2);
     
-    // Load the profile
     bool result = m_sessionManager->loadProfile(QStringLiteral("LoadTestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(m_sessionManager->instanceCount(), 4);
@@ -240,7 +228,6 @@ void TestSessionManager::testDeleteProfile()
     
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
     
-    // Delete it
     bool result = m_sessionManager->deleteProfile(QStringLiteral("DeleteTestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(spy.count(), 1);
@@ -261,11 +248,9 @@ void TestSessionManager::testSavedProfiles()
         m_sessionManager->deleteProfile(profile.name);
     }
     
-    // Initially should be empty
     profiles = m_sessionManager->savedProfiles();
     int initialCount = profiles.size();
     
-    // Save some profiles
     m_sessionManager->saveProfile(QStringLiteral("Profile1"));
     m_sessionManager->saveProfile(QStringLiteral("Profile2"));
     
@@ -337,23 +322,19 @@ void TestSessionManager::testGetAssignedUsers()
     m_sessionManager->newSession();
     m_sessionManager->setInstanceCount(3);
     
-    // Set users for instances
     m_sessionManager->setInstanceUser(0, QString());  // Primary user (empty string)
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstanceUser(2, QStringLiteral("player3"));
     
-    // Get assigned users excluding index 0 - should return player2 and player3
     QStringList assigned = m_sessionManager->getAssignedUsers(0);
     QCOMPARE(assigned.size(), 2);
     QVERIFY(assigned.contains(QStringLiteral("player2")));
     QVERIFY(assigned.contains(QStringLiteral("player3")));
     
-    // Get assigned users excluding index 1 - should return only player3
     assigned = m_sessionManager->getAssignedUsers(1);
     QCOMPARE(assigned.size(), 1);
     QVERIFY(assigned.contains(QStringLiteral("player3")));
     
-    // Get assigned users excluding index 2 - should return only player2
     assigned = m_sessionManager->getAssignedUsers(2);
     QCOMPARE(assigned.size(), 1);
     QVERIFY(assigned.contains(QStringLiteral("player2")));
