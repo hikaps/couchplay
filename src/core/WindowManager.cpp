@@ -108,13 +108,8 @@ QStringList WindowManager::findAllGamescopeWindows()
         return results;
     }
     
-    // Parse the reply - it's an array of structs: a(sssuda{sv})
-    // Each struct: (id, caption, iconName, relevance, score, properties)
-    // The id format is "0_{uuid}" - we need to extract the uuid and check if it's gamescope
-    // 
-    // The properties dict contains complex types (like icon-data with struct (iiibiiay))
-    // that can cause issues with QDBusArgument parsing. We only need the matchId,
-    // so we extract just what we need and skip the rest.
+    // The properties dict contains complex types (e.g. icon-data with struct (iiibiiay))
+    // that break QDBusArgument parsing. We only need matchId, so skip the rest.
     const QDBusArgument arg = reply.arguments().at(0).value<QDBusArgument>();
     
     if (arg.currentType() != QDBusArgument::ArrayType) {
@@ -135,14 +130,11 @@ QStringList WindowManager::findAllGamescopeWindows()
         
         arg >> matchId >> caption >> iconName >> relevance >> score;
         
-        // Skip the properties dict - it contains complex types that are hard to parse
-        // We use QVariant to consume it without fully deserializing
         QVariant propertiesVariant;
         arg >> propertiesVariant;
         
         arg.endStructure();
         
-        // matchId format is "0_{uuid}" - extract the uuid
         if (matchId.contains(QLatin1Char('{'))) {
             QString uuid = matchId.mid(matchId.indexOf(QLatin1Char('{')));
             
@@ -314,7 +306,7 @@ void WindowManager::checkForNewWindows()
     
     QStringList currentWindows = findAllGamescopeWindows();
     
-    // Process pending requests in order (FIFO) — we may remove elements during iteration
+    // FIFO order — elements removed during iteration
     int i = 0;
     while (i < m_pendingRequests.size() && !currentWindows.isEmpty()) {
         const PositionRequest &request = m_pendingRequests[i];
@@ -346,7 +338,6 @@ void WindowManager::checkForNewWindows()
             } else {
                 Q_EMIT positioningTimedOut(requestId);
             }
-            
             // Don't increment i since we removed the current element
         } else {
             ++i;
@@ -386,13 +377,9 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
     for (var i = 0; i < windows.length; i++) {
         var win = windows[i];
         if (win.internalId.toString() === targetUuid) {
-            // Set the frame geometry using a plain JavaScript object
             win.frameGeometry = {x: targetX, y: targetY, width: targetW, height: targetH};
-            // Remove decorations for cleaner positioning
             win.noBorder = true;
-            // Keep above other windows (including panels) for immersive gaming
             win.keepAbove = true;
-            // Hide from taskbar/pager but keep in Alt+Tab for emergency access
             win.skipTaskbar = true;
             win.skipPager = true;
             break;

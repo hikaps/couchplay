@@ -215,13 +215,11 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     // Note: Don't pass --backend flag - let gamescope auto-detect
     // It will use wayland backend when WAYLAND_DISPLAY is set
 
-    // Internal resolution (game renders at this)
     int internalW = config.value(QStringLiteral("internalWidth"), 1920).toInt();
     int internalH = config.value(QStringLiteral("internalHeight"), 1080).toInt();
     args << QStringLiteral("-w") << QString::number(internalW);
     args << QStringLiteral("-h") << QString::number(internalH);
 
-    // Output resolution (window size)
     int outputW = config.value(QStringLiteral("outputWidth"), 960).toInt();
     int outputH = config.value(QStringLiteral("outputHeight"), 1080).toInt();
     args << QStringLiteral("-W") << QString::number(outputW);
