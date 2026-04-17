@@ -13,9 +13,6 @@
 #include "HeroicConfigManager.h"
 #include "SteamConfigManager.h"
 
-/**
- * LauncherInfo - Launcher-specific configuration and paths
- */
 struct LauncherInfo {
     Q_GADGET
     Q_PROPERTY(QString configPath MEMBER configPath)
@@ -25,11 +22,11 @@ struct LauncherInfo {
     Q_PROPERTY(bool hasShortcutSync MEMBER hasShortcutSync)
 
 public:
-    QString configPath;           // Main config directory
-    QString dataPath;             // Game data/library path
+    QString configPath;
+    QString dataPath;
     QStringList gameDirectories;  // Paths needing ACLs (computed at runtime)
-    bool requiresAcls = false;    // Does this launcher need ACL setup?
-    bool hasShortcutSync = false; // Can we sync shortcuts from this launcher?
+    bool requiresAcls = false;
+    bool hasShortcutSync = false;
     
     bool operator==(const LauncherInfo &other) const {
         return configPath == other.configPath && 
@@ -41,9 +38,6 @@ public:
 
 Q_DECLARE_METATYPE(LauncherInfo)
 
-/**
- * @brief A launch preset defining how to start a game/application
- */
 struct LaunchPreset {
     Q_GADGET
     Q_PROPERTY(QString id MEMBER id)
@@ -60,16 +54,15 @@ struct LaunchPreset {
     Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
 
 public:
-    QString id;                     // Unique ID (e.g., "steam", "heroic", "lutris", "custom-abc123")
-    QString name;                   // Display name
-    QString command;                // Launch command
-    QString workingDirectory;       // Optional working dir (from .desktop Path=)
-    QString iconName;               // Icon name for UI
+    QString id;                     // e.g., "steam", "heroic", "lutris", "custom-abc123"
+    QString name;
+    QString command;
+    QString workingDirectory;       // Optional, from .desktop Path=
+    QString iconName;
     QString desktopFilePath;        // Source .desktop file (if applicable)
     bool isBuiltin = false;         // true for Steam/Heroic/Lutris
     bool steamIntegration = false;  // Enable gamescope -e flag
     
-    // Launcher-aware fields
     QString launcherId;             // "steam", "heroic", "lutris", "custom" (empty for non-launcher presets)
     LauncherInfo launcherInfo;      // Populated by detection for launcher presets
     QStringList sharedDirectories;  // Per-preset shared directories for ACL/mount setup
@@ -97,62 +90,25 @@ public:
     explicit PresetManager(QObject *parent = nullptr);
     ~PresetManager() override;
 
-    /**
-     * @brief Set the HeroicConfigManager for Heroic integration
-     */
     Q_INVOKABLE void setHeroicConfigManager(HeroicConfigManager *manager);
-    
-    /**
-     * @brief Get the HeroicConfigManager
-     */
     HeroicConfigManager *heroicConfigManager() const { return m_heroicConfigManager; }
 
-    /**
-     * @brief Set the SteamConfigManager for Steam library detection
-     */
     Q_INVOKABLE void setSteamConfigManager(SteamConfigManager *manager);
-
-    /**
-     * @brief Get the SteamConfigManager
-     */
     SteamConfigManager *steamConfigManager() const { return m_steamConfigManager; }
 
-    /**
-     * @brief Get all available presets (builtin + custom)
-     */
     QList<LaunchPreset> presets() const;
     QVariantList presetsAsVariant() const;
 
     /**
-     * @brief Get applications discovered from .desktop files
-     * These are potential presets that can be added as custom presets
+     * @brief Applications discovered from .desktop files, available as potential custom presets
      */
     QList<LaunchPreset> availableApplications() const { return m_availableApplications; }
     QVariantList availableApplicationsAsVariant() const;
 
-    /**
-     * @brief Get a preset by ID
-     */
     Q_INVOKABLE LaunchPreset getPreset(const QString &id) const;
-
-    /**
-     * @brief Get the command for a preset
-     */
     Q_INVOKABLE QString getCommand(const QString &id) const;
-
-    /**
-     * @brief Get the working directory for a preset
-     */
     Q_INVOKABLE QString getWorkingDirectory(const QString &id) const;
-
-    /**
-     * @brief Check if a preset has Steam integration enabled
-     */
     Q_INVOKABLE bool getSteamIntegration(const QString &id) const;
-
-    /**
-     * @brief Get launcher ID for a preset
-     */
     Q_INVOKABLE QString getLauncherId(const QString &id) const;
 
     /**
@@ -160,14 +116,7 @@ public:
      */
     Q_INVOKABLE QStringList getGameDirectories(const QString &id) const;
 
-    /**
-     * @brief Get shared directories for a preset
-     */
     Q_INVOKABLE QStringList getSharedDirectories(const QString &id) const;
-
-    /**
-     * @brief Set shared directories for a preset
-     */
     Q_INVOKABLE bool setSharedDirectories(const QString &id, const QStringList &directories);
 
     /**
@@ -252,9 +201,6 @@ private:
      */
     LaunchPreset parseDesktopFile(const QString &filePath) const;
 
-    /**
-     * @brief Generate a unique ID for a custom preset
-     */
     static QString generateCustomId();
 
     /**

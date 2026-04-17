@@ -58,10 +58,9 @@ QStringList PresetManager::getDefaultSharedDirectories(const QString &id) const
         }
     } else if (id == QStringLiteral("heroic")) {
         if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            // NOTE: configPath is NOT added to shared directories because:
-            // 1. syncConfigToUser() copies specific config files to the gaming user's home
-            // 2. Bind-mounting the config dir would cause ownership conflicts when syncing
-            // Only share the install path where games are installed
+            // Don't share configPath: syncConfigToUser() copies specific config files to the gaming user's home,
+            // and bind-mounting the config dir would cause ownership conflicts when syncing.
+            // Only share the install path where games are installed.
             QString installPath = m_heroicConfigManager->defaultInstallPath();
             if (!installPath.isEmpty()) {
                 dirs.append(installPath);
@@ -410,7 +409,6 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
         return preset;
     }
 
-    // Use QSettings to parse INI-like .desktop format
     QSettings desktop(filePath, QSettings::IniFormat);
     desktop.beginGroup(QStringLiteral("Desktop Entry"));
 
@@ -430,7 +428,6 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
     preset.iconName = desktop.value(QStringLiteral("Icon")).toString();
     preset.desktopFilePath = filePath;
 
-    // Check Categories for Game - could filter to only games in the future
     // QString categories = desktop.value(QStringLiteral("Categories")).toString();
 
     return preset;
@@ -440,16 +437,14 @@ QString PresetManager::cleanExecCommand(const QString &exec)
 {
     QString cleaned = exec;
 
-    // Remove freedesktop field codes
-    // These are placeholders for file arguments, URLs, etc.
     static const QStringList fieldCodes = {
-        QStringLiteral("%f"), QStringLiteral("%F"),  // File(s)
-        QStringLiteral("%u"), QStringLiteral("%U"),  // URL(s)
-        QStringLiteral("%d"), QStringLiteral("%D"),  // Directory (deprecated)
-        QStringLiteral("%n"), QStringLiteral("%N"),  // Filename (deprecated)
-        QStringLiteral("%i"),                         // Icon
-        QStringLiteral("%c"),                         // Translated name
-        QStringLiteral("%k")                          // Desktop file path
+        QStringLiteral("%f"), QStringLiteral("%F"),
+        QStringLiteral("%u"), QStringLiteral("%U"),
+        QStringLiteral("%d"), QStringLiteral("%D"),
+        QStringLiteral("%n"), QStringLiteral("%N"),
+        QStringLiteral("%i"),
+        QStringLiteral("%c"),
+        QStringLiteral("%k")
     };
 
     for (const QString &code : fieldCodes) {
