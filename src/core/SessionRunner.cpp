@@ -12,6 +12,9 @@
 #include "../dbus/CouchPlayHelperClient.h"
 
 #include <QAction>
+#include <QDBusConnection>
+#include <QDBusInterface>
+#include <QDBusReply>
 #include <QDebug>
 #include <QDir>
 #include <QDirIterator>
@@ -94,7 +97,6 @@ void SessionRunner::setSessionManager(SessionManager *manager)
 void SessionRunner::setDeviceManager(DeviceManager *manager)
 {
     if (m_deviceManager != manager) {
-        // Disconnect from old manager
         if (m_deviceManager) {
             disconnect(m_deviceManager, &DeviceManager::deviceReconnected,
                       this, &SessionRunner::onDeviceReconnected);
@@ -209,7 +211,8 @@ bool SessionRunner::start()
         }
     }
 
-    // Calculate window layouts
+    inhibitScreenSaver();
+
     QRect screenGeometry = getScreenGeometry();
     m_layouts = calculateLayout(profile.layout, instanceCount, screenGeometry, profile.gridSubLayout);
 
@@ -280,7 +283,6 @@ bool SessionRunner::start()
         m_pendingInstanceConfigs.append(config);
     }
 
-    // Start instances sequentially to ensure correct window positioning order
     m_nextInstanceToStart = 0;
     startNextInstance();
 
@@ -302,6 +304,8 @@ void SessionRunner::stop()
     }
 
     setStatus(QStringLiteral("Stopping session..."));
+
+    uninhibitScreenSaver();
 
     m_virtualDeviceWatcher->stopWatching();
 
@@ -772,7 +776,6 @@ QRect SessionRunner::getScreenGeometry() const
         return screen->geometry();
     }
 
-    // Fallback: headless or no screen available
     return QRect(0, 0, 1920, 1080);
 }
 
@@ -955,6 +958,7 @@ void SessionRunner::onInstanceStopped()
         Q_EMIT runningInstanceCountChanged();
 
         if (!isRunning()) {
+            uninhibitScreenSaver();
             setStatus(QStringLiteral("Session ended"));
             restoreDeviceOwnership();
             Q_EMIT runningChanged();
@@ -1227,4 +1231,57 @@ void SessionRunner::onVirtualDeviceAppeared(int eventNumber, const QString &devi
     } else {
         qWarning() << "SessionRunner: Failed to set virtual device ownership" << devicePath;
     }
+}
+
+void SessionRunner::inhibitScreenSaver()
+{
+    if (m_screenSaverCookie != 0) {
+        return;
+    }
+
+    QDBusInterface screenSaver(
+        QStringLiteral("org.freedesktop.ScreenSaver"),
+        QStringLiteral("/org/freedesktop/ScreenSaver"),
+        QStringLiteral("org.freedesktop.ScreenSaver"),
+        QDBusConnection::sessionBus()
+    );
+
+    if (!screenSaver.isValid()) {
+        qCDebug(couchplayCore) << "ScreenSaver D-Bus interface not available, skipping inhibition";
+        return;
+    }
+
+    QDBusReply<uint> reply = screenSaver.call(
+        QStringLiteral("Inhibit"),
+        QStringLiteral("io.github.hikaps.couchplay"),
+        QStringLiteral("Split-screen gaming session active")
+    );
+
+    if (reply.isValid()) {
+        m_screenSaverCookie = reply.value();
+        qCDebug(couchplayCore) << "ScreenSaver inhibited, cookie:" << m_screenSaverCookie;
+    } else {
+        qCWarning(couchplayCore) << "Failed to inhibit ScreenSaver:" << reply.error().message();
+    }
+}
+
+void SessionRunner::uninhibitScreenSaver()
+{
+    if (m_screenSaverCookie == 0) {
+        return;
+    }
+
+    QDBusInterface screenSaver(
+        QStringLiteral("org.freedesktop.ScreenSaver"),
+        QStringLiteral("/org/freedesktop/ScreenSaver"),
+        QStringLiteral("org.freedesktop.ScreenSaver"),
+        QDBusConnection::sessionBus()
+    );
+
+    if (screenSaver.isValid()) {
+        screenSaver.call(QStringLiteral("UnInhibit"), m_screenSaverCookie);
+        qCDebug(couchplayCore) << "ScreenSaver uninhibited, cookie:" << m_screenSaverCookie;
+    }
+
+    m_screenSaverCookie = 0;
 }

@@ -30,12 +30,6 @@ class PresetManager;
  * SessionRunner manages the lifecycle of multiple GamescopeInstance objects,
  * handles window layout calculations, device ownership transfers, and
  * coordinates with the SessionManager for configuration.
- * 
- * Typical usage:
- * 1. Set sessionManager, deviceManager, helperClient
- * 2. Call start() to begin the session
- * 3. Monitor via runningInstances property
- * 4. Call stop() to end the session
  */
 class SessionRunner : public QObject
 {
@@ -182,8 +176,11 @@ private:
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
     void cleanupOverrideDirs(const QStringList &overridePaths);
+    void inhibitScreenSaver();
+    void uninhibitScreenSaver();
 
     QMap<int, QStringList> m_instanceBindPaths;
+    uint m_screenSaverCookie = 0;
 
     // Steam process discovery helpers
     qint64 findSteamProcess(qint64 gamescopePid, int maxDepth = 6) const;
