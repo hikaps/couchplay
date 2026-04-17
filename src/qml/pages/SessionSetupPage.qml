@@ -13,7 +13,6 @@ Kirigami.ScrollablePage {
 
     title: i18nc("@title", "New Session")
 
-    // References to backend managers (from Main.qml)
     required property var sessionManager
     required property var sessionRunner
     required property var deviceManager
@@ -25,10 +24,7 @@ Kirigami.ScrollablePage {
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
     property string gridSubLayout: sessionManager ? sessionManager.currentGridSubLayout : ""
 
-    // Revision counter to force re-evaluation of user filtering when instances change
     property int instancesRevision: 0
-    
-    // Revision counter to force re-evaluation of device display when devices change
     property int devicesRevision: 0
 
     Connections {
@@ -48,7 +44,7 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Get available users for a specific instance (excludes users assigned to other instances)
+    // Get available users for a specific instance
     function getAvailableUsers(forIndex) {
         // Reference instancesRevision to create binding dependency
         void(root.instancesRevision)
@@ -315,7 +311,6 @@ Kirigami.ScrollablePage {
                 property var cardPresetManager: root.presetManager
                 property var cardSessionManager: root.sessionManager
                 
-                // Copy revision counter for reliable binding
                 property int cardRevision: root?.instancesRevision ?? 0
                 
                 property string currentPresetId: {
@@ -381,7 +376,6 @@ Kirigami.ScrollablePage {
                             textRole: "username"
                             valueRole: "username"
 
-                            // Restore selection after model changes
                             onModelChanged: {
                                 let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
                                 let currentUsername = config?.username ?? ""
@@ -427,7 +421,6 @@ Kirigami.ScrollablePage {
                                 if (instanceCard.cardSessionManager) {
                                     instanceCard.cardSessionManager.setInstancePreset(instanceCard.index, presetId)
 
-                                    // Also copy shared directories from the preset
                                     if (instanceCard.cardPresetManager) {
                                         let directories = instanceCard.cardPresetManager.getSharedDirectories(presetId) || []
                                         instanceCard.cardSessionManager.setInstanceSharedDirectories(instanceCard.index, directories)
@@ -662,31 +655,29 @@ Kirigami.ScrollablePage {
                         }
                     }
 
-                    // Warning for missing devices (from loaded profile)
+                    // Warning for missing devices
                     Kirigami.InlineMessage {
                         Layout.fillWidth: true
                         visible: {
-                            // Null-safe check and reference devicesRevision to force re-evaluation
                             if (!root) return false
                             void(root.devicesRevision)
                             if (!root.deviceManager) return false
                             let pending = root.deviceManager.pendingDevices
                             for (let i = 0; i < pending.length; i++) {
-                                // Use == for type-safe comparison (QVariant may convert int to different JS type)
+                                // QVariant may convert int to different JS type
                                 if (pending[i].instanceIndex == instanceCard.index) return true
                             }
                             return false
                         }
                         type: Kirigami.MessageType.Warning
                         text: {
-                            // Null-safe check and reference devicesRevision to force re-evaluation
                             if (!root) return ""
                             void(root.devicesRevision)
                             if (!root.deviceManager) return ""
                             let pending = root.deviceManager.pendingDevices
                             let names = []
                             for (let i = 0; i < pending.length; i++) {
-                                // Use == for type-safe comparison (QVariant may convert int to different JS type)
+                                // QVariant may convert int to different JS type
                                 if (pending[i].instanceIndex == instanceCard.index) {
                                     names.push(pending[i].name)
                                 }
@@ -698,7 +689,6 @@ Kirigami.ScrollablePage {
                     Kirigami.InlineMessage {
                         Layout.fillWidth: true
                         visible: {
-                            // Null-safe check and reference devicesRevision to force re-evaluation
                             if (!root) return false
                             void(root.devicesRevision)
                             if (!root.deviceManager) return false
@@ -706,13 +696,12 @@ Kirigami.ScrollablePage {
                             let assignedPaths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
                             if (assignedPaths.length > 0) return false
 
-                            // Check if there are pending devices for this instance (disconnected warning takes priority)
+                            // Disconnected warning takes priority
                             let pending = root.deviceManager.pendingDevices
                             for (let i = 0; i < pending.length; i++) {
                                 if (pending[i].instanceIndex == instanceCard.index) return false
                             }
 
-                            // No devices assigned and no pending devices — show info
                             return true
                         }
                         type: Kirigami.MessageType.Information
@@ -757,7 +746,6 @@ Kirigami.ScrollablePage {
         required property string description
         required property int instanceCount
 
-        // Custom animated background for selection feedback
         background: Rectangle {
             color: layoutCard.selected 
                 ? Qt.alpha(Kirigami.Theme.highlightColor, 0.15) 
