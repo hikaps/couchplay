@@ -218,7 +218,6 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
         return false;
     }
 
-    // Set permissions to 0600 (owner read/write only) for input isolation
     if (m_ops->chown(devicePath, uid, pw->pw_gid) != 0) {
         sendErrorReply(QDBusError::Failed,
             QStringLiteral("Failed to change ownership of %1: %2")
@@ -226,8 +225,7 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
         return false;
     }
 
-    // Set permissions to 0600 (owner read/write only) for input isolation
-    // This ensures only the assigned user can read the device, not the group
+    // Only the assigned user can read the device, not the group
     if (m_ops->chmod(devicePath, 0600) != 0) {
         sendErrorReply(QDBusError::Failed,
             QStringLiteral("Failed to set permissions on %1: %2")
@@ -279,7 +277,6 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
         return false;
     }
 
-    // Restore permissions to 0660 (owner and group read/write)
     if (m_ops->chmod(devicePath, 0660) != 0) {
         sendErrorReply(QDBusError::Failed,
             QStringLiteral("Failed to reset permissions on %1").arg(devicePath));
@@ -300,8 +297,7 @@ int CouchPlayHelper::ResetAllDevices()
     gid_t inputGid = inputGroup ? inputGroup->gr_gid : 0;
 
     for (const QString &path : devices) {
-    // Restore to root:input with 0660 permissions
-    if (m_ops->chown(path, 0, inputGid) == 0 &&
+        if (m_ops->chown(path, 0, inputGid) == 0 &&
             m_ops->chmod(path, 0660) == 0) {
             successCount++;
             m_modifiedDevices.removeAll(path);
@@ -336,11 +332,9 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     // -f flag means no error if group exists, so we don't check exit code
     runCommand(QStringLiteral("groupadd"), {QStringLiteral("-f"), COUCHPLAY_GROUP});
 
-    // Create user with useradd
     QProcess *process = m_ops->createProcess();
     QStringList args;
-    args << QStringLiteral("-m")  // Create home directory
-         << QStringLiteral("-c") << fullName
+    args << QStringLiteral("-m") << QStringLiteral("-c") << fullName
          << QStringLiteral("-s") << QStringLiteral("/bin/bash");
 
     args << QStringLiteral("-G") << QStringLiteral("input,") + COUCHPLAY_GROUP;
@@ -435,7 +429,6 @@ bool CouchPlayHelper::validateUserPath(const QString &path, const QString &usern
 
 bool CouchPlayHelper::IsInCouchPlayGroup(const QString &username)
 {
-    // Get the couchplay group
     struct group *grp = m_ops->getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
     if (!grp) {
         return false;
@@ -755,7 +748,6 @@ bool CouchPlayHelper::runCommand(const QString &program, const QStringList &args
 
 bool CouchPlayHelper::isValidDevicePath(const QString &path)
 {
-    // Check for path traversal
     if (path.contains(QStringLiteral(".."))) {
         return false;
     }
@@ -1605,7 +1597,6 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
         return QString();
     }
 
-    // Check for Steam userdata in common locations
     QStringList possibleRoots = {
         userHome + QStringLiteral("/.steam/steam/userdata"),
         userHome + QStringLiteral("/.local/share/Steam/userdata"),
@@ -1616,7 +1607,6 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
             continue;
         }
 
-        // Find first numeric directory (Steam user ID)
         QStringList entries = m_ops->entryList(userDataBase, QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
         for (const QString &entry : entries) {
             bool ok;

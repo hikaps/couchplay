@@ -14,7 +14,6 @@
 
 #include "SystemOps.h"
 
-// Forward declaration
 class UnitMonitor;
 
 /**
