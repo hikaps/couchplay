@@ -108,12 +108,11 @@ void TestSessionManager::testInstanceCount()
     QCOMPARE(m_sessionManager->instanceCount(), 3);
     QCOMPARE(spy.count(), 1);
     
-    // Test bounds
     m_sessionManager->setInstanceCount(4);
     QCOMPARE(m_sessionManager->instanceCount(), 4);
     
     m_sessionManager->setInstanceCount(1);
-    QVERIFY(m_sessionManager->instanceCount() >= 2); // Minimum should be 2
+    QVERIFY(m_sessionManager->instanceCount() >= 2);
 }
 
 void TestSessionManager::testCurrentLayout()
@@ -138,7 +137,6 @@ void TestSessionManager::testGetInstanceConfig()
     QVERIFY(config.contains(KEY("internalHeight")));
     QVERIFY(config.contains(KEY("refreshRate")));
     
-    // Invalid instance should return empty config
     QVariantMap invalidConfig = m_sessionManager->getInstanceConfig(-1);
     QVERIFY(invalidConfig.isEmpty());
     
@@ -179,7 +177,6 @@ void TestSessionManager::testSetInstanceUser()
     QVariantMap config = m_sessionManager->getInstanceConfig(1);
     QCOMPARE(config.value(KEY("username")).toString(), QStringLiteral("player2"));
     
-    // Empty username should clear the user
     m_sessionManager->setInstanceUser(1, QString());
     config = m_sessionManager->getInstanceConfig(1);
     QVERIFY(config.value(KEY("username")).toString().isEmpty());
@@ -195,8 +192,6 @@ void TestSessionManager::testSaveProfile()
     bool result = m_sessionManager->saveProfile(QStringLiteral("TestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(spy.count(), 1);
-    
-    // Current profile name should be updated
     QCOMPARE(m_sessionManager->currentProfileName(), QStringLiteral("TestProfile"));
 }
 
@@ -206,7 +201,6 @@ void TestSessionManager::testLoadProfile()
     m_sessionManager->setCurrentLayout(QStringLiteral("vertical"));
     m_sessionManager->saveProfile(QStringLiteral("LoadTestProfile"));
     
-    // Reset session before loading
     m_sessionManager->newSession();
     QCOMPARE(m_sessionManager->instanceCount(), 2);
     
@@ -216,14 +210,12 @@ void TestSessionManager::testLoadProfile()
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("vertical"));
     QCOMPARE(m_sessionManager->currentProfileName(), QStringLiteral("LoadTestProfile"));
     
-    // Loading non-existent profile should fail
     result = m_sessionManager->loadProfile(QStringLiteral("NonExistentProfile"));
     QCOMPARE(result, false);
 }
 
 void TestSessionManager::testDeleteProfile()
 {
-    // Save a profile first
     m_sessionManager->saveProfile(QStringLiteral("DeleteTestProfile"));
     
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
@@ -231,18 +223,14 @@ void TestSessionManager::testDeleteProfile()
     bool result = m_sessionManager->deleteProfile(QStringLiteral("DeleteTestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(spy.count(), 1);
-    
-    // Current profile should be cleared if it was the deleted one
     QVERIFY(m_sessionManager->currentProfileName().isEmpty());
     
-    // Deleting non-existent profile should fail
     result = m_sessionManager->deleteProfile(QStringLiteral("NonExistentProfile"));
     QCOMPARE(result, false);
 }
 
 void TestSessionManager::testSavedProfiles()
 {
-    // Clear existing profiles first
     QList<SessionProfile> profiles = m_sessionManager->savedProfiles();
     for (const SessionProfile &profile : profiles) {
         m_sessionManager->deleteProfile(profile.name);
@@ -257,7 +245,6 @@ void TestSessionManager::testSavedProfiles()
     profiles = m_sessionManager->savedProfiles();
     QCOMPARE(profiles.size(), initialCount + 2);
     
-    // Profiles should contain expected data
     bool foundProfile1 = false;
     bool foundProfile2 = false;
     for (const SessionProfile &profile : profiles) {
@@ -277,8 +264,6 @@ void TestSessionManager::testRefreshProfiles()
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
     
     m_sessionManager->refreshProfiles();
-    
-    // Should emit savedProfilesChanged
     QCOMPARE(spy.count(), 1);
 }
 
@@ -288,8 +273,6 @@ void TestSessionManager::testInstanceCountChangedSignal()
     
     m_sessionManager->setInstanceCount(3);
     QCOMPARE(spy.count(), 1);
-    
-    // Setting same value shouldn't emit
     m_sessionManager->setInstanceCount(3);
     QCOMPARE(spy.count(), 1);
 }
@@ -300,8 +283,6 @@ void TestSessionManager::testCurrentLayoutChangedSignal()
     
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
     QCOMPARE(spy.count(), 1);
-    
-    // Setting same value shouldn't emit
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
     QCOMPARE(spy.count(), 1);
 }
@@ -322,7 +303,7 @@ void TestSessionManager::testGetAssignedUsers()
     m_sessionManager->newSession();
     m_sessionManager->setInstanceCount(3);
     
-    m_sessionManager->setInstanceUser(0, QString());  // Primary user (empty string)
+    m_sessionManager->setInstanceUser(0, QString());
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstanceUser(2, QStringLiteral("player3"));
     
@@ -339,7 +320,6 @@ void TestSessionManager::testGetAssignedUsers()
     QCOMPARE(assigned.size(), 1);
     QVERIFY(assigned.contains(QStringLiteral("player2")));
     
-    // Empty usernames should not be included
     m_sessionManager->setInstanceUser(1, QString());
     assigned = m_sessionManager->getAssignedUsers(0);
     QCOMPARE(assigned.size(), 1);

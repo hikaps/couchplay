@@ -520,8 +520,6 @@ void TestCouchPlayHelper::testCreateUserLingerFailure()
         QStringLiteral("Test User")
     );
 
-    // User already exists, so should fail with "already exists"
-    // This tests the user existence check before trying to create
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::Failed);
 }
@@ -596,7 +594,7 @@ void TestCouchPlayHelper::testDeleteUserAuthDenied()
 void TestCouchPlayHelper::testDeleteUserNotInCouchPlayGroup()
 {
     m_ops->clear();
-    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {}); // Not in group
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
     m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
     m_ops->setUserExists(QStringLiteral("testuser"), true, 1002, 1002);
 
@@ -645,7 +643,7 @@ void TestCouchPlayHelper::testIsInCouchPlayGroupTrue()
 void TestCouchPlayHelper::testIsInCouchPlayGroupFalse()
 {
     m_ops->clear();
-    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {}); // No members
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
 
     QDBusReply<bool> reply = m_dbusInterface->call(
         QStringLiteral("IsInCouchPlayGroup"),
@@ -673,7 +671,7 @@ void TestCouchPlayHelper::testIsInCouchPlayGroupNonexistent()
 void TestCouchPlayHelper::testIsInCouchPlayGroupNonexistentGroup()
 {
     m_ops->clear();
-    m_ops->setGroupExists(QStringLiteral("couchplay"), false, 0, {}); // Group doesn't exist
+    m_ops->setGroupExists(QStringLiteral("couchplay"), false, 0, {});
 
     QDBusReply<bool> reply = m_dbusInterface->call(
         QStringLiteral("IsInCouchPlayGroup"),
@@ -900,7 +898,7 @@ void TestCouchPlayHelper::testChangeDeviceOwnerChownFails()
     m_ops->clear();
     m_ops->setUserExists(QStringLiteral("testuser"), true, 1000, 1000);
     m_ops->setFileExists(QStringLiteral("/dev/input/event0"), true);
-    m_ops->setChownResult(-1);  // chown fails
+    m_ops->setChownResult(-1);
 
     QDBusReply<bool> reply = m_dbusInterface->call(
         QStringLiteral("ChangeDeviceOwner"),
@@ -918,7 +916,7 @@ void TestCouchPlayHelper::testChangeDeviceOwnerChmodFails()
     m_ops->setUserExists(QStringLiteral("testuser"), true, 1000, 1000);
     m_ops->setFileExists(QStringLiteral("/dev/input/event0"), true);
     m_ops->setChownResult(0);
-    m_ops->setChmodResult(-1);  // chmod fails
+    m_ops->setChmodResult(-1);
 
     QDBusReply<bool> reply = m_dbusInterface->call(
         QStringLiteral("ChangeDeviceOwner"),
@@ -1156,8 +1154,8 @@ void TestCouchPlayHelper::testChangeDeviceOwnerBatchPartialFailure()
     );
 
     QStringList paths = {
-        QStringLiteral("/dev/input/event0"),  // Will succeed
-        QStringLiteral("/dev/sda")  // Invalid path - will fail
+        QStringLiteral("/dev/input/event0"),
+        QStringLiteral("/dev/sda")
     };
 
     QDBusReply<int> reply = m_dbusInterface->call(
@@ -1166,9 +1164,6 @@ void TestCouchPlayHelper::testChangeDeviceOwnerBatchPartialFailure()
         1000u
     );
 
-    // Expect D-Bus error reply (invalid input path) - reply.isValid() will be false
-    // CouchPlayHelper validates paths and returns error for /dev/sda
-    // The partial success (event0) is tracked internally, but D-Bus returns error
     QVERIFY(!reply.isValid());
 }
 
@@ -1178,8 +1173,8 @@ void TestCouchPlayHelper::testChangeDeviceOwnerBatchAllFailure()
     m_ops->setUserExists(QStringLiteral("testuser"), true, 1000, 1000);
 
     QStringList paths = {
-        QStringLiteral("/dev/sda"),  // Invalid path (not under /dev/input)
-        QStringLiteral("/dev/sdb")   // Invalid path (not under /dev/input)
+        QStringLiteral("/dev/sda"),
+        QStringLiteral("/dev/sdb")
     };
 
     QDBusReply<int> reply = m_dbusInterface->call(
@@ -1188,8 +1183,6 @@ void TestCouchPlayHelper::testChangeDeviceOwnerBatchAllFailure()
         1000u
     );
 
-    // Expect D-Bus error reply (both paths invalid) - reply.isValid() will be false
-    // CouchPlayHelper validates paths and returns error for invalid inputs
     QVERIFY(!reply.isValid());
 }
 
@@ -1234,7 +1227,6 @@ void TestCouchPlayHelper::testSetupRuntimeAccessUserNotFound()
 {
     m_ops->clear();
     m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
-    // Compositor user does not exist
 
     QDBusReply<bool> reply = m_dbusInterface->call(
         QStringLiteral("SetupRuntimeAccess"),
@@ -1254,14 +1246,12 @@ void TestCouchPlayHelper::testRemoveRuntimeAccessSuccess()
     m_ops->setFileExists(QStringLiteral("/run/user/1000/wayland-0"), true);
     m_ops->setProcessExitCode(0);
 
-    // First setup runtime access
     QDBusReply<bool> setupReply = m_dbusInterface->call(
         QStringLiteral("SetupRuntimeAccess"),
         1000u
     );
     QVERIFY(setupReply.isValid());
 
-    // Then remove it
     QDBusReply<bool> reply = m_dbusInterface->call(
         QStringLiteral("RemoveRuntimeAccess"),
         1000u

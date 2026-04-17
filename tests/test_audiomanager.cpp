@@ -22,17 +22,12 @@ private Q_SLOTS:
     void init();
     void cleanup();
 
-    // Construction tests
     void testConstructionDefaults();
     void testPipeWireDetection();
     void testPulseAudioFallback();
-
-    // Configuration tests
     void testMultiUserConfiguredRequiresAcl();
     void testConfigurationChangedSignal();
     void testAudioServerChangedSignal();
-
-    // Socket ACL tests
     void testCheckSocketAclNonexistent();
     void testCheckSocketAclWithFakeSocket();
 
@@ -62,17 +57,13 @@ void TestAudioManager::cleanup()
     m_manager = nullptr;
 }
 
-// --- Construction tests ---
-
 void TestAudioManager::testConstructionDefaults()
 {
     m_manager = new AudioManager();
 
-    // multiUserConfigured should start false — no pipewire-0 socket in
-    // the isolated test runtime directory
+    // No pipewire-0 socket in the isolated test runtime directory
     QVERIFY(!m_manager->isMultiUserConfigured());
 
-    // audioServer should be a valid server name
     const QString server = m_manager->audioServer();
     QVERIFY2(server == QStringLiteral("pipewire") || server == QStringLiteral("pulseaudio"),
              qPrintable(QStringLiteral("Unexpected audio server: %1").arg(server)));
@@ -108,8 +99,6 @@ void TestAudioManager::testPulseAudioFallback()
     m_manager = new AudioManager();
     QCOMPARE(m_manager->audioServer(), QStringLiteral("pulseaudio"));
 }
-
-// --- Configuration tests ---
 
 void TestAudioManager::testMultiUserConfiguredRequiresAcl()
 {
@@ -181,8 +170,6 @@ void TestAudioManager::testAudioServerChangedSignal()
 
     QFile::remove(socketPath);
 }
-
-// --- Socket ACL tests ---
 
 void TestAudioManager::testCheckSocketAclNonexistent()
 {
