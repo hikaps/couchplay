@@ -335,13 +335,16 @@ void TestUserManager::testDeleteUserCurrentUser()
 
 void TestUserManager::testDeleteUserRequiresHelper()
 {
+    // Find a user that exists but is NOT the current user
+    // so we reach the "Helper service not available" check
+    QString testUser = QStringLiteral("root");
+    if (m_manager->currentUser() == testUser)
+        QSKIP("Cannot test helper requirement when running as root");
+
     QSignalSpy errorSpy(m_manager, &UserManager::errorOccurred);
-    
-    // Try to delete root (exists, not current, no helper)
-    // Note: This will fail with "helper not available" because root is not in couchplay group
-    // but we check helper first, then the helper checks the group
-    bool result = m_manager->deleteUser(QStringLiteral("root"), false);
-    
+
+    bool result = m_manager->deleteUser(testUser, false);
+
     QVERIFY(!result);
     QCOMPARE(errorSpy.count(), 1);
     // Should indicate helper is required

@@ -204,6 +204,9 @@ void TestDeviceManager::testGetDevicePathsForInstance()
     
     // Assign some devices
     QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (devices.isEmpty())
+        QSKIP("No input devices available in this environment");
+
     for (int i = 0; i < qMin(devices.size(), 2); ++i) {
         QVariantMap device = devices.at(i).toMap();
         int eventNumber = device.value(KEY("eventNumber")).toInt();
