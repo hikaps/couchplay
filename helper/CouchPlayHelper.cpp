@@ -821,7 +821,7 @@ void CouchPlayHelper::restartUserPipeWirePulse(uint compositorUid)
 
 bool CouchPlayHelper::checkAuthorization(const QString &action)
 {
-    return m_ops->checkAuthorization(action);
+    return m_ops->checkAuthorization(action, message().service());
 }
 
 bool CouchPlayHelper::validateUserAndAuth(const QString &username, const QString &action)

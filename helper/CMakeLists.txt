@@ -11,10 +11,17 @@ add_executable(couchplay-helper
     SystemOps.h
     )
 
+find_package(PolkitQt6-1)
+
 target_link_libraries(couchplay-helper PRIVATE
     Qt6::Core
     Qt6::DBus
 )
+
+if(PolkitQt6-1_FOUND)
+    target_link_libraries(couchplay-helper PRIVATE PolkitQt6-1::Core)
+    target_compile_definitions(couchplay-helper PRIVATE HAVE_POLKITQT)
+endif()
 
 target_include_directories(couchplay-helper PRIVATE
     ${PROJECT_BINARY_DIR}

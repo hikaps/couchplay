@@ -66,7 +66,7 @@ public:
     virtual bool killProcess(pid_t pid, int signal) = 0;
 
     // Authorization check
-    virtual bool checkAuthorization(const QString &action) = 0;
+    virtual bool checkAuthorization(const QString &action, const QString &callerBusName) = 0;
 };
 
 /**
@@ -107,5 +107,5 @@ public:
 
     bool killProcess(pid_t pid, int signal) override;
 
-    bool checkAuthorization(const QString &action) override;
+    bool checkAuthorization(const QString &action, const QString &callerBusName) override;
 };
