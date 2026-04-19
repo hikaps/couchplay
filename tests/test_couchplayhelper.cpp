@@ -208,8 +208,9 @@ public:
         return true;
     }
 
-    bool checkAuthorization(const QString &action) override {
+    bool checkAuthorization(const QString &action, const QString &callerBusName) override {
         Q_UNUSED(action)
+        Q_UNUSED(callerBusName)
         return m_authorized;
     }
 
