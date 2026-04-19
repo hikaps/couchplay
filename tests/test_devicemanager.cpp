@@ -207,11 +207,16 @@ void TestDeviceManager::testGetDevicePathsForInstance()
     if (devices.isEmpty())
         QSKIP("No input devices available in this environment");
 
+    bool hasDeviceWithPath = false;
     for (int i = 0; i < qMin(devices.size(), 2); ++i) {
         QVariantMap device = devices.at(i).toMap();
         int eventNumber = device.value(KEY("eventNumber")).toInt();
         m_deviceManager->assignDevice(eventNumber, 0);
+        if (device.value(KEY("path")).toString().startsWith(QStringLiteral("/dev/input/event")))
+            hasDeviceWithPath = true;
     }
+    if (!hasDeviceWithPath)
+        QSKIP("No devices with /dev/input/event paths in this environment");
     
     // Get paths for instance 0
     QStringList paths = m_deviceManager->getDevicePathsForInstance(0);

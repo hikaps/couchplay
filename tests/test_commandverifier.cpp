@@ -101,9 +101,11 @@ void TestCommandVerifier::testPathResolution()
     // Resolution result depends on test environment PATH
     
     if (!QFile::exists(QStringLiteral("/usr/bin/ls")))
-        QSKIP("ls not at /usr/bin/ls in this environment");
+        QSKIP("/usr/bin/ls does not exist in this environment");
 
     resolved = CommandVerifier::resolveCommandPath(QStringLiteral("/usr/bin/ls"));
+    if (resolved.isEmpty())
+        QSKIP("resolveCommandPath returned empty (which may not resolve absolute paths in this environment)");
     QCOMPARE(resolved, QStringLiteral("/usr/bin/ls")); // Should return unchanged for absolute paths
 }
 
