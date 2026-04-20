@@ -316,6 +316,9 @@ private:
     bool isValidDevicePath(const QString &path);
     bool validateUserAndAuth(const QString &username, const QString &action);
     bool runCommand(const QString &program, const QStringList &args, int timeoutMs = 10000);
+    bool setupPulseTcpListener(uint compositorUid);
+    void removePulseTcpListener(uint compositorUid);
+    void restartUserPipeWirePulse(uint compositorUid);
 
     // Internal helpers (not exposed via D-Bus)
     bool userExists(const QString &username);
