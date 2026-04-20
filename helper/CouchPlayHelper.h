@@ -350,6 +350,7 @@ private:
     // Track launched transient units
     QMap<QString, QString> m_usernameToUnitName;  // username -> service name
     QMap<qint64, QString> m_pidToUsername;         // PID -> username (reverse lookup for Stop/Kill)
+    QHash<QString, uint> m_compositorUidForUsername;  // username -> compositor UID
 
     // Units being explicitly stopped (suppresses crash detection)
     QSet<QString> m_stoppingUnits;
@@ -367,4 +368,5 @@ private:
     void saveState();
     void loadAndReconcileState();
     void removeRuntimeAcls(const QString &runtimeDir);
+    void cleanupTcpListenerIfLast(const QString &username);
 };

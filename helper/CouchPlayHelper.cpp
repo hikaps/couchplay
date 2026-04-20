@@ -82,6 +82,7 @@ public Q_SLOTS:
 
         m_helper->m_usernameToUnitName.remove(m_username);
         m_helper->m_pidToUsername.remove(m_pid);
+        m_helper->cleanupTcpListenerIfLast(m_username);
 
         m_helper->saveState();
 
@@ -940,6 +941,7 @@ bool CouchPlayHelper::StopInstance(qint64 pid)
             stopServiceInstance(serviceName);
             m_usernameToUnitName.remove(username);
             m_pidToUsername.remove(pid);
+            cleanupTcpListenerIfLast(username);
             m_stoppingUnits.remove(serviceName);
             saveState();
             return true;
@@ -983,6 +985,7 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
             stopServiceInstance(serviceName);
             m_usernameToUnitName.remove(username);
             m_pidToUsername.remove(pid);
+            cleanupTcpListenerIfLast(username);
             m_stoppingUnits.remove(serviceName);
             saveState();
             return true;
@@ -1150,6 +1153,7 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username, uint composi
 
     m_usernameToUnitName[username] = serviceName;
     m_pidToUsername[mainPid] = username;
+    m_compositorUidForUsername[username] = compositorUid;
 
     saveState();
 
@@ -1157,6 +1161,27 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username, uint composi
 
     qInfo() << "Started transient unit" << serviceName << "with PID" << mainPid;
     return mainPid;
+}
+
+void CouchPlayHelper::cleanupTcpListenerIfLast(const QString &username)
+{
+    if (!m_compositorUidForUsername.contains(username)) {
+        return;
+    }
+    uint compositorUid = m_compositorUidForUsername.value(username);
+    m_compositorUidForUsername.remove(username);
+
+    bool hasOtherInstances = false;
+    for (auto it = m_compositorUidForUsername.constBegin(); it != m_compositorUidForUsername.constEnd(); ++it) {
+        if (it.value() == compositorUid) {
+            hasOtherInstances = true;
+            break;
+        }
+    }
+
+    if (!hasOtherInstances) {
+        removePulseTcpListener(compositorUid);
+    }
 }
 
 void CouchPlayHelper::stopServiceInstance(const QString &serviceName)
@@ -1767,6 +1792,12 @@ void CouchPlayHelper::saveState()
     }
     root[QStringLiteral("runtimeAccessUids")] = runtimeUids;
 
+    QJsonObject compositorUidObject;
+    for (auto it = m_compositorUidForUsername.constBegin(); it != m_compositorUidForUsername.constEnd(); ++it) {
+        compositorUidObject[it.key()] = static_cast<qint64>(it.value());
+    }
+    root[QStringLiteral("compositorUidForUsername")] = compositorUidObject;
+
     QJsonDocument doc(root);
     QByteArray data = doc.toJson(QJsonDocument::Compact);
 
@@ -1932,6 +1963,16 @@ void CouchPlayHelper::loadAndReconcileState()
         loadedRuntimeUids.insert(uid);
     }
     m_runtimeAccessSetForUid = loadedRuntimeUids;
+
+    QJsonObject compositorUidObject = root.value(QStringLiteral("compositorUidForUsername")).toObject();
+    QHash<QString, uint> loadedCompositorUid;
+    for (auto it = compositorUidObject.constBegin(); it != compositorUidObject.constEnd(); ++it) {
+        QString user = it.key();
+        if (m_usernameToUnitName.contains(user)) {
+            loadedCompositorUid[user] = static_cast<uint>(it.value().toInteger());
+        }
+    }
+    m_compositorUidForUsername = loadedCompositorUid;
 
     if (changed) {
         saveState();
