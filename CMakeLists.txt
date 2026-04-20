@@ -91,5 +91,10 @@ install(FILES data/dbus/io.github.hikaps.CouchPlayHelper.conf
     DESTINATION ${CMAKE_INSTALL_PREFIX}/share/dbus-1/system.d
 )
 
+# Install PipeWire PulseAudio config
+install(FILES data/pipewire/50-couchplay.conf
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/share/pipewire/pipewire-pulse.conf.d
+)
+
 # Summary
 feature_summary(WHAT ALL INCLUDE_QUIET_PACKAGES FATAL_ON_MISSING_REQUIRED_PACKAGES)

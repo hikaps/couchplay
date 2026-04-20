@@ -163,6 +163,11 @@ export_helper() {
             install -m644 "${DATA_DIR}/polkit/io.github.hikaps.couchplay.policy" \
                 "${EXPORT_DIR}/data/polkit/"
         fi
+        if [[ -d "${DATA_DIR}/pipewire" ]]; then
+            mkdir -p "${EXPORT_DIR}/data/pipewire"
+            install -m644 "${DATA_DIR}/pipewire/50-couchplay.conf" \
+                "${EXPORT_DIR}/data/pipewire/"
+        fi
     fi
     
     print_info "Export complete!"
@@ -206,6 +211,13 @@ install_helper() {
     install -Dm644 "${DATA_DIR}/polkit/io.github.hikaps.couchplay.policy" \
         "${POLKIT_DIR}/io.github.hikaps.couchplay.policy"
 
+    # Install PipeWire PulseAudio TCP listener config
+    print_info "Installing PipeWire PulseAudio TCP listener..."
+    SYSTEM_PIPEWIRE_PULSE_CONF_DIR="${PREFIX}/share/pipewire/pipewire-pulse.conf.d"
+    mkdir -p "$SYSTEM_PIPEWIRE_PULSE_CONF_DIR"
+    install -Dm644 "${DATA_DIR}/pipewire/50-couchplay.conf" \
+        "${SYSTEM_PIPEWIRE_PULSE_CONF_DIR}/50-couchplay.conf"
+
     # Reload systemd
     print_info "Reloading systemd..."
     systemctl daemon-reload
@@ -242,6 +254,7 @@ uninstall_helper() {
     rm -f "${DBUS_SERVICE_DIR}/io.github.hikaps.CouchPlayHelper.service"
     rm -f "${SYSTEMD_DIR}/couchplay-helper.service"
     rm -f "${POLKIT_DIR}/io.github.hikaps.couchplay.policy"
+    rm -f "${PREFIX}/share/pipewire/pipewire-pulse.conf.d/50-couchplay.conf"
 
     # Reload systemd
     print_info "Reloading systemd..."
