@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "CouchPlayHelper.h"
+#include "PolkitActions.h"
 #include "SystemOps.h"
 
 #include <QCryptographicHash>
@@ -135,13 +136,7 @@ private:
 
 static const QRegularExpression s_validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
 
-static const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couchplay.change-device-owner");
-static const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couchplay.create-user");
-static const QString ACTION_DELETE_USER = QStringLiteral("io.github.hikaps.couchplay.delete-user");
-static const QString ACTION_ENABLE_LINGER = QStringLiteral("io.github.hikaps.couchplay.enable-linger");
-static const QString ACTION_WAYLAND_ACCESS = QStringLiteral("io.github.hikaps.couchplay.setup-wayland-access");
-static const QString ACTION_LAUNCH_INSTANCE = QStringLiteral("io.github.hikaps.couchplay.launch-instance");
-static const QString ACTION_MANAGE_MOUNTS = QStringLiteral("io.github.hikaps.couchplay.manage-mounts");
+using namespace PolkitActions;
 
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 

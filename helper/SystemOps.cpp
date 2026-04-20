@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SystemOps.h"
+#include "PolkitActions.h"
 
 #include <QDir>
 #include <QFile>
@@ -135,10 +136,13 @@ bool RealSystemOps::killProcess(pid_t pid, int signal)
 
 bool RealSystemOps::checkAuthorization(const QString &action, const QString &callerBusName)
 {
-    // Option A: only gate user management with Polkit.
-    // All other actions rely on the D-Bus system bus ACL (wheel/games groups).
-    if (action != QStringLiteral("io.github.hikaps.couchplay.create-user")
-        && action != QStringLiteral("io.github.hikaps.couchplay.delete-user")) {
+    // Only user account lifecycle actions require Polkit authentication.
+    // Other privileged operations (device ownership, instance launch, mount
+    // management) rely on D-Bus system bus ACL restricted to wheel/games groups.
+    // Rationale: user accounts persist beyond the session; other operations are
+    // transient and scoped to the local machine where physical access is assumed.
+    if (action != PolkitActions::ACTION_CREATE_USER
+        && action != PolkitActions::ACTION_DELETE_USER) {
         return true;
     }
 
@@ -148,12 +152,24 @@ bool RealSystemOps::checkAuthorization(const QString &action, const QString &cal
     }
 
 #ifdef HAVE_POLKITQT
+    PolkitQt1::Authority *authority = PolkitQt1::Authority::instance();
+    if (authority->hasError()) {
+        qWarning() << "Polkit authority error:" << authority->lastError()
+                   << "- denying action:" << action;
+        return false;
+    }
+
     PolkitQt1::Authority::Result result =
-        PolkitQt1::Authority::instance()->checkAuthorizationSync(
+        authority->checkAuthorizationSync(
             action,
             PolkitQt1::SystemBusNameSubject(callerBusName),
             PolkitQt1::Authority::AllowUserInteraction);
 
+    if (result == PolkitQt1::Authority::Unknown) {
+        qWarning() << "Polkit returned Unknown (daemon unavailable?) for action:" << action
+                   << "caller:" << callerBusName;
+        return false;
+    }
     if (result != PolkitQt1::Authority::Yes) {
         qWarning() << "Polkit authorization denied for action:" << action
                    << "caller:" << callerBusName;
@@ -161,7 +177,7 @@ bool RealSystemOps::checkAuthorization(const QString &action, const QString &cal
     }
     return true;
 #else
-    qWarning() << "Polkit not available, trusting D-Bus ACL for action:" << action;
-    return true;
+    qWarning() << "Polkit not available, denying privileged action:" << action;
+    return false;
 #endif
 }
