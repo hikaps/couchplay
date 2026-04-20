@@ -9,9 +9,8 @@ add_executable(couchplay-helper
     CouchPlayHelper.h
     SystemOps.cpp
     SystemOps.h
+    PolkitActions.h
     )
-
-find_package(PolkitQt6-1)
 
 target_link_libraries(couchplay-helper PRIVATE
     Qt6::Core

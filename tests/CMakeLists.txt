@@ -103,8 +103,6 @@ function(add_helper_test TEST_NAME)
         ${HELPER_TEST_SOURCES}
     )
 
-    find_package(PolkitQt6-1)
-
     target_link_libraries(${TEST_NAME} PRIVATE
         Qt6::Core
         Qt6::DBus
