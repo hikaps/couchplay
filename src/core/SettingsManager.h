@@ -27,7 +27,6 @@ class SettingsManager : public QObject
     // Gamescope settings
     Q_PROPERTY(QString scalingMode READ scalingMode WRITE setScalingMode NOTIFY scalingModeChanged)
     Q_PROPERTY(QString filterMode READ filterMode WRITE setFilterMode NOTIFY filterModeChanged)
-    Q_PROPERTY(bool steamIntegration READ steamIntegration WRITE setSteamIntegration NOTIFY steamIntegrationChanged)
     Q_PROPERTY(bool borderlessWindows READ borderlessWindows WRITE setBorderlessWindows NOTIFY borderlessWindowsChanged)
 
     // Device settings
@@ -54,9 +53,6 @@ public:
     QString filterMode() const { return m_filterMode; }
     void setFilterMode(const QString &value);
 
-    bool steamIntegration() const { return m_steamIntegration; }
-    void setSteamIntegration(bool value);
-
     bool borderlessWindows() const { return m_borderlessWindows; }
     void setBorderlessWindows(bool value);
 
@@ -77,13 +73,12 @@ Q_SIGNALS:
     void restoreSessionChanged();
     void scalingModeChanged();
     void filterModeChanged();
-    void steamIntegrationChanged();
     void borderlessWindowsChanged();
     void ignoredDevicesChanged();
 
 private:
     void loadSettings();
-    void saveSettings();
+    void saveAllSettings();
 
     // General settings
     bool m_hidePanels = true;
@@ -93,7 +88,6 @@ private:
     // Gamescope settings
     QString m_scalingMode = QStringLiteral("fit");
     QString m_filterMode = QStringLiteral("linear");
-    bool m_steamIntegration = true;
     bool m_borderlessWindows = false;
 
     // Device settings

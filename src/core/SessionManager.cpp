@@ -113,7 +113,6 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
-        instGroup.writeEntry("borderless", inst.borderless);
 
         // Convert devices to string list for backwards compatibility
         QStringList deviceStrings;
@@ -184,8 +183,6 @@ bool SessionManager::loadProfile(const QString &name)
             inst.overridePatterns = inst.overrideFiles;
             qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
         }
-
-        inst.borderless = instGroup.readEntry("borderless", false);
 
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
         inst.deviceStableIdNames = instGroup.readEntry("deviceStableIdNames", QStringList());
@@ -311,7 +308,6 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
     map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
-    map[QStringLiteral("borderless")] = inst.borderless;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -370,8 +366,6 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.overridePatterns = config[QStringLiteral("overridePatterns")].toStringList();
     if (config.contains(QStringLiteral("overrideGamePath")))
         inst.overrideGamePath = config[QStringLiteral("overrideGamePath")].toString();
-    if (config.contains(QStringLiteral("borderless")))
-        inst.borderless = config[QStringLiteral("borderless")].toBool();
 
     Q_EMIT instancesChanged();
 
@@ -470,18 +464,6 @@ void SessionManager::setInstanceSharedDirectories(int index, const QStringList &
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].sharedDirectories = directories;
-        Q_EMIT instancesChanged();
-        
-        if (!m_currentProfile.name.isEmpty()) {
-            saveProfile(m_currentProfile.name);
-        }
-    }
-}
-
-void SessionManager::setInstanceBorderless(int index, bool borderless)
-{
-    if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].borderless = borderless;
         Q_EMIT instancesChanged();
         
         if (!m_currentProfile.name.isEmpty()) {

@@ -21,6 +21,7 @@ class QAction;
 class GamescopeInstance;
 class DeviceManager;
 class SessionManager;
+class SettingsManager;
 class WindowManager;
 class PresetManager;
 
@@ -40,7 +41,6 @@ class SessionRunner : public QObject
     Q_PROPERTY(int runningInstanceCount READ runningInstanceCount NOTIFY runningInstanceCountChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
-    Q_PROPERTY(bool borderlessWindows READ borderlessWindows WRITE setBorderlessWindows NOTIFY borderlessWindowsChanged)
     
     // Dependencies
     Q_PROPERTY(SessionManager* sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
@@ -49,6 +49,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(PresetManager* presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
     Q_PROPERTY(SteamConfigManager* steamConfigManager READ steamConfigManager WRITE setSteamConfigManager NOTIFY steamConfigManagerChanged)
     Q_PROPERTY(HeroicConfigManager* heroicConfigManager READ heroicConfigManager WRITE setHeroicConfigManager NOTIFY heroicConfigManagerChanged)
+    Q_PROPERTY(SettingsManager* settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -110,8 +111,8 @@ public:
     HeroicConfigManager* heroicConfigManager() const { return m_heroicConfigManager; }
     void setHeroicConfigManager(HeroicConfigManager *manager);
 
-    bool borderlessWindows() const { return m_borderlessWindows; }
-    void setBorderlessWindows(bool borderless);
+    SettingsManager* settingsManager() const { return m_settingsManager; }
+    void setSettingsManager(SettingsManager *manager);
 
     /**
      * @brief Calculate window geometries for a given layout
@@ -146,7 +147,7 @@ Q_SIGNALS:
     void presetManagerChanged();
     void steamConfigManagerChanged();
     void heroicConfigManagerChanged();
-    void borderlessWindowsChanged();
+    void settingsManagerChanged();
     void errorOccurred(const QString &message);
     void sessionStarted();
     void sessionStopped();
@@ -195,6 +196,7 @@ private:
     PresetManager *m_presetManager = nullptr;
     SteamConfigManager *m_steamConfigManager = nullptr;
     HeroicConfigManager *m_heroicConfigManager = nullptr;
+    SettingsManager *m_settingsManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     VirtualDeviceWatcher *m_virtualDeviceWatcher = nullptr;
     QList<GamescopeInstance*> m_instances;
@@ -202,7 +204,6 @@ private:
     QString m_status;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
-    bool m_borderlessWindows = false; // Default to decorated windows
     
     // Sequential instance launching state
     int m_nextInstanceToStart = 0;

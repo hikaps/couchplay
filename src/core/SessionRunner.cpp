@@ -5,6 +5,7 @@
 #include "GamescopeInstance.h"
 #include "Logging.h"
 #include "SessionManager.h"
+#include "SettingsManager.h"
 #include "DeviceManager.h"
 #include "PresetManager.h"
 #include "SteamConfigManager.h"
@@ -145,11 +146,11 @@ void SessionRunner::setHeroicConfigManager(HeroicConfigManager *manager)
     }
 }
 
-void SessionRunner::setBorderlessWindows(bool borderless)
+void SessionRunner::setSettingsManager(SettingsManager *manager)
 {
-    if (m_borderlessWindows != borderless) {
-        m_borderlessWindows = borderless;
-        Q_EMIT borderlessWindowsChanged();
+    if (m_settingsManager != manager) {
+        m_settingsManager = manager;
+        Q_EMIT settingsManagerChanged();
     }
 }
 
@@ -250,7 +251,7 @@ bool SessionRunner::start()
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
         config[QStringLiteral("gameCommand")] = instConfig.gameCommand;
         config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
-        config[QStringLiteral("borderless")] = m_borderlessWindows;
+        config[QStringLiteral("borderless")] = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
 
         if (m_presetManager) {
             QString presetId = instConfig.presetId;
@@ -987,12 +988,14 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 
     QRect targetGeometry = instance->windowGeometry();
     int instanceIndex = instance->index();
+    bool borderless = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
 
     m_windowManager->queuePositionRequest(
         instanceIndex,
         targetGeometry,
         m_positionedWindowIds,
-        60000  // 60 second timeout for Steam login on secondary instances
+        borderless,
+        60000
     );
 }
 

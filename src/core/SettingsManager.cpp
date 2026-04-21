@@ -29,13 +29,12 @@ void SettingsManager::loadSettings()
     KConfigGroup gamescope = config->group(QStringLiteral("Gamescope"));
     m_scalingMode = gamescope.readEntry(QStringLiteral("ScalingMode"), QStringLiteral("fit"));
     m_filterMode = gamescope.readEntry(QStringLiteral("FilterMode"), QStringLiteral("linear"));
-    m_steamIntegration = gamescope.readEntry(QStringLiteral("SteamIntegration"), true);
     m_borderlessWindows = gamescope.readEntry(QStringLiteral("BorderlessWindows"), false);
     
     qDebug() << "SettingsManager: Loaded settings from couchplayrc";
 }
 
-void SettingsManager::saveSettings()
+void SettingsManager::saveAllSettings()
 {
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     
@@ -50,7 +49,6 @@ void SettingsManager::saveSettings()
     KConfigGroup gamescope = config->group(QStringLiteral("Gamescope"));
     gamescope.writeEntry(QStringLiteral("ScalingMode"), m_scalingMode);
     gamescope.writeEntry(QStringLiteral("FilterMode"), m_filterMode);
-    gamescope.writeEntry(QStringLiteral("SteamIntegration"), m_steamIntegration);
     gamescope.writeEntry(QStringLiteral("BorderlessWindows"), m_borderlessWindows);
     
     config->sync();
@@ -60,7 +58,9 @@ void SettingsManager::setHidePanels(bool value)
 {
     if (m_hidePanels != value) {
         m_hidePanels = value;
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("General")).writeEntry(QStringLiteral("HidePanels"), value);
+        config->sync();
         Q_EMIT hidePanelsChanged();
     }
 }
@@ -69,7 +69,9 @@ void SettingsManager::setKillSteam(bool value)
 {
     if (m_killSteam != value) {
         m_killSteam = value;
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("General")).writeEntry(QStringLiteral("KillSteam"), value);
+        config->sync();
         Q_EMIT killSteamChanged();
     }
 }
@@ -78,7 +80,9 @@ void SettingsManager::setRestoreSession(bool value)
 {
     if (m_restoreSession != value) {
         m_restoreSession = value;
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("General")).writeEntry(QStringLiteral("RestoreSession"), value);
+        config->sync();
         Q_EMIT restoreSessionChanged();
     }
 }
@@ -87,7 +91,9 @@ void SettingsManager::setScalingMode(const QString &value)
 {
     if (m_scalingMode != value) {
         m_scalingMode = value;
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("Gamescope")).writeEntry(QStringLiteral("ScalingMode"), value);
+        config->sync();
         Q_EMIT scalingModeChanged();
     }
 }
@@ -96,17 +102,10 @@ void SettingsManager::setFilterMode(const QString &value)
 {
     if (m_filterMode != value) {
         m_filterMode = value;
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("Gamescope")).writeEntry(QStringLiteral("FilterMode"), value);
+        config->sync();
         Q_EMIT filterModeChanged();
-    }
-}
-
-void SettingsManager::setSteamIntegration(bool value)
-{
-    if (m_steamIntegration != value) {
-        m_steamIntegration = value;
-        saveSettings();
-        Q_EMIT steamIntegrationChanged();
     }
 }
 
@@ -114,7 +113,9 @@ void SettingsManager::setBorderlessWindows(bool value)
 {
     if (m_borderlessWindows != value) {
         m_borderlessWindows = value;
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("Gamescope")).writeEntry(QStringLiteral("BorderlessWindows"), value);
+        config->sync();
         Q_EMIT borderlessWindowsChanged();
     }
 }
@@ -123,7 +124,9 @@ void SettingsManager::setIgnoredDevices(const QStringList &value)
 {
     if (m_ignoredDevices != value) {
         m_ignoredDevices = value;
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("General")).writeEntry(QStringLiteral("IgnoredDevices"), value);
+        config->sync();
         Q_EMIT ignoredDevicesChanged();
     }
 }
@@ -132,7 +135,9 @@ void SettingsManager::addIgnoredDevice(const QString &stableId)
 {
     if (!m_ignoredDevices.contains(stableId)) {
         m_ignoredDevices.append(stableId);
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("General")).writeEntry(QStringLiteral("IgnoredDevices"), m_ignoredDevices);
+        config->sync();
         Q_EMIT ignoredDevicesChanged();
     }
 }
@@ -141,7 +146,9 @@ void SettingsManager::removeIgnoredDevice(const QString &stableId)
 {
     if (m_ignoredDevices.contains(stableId)) {
         m_ignoredDevices.removeAll(stableId);
-        saveSettings();
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("General")).writeEntry(QStringLiteral("IgnoredDevices"), m_ignoredDevices);
+        config->sync();
         Q_EMIT ignoredDevicesChanged();
     }
 }
@@ -153,18 +160,16 @@ void SettingsManager::resetToDefaults()
     m_restoreSession = false;
     m_scalingMode = QStringLiteral("fit");
     m_filterMode = QStringLiteral("linear");
-    m_steamIntegration = true;
     m_borderlessWindows = false;
     m_ignoredDevices.clear();
     
-    saveSettings();
+    saveAllSettings();
     
     Q_EMIT hidePanelsChanged();
     Q_EMIT killSteamChanged();
     Q_EMIT restoreSessionChanged();
     Q_EMIT scalingModeChanged();
     Q_EMIT filterModeChanged();
-    Q_EMIT steamIntegrationChanged();
     Q_EMIT borderlessWindowsChanged();
     Q_EMIT ignoredDevicesChanged();
     

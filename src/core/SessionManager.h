@@ -38,7 +38,6 @@ struct InstanceConfig {
     Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
     Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
-    Q_PROPERTY(bool borderless MEMBER borderless)
 
 public:
     QString username;
@@ -60,7 +59,6 @@ public:
     QString overrideGamePath;
     QStringList overrideFiles;
     QStringList overridePatterns;                     // Glob patterns for per-user overrides
-    bool borderless = false;                           // Window border visibility (false = show borders)
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)
@@ -132,7 +130,6 @@ public:
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
     Q_INVOKABLE void setInstanceSharedDirectories(int index, const QStringList &directories);
-    Q_INVOKABLE void setInstanceBorderless(int index, bool borderless);
 
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;

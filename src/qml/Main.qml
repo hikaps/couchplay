@@ -74,7 +74,7 @@ Kirigami.ApplicationWindow {
         presetManager: presetManager
         steamConfigManager: steamConfigManager
         heroicConfigManager: heroicConfigManager
-        borderlessWindows: settingsManager.borderlessWindows
+        settingsManager: settingsManager
 
         onErrorOccurred: (message) => {
             applicationWindow().showPassiveNotification(message, "long")
