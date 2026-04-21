@@ -40,7 +40,6 @@ Kirigami.ScrollablePage {
     readonly property bool restoreSession: settingsManager?.restoreSession ?? false
     readonly property string scalingMode: settingsManager?.scalingMode ?? "fit"
     readonly property string filterMode: settingsManager?.filterMode ?? "linear"
-    readonly property bool steamIntegration: settingsManager?.steamIntegration ?? true
     readonly property bool borderlessWindows: settingsManager?.borderlessWindows ?? false
 
     actions: [
@@ -137,26 +136,10 @@ Kirigami.ScrollablePage {
             }
 
             Controls.CheckBox {
-                id: steamIntegrationCheck
-                Kirigami.FormData.label: i18nc("@option:check", "Steam integration")
-                checked: root.steamIntegration
-                onToggled: if (root.settingsManager) root.settingsManager.steamIntegration = checked
-
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Enables Steam Deck and Big Picture compatibility mode")
-                Controls.ToolTip.visible: hovered
-                Controls.ToolTip.delay: 1000
-            }
-
-            Controls.CheckBox {
                 id: borderlessCheck
                 Kirigami.FormData.label: i18nc("@option:check", "Borderless windows")
-                checked: root.sessionRunner ? root.sessionRunner.borderlessWindows : root.borderlessWindows
-                onToggled: {
-                    if (root.settingsManager) root.settingsManager.borderlessWindows = checked
-                    if (root.sessionRunner) {
-                        root.sessionRunner.borderlessWindows = checked
-                    }
-                }
+                checked: root.borderlessWindows
+                onToggled: if (root.settingsManager) root.settingsManager.borderlessWindows = checked
 
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Disable for resizable windows with title bars")
                 Controls.ToolTip.visible: hovered

@@ -334,10 +334,7 @@ Kirigami.ScrollablePage {
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
-                readonly property string labelWindowBorders: i18nc("@label", "Window Borders:")
                 readonly property string labelDevices: i18nc("@label", "Devices:")
-                readonly property string textBorderless: i18nc("@option:check", "Borderless")
-                readonly property string tooltipBorderless: i18nc("@info:tooltip", "Enable for borderless windows, disable to show window decorations")
 
                 readonly property string labelOverlay: i18nc("@label", "Config Overrides:")
                 readonly property string tooltipOverlay: i18nc("@info:tooltip", "For games that store saves/config in their own folder (not in AppData/Documents). Each player gets their own copy of matching files.")
@@ -539,16 +536,6 @@ Kirigami.ScrollablePage {
                                 model: ["fit", "stretch", "integer", "auto"]
                                 currentIndex: 0
                                 Layout.fillWidth: true
-                            }
-
-                            Controls.CheckBox {
-                                Kirigami.FormData.label: instanceCard.labelWindowBorders
-                                checked: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).borderless : false
-                                text: instanceCard.textBorderless
-
-                                Controls.ToolTip.text: instanceCard.tooltipBorderless
-                                Controls.ToolTip.visible: hovered
-                                Controls.ToolTip.delay: 1000
                             }
                         }
 
