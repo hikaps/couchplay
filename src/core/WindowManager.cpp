@@ -202,7 +202,7 @@ QVariantMap WindowManager::getWindowInfo(const QString &windowId)
     return info;
 }
 
-bool WindowManager::positionWindow(const QString &windowId, const QRect &geometry)
+bool WindowManager::positionWindow(const QString &windowId, const QRect &geometry, bool borderless)
 {
     if (!m_kwinAvailable || windowId.isEmpty()) {
         Q_EMIT positioningFailed(windowId, QStringLiteral("KWin not available or invalid window ID"));
@@ -211,11 +211,12 @@ bool WindowManager::positionWindow(const QString &windowId, const QRect &geometr
 
     qDebug() << "WindowManager: Positioning window" << windowId << "to" << geometry;
 
-    return executePositionScript(windowId, geometry);
+    return executePositionScript(windowId, geometry, borderless);
 }
 
 void WindowManager::queuePositionRequest(int requestId, const QRect &geometry,
                                           const QStringList &excludeWindowIds,
+                                          bool borderless,
                                           int timeoutMs)
 {
     if (!m_kwinAvailable) {
@@ -236,6 +237,7 @@ void WindowManager::queuePositionRequest(int requestId, const QRect &geometry,
     request.requestId = requestId;
     request.geometry = geometry;
     request.excludeWindowIds = excludeWindowIds;
+    request.borderless = borderless;
     request.expiresAt = QDateTime::currentMSecsSinceEpoch() + timeoutMs;
     
     m_pendingRequests.append(request);
@@ -324,7 +326,7 @@ void WindowManager::checkForNewWindows()
             qDebug() << "WindowManager: Matched window" << matchedWindowId 
                      << "to request" << request.requestId;
             
-            bool success = positionWindow(matchedWindowId, request.geometry);
+            bool success = positionWindow(matchedWindowId, request.geometry, request.borderless);
             
             m_knownWindowIds.append(matchedWindowId);
             
@@ -363,8 +365,9 @@ void WindowManager::stopMonitoringIfEmpty()
     }
 }
 
-bool WindowManager::executePositionScript(const QString &windowId, const QRect &geometry)
+bool WindowManager::executePositionScript(const QString &windowId, const QRect &geometry, bool borderless)
 {
+    QString borderlessValue = borderless ? QStringLiteral("true") : QStringLiteral("false");
     QString scriptContent = QStringLiteral(R"(
 (function() {
     var targetUuid = "%1";
@@ -372,13 +375,14 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
     var targetY = %3;
     var targetW = %4;
     var targetH = %5;
+    var borderless = %6;
     
     var windows = workspace.windowList();
     for (var i = 0; i < windows.length; i++) {
         var win = windows[i];
         if (win.internalId.toString() === targetUuid) {
             win.frameGeometry = {x: targetX, y: targetY, width: targetW, height: targetH};
-            win.noBorder = true;
+            win.noBorder = borderless;
             win.keepAbove = true;
             win.skipTaskbar = true;
             win.skipPager = true;
@@ -391,7 +395,8 @@ bool WindowManager::executePositionScript(const QString &windowId, const QRect &
         .arg(geometry.x())
         .arg(geometry.y())
         .arg(geometry.width())
-        .arg(geometry.height());
+        .arg(geometry.height())
+        .arg(borderlessValue);
     
     // Use XDG_RUNTIME_DIR — auto-cleaned on session end, not shared across users
     QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);

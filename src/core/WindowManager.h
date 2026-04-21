@@ -52,7 +52,7 @@ public:
      * @param geometry The target geometry (x, y, width, height)
      * @return true if successful
      */
-    Q_INVOKABLE bool positionWindow(const QString &windowId, const QRect &geometry);
+    Q_INVOKABLE bool positionWindow(const QString &windowId, const QRect &geometry, bool borderless = false);
 
     /**
      * @brief Queue a positioning request that will be fulfilled when a gamescope window appears
@@ -67,6 +67,7 @@ public:
      */
     Q_INVOKABLE void queuePositionRequest(int requestId, const QRect &geometry,
                                            const QStringList &excludeWindowIds,
+                                           bool borderless,
                                            int timeoutMs = 60000);
 
     /**
@@ -131,13 +132,14 @@ private:
         int requestId;
         QRect geometry;
         QStringList excludeWindowIds;
-        qint64 expiresAt;  // milliseconds since epoch
+        bool borderless;
+        qint64 expiresAt;
     };
 
     /**
      * @brief Execute a KWin script to position a specific window
      */
-    bool executePositionScript(const QString &windowId, const QRect &geometry);
+    bool executePositionScript(const QString &windowId, const QRect &geometry, bool borderless);
 
     /**
      * @brief Start the monitoring timer if not already running
