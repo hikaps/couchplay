@@ -240,10 +240,19 @@ bool SessionRunner::start()
         config[QStringLiteral("username")] = instConfig.username;
         config[QStringLiteral("monitor")] = instConfig.monitor;
         
-        config[QStringLiteral("internalWidth")] = m_layouts[i].width();
-        config[QStringLiteral("internalHeight")] = m_layouts[i].height();
         config[QStringLiteral("outputWidth")] = m_layouts[i].width();
         config[QStringLiteral("outputHeight")] = m_layouts[i].height();
+        
+        // autoScale: internal=output (game renders at window size, readable UI).
+        // !autoScale: internal=full monitor res (crisper graphics, smaller UI text).
+        if (profile.autoScale) {
+            config[QStringLiteral("internalWidth")] = m_layouts[i].width();
+            config[QStringLiteral("internalHeight")] = m_layouts[i].height();
+        } else {
+            config[QStringLiteral("internalWidth")] = screenGeometry.width();
+            config[QStringLiteral("internalHeight")] = screenGeometry.height();
+        }
+        
         config[QStringLiteral("positionX")] = m_layouts[i].x();
         config[QStringLiteral("positionY")] = m_layouts[i].y();
         config[QStringLiteral("refreshRate")] = instConfig.refreshRate;

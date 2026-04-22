@@ -199,6 +199,23 @@ Kirigami.ScrollablePage {
             }
         }
 
+        Controls.CheckBox {
+            id: autoScaleCheck
+            Layout.fillWidth: true
+            checked: root.sessionManager ? root.sessionManager.autoScale : true
+            text: i18nc("@option:check", "Scale Game UI to Window Size")
+            
+            onToggled: {
+                if (root.sessionManager) {
+                    root.sessionManager.autoScale = checked
+                }
+            }
+            
+            Controls.ToolTip.text: i18nc("@info:tooltip", "When enabled, game UI elements (fonts, menus) scale proportionally to the window size. Disable for crisper graphics at the cost of smaller text in split-screen.")
+            Controls.ToolTip.visible: hovered
+            Controls.ToolTip.delay: 1000
+        }
+
         RowLayout {
             spacing: Kirigami.Units.largeSpacing
             Layout.fillWidth: true

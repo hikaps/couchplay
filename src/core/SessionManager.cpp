@@ -91,6 +91,7 @@ bool SessionManager::saveProfile(const QString &name)
     general.writeEntry("name", name);
     general.writeEntry("layout", m_currentProfile.layout);
     general.writeEntry("gridSubLayout", m_currentProfile.gridSubLayout);
+    general.writeEntry("autoScale", m_currentProfile.autoScale);
     general.writeEntry("instanceCount", m_currentProfile.instances.size());
 
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
@@ -151,6 +152,7 @@ bool SessionManager::loadProfile(const QString &name)
     m_currentProfile.filePath = path;
     m_currentProfile.layout = general.readEntry("layout", QStringLiteral("horizontal"));
     m_currentProfile.gridSubLayout = general.readEntry("gridSubLayout", QString());
+    m_currentProfile.autoScale = general.readEntry("autoScale", true);
     int instanceCount = general.readEntry("instanceCount", 2);
 
     m_currentProfile.instances.clear();
@@ -259,6 +261,14 @@ void SessionManager::setCurrentGridSubLayout(const QString &subLayout)
     if (m_currentProfile.gridSubLayout != subLayout) {
         m_currentProfile.gridSubLayout = subLayout;
         Q_EMIT currentGridSubLayoutChanged();
+    }
+}
+
+void SessionManager::setAutoScale(bool autoScale)
+{
+    if (m_currentProfile.autoScale != autoScale) {
+        m_currentProfile.autoScale = autoScale;
+        Q_EMIT autoScaleChanged();
     }
 }
 

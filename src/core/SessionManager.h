@@ -72,12 +72,14 @@ struct SessionProfile {
     Q_PROPERTY(QString layout MEMBER layout)
     Q_PROPERTY(QString gridSubLayout MEMBER gridSubLayout)
     Q_PROPERTY(QString filePath MEMBER filePath)
+    Q_PROPERTY(bool autoScale MEMBER autoScale)
 
 public:
     QString name;
     QString layout = QStringLiteral("horizontal"); // horizontal, vertical, multi-monitor, grid
     QString gridSubLayout; // "horizontal" (3×1) or "grid-2x2" (2×2 with gap) — only used when layout is "grid"
     QString filePath;
+    bool autoScale = true; // When true, internal resolution matches output for readable game UI
     QList<InstanceConfig> instances;
 };
 
@@ -94,6 +96,7 @@ class SessionManager : public QObject
     Q_PROPERTY(QString currentLayout READ currentLayout WRITE setCurrentLayout NOTIFY currentLayoutChanged)
     Q_PROPERTY(QString currentGridSubLayout READ currentGridSubLayout WRITE setCurrentGridSubLayout NOTIFY currentGridSubLayoutChanged)
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
+    Q_PROPERTY(bool autoScale READ autoScale WRITE setAutoScale NOTIFY autoScaleChanged)
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
 
@@ -142,6 +145,8 @@ public:
     void setCurrentGridSubLayout(const QString &subLayout);
     int instanceCount() const { return m_currentProfile.instances.size(); }
     void setInstanceCount(int count);
+    bool autoScale() const { return m_currentProfile.autoScale; }
+    void setAutoScale(bool autoScale);
 
     QList<SessionProfile> savedProfiles() const { return m_savedProfiles; }
     QVariantList savedProfilesAsVariant() const;
@@ -154,6 +159,7 @@ Q_SIGNALS:
     void currentLayoutChanged();
     void currentGridSubLayoutChanged();
     void instanceCountChanged();
+    void autoScaleChanged();
     void savedProfilesChanged();
     void instancesChanged();
     void errorOccurred(const QString &message);
