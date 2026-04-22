@@ -508,6 +508,9 @@ void DeviceManager::unassignAll()
     for (int i = 0; i < m_devices.size(); ++i) {
         m_devices[i].assigned = false;
         m_devices[i].assignedInstance = -1;
+        if (!m_devices[i].stableId.isEmpty()) {
+            m_assignmentCache.remove(m_devices[i].stableId);
+        }
     }
     Q_EMIT devicesChanged();
     qDebug() << "DeviceManager: Unassigned all devices";
@@ -551,15 +554,16 @@ QStringList DeviceManager::getHidrawPathsForInstance(int instanceIndex) const
 
 int DeviceManager::autoAssignControllers()
 {
-    // First, unassign all controllers
     for (auto &device : m_devices) {
         if (device.type == QStringLiteral("controller")) {
             device.assigned = false;
             device.assignedInstance = -1;
+            if (!device.stableId.isEmpty()) {
+                m_assignmentCache.remove(device.stableId);
+            }
         }
     }
     
-    // Get list of non-virtual controllers
     QList<int> controllerIndices;
     for (int i = 0; i < m_devices.size(); ++i) {
         if (m_devices[i].type == QStringLiteral("controller") && 
@@ -568,13 +572,15 @@ int DeviceManager::autoAssignControllers()
         }
     }
     
-    // Assign one controller per instance
     int assignedCount = 0;
     for (int instance = 0; instance < m_instanceCount && assignedCount < controllerIndices.size(); ++instance) {
         int deviceIndex = controllerIndices[assignedCount];
-        int previousInstance = m_devices[deviceIndex].assignedInstance; // Will be -1 since we unassigned all above
+        int previousInstance = m_devices[deviceIndex].assignedInstance;
         m_devices[deviceIndex].assigned = true;
         m_devices[deviceIndex].assignedInstance = instance;
+        if (!m_devices[deviceIndex].stableId.isEmpty()) {
+            m_assignmentCache[m_devices[deviceIndex].stableId] = qMakePair(instance, m_devices[deviceIndex].name);
+        }
         Q_EMIT deviceAssigned(m_devices[deviceIndex].eventNumber, instance, previousInstance);
         assignedCount++;
     }
