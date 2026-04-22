@@ -1181,6 +1181,7 @@ void CouchPlayHelper::cleanupTcpListenerIfLast(const QString &username)
 
     if (!hasOtherInstances) {
         removePulseTcpListener(compositorUid);
+        m_runtimeAccessSetForUid.remove(compositorUid);
     }
 }
 
