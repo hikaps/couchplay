@@ -4,7 +4,10 @@
 
 <h1 align="center">CouchPlay</h1>
 
-<p align="center">Split-screen gaming manager for Linux, designed for KDE Plasma and Gamescope. CouchPlay enables multi-seat gaming sessions on a single PC by managing input device assignment, multiple Gamescope instances, and audio routing.</p>
+<p align="center">
+  <strong>Split-screen any game on Linux.</strong><br/>
+  CouchPlay launches multiple Steam or Heroic instances side by side through Gamescope — no native split-screen support needed. Each player gets their own isolated input, save data, and audio. Works on KDE Plasma, designed for immutable distros like Bazzite and Fedora Silverblue.
+</p>
 
 ## Screenshots
 
@@ -20,6 +23,18 @@
   <img src="assets/couchplay-split-screen.png" alt="CouchPlay Split-Screen Gaming" width="80%"/>
 </p>
 
+## Features
+
+- 🎮 **Split-screen any game** — launches multiple independent Steam or Heroic instances through Gamescope. No native split-screen support required.
+- 🖥️ **Flexible layouts** — side by side, top and bottom, multi-monitor, or grid (3+ players with 3×1 and 2×2 sub-layouts).
+- 🕹️ **Input isolation** — assign gamepads, keyboards, and mice to specific player instances. Steam Input virtual gamepads are detected and isolated automatically.
+- 👤 **User isolation** — each player gets a temporary Linux account with their own save data, settings, and Steam library.
+- 🔊 **Audio routing** — cross-user audio via PipeWire PulseAudio TCP listener.
+- 🛡️ **Overlay configs** — per-user config file overrides via glob patterns.
+- ⚡ **Sequential launching** — instances start one at a time to avoid GPU contention.
+- 🖼️ **Borderless windows** — optional borderless mode for cleaner multi-window setups.
+- 🐧 **Atomic-ready** — designed for immutable distributions like Bazzite and Fedora Silverblue. Available as a Flatpak.
+
 ## Usage
 
 ### Creating a Session
@@ -29,7 +44,8 @@
    - **Side by Side** — splits the screen horizontally
    - **Top and Bottom** — splits the screen vertically
    - **Multi-Monitor** — dedicates one display per player
-3. Configure each player instance: pick a launcher (Steam, Steam Big Picture, or Heroic), then set resolution, refresh rate, and scaling options.
+   - **Grid** — supports 3+ players with sub-layouts (3×1 row or 2×2 with gap)
+3. Configure each player instance: pick a launcher (Steam, Steam Big Picture, or Heroic), then set resolution, refresh rate, scaling, and filter options.
 4. Click **Start Session** to launch all instances through Gamescope.
 
 ### Assigning Controllers
@@ -38,19 +54,18 @@ Connect your gamepads, then use the **Auto-Assign Controllers** button to let Co
 
 ### Profiles
 
-Save a session configuration as a profile to reload it later without reconfiguring everything. Profiles are stored as JSON files in `~/.local/share/couchplay/profiles/` and can be loaded from the session page.
+Save a session configuration as a profile to reload it later without reconfiguring everything. Profiles are stored as JSON files in `~/.local/share/couchplay/profiles/` and can be loaded from the **Profiles** page.
 
 ### Managing Users
 
 CouchPlay creates temporary Linux user accounts so each player gets isolated save data and settings. Open the **Users** page to view and manage these accounts. The helper service handles the privileged operations behind the scenes.
 
-## Features
+### Settings
 
-- 🎮 **Input Isolation**: Assign specific gamepads/keyboards to specific player instances.
-- 🖥️ **Multi-Instance**: Run multiple games simultaneously using Gamescope nested compositors.
-- 🔊 **Audio Routing**: Route game audio to specific outputs (via PipeWire).
-- 👤 **User Management**: Automatically manages temporary user accounts for isolated save data.
-- 🐧 **Atomic-Ready**: Designed for immutable distributions like Bazzite and Fedora Silverblue.
+The **Settings** page offers additional configuration:
+- **Hide KDE panels** — auto-hide Plasma panels during gaming sessions.
+- **Scaling and filter modes** — per-instance rendering options.
+- **Steam and Heroic shortcut sync** — keep launch shortcuts in sync across users.
 
 ## Quick Install (Linux x86_64)
 
@@ -109,11 +124,11 @@ sudo ./install-helper.sh uninstall
 
 ### Prerequisites
 - CMake 3.20+
-- Qt 6.5+
-- KDE Frameworks 6 (Kirigami, I18n, Config, CoreAddons)
-- Gamescope
+- Qt 6.5+ (Core, Quick, Qml, Gui, QuickControls2, Widgets, DBus)
+- KDE Frameworks 6 (Kirigami, I18n, Config, CoreAddons, IconThemes, QQC2DesktopStyle, GlobalAccel)
+- PolkitQt6-1 (optional — required for user management authorization)
 - PipeWire (devel headers)
-- Polkit (devel headers)
+- Gamescope (runtime dependency)
 
 ### Building
 ```bash
@@ -129,6 +144,10 @@ ctest --test-dir build --output-on-failure
 ## AI Disclosure
 
 This project was developed with assistance from AI tools for code generation, documentation, and debugging.
+
+## Credits
+
+- [DualScope](https://gist.github.com/NaviVani-dev/9a8a704a31313fd5ed5fa68babf7bc3a) by [NaviVani](https://github.com/NaviVani-dev) — initial inspiration for split-screen gaming with Gamescope on Linux.
 
 ## License
 GPL-3.0-or-later
