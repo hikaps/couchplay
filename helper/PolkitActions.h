@@ -6,7 +6,8 @@
 #include <QString>
 
 // Polkit action IDs — must match data/polkit/io.github.hikaps.couchplay.policy
-namespace PolkitActions {
+namespace PolkitActions
+{
 inline const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couchplay.change-device-owner");
 inline const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couchplay.create-user");
 inline const QString ACTION_DELETE_USER = QStringLiteral("io.github.hikaps.couchplay.delete-user");

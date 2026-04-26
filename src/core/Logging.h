@@ -7,15 +7,15 @@
 
 /**
  * CouchPlay Logging Categories
- * 
+ *
  * Usage:
  *   #include "Logging.h"
  *   qCDebug(couchplaySteam) << "Message";
  *   qCWarning(couchplayCore) << "Warning message";
- * 
+ *
  * Enable via environment variable:
  *   QT_LOGGING_RULES="couchplay.*=true" ./build/bin/couchplay
- * 
+ *
  * Or use the run-debug.sh script:
  *   ./run-debug.sh
  */

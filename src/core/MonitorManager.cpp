@@ -3,9 +3,9 @@
 
 #include "MonitorManager.h"
 
+#include <QDebug>
 #include <QGuiApplication>
 #include <QScreen>
-#include <QDebug>
 
 MonitorManager::MonitorManager(QObject *parent)
     : QObject(parent)
@@ -23,7 +23,7 @@ void MonitorManager::refresh()
 {
     m_monitors.clear();
 
-    QList<QScreen*> screens = QGuiApplication::screens();
+    QList<QScreen *> screens = QGuiApplication::screens();
     QScreen *primaryScreen = QGuiApplication::primaryScreen();
 
     for (int i = 0; i < screens.size(); ++i) {
@@ -57,10 +57,10 @@ QVariantList MonitorManager::monitorsAsVariant() const
         map[QStringLiteral("refreshRate")] = monitor.refreshRate;
         map[QStringLiteral("primary")] = monitor.primary;
         map[QStringLiteral("displayString")] = QStringLiteral("%1 (%2x%3 @ %4Hz)")
-            .arg(monitor.name)
-            .arg(monitor.width)
-            .arg(monitor.height)
-            .arg(monitor.refreshRate);
+                                                   .arg(monitor.name)
+                                                   .arg(monitor.width)
+                                                   .arg(monitor.height)
+                                                   .arg(monitor.refreshRate);
         list.append(map);
     }
     return list;

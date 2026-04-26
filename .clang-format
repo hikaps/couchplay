@@ -1,0 +1,39 @@
+---
+# SPDX-FileCopyrightText: 2025 CouchPlay Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Based on KDE ECM .clang-format (MIT license)
+# Adapted for CouchPlay: ColumnLimit reduced to 120
+
+Language: JavaScript
+DisableFormat: true
+---
+Language: Json
+DisableFormat: false
+IndentWidth: 4
+---
+Language: Cpp
+BasedOnStyle: WebKit
+Standard: c++20
+TabWidth: 4
+ColumnLimit: 120
+SortIncludes: CaseInsensitive
+BreakBeforeBraces: Linux
+PointerAlignment: Right
+AlignAfterOpenBracket: Align
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortEnumsOnASingleLine: false
+AlwaysBreakBeforeMultilineStrings: true
+BinPackArguments: false
+BinPackParameters: false
+BreakBeforeBinaryOperators: NonAssignment
+Cpp11BracedListStyle: true
+SpaceBeforeCpp11BracedList: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+NamespaceIndentation: None
+SpaceAfterTemplateKeyword: false
+AlwaysBreakTemplateDeclarations: Yes
+ForEachMacros: [foreach, Q_FOREACH, BOOST_FOREACH, forever, Q_FOREVER, QBENCHMARK, QBENCHMARK_ONCE]
+AllowShortLambdasOnASingleLine: Empty
+AllowAllArgumentsOnNextLine: false

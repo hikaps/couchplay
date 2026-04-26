@@ -7,18 +7,18 @@
 #include <QRect>
 #include <QString>
 #include <QStringList>
-#include <QVariantMap>
 #include <QTimer>
 #include <QtQml/qqmlregistration.h>
+#include <QVariantMap>
 
 /**
  * @brief Manages window positioning via KWin D-Bus interface
- * 
+ *
  * This class provides methods to find and position gamescope windows
  * using KDE's KWin window manager. It uses the org.kde.KWin D-Bus
  * interface to query window information and a KWin script to
  * set window geometry.
- * 
+ *
  * Supports event-driven positioning through a queue system where
  * positioning requests are queued and fulfilled as windows appear.
  */
@@ -60,15 +60,16 @@ public:
      * @param geometry The target geometry for the window
      * @param excludeWindowIds Window IDs to exclude (already positioned windows)
      * @param timeoutMs Maximum time to wait for the window (default 60 seconds)
-     * 
+     *
      * When a matching gamescope window appears (not in excludeWindowIds), it will be
      * positioned and the gamescopeWindowPositioned signal will be emitted.
      * If the timeout expires, positioningFailed will be emitted.
      */
-    Q_INVOKABLE void queuePositionRequest(int requestId, const QRect &geometry,
-                                           const QStringList &excludeWindowIds,
-                                           bool borderless,
-                                           int timeoutMs = 60000);
+    Q_INVOKABLE void queuePositionRequest(int requestId,
+                                          const QRect &geometry,
+                                          const QStringList &excludeWindowIds,
+                                          bool borderless,
+                                          int timeoutMs = 60000);
 
     /**
      * @brief Cancel a pending positioning request
@@ -153,8 +154,8 @@ private:
 
     QTimer *m_monitorTimer = nullptr;
     QList<PositionRequest> m_pendingRequests;
-    QStringList m_knownWindowIds;  // Windows we've already seen/positioned
+    QStringList m_knownWindowIds; // Windows we've already seen/positioned
     bool m_kwinAvailable = false;
-    
-    static constexpr int MONITOR_INTERVAL_MS = 2000;  // Poll every 2 seconds
+
+    static constexpr int MONITOR_INTERVAL_MS = 2000; // Poll every 2 seconds
 };

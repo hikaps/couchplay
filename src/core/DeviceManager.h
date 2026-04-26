@@ -3,16 +3,16 @@
 
 #pragma once
 
-#include <QObject>
+#include <QFileSystemWatcher>
 #include <QList>
 #include <QMap>
+#include <QObject>
 #include <QPair>
+#include <qqmlintegration.h>
 #include <QSet>
 #include <QString>
-#include <QVariantMap>
-#include <QFileSystemWatcher>
 #include <QTimer>
-#include <qqmlintegration.h>
+#include <QVariantMap>
 
 #include "SettingsManager.h"
 
@@ -49,7 +49,7 @@ public:
     QString stableId; // Stable identifier: "vendorId:productId:physPath" - survives hotplug/reboot
     bool assigned = false;
     int assignedInstance = -1;
-    bool isVirtual = false;  // Virtual/software device
+    bool isVirtual = false; // Virtual/software device
     bool isInternal = false; // Internal device (power buttons, etc.)
     QString hidrawPath; // /dev/hidrawN (correlated via sysfs)
     int hidrawNumber = -1; // Just the N for quick access (-1 if no hidraw)
@@ -59,7 +59,7 @@ Q_DECLARE_METATYPE(InputDevice)
 
 /**
  * @brief Manages input device detection and assignment
- * 
+ *
  * Reads from /proc/bus/input/devices to detect available input devices
  * and manages their assignment to gamescope instances. Monitors for
  * hotplug events to automatically detect device changes.
@@ -68,18 +68,21 @@ class DeviceManager : public QObject
 {
     Q_OBJECT
     QML_ELEMENT
-    
+
     Q_PROPERTY(QVariantList devices READ devicesAsVariant NOTIFY devicesChanged)
     Q_PROPERTY(QVariantList controllers READ controllersAsVariant NOTIFY devicesChanged)
     Q_PROPERTY(QVariantList keyboards READ keyboardsAsVariant NOTIFY devicesChanged)
     Q_PROPERTY(QVariantList mice READ miceAsVariant NOTIFY devicesChanged)
     Q_PROPERTY(QVariantList visibleDevices READ visibleDevicesAsVariant NOTIFY devicesChanged)
-    Q_PROPERTY(bool showVirtualDevices READ showVirtualDevices WRITE setShowVirtualDevices NOTIFY showVirtualDevicesChanged)
-    Q_PROPERTY(bool showInternalDevices READ showInternalDevices WRITE setShowInternalDevices NOTIFY showInternalDevicesChanged)
+    Q_PROPERTY(
+        bool showVirtualDevices READ showVirtualDevices WRITE setShowVirtualDevices NOTIFY showVirtualDevicesChanged)
+    Q_PROPERTY(bool showInternalDevices READ showInternalDevices WRITE setShowInternalDevices NOTIFY
+                   showInternalDevicesChanged)
     Q_PROPERTY(bool hotplugEnabled READ hotplugEnabled WRITE setHotplugEnabled NOTIFY hotplugEnabledChanged)
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList pendingDevices READ pendingDevicesAsVariant NOTIFY pendingDevicesChanged)
-    Q_PROPERTY(SettingsManager* settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
+    Q_PROPERTY(
+        SettingsManager *settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
 
 public:
     explicit DeviceManager(QObject *parent = nullptr);
@@ -89,7 +92,10 @@ public:
      * @brief Set the settings manager to use for device filtering
      */
     void setSettingsManager(SettingsManager *manager);
-    SettingsManager* settingsManager() const { return m_settingsManager; }
+    SettingsManager *settingsManager() const
+    {
+        return m_settingsManager;
+    }
 
     /**
      * @brief Ignore a device by its stable ID
@@ -204,15 +210,16 @@ public:
 
     /**
      * @brief Restore device assignments from a list of stable IDs
-     * 
+     *
      * Devices that cannot be found are added to the pending devices list
      * and will be auto-assigned when they reconnect.
-     * 
+     *
      * @param instanceIndex The instance to assign devices to
      * @param stableIds List of stable IDs to assign
      * @param names List of friendly names (parallel to stableIds)
      */
-    Q_INVOKABLE void restoreAssignmentsFromStableIds(int instanceIndex, const QStringList &stableIds, const QStringList &names);
+    Q_INVOKABLE void
+    restoreAssignmentsFromStableIds(int instanceIndex, const QStringList &stableIds, const QStringList &names);
 
     /**
      * @brief Clear pending devices for a specific instance
@@ -227,23 +234,38 @@ public:
     QVariantList pendingDevicesAsVariant() const;
 
     // Property getters
-    QList<InputDevice> devices() const { return m_devices; }
+    QList<InputDevice> devices() const
+    {
+        return m_devices;
+    }
     QVariantList devicesAsVariant() const;
     QVariantList controllersAsVariant() const;
     QVariantList keyboardsAsVariant() const;
     QVariantList miceAsVariant() const;
     QVariantList visibleDevicesAsVariant() const;
-    
-    bool showVirtualDevices() const { return m_showVirtualDevices; }
+
+    bool showVirtualDevices() const
+    {
+        return m_showVirtualDevices;
+    }
     void setShowVirtualDevices(bool show);
-    
-    bool showInternalDevices() const { return m_showInternalDevices; }
+
+    bool showInternalDevices() const
+    {
+        return m_showInternalDevices;
+    }
     void setShowInternalDevices(bool show);
-    
-    bool hotplugEnabled() const { return m_hotplugEnabled; }
+
+    bool hotplugEnabled() const
+    {
+        return m_hotplugEnabled;
+    }
     void setHotplugEnabled(bool enabled);
-    
-    int instanceCount() const { return m_instanceCount; }
+
+    int instanceCount() const
+    {
+        return m_instanceCount;
+    }
     void setInstanceCount(int count);
 
 Q_SIGNALS:
@@ -300,15 +322,15 @@ private:
     SettingsManager *m_settingsManager = nullptr;
     QFileSystemWatcher *m_watcher = nullptr;
     QTimer *m_debounceTimer = nullptr;
-    
+
     // Persistent assignment cache: survives across hotplug cycles
     // Maps stableId -> {instanceIndex, deviceName}
     QMap<QString, QPair<int, QString>> m_assignmentCache;
-    
+
     // Pending devices: devices that were expected from profile but not connected
     // Format: {stableId, name, instanceIndex}
     QList<QVariantMap> m_pendingDevices;
-    
+
     bool m_showVirtualDevices = false;
     bool m_showInternalDevices = false;
     bool m_hotplugEnabled = true;

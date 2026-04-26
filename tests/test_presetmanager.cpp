@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QTest>
-#include <QSignalSpy>
-#include <QTemporaryDir>
-#include <QStandardPaths>
-#include <QFile>
 #include <QDir>
+#include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
+#include <QSignalSpy>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTest>
 
-#include <KSharedConfig>
 #include <KConfigGroup>
+#include <KSharedConfig>
 
 #include "PresetManager.h"
 
@@ -167,13 +167,11 @@ void TestPresetManager::testAddCustomPreset()
     PresetManager manager;
     QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
 
-    QString id = manager.addCustomPreset(
-        QStringLiteral("Test Game"),
-        QStringLiteral("/path/to/game"),
-        QStringLiteral("/working/dir"),
-        QStringLiteral("test-icon"),
-        true
-    );
+    QString id = manager.addCustomPreset(QStringLiteral("Test Game"),
+                                         QStringLiteral("/path/to/game"),
+                                         QStringLiteral("/working/dir"),
+                                         QStringLiteral("test-icon"),
+                                         true);
 
     QVERIFY(!id.isEmpty());
     QVERIFY(id.startsWith(QStringLiteral("custom-")));
@@ -202,10 +200,7 @@ void TestPresetManager::testRemoveCustomPreset()
     QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
 
     // Add a custom preset
-    QString id = manager.addCustomPreset(
-        QStringLiteral("To Remove"),
-        QStringLiteral("/path/to/game")
-    );
+    QString id = manager.addCustomPreset(QStringLiteral("To Remove"), QStringLiteral("/path/to/game"));
     QVERIFY(!id.isEmpty());
     presetsChangedSpy.clear();
 
@@ -228,10 +223,7 @@ void TestPresetManager::testGetSetSharedDirectories()
     QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
 
     // Add a custom preset
-    QString id = manager.addCustomPreset(
-        QStringLiteral("Shared Test"),
-        QStringLiteral("/path/to/game")
-    );
+    QString id = manager.addCustomPreset(QStringLiteral("Shared Test"), QStringLiteral("/path/to/game"));
 
     // Initially empty
     QStringList dirs = manager.getSharedDirectories(id);

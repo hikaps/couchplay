@@ -21,46 +21,47 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
     result.isFlatpakAvailable = false;
     result.isAccessibleToOtherUsers = false;
     result.isAbsolutePath = false;
-    
+
     if (command.isEmpty()) {
         result.errorMessage = QStringLiteral("Empty command");
         result.commandType = QStringLiteral("invalid");
         return result;
     }
-    
+
     result.commandType = detectCommandType(command);
-    
+
     if (result.commandType == QStringLiteral("invalid")) {
         result.isValid = false;
         result.errorMessage = QStringLiteral("Invalid command format");
         return result;
     }
-    
+
     if (result.commandType == QStringLiteral("flatpak")) {
         result.isFlatpak = true;
         result.isAbsolutePath = false;
         result.isFlatpakAvailable = isFlatpakAvailable();
-        
+
         if (!result.isFlatpakAvailable) {
             result.isValid = false;
             result.errorMessage = QStringLiteral("Flatpak not installed or not accessible");
             return result;
         }
-        
+
         // Extract app ID from "flatpak run <app-id>"
         QStringList parts = command.split(QStringLiteral(" "));
         if (parts.size() >= 3 && parts[0] == QStringLiteral("flatpak") && parts[1] == QStringLiteral("run")) {
             QString appID = parts[2];
-            
+
             if (!isValidFlatpakAppId(appID)) {
                 result.isValid = false;
                 result.errorMessage = QStringLiteral("Invalid Flatpak app ID format");
                 return result;
             }
-            
+
             result.isValid = isFlatpakAppInstalled(appID);
             if (!result.isValid) {
-                result.errorMessage = QString(QStringLiteral("Flatpak app '%1' not installed or not accessible to all users")).arg(appID);
+                result.errorMessage =
+                    QString(QStringLiteral("Flatpak app '%1' not installed or not accessible to all users")).arg(appID);
             }
             result.isAccessibleToOtherUsers = result.isValid; // Flatpak apps are generally accessible
         } else {
@@ -70,7 +71,7 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
     } else if (result.commandType == QStringLiteral("absolute")) {
         result.isFlatpak = false;
         result.isAbsolutePath = true;
-        
+
         QFileInfo fileInfo(command);
         result.isAccessibleToOtherUsers = isAccessibleToOtherUsersPath(command);
         result.isValid = fileInfo.exists() && fileInfo.isExecutable();
@@ -82,7 +83,7 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
     } else if (result.commandType == QStringLiteral("path")) {
         result.isFlatpak = false;
         result.isAbsolutePath = false;
-        
+
         QString resolvedPath = resolveCommandPath(command);
         if (resolvedPath.isEmpty()) {
             result.isValid = false;
@@ -97,7 +98,7 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
             }
         }
     }
-    
+
     return result;
 }
 
@@ -106,11 +107,11 @@ QString CommandVerifier::detectCommandType(const QString &command)
     if (command.isEmpty()) {
         return QStringLiteral("invalid");
     }
-    
+
     if (command.startsWith(QStringLiteral("flatpak run "))) {
         return QStringLiteral("flatpak");
     }
-    
+
     if (command.startsWith(QStringLiteral("/"))) {
         // Check if it's an absolute path to an executable
         // Extract the command part (without arguments)
@@ -123,13 +124,13 @@ QString CommandVerifier::detectCommandType(const QString &command)
             return QStringLiteral("absolute");
         }
     }
-    
+
     // Check if it's a command that can be found in PATH
     QString commandName = command.split(QStringLiteral(" ")).first();
     if (!commandName.isEmpty()) {
         return QStringLiteral("path");
     }
-    
+
     return QStringLiteral("invalid");
 }
 
@@ -150,11 +151,11 @@ bool CommandVerifier::commandExistsInPath(const QString &commandName)
     process.setProgram(QStringLiteral("which"));
     process.setArguments({commandName});
     process.start();
-    
+
     if (process.waitForFinished(2000)) {
         return process.exitCode() == 0;
     }
-    
+
     return false;
 }
 
@@ -169,23 +170,23 @@ bool CommandVerifier::isUserLocalCommand(const QString &command)
     if (isFlatpakCommand(command)) {
         return false; // Flatpak apps are generally system-wide
     }
-    
+
     QString commandName = command.split(QStringLiteral(" ")).first();
     if (commandName.isEmpty()) {
         return false;
     }
-    
+
     // If it's an absolute path, check if it's user-local
     if (commandName.startsWith(QStringLiteral("/"))) {
         return isUserLocalPath(commandName);
     }
-    
+
     // Check if the command resolves to a user-local path
     QString resolvedPath = resolveCommandPath(commandName);
     if (!resolvedPath.isEmpty()) {
         return isUserLocalPath(resolvedPath);
     }
-    
+
     return false;
 }
 
@@ -195,11 +196,11 @@ bool CommandVerifier::isFlatpakAvailable()
     process.setProgram(QStringLiteral("flatpak"));
     process.setArguments({QStringLiteral("--version")});
     process.start();
-    
+
     if (process.waitForFinished(2000)) {
         return process.exitCode() == 0;
     }
-    
+
     return false;
 }
 
@@ -208,12 +209,12 @@ bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
     if (!isValidFlatpakAppId(appID)) {
         return false;
     }
-    
+
     QProcess process;
     process.setProgram(QStringLiteral("flatpak"));
     process.setArguments({QStringLiteral("list"), QStringLiteral("--app"), QStringLiteral("--columns=application")});
     process.start();
-    
+
     if (process.waitForFinished(2000)) {
         if (process.exitCode() == 0) {
             QByteArray output = process.readAllStandardOutput();
@@ -221,7 +222,7 @@ bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
             return installedApps.contains(appID);
         }
     }
-    
+
     return false;
 }
 
@@ -231,7 +232,7 @@ QString CommandVerifier::resolveCommandPath(const QString &commandName)
     process.setProgram(QStringLiteral("which"));
     process.setArguments({commandName});
     process.start();
-    
+
     if (process.waitForFinished(2000)) {
         if (process.exitCode() == 0) {
             QByteArray output = process.readAllStandardOutput();
@@ -244,7 +245,7 @@ QString CommandVerifier::resolveCommandPath(const QString &commandName)
             }
         }
     }
-    
+
     return QString();
 }
 
@@ -315,18 +316,18 @@ bool CommandVerifier::isValidFlatpakAppId(const QString &appID)
     if (appID.isEmpty()) {
         return false;
     }
-    
+
     QStringList parts = appID.split(QStringLiteral("."));
     if (parts.size() < 3) {
         return false;
     }
-    
+
     // Check that each part is valid
     for (const QString &part : parts) {
         if (part.isEmpty()) {
             return false;
         }
-        
+
         // Check that part contains only valid characters
         for (QChar ch : part) {
             if (!ch.isLetterOrNumber() && ch != QLatin1Char('-')) {
@@ -334,6 +335,6 @@ bool CommandVerifier::isValidFlatpakAppId(const QString &appID)
             }
         }
     }
-    
+
     return true;
 }

@@ -22,7 +22,7 @@ struct CommandVerificationResult {
 
 /**
  * @brief Command verification utility
- * 
+ *
  * Provides methods to verify commands work properly for different users,
  * detecting Flatpak vs native commands, PATH resolution, and user-local commands.
  */

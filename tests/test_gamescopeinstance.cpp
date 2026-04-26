@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QTest>
+#include <QMap> // Ensures QMap<QString, QVariant> is complete
+#include <QProcess> // For QProcess::ExitStatus used in signals
+#include <QRect>
 #include <QSignalSpy>
-#include <QVariant>      // Must be before QVariantMap
-#include <QVariantMap>
-#include <QMap>          // Ensures QMap<QString, QVariant> is complete
 #include <QString>
 #include <QStringList>
-#include <QRect>
-#include <QProcess>      // For QProcess::ExitStatus used in signals
+#include <QTest>
+#include <QVariant> // Must be before QVariantMap
+#include <QVariantMap>
 
 #include "GamescopeInstance.h"
 
@@ -32,21 +32,21 @@ private Q_SLOTS:
     void testBuildArgsPosition();
     void testBuildArgsInputDevices();
     void testBuildArgsFullConfig();
-    
+
     // buildEnvironment tests
     void testBuildEnvBasic();
     void testBuildEnvCustomPulseServer();
-    
+
     // Instance state tests
     void testInitialState();
     void testNotRunningWithoutProcess();
     void testDoubleStartPrevention();
-    
+
     // Property tests
     void testIndexProperty();
     void testUsernameProperty();
     void testWindowGeometryProperty();
-    
+
     // Launch mode tests
     void testSteamLaunchMode();
     void testSteamLaunchModeNoAppId();
@@ -81,13 +81,13 @@ void TestGamescopeInstance::testBuildArgsMinimal()
 {
     QVariantMap config;
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
-     // Should NOT include -e by default (steamIntegration is false)
+
+    // Should NOT include -e by default (steamIntegration is false)
     QVERIFY(!args.contains(QStringLiteral("-e")));
-    
+
     // Should NOT include -b by default (decorated windows for resizing)
     QVERIFY(!args.contains(QStringLiteral("-b")));
-    
+
     // Should have default resolutions
     QVERIFY(args.contains(QStringLiteral("-w")));
     QVERIFY(args.contains(QStringLiteral("-h")));
@@ -102,23 +102,23 @@ void TestGamescopeInstance::testBuildArgsResolution()
     config[QStringLiteral("internalHeight")] = 1440;
     config[QStringLiteral("outputWidth")] = 1280;
     config[QStringLiteral("outputHeight")] = 720;
-    
+
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
+
     // Check internal resolution
     int wIdx = args.indexOf(QStringLiteral("-w"));
     QVERIFY(wIdx >= 0);
     QCOMPARE(args[wIdx + 1], QStringLiteral("2560"));
-    
+
     int hIdx = args.indexOf(QStringLiteral("-h"));
     QVERIFY(hIdx >= 0);
     QCOMPARE(args[hIdx + 1], QStringLiteral("1440"));
-    
+
     // Check output resolution
     int WIdx = args.indexOf(QStringLiteral("-W"));
     QVERIFY(WIdx >= 0);
     QCOMPARE(args[WIdx + 1], QStringLiteral("1280"));
-    
+
     int HIdx = args.indexOf(QStringLiteral("-H"));
     QVERIFY(HIdx >= 0);
     QCOMPARE(args[HIdx + 1], QStringLiteral("720"));
@@ -128,9 +128,9 @@ void TestGamescopeInstance::testBuildArgsRefreshRate()
 {
     QVariantMap config;
     config[QStringLiteral("refreshRate")] = 144;
-    
+
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
+
     int rIdx = args.indexOf(QStringLiteral("-r"));
     QVERIFY(rIdx >= 0);
     QCOMPARE(args[rIdx + 1], QStringLiteral("144"));
@@ -140,9 +140,9 @@ void TestGamescopeInstance::testBuildArgsScalingMode()
 {
     QVariantMap config;
     config[QStringLiteral("scalingMode")] = QStringLiteral("integer");
-    
+
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
+
     int SIdx = args.indexOf(QStringLiteral("-S"));
     QVERIFY(SIdx >= 0);
     QCOMPARE(args[SIdx + 1], QStringLiteral("integer"));
@@ -152,9 +152,9 @@ void TestGamescopeInstance::testBuildArgsFilterMode()
 {
     QVariantMap config;
     config[QStringLiteral("filterMode")] = QStringLiteral("fsr");
-    
+
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
+
     int FIdx = args.indexOf(QStringLiteral("-F"));
     QVERIFY(FIdx >= 0);
     QCOMPARE(args[FIdx + 1], QStringLiteral("fsr"));
@@ -165,14 +165,14 @@ void TestGamescopeInstance::testBuildArgsPosition()
     QVariantMap config;
     config[QStringLiteral("positionX")] = 960;
     config[QStringLiteral("positionY")] = 0;
-    
+
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
+
     // NOTE: --position is NOT available in all gamescope versions (e.g., Bazzite)
     // So we currently skip position args and rely on window manager or manual positioning
     // This test verifies that we DON'T add --position (since it's disabled)
     int posIdx = args.indexOf(QStringLiteral("--position"));
-    QCOMPARE(posIdx, -1);  // Should NOT be present
+    QCOMPARE(posIdx, -1); // Should NOT be present
 }
 
 void TestGamescopeInstance::testBuildArgsInputDevices()
@@ -182,17 +182,17 @@ void TestGamescopeInstance::testBuildArgsInputDevices()
     // Instead, isolation is achieved by changing device ownership (chown/chmod 600)
     // so each user can only read devices they own.
     // This test verifies we DON'T pass invalid gamescope flags.
-    
+
     QVariantMap config;
     QVariantList devices;
     devices << QStringLiteral("/dev/null"); // Use /dev/null as a stand-in
     config[QStringLiteral("devicePaths")] = devices;
-    
+
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
+
     // Should NOT contain --input-device (not a valid gamescope flag)
     QVERIFY(!args.contains(QStringLiteral("--input-device")));
-    
+
     // Should NOT contain --grab (only grabs keyboard, not useful for gamepad isolation)
     QVERIFY(!args.contains(QStringLiteral("--grab")));
 }
@@ -209,17 +209,17 @@ void TestGamescopeInstance::testBuildArgsFullConfig()
     config[QStringLiteral("filterMode")] = QStringLiteral("linear");
     config[QStringLiteral("positionX")] = 0;
     config[QStringLiteral("positionY")] = 0;
-    config[QStringLiteral("borderless")] = true;  // Enable borderless for this test
-    
+    config[QStringLiteral("borderless")] = true; // Enable borderless for this test
+
     QVariantList devices;
     devices << QStringLiteral("/dev/null");
     config[QStringLiteral("devicePaths")] = devices;
-    
+
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
-    
+
     // Verify all expected args are present
-    QVERIFY(!args.contains(QStringLiteral("-e")));  // Should NOT include -e (steamIntegration is false)
-    QVERIFY(args.contains(QStringLiteral("-b")));  // Now enabled because borderless=true
+    QVERIFY(!args.contains(QStringLiteral("-e"))); // Should NOT include -e (steamIntegration is false)
+    QVERIFY(args.contains(QStringLiteral("-b"))); // Now enabled because borderless=true
     QVERIFY(args.contains(QStringLiteral("-w")));
     QVERIFY(args.contains(QStringLiteral("-h")));
     QVERIFY(args.contains(QStringLiteral("-W")));
@@ -240,7 +240,7 @@ void TestGamescopeInstance::testBuildEnvBasic()
 {
     QVariantMap config;
     QStringList env = GamescopeInstance::buildEnvironment(config);
-    
+
     // Should have essential env vars for Vulkan games
     QVERIFY(!env.isEmpty());
     QVERIFY(env.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
@@ -251,14 +251,14 @@ void TestGamescopeInstance::testBuildEnvCustomPulseServer()
 {
     QVariantMap config;
     config[QStringLiteral("pulseServer")] = QStringLiteral("tcp:192.168.1.100:4713");
-    
+
     QStringList env = GamescopeInstance::buildEnvironment(config);
-    
+
     // pulseServer config is no longer used (each user has own PipeWire session)
     // but we still get the base env vars
     QVERIFY(!env.isEmpty());
     QVERIFY(env.contains(QStringLiteral("ENABLE_GAMESCOPE_WSI=1")));
-    
+
     // PULSE_SERVER should NOT be in the env
     bool hasPulseServer = false;
     for (const QString &var : env) {
@@ -292,19 +292,19 @@ void TestGamescopeInstance::testDoubleStartPrevention()
     // Note: We can't actually start gamescope in tests, but we can verify
     // the protection logic exists in the code
     // The start() method checks m_process->state() before starting
-    
+
     // For now, just verify the instance can receive start() calls
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-    
+
     QVariantMap config;
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
-    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");  // Use a real executable
-    
+    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true"); // Use a real executable
+
     // First start will attempt to run (may fail if gamescope not installed)
     // We're mainly testing that the method is callable
     m_instance->start(config, 0);
-    
+
     // We don't assert on the result because gamescope may not be installed
     // in the test environment
 }
@@ -338,15 +338,15 @@ void TestGamescopeInstance::testWindowGeometryProperty()
     config[QStringLiteral("outputWidth")] = 800;
     config[QStringLiteral("outputHeight")] = 600;
     config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");
-    
+
     m_instance->start(config, 0);
-    
+
     QRect geometry = m_instance->windowGeometry();
     QCOMPARE(geometry.x(), 100);
     QCOMPARE(geometry.y(), 200);
     QCOMPARE(geometry.width(), 800);
     QCOMPARE(geometry.height(), 600);
-    
+
     m_instance->stop();
 }
 
@@ -357,29 +357,28 @@ void TestGamescopeInstance::testSteamLaunchMode()
     // Test that Steam preset builds proper command with steamAppId
     // We can't actually start the process, but we can verify the config is accepted
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-    
+
     QVariantMap config;
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
     config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
     config[QStringLiteral("steamIntegration")] = true;
-    config[QStringLiteral("steamAppId")] = QStringLiteral("1426210");  // It Takes Two
+    config[QStringLiteral("steamAppId")] = QStringLiteral("1426210"); // It Takes Two
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
-    
+
     // This will try to start gamescope (may fail if not installed)
     m_instance->start(config, 0);
-    
+
     // Check that we didn't get any preset-related errors
     bool hasPresetError = false;
     for (int i = 0; i < errorSpy.count(); ++i) {
         QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("preset")) || 
-            error.contains(QStringLiteral("No game command"))) {
+        if (error.contains(QStringLiteral("preset")) || error.contains(QStringLiteral("No game command"))) {
             hasPresetError = true;
         }
     }
     QVERIFY(!hasPresetError);
-    
+
     m_instance->stop();
 }
 
@@ -388,7 +387,7 @@ void TestGamescopeInstance::testSteamLaunchModeNoAppId()
     // Test that Steam preset WITHOUT steamAppId is valid (launches Big Picture)
     // This allows players to select games inside Steam
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-    
+
     QVariantMap config;
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
     config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
@@ -396,21 +395,20 @@ void TestGamescopeInstance::testSteamLaunchModeNoAppId()
     // No steamAppId set - this is valid, launches Steam Big Picture
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
-    
+
     m_instance->start(config, 0);
-    
+
     // Check that we didn't get any preset-related errors
     // (may still get "gamescope not found" in test environment, which is expected)
     bool hasPresetError = false;
     for (int i = 0; i < errorSpy.count(); ++i) {
         QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("preset")) ||
-            error.contains(QStringLiteral("No game command"))) {
+        if (error.contains(QStringLiteral("preset")) || error.contains(QStringLiteral("No game command"))) {
             hasPresetError = true;
         }
     }
     QVERIFY(!hasPresetError);
-    
+
     m_instance->stop();
 }
 
@@ -419,14 +417,14 @@ void TestGamescopeInstance::testSteamModeIsDefault()
     // Test that Steam is the default when no preset command is provided
     // The instance should fall back to Steam Big Picture
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-    
+
     QVariantMap config;
     // No presetCommand set - should default to "steam -tenfoot -steamdeck"
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
-    
+
     m_instance->start(config, 0);
-    
+
     // Check that we didn't get "No game command" error
     // (the fallback should provide a default command)
     // May still get "gamescope not found" in test environment
@@ -438,7 +436,7 @@ void TestGamescopeInstance::testSteamModeIsDefault()
         }
     }
     QVERIFY(!hasCommandError);
-    
+
     m_instance->stop();
 }
 

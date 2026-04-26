@@ -1,0 +1,67 @@
+---
+# SPDX-FileCopyrightText: 2025 CouchPlay Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Pragmatic clang-tidy config for Qt6/KDE C++20 project
+# Based on okular/KDiff3 configs with Qt-specific suppressions
+
+Checks: >
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.performance.Padding,
+  performance-*,
+  -performance-no-automatic-move,
+  -performance-unnecessary-copy-initialization,
+  bugprone-*,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-switch-missing-default-case,
+  -bugprone-macro-parentheses,
+  -bugprone-narrowing-conversions,
+  -bugprone-branch-clone,
+  -bugprone-incorrect-roundings,
+  -bugprone-suspicious-include,
+  -bugprone-reserved-identifier,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  modernize-redundant-void-arg,
+  modernize-use-bool-literals,
+  modernize-use-override,
+  modernize-use-equals-delete,
+  modernize-use-emplace,
+  modernize-loop-convert,
+  modernize-use-nullptr,
+  modernize-use-auto,
+  modernize-use-default-member-init,
+  modernize-use-equals-default,
+  google-explicit-constructor,
+  readability-braces-around-statements,
+  readability-inconsistent-declaration-parameter-name,
+  readability-string-compare,
+  readability-redundant-*,
+  -readability-redundant-inline-specifier,
+  -readability-redundant-access-specifiers,
+  readability-static-*,
+  misc-redundant-expression,
+  misc-misplaced-const,
+  misc-unused-*
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*'
+FormatStyle: file
+
+CheckOptions:
+  - key:             google-readability-braces-around-statements.ShortStatementLines
+    value:           '4'
+  - key:             google-readability-function-size.StatementThreshold
+    value:           '800'
+  - key:             modernize-loop-convert.MaxCopySize
+    value:           '16'
+  - key:             modernize-loop-convert.MinConfidence
+    value:           reasonable
+  - key:             modernize-loop-convert.NamingStyle
+    value:           CamelCase
+  - key:             modernize-use-nullptr.NullMacros
+    value:           'NULL'
+  - key:             modernize-use-auto.MinTypeNameLength
+    value:           '10'
+...

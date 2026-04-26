@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "HeroicConfigManager.h"
-#include "Logging.h"
 #include "../dbus/CouchPlayHelperClient.h"
+#include "Logging.h"
 
 #include <QDebug>
 #include <QDir>
@@ -34,10 +34,10 @@ HeroicConfigManager::HeroicConfigManager(QObject *parent)
             m_userHome = QString::fromLocal8Bit(pw->pw_dir);
         }
     }
-    
+
     // Auto-detect Heroic on construction
     detectHeroicPaths();
-    
+
     // Load settings from config
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup group = config->group(QStringLiteral("Heroic"));
@@ -47,7 +47,7 @@ HeroicConfigManager::HeroicConfigManager(QObject *parent)
 void HeroicConfigManager::detectHeroicPaths()
 {
     m_heroicPaths = HeroicPaths();
-    
+
     // Check for Flatpak installation first
     QString flatpakPath = m_userHome + QStringLiteral("/.var/app/com.heroicgameslauncher.hgl/config/heroic");
     if (QDir(flatpakPath).exists()) {
@@ -64,17 +64,17 @@ void HeroicConfigManager::detectHeroicPaths()
             qDebug() << "HeroicConfigManager: Detected native Heroic at" << nativePath;
         }
     }
-    
+
     if (m_heroicPaths.heroicRoot.isEmpty()) {
         qDebug() << "HeroicConfigManager: Heroic not detected";
         return;
     }
-    
+
     // Set up all paths
     m_heroicPaths.configJson = m_heroicPaths.heroicRoot + QStringLiteral("/config.json");
     m_heroicPaths.gamesConfig = m_heroicPaths.heroicRoot + QStringLiteral("/GamesConfig");
     m_heroicPaths.toolsPath = m_heroicPaths.heroicRoot + QStringLiteral("/tools");
-    
+
     // Legendary config (Epic Games)
     // Check for nested legendary config first (Flatpak structure)
     QString legendaryNested = m_heroicPaths.heroicRoot + QStringLiteral("/legendaryConfig/legendary/installed.json");
@@ -87,16 +87,16 @@ void HeroicConfigManager::detectHeroicPaths()
             m_heroicPaths.legendaryInstalled = legendaryStandalone;
         }
     }
-    
+
     // GOG config
     m_heroicPaths.gogInstalled = m_heroicPaths.heroicRoot + QStringLiteral("/gog_store/installed.json");
-    
+
     // Nile config (Amazon Games)
     m_heroicPaths.nileInstalled = m_heroicPaths.heroicRoot + QStringLiteral("/nile_config/installed.json");
-    
+
     // Sideload (manually added games)
     m_heroicPaths.sideloadLibrary = m_heroicPaths.heroicRoot + QStringLiteral("/sideload_apps/library.json");
-    
+
     // Verify at least config.json exists
     if (QFile::exists(m_heroicPaths.configJson)) {
         m_heroicPaths.valid = true;
@@ -108,7 +108,7 @@ void HeroicConfigManager::detectHeroicPaths()
 
     // Set shortcuts directory (standard XDG location where Heroic puts .desktop files)
     m_heroicPaths.shortcutsDir = m_userHome + QStringLiteral("/.local/share/applications");
-    
+
     Q_EMIT heroicPathsChanged();
 }
 
@@ -124,13 +124,13 @@ void HeroicConfigManager::setSyncShortcutsEnabled(bool enabled)
 {
     if (m_syncShortcutsEnabled != enabled) {
         m_syncShortcutsEnabled = enabled;
-        
+
         // Persist to config
         KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
         KConfigGroup group = config->group(QStringLiteral("Heroic"));
         group.writeEntry(QStringLiteral("SyncShortcutsEnabled"), enabled);
         config->sync();
-        
+
         Q_EMIT syncShortcutsEnabledChanged();
     }
 }
@@ -148,9 +148,8 @@ int HeroicConfigManager::generateShortcuts()
     }
 
     int generated = 0;
-    QString launchCmd = m_heroicPaths.isFlatpak 
-        ? QStringLiteral("flatpak run com.heroicgameslauncher.hgl --no-gui")
-        : QStringLiteral("heroic --no-gui");
+    QString launchCmd = m_heroicPaths.isFlatpak ? QStringLiteral("flatpak run com.heroicgameslauncher.hgl --no-gui")
+                                                : QStringLiteral("heroic --no-gui");
 
     for (const HeroicGame &game : m_games) {
         QString runner = game.runner;
@@ -159,15 +158,15 @@ int HeroicConfigManager::generateShortcuts()
         }
 
         QString desktopContent = QStringLiteral(
-            "[Desktop Entry]\n"
-            "Version=1.0\n"
-            "Type=Application\n"
-            "Name=%1\n"
-            "Exec=%2 \"heroic://launch/%3/%4\"\n"
-            "Icon=applications-games\n"
-            "Categories=Game;\n"
-            "StartupNotify=true\n"
-        ).arg(game.title, launchCmd, runner, game.appName);
+                                     "[Desktop Entry]\n"
+                                     "Version=1.0\n"
+                                     "Type=Application\n"
+                                     "Name=%1\n"
+                                     "Exec=%2 \"heroic://launch/%3/%4\"\n"
+                                     "Icon=applications-games\n"
+                                     "Categories=Game;\n"
+                                     "StartupNotify=true\n")
+                                     .arg(game.title, launchCmd, runner, game.appName);
 
         QString filename = QStringLiteral("heroic-%1.desktop").arg(game.appName);
         QString filePath = shortcutsDir.absoluteFilePath(filename);
@@ -211,14 +210,14 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
     if (m_games.isEmpty()) {
         loadGames();
     }
-    
+
     int generated = generateShortcuts();
     qDebug() << "HeroicConfigManager: Generated" << generated << "shortcuts from Heroic games";
 
     QStringList filters;
     filters << QStringLiteral("heroic-*.desktop");
     QStringList shortcuts = sourceDir.entryList(filters, QDir::Files);
-    
+
     if (shortcuts.isEmpty()) {
         qDebug() << "HeroicConfigManager: No shortcuts to sync";
         return true;
@@ -234,8 +233,7 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
     QString targetDir = targetHome + QStringLiteral("/.local/share/applications");
 
     if (!targetDir.startsWith(targetHome + QLatin1Char('/'))) {
-        qWarning() << "HeroicConfigManager: Target directory" << targetDir
-                   << "is not under user's home" << targetHome;
+        qWarning() << "HeroicConfigManager: Target directory" << targetDir << "is not under user's home" << targetHome;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Target path is not under user's home directory"));
         return false;
     }
@@ -252,7 +250,7 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
         QString targetPath = targetDir + QLatin1Char('/') + filename;
 
         qDebug() << "HeroicConfigManager: Copying" << filename << "to" << targetUsername;
-        
+
         if (!m_helperClient->copyFileToUser(sourcePath, targetPath, targetUsername)) {
             qWarning() << "HeroicConfigManager: Failed to copy" << filename;
             allSucceeded = false;
@@ -288,7 +286,7 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
         return false;
     }
     QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
-    
+
     QString targetHeroicRoot;
     if (m_heroicPaths.isFlatpak) {
         targetHeroicRoot = targetHome + QStringLiteral("/.var/app/com.heroicgameslauncher.hgl/config/heroic");
@@ -297,13 +295,14 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
     }
 
     if (!targetHeroicRoot.startsWith(targetHome + QLatin1Char('/'))) {
-        qWarning() << "HeroicConfigManager: Target heroic root" << targetHeroicRoot
-                   << "is not under user's home" << targetHome;
+        qWarning() << "HeroicConfigManager: Target heroic root" << targetHeroicRoot << "is not under user's home"
+                   << targetHome;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Target path is not under user's home directory"));
         return false;
     }
 
-    auto copyFile = [this, &targetUsername, &targetHeroicRoot](const QString &sourcePath, const QString &relTargetPath) {
+    auto copyFile = [this, &targetUsername, &targetHeroicRoot](const QString &sourcePath,
+                                                               const QString &relTargetPath) {
         if (!QFile::exists(sourcePath)) {
             return;
         }
@@ -313,11 +312,11 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
     };
 
     copyFile(m_heroicPaths.sideloadLibrary, QStringLiteral("sideload_apps/library.json"));
-    
+
     if (!m_heroicPaths.legendaryInstalled.isEmpty()) {
         copyFile(m_heroicPaths.legendaryInstalled, QStringLiteral("legendaryConfig/legendary/installed.json"));
     }
-    
+
     copyFile(m_heroicPaths.gogInstalled, QStringLiteral("gog_store/installed.json"));
     copyFile(m_heroicPaths.nileInstalled, QStringLiteral("nile_config/installed.json"));
 
@@ -330,7 +329,7 @@ QString HeroicConfigManager::heroicCommand() const
     if (!m_heroicPaths.valid) {
         return QStringLiteral("heroic");
     }
-    
+
     if (m_heroicPaths.isFlatpak) {
         return QStringLiteral("flatpak run com.heroicgameslauncher.hgl");
     } else {
@@ -343,30 +342,30 @@ void HeroicConfigManager::loadHeroicConfig()
     if (!QFile::exists(m_heroicPaths.configJson)) {
         return;
     }
-    
+
     QFile file(m_heroicPaths.configJson);
     if (!file.open(QIODevice::ReadOnly)) {
         qWarning() << "HeroicConfigManager: Failed to open config.json";
         return;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(data, &error);
-    
+
     if (error.error != QJsonParseError::NoError) {
         qWarning() << "HeroicConfigManager: Failed to parse config.json:" << error.errorString();
         return;
     }
-    
+
     QJsonObject root = doc.object();
     QJsonObject defaultSettings = root[QStringLiteral("defaultSettings")].toObject();
-    
+
     // Extract default paths
     m_defaultInstallPath = defaultSettings[QStringLiteral("defaultInstallPath")].toString();
-    
+
     qDebug() << "HeroicConfigManager: Default install path:" << m_defaultInstallPath;
 }
 
@@ -375,24 +374,22 @@ QString HeroicConfigManager::defaultInstallPath() const
     return m_defaultInstallPath;
 }
 
-
-
 void HeroicConfigManager::loadGames()
 {
     m_games.clear();
-    
+
     if (!m_heroicPaths.valid) {
         qDebug() << "HeroicConfigManager: Cannot load games - Heroic not detected";
         Q_EMIT gamesLoaded();
         return;
     }
-    
+
     // Load games from all backends
     m_games.append(parseLegendaryGames());
     m_games.append(parseGogGames());
     m_games.append(parseNileGames());
     m_games.append(parseSideloadGames());
-    
+
     qDebug() << "HeroicConfigManager: Loaded" << m_games.size() << "total games";
     Q_EMIT gamesLoaded();
 }
@@ -400,36 +397,36 @@ void HeroicConfigManager::loadGames()
 QList<HeroicGame> HeroicConfigManager::parseLegendaryGames()
 {
     QList<HeroicGame> games;
-    
+
     if (!QFile::exists(m_heroicPaths.legendaryInstalled)) {
         qDebug() << "HeroicConfigManager: Legendary installed.json not found";
         return games;
     }
-    
+
     QFile file(m_heroicPaths.legendaryInstalled);
     if (!file.open(QIODevice::ReadOnly)) {
         qWarning() << "HeroicConfigManager: Failed to open Legendary installed.json";
         return games;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(data, &error);
-    
+
     if (error.error != QJsonParseError::NoError) {
         qWarning() << "HeroicConfigManager: Failed to parse Legendary installed.json:" << error.errorString();
         return games;
     }
-    
+
     QJsonObject root = doc.object();
-    
+
     // Iterate over all games in the installed.json
     for (auto it = root.begin(); it != root.end(); ++it) {
         QString appName = it.key();
         QJsonObject gameObj = it.value().toObject();
-        
+
         HeroicGame game;
         game.appName = appName;
         game.title = gameObj[QStringLiteral("title")].toString();
@@ -437,10 +434,10 @@ QList<HeroicGame> HeroicConfigManager::parseLegendaryGames()
         game.executable = gameObj[QStringLiteral("executable")].toString();
         game.installSize = gameObj[QStringLiteral("install_size")].toVariant().toLongLong();
         game.runner = QStringLiteral("legendary");
-        
+
         games.append(game);
     }
-    
+
     qDebug() << "HeroicConfigManager: Loaded" << games.size() << "Legendary games";
     return games;
 }
@@ -448,35 +445,35 @@ QList<HeroicGame> HeroicConfigManager::parseLegendaryGames()
 QList<HeroicGame> HeroicConfigManager::parseGogGames()
 {
     QList<HeroicGame> games;
-    
+
     if (!QFile::exists(m_heroicPaths.gogInstalled)) {
         qDebug() << "HeroicConfigManager: GOG installed.json not found";
         return games;
     }
-    
+
     QFile file(m_heroicPaths.gogInstalled);
     if (!file.open(QIODevice::ReadOnly)) {
         qWarning() << "HeroicConfigManager: Failed to open GOG installed.json";
         return games;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(data, &error);
-    
+
     if (error.error != QJsonParseError::NoError) {
         qWarning() << "HeroicConfigManager: Failed to parse GOG installed.json:" << error.errorString();
         return games;
     }
-    
+
     QJsonObject root = doc.object();
     QJsonArray installedArray = root[QStringLiteral("installed")].toArray();
-    
+
     for (const QJsonValue &value : installedArray) {
         QJsonObject gameObj = value.toObject();
-        
+
         HeroicGame game;
         game.appName = gameObj[QStringLiteral("appName")].toString();
         game.title = gameObj[QStringLiteral("title")].toString();
@@ -486,7 +483,7 @@ QList<HeroicGame> HeroicConfigManager::parseGogGames()
         game.runner = QStringLiteral("gog");
         games.append(game);
     }
-    
+
     qDebug() << "HeroicConfigManager: Loaded" << games.size() << "GOG games";
     return games;
 }
@@ -494,35 +491,35 @@ QList<HeroicGame> HeroicConfigManager::parseGogGames()
 QList<HeroicGame> HeroicConfigManager::parseNileGames()
 {
     QList<HeroicGame> games;
-    
+
     if (!QFile::exists(m_heroicPaths.nileInstalled)) {
         qDebug() << "HeroicConfigManager: Nile installed.json not found (Amazon Games)";
         return games;
     }
-    
+
     QFile file(m_heroicPaths.nileInstalled);
     if (!file.open(QIODevice::ReadOnly)) {
         qWarning() << "HeroicConfigManager: Failed to open Nile installed.json";
         return games;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(data, &error);
-    
+
     if (error.error != QJsonParseError::NoError) {
         qWarning() << "HeroicConfigManager: Failed to parse Nile installed.json:" << error.errorString();
         return games;
     }
-    
+
     QJsonObject root = doc.object();
     QJsonArray installedArray = root[QStringLiteral("installed")].toArray();
-    
+
     for (const QJsonValue &value : installedArray) {
         QJsonObject gameObj = value.toObject();
-        
+
         HeroicGame game;
         game.appName = gameObj[QStringLiteral("id")].toString();
         game.title = gameObj[QStringLiteral("title")].toString();
@@ -532,7 +529,7 @@ QList<HeroicGame> HeroicConfigManager::parseNileGames()
         game.runner = QStringLiteral("nile");
         games.append(game);
     }
-    
+
     qDebug() << "HeroicConfigManager: Loaded" << games.size() << "Nile (Amazon) games";
     return games;
 }
@@ -556,66 +553,64 @@ QVariantList HeroicConfigManager::gamesAsVariant() const
 QStringList HeroicConfigManager::extractGameDirectories() const
 {
     QSet<QString> dirs;
-    
+
     for (const HeroicGame &game : m_games) {
         if (!game.installPath.isEmpty() && QDir(game.installPath).exists()) {
             dirs.insert(game.installPath);
         }
     }
-    
+
     // Remove empty strings
     dirs.remove(QString());
-    
+
     QStringList result = dirs.values();
     qDebug() << "HeroicConfigManager: Extracted" << result.size() << "game directories";
     return result;
 }
 
-
-
 QList<HeroicGame> HeroicConfigManager::parseSideloadGames()
 {
     QList<HeroicGame> games;
-    
+
     if (!QFile::exists(m_heroicPaths.sideloadLibrary)) {
         qDebug() << "HeroicConfigManager: Sideload library.json not found";
         return games;
     }
-    
+
     QFile file(m_heroicPaths.sideloadLibrary);
     if (!file.open(QIODevice::ReadOnly)) {
         qWarning() << "HeroicConfigManager: Failed to open sideload library.json";
         return games;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(data, &error);
-    
+
     if (error.error != QJsonParseError::NoError) {
         qWarning() << "HeroicConfigManager: Failed to parse sideload library.json:" << error.errorString();
         return games;
     }
-    
+
     QJsonObject root = doc.object();
     QJsonArray gamesArray = root[QStringLiteral("games")].toArray();
-    
+
     for (const QJsonValue &value : gamesArray) {
         QJsonObject gameObj = value.toObject();
-        
+
         HeroicGame game;
         game.appName = gameObj[QStringLiteral("app_name")].toString();
         game.title = gameObj[QStringLiteral("title")].toString();
         game.runner = QStringLiteral("sideload");
-        
+
         QJsonObject installObj = gameObj[QStringLiteral("install")].toObject();
         game.executable = installObj[QStringLiteral("executable")].toString();
         game.installPath = gameObj[QStringLiteral("folder_name")].toString();
         games.append(game);
     }
-    
+
     qDebug() << "HeroicConfigManager: Loaded" << games.size() << "sideload games";
     return games;
 }

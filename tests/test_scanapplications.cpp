@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QTest>
-#include <QSignalSpy>
 #include <QDebug>
+#include <QSignalSpy>
+#include <QTest>
 
 #include "PresetManager.h"
 
@@ -41,7 +41,8 @@ void TestScanApplications::testScanApplications()
         for (const QString &path : paths) {
             QDir dir(path);
             if (dir.exists()) {
-                qDebug() << path << "exists with" << dir.entryList({QStringLiteral("*.desktop")}, QDir::Files).length() << ".desktop files";
+                qDebug() << path << "exists with" << dir.entryList({QStringLiteral("*.desktop")}, QDir::Files).length()
+                         << ".desktop files";
             } else {
                 qDebug() << path << "does not exist";
             }
@@ -58,7 +59,7 @@ void TestScanApplications::testScanApplications()
         }
     }
 
-    QVERIFY(spy.count() >= 1);  // Should emit at least once
+    QVERIFY(spy.count() >= 1); // Should emit at least once
 }
 
 QTEST_MAIN(TestScanApplications)

@@ -4,13 +4,13 @@
 #pragma once
 
 #include <QObject>
+#include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
-#include <qqmlintegration.h>
 
 /**
  * SettingsManager - Manages application settings persistence
- * 
+ *
  * Stores settings in ~/.config/couchplayrc using KSharedConfig.
  * All settings are automatically persisted when changed.
  */
@@ -37,27 +37,48 @@ public:
     ~SettingsManager() override = default;
 
     // General settings
-    bool hidePanels() const { return m_hidePanels; }
+    bool hidePanels() const
+    {
+        return m_hidePanels;
+    }
     void setHidePanels(bool value);
 
-    bool killSteam() const { return m_killSteam; }
+    bool killSteam() const
+    {
+        return m_killSteam;
+    }
     void setKillSteam(bool value);
 
-    bool restoreSession() const { return m_restoreSession; }
+    bool restoreSession() const
+    {
+        return m_restoreSession;
+    }
     void setRestoreSession(bool value);
 
     // Gamescope settings
-    QString scalingMode() const { return m_scalingMode; }
+    QString scalingMode() const
+    {
+        return m_scalingMode;
+    }
     void setScalingMode(const QString &value);
 
-    QString filterMode() const { return m_filterMode; }
+    QString filterMode() const
+    {
+        return m_filterMode;
+    }
     void setFilterMode(const QString &value);
 
-    bool borderlessWindows() const { return m_borderlessWindows; }
+    bool borderlessWindows() const
+    {
+        return m_borderlessWindows;
+    }
     void setBorderlessWindows(bool value);
 
     // Device settings
-    QStringList ignoredDevices() const { return m_ignoredDevices; }
+    QStringList ignoredDevices() const
+    {
+        return m_ignoredDevices;
+    }
     void setIgnoredDevices(const QStringList &value);
     Q_INVOKABLE void addIgnoredDevice(const QString &stableId);
     Q_INVOKABLE void removeIgnoredDevice(const QString &stableId);

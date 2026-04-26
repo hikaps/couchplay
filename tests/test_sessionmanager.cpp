@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QTest>
-#include <QSignalSpy>
-#include <QTemporaryDir>
 #include <QDir>
-#include <QStandardPaths>
 #include <QFile>
+#include <QSignalSpy>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTest>
 
 #include <KConfig>
 #include <KConfigGroup>
@@ -30,25 +30,25 @@ private Q_SLOTS:
     void testNewSession();
     void testInstanceCount();
     void testCurrentLayout();
-    
+
     // Instance configuration tests
     void testGetInstanceConfig();
     void testSetInstanceConfig();
     void testSetInstanceResolution();
     void testSetInstanceUser();
-    
+
     // Profile management tests
     void testSaveProfile();
     void testLoadProfile();
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
-    
+
     // Signal tests
     void testInstanceCountChangedSignal();
     void testCurrentLayoutChangedSignal();
     void testProfilesChangedSignal();
-    
+
     // User assignment tests
     void testGetAssignedUsers();
 
@@ -92,9 +92,9 @@ void TestSessionManager::testNewSession()
 {
     m_sessionManager->setInstanceCount(3);
     m_sessionManager->setCurrentLayout(QStringLiteral("vertical"));
-    
+
     m_sessionManager->newSession();
-    
+
     QCOMPARE(m_sessionManager->instanceCount(), 2);
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("horizontal"));
     QVERIFY(m_sessionManager->currentProfileName().isEmpty());
@@ -103,14 +103,14 @@ void TestSessionManager::testNewSession()
 void TestSessionManager::testInstanceCount()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::instanceCountChanged);
-    
+
     m_sessionManager->setInstanceCount(3);
     QCOMPARE(m_sessionManager->instanceCount(), 3);
     QCOMPARE(spy.count(), 1);
-    
+
     m_sessionManager->setInstanceCount(4);
     QCOMPARE(m_sessionManager->instanceCount(), 4);
-    
+
     m_sessionManager->setInstanceCount(1);
     QVERIFY(m_sessionManager->instanceCount() >= 2);
 }
@@ -118,14 +118,14 @@ void TestSessionManager::testInstanceCount()
 void TestSessionManager::testCurrentLayout()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::currentLayoutChanged);
-    
+
     m_sessionManager->setCurrentLayout(QStringLiteral("vertical"));
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("vertical"));
     QCOMPARE(spy.count(), 1);
-    
+
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("grid"));
-    
+
     m_sessionManager->setCurrentLayout(QStringLiteral("multi-monitor"));
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("multi-monitor"));
 }
@@ -136,10 +136,10 @@ void TestSessionManager::testGetInstanceConfig()
     QVERIFY(config.contains(KEY("internalWidth")));
     QVERIFY(config.contains(KEY("internalHeight")));
     QVERIFY(config.contains(KEY("refreshRate")));
-    
+
     QVariantMap invalidConfig = m_sessionManager->getInstanceConfig(-1);
     QVERIFY(invalidConfig.isEmpty());
-    
+
     QVariantMap outOfBoundsConfig = m_sessionManager->getInstanceConfig(10);
     QVERIFY(outOfBoundsConfig.isEmpty());
 }
@@ -150,9 +150,9 @@ void TestSessionManager::testSetInstanceConfig()
     config.insert(KEY("internalWidth"), 1280);
     config.insert(KEY("internalHeight"), 720);
     config.insert(KEY("refreshRate"), 120);
-    
+
     m_sessionManager->setInstanceConfig(0, config);
-    
+
     QVariantMap retrieved = m_sessionManager->getInstanceConfig(0);
     QCOMPARE(retrieved.value(KEY("internalWidth")).toInt(), 1280);
     QCOMPARE(retrieved.value(KEY("internalHeight")).toInt(), 720);
@@ -162,7 +162,7 @@ void TestSessionManager::testSetInstanceConfig()
 void TestSessionManager::testSetInstanceResolution()
 {
     m_sessionManager->setInstanceResolution(0, 2560, 1440, 1920, 1080);
-    
+
     QVariantMap config = m_sessionManager->getInstanceConfig(0);
     QCOMPARE(config.value(KEY("internalWidth")).toInt(), 2560);
     QCOMPARE(config.value(KEY("internalHeight")).toInt(), 1440);
@@ -173,10 +173,10 @@ void TestSessionManager::testSetInstanceResolution()
 void TestSessionManager::testSetInstanceUser()
 {
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
-    
+
     QVariantMap config = m_sessionManager->getInstanceConfig(1);
     QCOMPARE(config.value(KEY("username")).toString(), QStringLiteral("player2"));
-    
+
     m_sessionManager->setInstanceUser(1, QString());
     config = m_sessionManager->getInstanceConfig(1);
     QVERIFY(config.value(KEY("username")).toString().isEmpty());
@@ -185,10 +185,10 @@ void TestSessionManager::testSetInstanceUser()
 void TestSessionManager::testSaveProfile()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
-    
+
     m_sessionManager->setInstanceCount(3);
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
-    
+
     bool result = m_sessionManager->saveProfile(QStringLiteral("TestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(spy.count(), 1);
@@ -200,16 +200,16 @@ void TestSessionManager::testLoadProfile()
     m_sessionManager->setInstanceCount(4);
     m_sessionManager->setCurrentLayout(QStringLiteral("vertical"));
     m_sessionManager->saveProfile(QStringLiteral("LoadTestProfile"));
-    
+
     m_sessionManager->newSession();
     QCOMPARE(m_sessionManager->instanceCount(), 2);
-    
+
     bool result = m_sessionManager->loadProfile(QStringLiteral("LoadTestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(m_sessionManager->instanceCount(), 4);
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("vertical"));
     QCOMPARE(m_sessionManager->currentProfileName(), QStringLiteral("LoadTestProfile"));
-    
+
     result = m_sessionManager->loadProfile(QStringLiteral("NonExistentProfile"));
     QCOMPARE(result, false);
 }
@@ -217,14 +217,14 @@ void TestSessionManager::testLoadProfile()
 void TestSessionManager::testDeleteProfile()
 {
     m_sessionManager->saveProfile(QStringLiteral("DeleteTestProfile"));
-    
+
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
-    
+
     bool result = m_sessionManager->deleteProfile(QStringLiteral("DeleteTestProfile"));
     QCOMPARE(result, true);
     QCOMPARE(spy.count(), 1);
     QVERIFY(m_sessionManager->currentProfileName().isEmpty());
-    
+
     result = m_sessionManager->deleteProfile(QStringLiteral("NonExistentProfile"));
     QCOMPARE(result, false);
 }
@@ -235,16 +235,16 @@ void TestSessionManager::testSavedProfiles()
     for (const SessionProfile &profile : profiles) {
         m_sessionManager->deleteProfile(profile.name);
     }
-    
+
     profiles = m_sessionManager->savedProfiles();
     int initialCount = profiles.size();
-    
+
     m_sessionManager->saveProfile(QStringLiteral("Profile1"));
     m_sessionManager->saveProfile(QStringLiteral("Profile2"));
-    
+
     profiles = m_sessionManager->savedProfiles();
     QCOMPARE(profiles.size(), initialCount + 2);
-    
+
     bool foundProfile1 = false;
     bool foundProfile2 = false;
     for (const SessionProfile &profile : profiles) {
@@ -262,7 +262,7 @@ void TestSessionManager::testSavedProfiles()
 void TestSessionManager::testRefreshProfiles()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
-    
+
     m_sessionManager->refreshProfiles();
     QCOMPARE(spy.count(), 1);
 }
@@ -270,7 +270,7 @@ void TestSessionManager::testRefreshProfiles()
 void TestSessionManager::testInstanceCountChangedSignal()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::instanceCountChanged);
-    
+
     m_sessionManager->setInstanceCount(3);
     QCOMPARE(spy.count(), 1);
     m_sessionManager->setInstanceCount(3);
@@ -280,7 +280,7 @@ void TestSessionManager::testInstanceCountChangedSignal()
 void TestSessionManager::testCurrentLayoutChangedSignal()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::currentLayoutChanged);
-    
+
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
     QCOMPARE(spy.count(), 1);
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
@@ -290,10 +290,10 @@ void TestSessionManager::testCurrentLayoutChangedSignal()
 void TestSessionManager::testProfilesChangedSignal()
 {
     QSignalSpy spy(m_sessionManager, &SessionManager::savedProfilesChanged);
-    
+
     m_sessionManager->saveProfile(QStringLiteral("SignalTestProfile"));
     QCOMPARE(spy.count(), 1);
-    
+
     m_sessionManager->deleteProfile(QStringLiteral("SignalTestProfile"));
     QCOMPARE(spy.count(), 2);
 }
@@ -302,24 +302,24 @@ void TestSessionManager::testGetAssignedUsers()
 {
     m_sessionManager->newSession();
     m_sessionManager->setInstanceCount(3);
-    
+
     m_sessionManager->setInstanceUser(0, QString());
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstanceUser(2, QStringLiteral("player3"));
-    
+
     QStringList assigned = m_sessionManager->getAssignedUsers(0);
     QCOMPARE(assigned.size(), 2);
     QVERIFY(assigned.contains(QStringLiteral("player2")));
     QVERIFY(assigned.contains(QStringLiteral("player3")));
-    
+
     assigned = m_sessionManager->getAssignedUsers(1);
     QCOMPARE(assigned.size(), 1);
     QVERIFY(assigned.contains(QStringLiteral("player3")));
-    
+
     assigned = m_sessionManager->getAssignedUsers(2);
     QCOMPARE(assigned.size(), 1);
     QVERIFY(assigned.contains(QStringLiteral("player2")));
-    
+
     m_sessionManager->setInstanceUser(1, QString());
     assigned = m_sessionManager->getAssignedUsers(0);
     QCOMPARE(assigned.size(), 1);

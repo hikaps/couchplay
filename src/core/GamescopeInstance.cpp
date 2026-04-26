@@ -49,47 +49,44 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     }
 
     // Launch via D-Bus helper for uniform handling across all users (including compositor user)
-    QDBusInterface helper(
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QDBusConnection::systemBus()
-    );
-    
+    QDBusInterface helper(QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                          QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+                          QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                          QDBusConnection::systemBus());
+
     if (!helper.isValid()) {
         qWarning() << "Instance" << m_index << "helper service not available";
-        Q_EMIT errorOccurred(QStringLiteral("CouchPlay Helper service is not available. Please run: sudo ./scripts/install-helper.sh install"));
+        Q_EMIT errorOccurred(QStringLiteral(
+            "CouchPlay Helper service is not available. Please run: sudo ./scripts/install-helper.sh install"));
         return false;
     }
-    
+
     // compositorUid is the UID of the user running CouchPlay (owns the Wayland socket)
     uid_t compositorUid = getuid();
-    
+
     QStringList bindPaths = config.value(QStringLiteral("bindPaths")).toStringList();
-    
-    QDBusReply<qint64> reply = helper.call(
-        QStringLiteral("LaunchInstance"),
-        m_username,
-        static_cast<uint>(compositorUid),
-        gamescopeArgs,
-        gameCommand,
-        envVars,
-        bindPaths
-    );
-    
+
+    QDBusReply<qint64> reply = helper.call(QStringLiteral("LaunchInstance"),
+                                           m_username,
+                                           static_cast<uint>(compositorUid),
+                                           gamescopeArgs,
+                                           gameCommand,
+                                           envVars,
+                                           bindPaths);
+
     if (!reply.isValid()) {
         qWarning() << "Instance" << m_index << "helper LaunchInstance failed:" << reply.error().message();
         Q_EMIT errorOccurred(QStringLiteral("Failed to launch instance: %1").arg(reply.error().message()));
         return false;
     }
-    
+
     m_helperPid = reply.value();
     if (m_helperPid == 0) {
         qWarning() << "Instance" << m_index << "helper returned PID 0";
         Q_EMIT errorOccurred(QStringLiteral("Helper service failed to launch instance"));
         return false;
     }
-    
+
     m_gamescopePid = resolveGamescopePid(m_helperPid);
     if (m_gamescopePid == 0) {
         qWarning() << "Instance" << m_index << "could not resolve gamescope PID from helper PID" << m_helperPid;
@@ -98,14 +95,13 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     Q_EMIT gamescopePidChanged();
     setStatus(QStringLiteral("Running as %1").arg(m_username));
 
-    QDBusConnection::systemBus().connect(
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-    );
-    
+    QDBusConnection::systemBus().connect(QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                         QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+                                         QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                         QStringLiteral("instanceStopped"),
+                                         this,
+                                         SLOT(onHelperInstanceStopped(QString, qint64, QString)));
+
     Q_EMIT runningChanged();
     Q_EMIT started();
 
@@ -119,20 +115,17 @@ void GamescopeInstance::stop(int timeoutMs)
     if (m_helperPid > 0) {
         setStatus(QStringLiteral("Stopping..."));
 
-        QDBusConnection::systemBus().disconnect(
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QStringLiteral("instanceStopped"),
-            this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-        );
+        QDBusConnection::systemBus().disconnect(QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                                QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+                                                QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                                QStringLiteral("instanceStopped"),
+                                                this,
+                                                SLOT(onHelperInstanceStopped(QString, qint64, QString)));
 
-        QDBusInterface helper(
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QDBusConnection::systemBus()
-        );
+        QDBusInterface helper(QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                              QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+                              QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                              QDBusConnection::systemBus());
 
         if (helper.isValid()) {
             QDBusReply<bool> reply = helper.call(QStringLiteral("StopInstance"), m_helperPid);
@@ -156,20 +149,17 @@ void GamescopeInstance::kill()
     if (m_helperPid > 0) {
         setStatus(QStringLiteral("Killing..."));
 
-        QDBusConnection::systemBus().disconnect(
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QStringLiteral("instanceStopped"),
-            this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-        );
+        QDBusConnection::systemBus().disconnect(QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                                QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+                                                QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                                QStringLiteral("instanceStopped"),
+                                                this,
+                                                SLOT(onHelperInstanceStopped(QString, qint64, QString)));
 
-        QDBusInterface helper(
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-            QDBusConnection::systemBus()
-        );
+        QDBusInterface helper(QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                              QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+                              QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                              QDBusConnection::systemBus());
 
         if (helper.isValid()) {
             helper.call(QStringLiteral("KillInstance"), m_helperPid);
@@ -262,22 +252,22 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
 QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
 {
     Q_UNUSED(config)
-    
+
     QStringList envVars;
-    
+
     // Enable Gamescope WSI layer - critical for Vulkan games to work inside gamescope
     envVars << QStringLiteral("ENABLE_GAMESCOPE_WSI=1");
-    
+
     // Prevent games from minimizing when losing focus
     envVars << QStringLiteral("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0");
-    
+
     // Mesa threading for better performance
     envVars << QStringLiteral("mesa_glthread=true");
-    
+
     // Set desktop environment for XDG portal integration (native file dialogs in Steam etc.)
     envVars << QStringLiteral("XDG_CURRENT_DESKTOP=KDE");
     envVars << QStringLiteral("GTK_USE_PORTAL=1");
-    
+
     return envVars;
 }
 
@@ -293,8 +283,7 @@ qint64 GamescopeInstance::resolveGamescopePid(qint64 launchedPid)
         return 0;
     }
 
-    QStringList childPids = QString::fromLocal8Bit(childrenFile.readAll())
-                                .split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    QStringList childPids = QString::fromLocal8Bit(childrenFile.readAll()).split(QLatin1Char(' '), Qt::SkipEmptyParts);
 
     for (const QString &childPidStr : childPids) {
         qint64 childPid = childPidStr.toLongLong();
@@ -323,13 +312,12 @@ void GamescopeInstance::onHelperInstanceStopped(const QString &username, qint64 
         return;
     }
 
-    QDBusConnection::systemBus().disconnect(
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
-        QStringLiteral("io.github.hikaps.CouchPlayHelper"),
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-    );
+    QDBusConnection::systemBus().disconnect(QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                            QStringLiteral("/io/github/hikaps/CouchPlayHelper"),
+                                            QStringLiteral("io.github.hikaps.CouchPlayHelper"),
+                                            QStringLiteral("instanceStopped"),
+                                            this,
+                                            SLOT(onHelperInstanceStopped(QString, qint64, QString)));
 
     QString statusMsg;
     if (reason == QStringLiteral("crashed")) {

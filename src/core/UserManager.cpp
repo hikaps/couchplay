@@ -4,15 +4,15 @@
 #include "UserManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 
-#include <QFile>
-#include <QTextStream>
-#include <QRegularExpression>
 #include <QDebug>
 #include <QDir>
+#include <QFile>
+#include <QRegularExpression>
+#include <QTextStream>
 
-#include <unistd.h>
-#include <pwd.h>
 #include <grp.h>
+#include <pwd.h>
+#include <unistd.h>
 
 // Name of the couchplay group for managed users
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
@@ -51,10 +51,10 @@ void UserManager::refresh()
 QSet<QString> UserManager::getCouchPlayGroupMembers() const
 {
     QSet<QString> members;
-    
+
     struct group *grp = getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
     if (!grp) {
-        return members;  // Group doesn't exist yet
+        return members; // Group doesn't exist yet
     }
 
     // Get all members from the group
@@ -86,7 +86,7 @@ void UserManager::parseUsers()
 {
     // Get couchplay group members
     QSet<QString> couchplayMembers = getCouchPlayGroupMembers();
-    
+
     QFile file(QStringLiteral("/etc/passwd"));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         Q_EMIT errorOccurred(QStringLiteral("Failed to read /etc/passwd"));
@@ -124,8 +124,7 @@ void UserManager::parseUsers()
         }
 
         // Check for valid login shell (not nologin or false)
-        if (shell.contains(QStringLiteral("nologin")) || 
-            shell.contains(QStringLiteral("false"))) {
+        if (shell.contains(QStringLiteral("nologin")) || shell.contains(QStringLiteral("false"))) {
             continue;
         }
 

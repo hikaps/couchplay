@@ -3,13 +3,13 @@
 
 #pragma once
 
+#include <QList>
 #include <QObject>
+#include <qqmlintegration.h>
+#include <QRect>
 #include <QString>
 #include <QStringList>
-#include <QList>
-#include <QRect>
 #include <QVariantMap>
-#include <qqmlintegration.h>
 
 struct InstanceConfig;
 
@@ -39,12 +39,30 @@ public:
 
     bool isRunning() const;
 
-    int index() const { return m_index; }
-    qint64 pid() const { return m_helperPid; }
-    qint64 gamescopePid() const { return m_gamescopePid; }
-    QString status() const { return m_status; }
-    QString username() const { return m_username; }
-    QRect windowGeometry() const { return m_windowGeometry; }
+    int index() const
+    {
+        return m_index;
+    }
+    qint64 pid() const
+    {
+        return m_helperPid;
+    }
+    qint64 gamescopePid() const
+    {
+        return m_gamescopePid;
+    }
+    QString status() const
+    {
+        return m_status;
+    }
+    QString username() const
+    {
+        return m_username;
+    }
+    QRect windowGeometry() const
+    {
+        return m_windowGeometry;
+    }
 
     static QStringList buildGamescopeArgs(const QVariantMap &config);
 

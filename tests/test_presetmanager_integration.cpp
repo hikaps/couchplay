@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QtTest>
-#include <QTemporaryDir>
-#include <QStandardPaths>
-#include <QFile>
 #include <QDir>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QtTest>
 
-#include "core/PresetManager.h"
 #include "core/HeroicConfigManager.h"
+#include "core/PresetManager.h"
 
 class TestPresetManagerIntegration : public QObject
 {
@@ -60,7 +60,8 @@ void TestPresetManagerIntegration::createMockHeroicConfig(const QString &basePat
         QJsonObject root;
         QJsonObject defaultSettings;
         defaultSettings[QStringLiteral("defaultInstallPath")] = QString(basePath + QStringLiteral("/Games/Heroic"));
-        defaultSettings[QStringLiteral("defaultWinePrefix")] = QString(basePath + QStringLiteral("/Games/Heroic/Prefixes/default"));
+        defaultSettings[QStringLiteral("defaultWinePrefix")] =
+            QString(basePath + QStringLiteral("/Games/Heroic/Prefixes/default"));
         root[QStringLiteral("defaultSettings")] = defaultSettings;
         configFile.write(QJsonDocument(root).toJson());
         configFile.close();
@@ -164,24 +165,22 @@ void TestPresetManagerIntegration::testHeroicDetected()
 
     // Verify launcherInfo is populated
     QVERIFY(!heroicPreset.launcherInfo.configPath.isEmpty());
-    QCOMPARE(heroicPreset.launcherInfo.configPath,
-             homeDir.path() + QStringLiteral("/.config/heroic"));
+    QCOMPARE(heroicPreset.launcherInfo.configPath, homeDir.path() + QStringLiteral("/.config/heroic"));
 
     QVERIFY(!heroicPreset.launcherInfo.dataPath.isEmpty());
-    QCOMPARE(heroicPreset.launcherInfo.dataPath,
-             homeDir.path() + QStringLiteral("/Games/Heroic"));
+    QCOMPARE(heroicPreset.launcherInfo.dataPath, homeDir.path() + QStringLiteral("/Games/Heroic"));
 
     QCOMPARE(heroicPreset.launcherInfo.requiresAcls, true);
     QCOMPARE(heroicPreset.launcherInfo.hasShortcutSync, true);
 
     // Verify gameDirectories are extracted
     QCOMPARE(heroicPreset.launcherInfo.gameDirectories.size(), 3);
-    QVERIFY(heroicPreset.launcherInfo.gameDirectories.contains(
-        homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame")));
-    QVERIFY(heroicPreset.launcherInfo.gameDirectories.contains(
-        homeDir.path() + QStringLiteral("/Games/Heroic/GogGame")));
-    QVERIFY(heroicPreset.launcherInfo.gameDirectories.contains(
-        homeDir.path() + QStringLiteral("/Games/Heroic/AmazonGame")));
+    QVERIFY(
+        heroicPreset.launcherInfo.gameDirectories.contains(homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame")));
+    QVERIFY(
+        heroicPreset.launcherInfo.gameDirectories.contains(homeDir.path() + QStringLiteral("/Games/Heroic/GogGame")));
+    QVERIFY(heroicPreset.launcherInfo.gameDirectories.contains(homeDir.path()
+                                                               + QStringLiteral("/Games/Heroic/AmazonGame")));
 
     // Verify command is set from HeroicConfigManager
     QCOMPARE(heroicPreset.command, QStringLiteral("heroic"));

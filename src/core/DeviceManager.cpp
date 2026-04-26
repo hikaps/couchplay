@@ -4,18 +4,18 @@
 #include "DeviceManager.h"
 #include "SettingsManager.h"
 
-#include <QFile>
-#include <QDir>
-#include <QTextStream>
-#include <QRegularExpression>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QRegularExpression>
+#include <QTextStream>
 
 // For device identification (rumble)
+#include <cerrno>
 #include <fcntl.h>
-#include <unistd.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
-#include <cerrno>
+#include <unistd.h>
 
 DeviceManager::DeviceManager(QObject *parent)
     : QObject(parent)
@@ -25,7 +25,7 @@ DeviceManager::DeviceManager(QObject *parent)
     m_debounceTimer->setSingleShot(true);
     m_debounceTimer->setInterval(500); // 500ms debounce
     connect(m_debounceTimer, &QTimer::timeout, this, &DeviceManager::onDebounceTimeout);
-    
+
     refresh();
     setupHotplugWatcher();
 }
@@ -38,28 +38,26 @@ void DeviceManager::setupHotplugWatcher()
         delete m_watcher;
         m_watcher = nullptr;
     }
-    
+
     if (!m_hotplugEnabled) {
         return;
     }
-    
+
     m_watcher = new QFileSystemWatcher(this);
-    
+
     // Watch /dev/input for device changes
     if (QDir(QStringLiteral("/dev/input")).exists()) {
         m_watcher->addPath(QStringLiteral("/dev/input"));
     }
-    
+
     // Also watch /proc/bus/input/devices for more reliable detection
     if (QFile::exists(QStringLiteral("/proc/bus/input/devices"))) {
         m_watcher->addPath(QStringLiteral("/proc/bus/input/devices"));
     }
-    
-    connect(m_watcher, &QFileSystemWatcher::directoryChanged, 
-            this, &DeviceManager::onInputDirectoryChanged);
-    connect(m_watcher, &QFileSystemWatcher::fileChanged,
-            this, &DeviceManager::onInputDirectoryChanged);
-    
+
+    connect(m_watcher, &QFileSystemWatcher::directoryChanged, this, &DeviceManager::onInputDirectoryChanged);
+    connect(m_watcher, &QFileSystemWatcher::fileChanged, this, &DeviceManager::onInputDirectoryChanged);
+
     qDebug() << "DeviceManager: Hotplug watcher enabled";
 }
 
@@ -72,7 +70,7 @@ void DeviceManager::onInputDirectoryChanged()
 void DeviceManager::onDebounceTimeout()
 {
     qDebug() << "DeviceManager: Detected device change, refreshing...";
-    
+
     // Store old device list to detect changes
     QList<int> oldEventNumbers;
     QMap<int, QString> oldDeviceNames;
@@ -84,11 +82,11 @@ void DeviceManager::onDebounceTimeout()
             oldStableIds.insert(device.stableId);
         }
     }
-    
+
     // Refresh devices
     m_devices.clear();
     parseDevices();
-    
+
     // Build set of currently connected stableIds
     QSet<QString> newStableIds;
     for (const auto &device : m_devices) {
@@ -96,7 +94,7 @@ void DeviceManager::onDebounceTimeout()
             newStableIds.insert(device.stableId);
         }
     }
-    
+
     // Check for disconnected devices that were in the cache - add to pending
     bool pendingChanged = false;
     for (auto it = m_assignmentCache.constBegin(); it != m_assignmentCache.constEnd(); ++it) {
@@ -117,28 +115,27 @@ void DeviceManager::onDebounceTimeout()
                 pending[QStringLiteral("instanceIndex")] = it.value().first;
                 m_pendingDevices.append(pending);
                 pendingChanged = true;
-                qDebug() << "DeviceManager: Device disconnected, added to pending:" 
-                         << it.value().second << "for instance" << it.value().first;
+                qDebug() << "DeviceManager: Device disconnected, added to pending:" << it.value().second
+                         << "for instance" << it.value().first;
             }
         }
     }
-    
+
     // Restore assignments from persistent cache (survives across hotplug cycles)
     for (auto &device : m_devices) {
         if (m_assignmentCache.contains(device.stableId)) {
             int instanceIndex = m_assignmentCache[device.stableId].first;
             device.assigned = true;
             device.assignedInstance = instanceIndex;
-            
+
             // Check if this is a reconnected device (wasn't present before)
             bool wasPresent = oldStableIds.contains(device.stableId);
-            
+
             if (!wasPresent) {
-                qDebug() << "DeviceManager: Device reconnected:" << device.name 
-                         << "stableId:" << device.stableId
+                qDebug() << "DeviceManager: Device reconnected:" << device.name << "stableId:" << device.stableId
                          << "eventNumber:" << device.eventNumber;
                 Q_EMIT deviceReconnected(device.stableId, device.eventNumber, instanceIndex);
-                
+
                 // Remove from pending list
                 for (int i = m_pendingDevices.size() - 1; i >= 0; --i) {
                     if (m_pendingDevices[i][QStringLiteral("stableId")].toString() == device.stableId) {
@@ -151,31 +148,31 @@ void DeviceManager::onDebounceTimeout()
             }
         }
     }
-    
+
     // Detect added/removed devices for signals
     QList<int> newEventNumbers;
     for (const auto &device : m_devices) {
         newEventNumbers.append(device.eventNumber);
-        
+
         if (!oldEventNumbers.contains(device.eventNumber)) {
             qDebug() << "DeviceManager: Device added:" << device.name;
             Q_EMIT deviceAdded(device.eventNumber, device.name);
         }
     }
-    
+
     for (int oldEvent : oldEventNumbers) {
         if (!newEventNumbers.contains(oldEvent)) {
             qDebug() << "DeviceManager: Device removed:" << oldDeviceNames[oldEvent];
             Q_EMIT deviceRemoved(oldEvent, oldDeviceNames[oldEvent]);
         }
     }
-    
+
     Q_EMIT devicesChanged();
-    
+
     if (pendingChanged) {
         Q_EMIT pendingDevicesChanged();
     }
-    
+
     // Check if any pending devices (from profile load) have reconnected
     checkPendingDevices();
 }
@@ -195,11 +192,11 @@ void DeviceManager::parseDevices()
         Q_EMIT errorOccurred(QStringLiteral("Failed to open /proc/bus/input/devices"));
         return;
     }
-    
+
     // Read entire file content (procfs files report size 0, so we must read all)
     QByteArray content = file.readAll();
     file.close();
-    
+
     if (content.isEmpty()) {
         qWarning() << "DeviceManager: /proc/bus/input/devices is empty";
         return;
@@ -244,7 +241,7 @@ void DeviceManager::parseDevices()
                 device.eventNumber = currentEventNumber;
                 device.name = currentName;
                 device.path = QStringLiteral("/dev/input/event%1").arg(currentEventNumber);
-                
+
                 // Construct joystick path if a js handler was found
                 if (!currentHandlers.isEmpty()) {
                     QRegularExpressionMatch joyMatch = joyRegex.match(currentHandlers);
@@ -301,14 +298,14 @@ void DeviceManager::parseDevices()
             }
             continue;
         }
-        
+
         // Parse physical path
         QRegularExpressionMatch physMatch = physRegex.match(line);
         if (physMatch.hasMatch()) {
             currentPhys = physMatch.captured(1);
             continue;
         }
-        
+
         // Parse vendor/product ID
         QRegularExpressionMatch idMatch = idRegex.match(line);
         if (idMatch.hasMatch()) {
@@ -351,7 +348,7 @@ void DeviceManager::parseDevices()
             m_devices.append(device);
         }
     }
-    
+
     qDebug() << "DeviceManager: Found" << m_devices.size() << "input devices";
 }
 
@@ -361,47 +358,40 @@ QString DeviceManager::detectDeviceType(const QString &name, const QString &hand
     QString lowerHandlers = handlers.toLower();
 
     // Check for controllers/gamepads
-    if (lowerName.contains(QStringLiteral("xbox")) ||
-        lowerName.contains(QStringLiteral("controller")) ||
-        lowerName.contains(QStringLiteral("gamepad")) ||
-        lowerName.contains(QStringLiteral("joystick")) ||
-        lowerName.contains(QStringLiteral("dualshock")) ||
-        lowerName.contains(QStringLiteral("dualsense")) ||
-        lowerName.contains(QStringLiteral("wireless controller")) ||
-        lowerName.contains(QStringLiteral("sony")) ||
-        lowerName.contains(QStringLiteral("nintendo")) ||
-        lowerName.contains(QStringLiteral("pro controller")) ||
-        lowerName.contains(QStringLiteral("8bitdo")) ||
-        lowerName.contains(QStringLiteral("steam controller")) ||
-        (lowerHandlers.contains(QStringLiteral("js")) && 
-         !lowerName.contains(QStringLiteral("mouse")) && 
-         !lowerName.contains(QStringLiteral("keyboard")))) {
-        
-        // Extra check: If it claims to be a controller but has no buttons, it's likely a wireless receiver with no controller connected
-        // We can check this by trying to open the device and querying capabilities
-        // However, we need to be careful about permissions. 
-        // If we can't open it, we assume it's valid to avoid blocking valid devices due to permission issues.
-        // But for "ghost" devices that are readable (like event8 in the user report), this check will filter them out.
-        
-        QString path = QStringLiteral("/dev/input/event%1").arg(handlers.section(QStringLiteral("event"), 1, 1).section(QLatin1Char(' '), 0, 0));
+    if (lowerName.contains(QStringLiteral("xbox")) || lowerName.contains(QStringLiteral("controller"))
+        || lowerName.contains(QStringLiteral("gamepad")) || lowerName.contains(QStringLiteral("joystick"))
+        || lowerName.contains(QStringLiteral("dualshock")) || lowerName.contains(QStringLiteral("dualsense"))
+        || lowerName.contains(QStringLiteral("wireless controller")) || lowerName.contains(QStringLiteral("sony"))
+        || lowerName.contains(QStringLiteral("nintendo")) || lowerName.contains(QStringLiteral("pro controller"))
+        || lowerName.contains(QStringLiteral("8bitdo")) || lowerName.contains(QStringLiteral("steam controller"))
+        || (lowerHandlers.contains(QStringLiteral("js")) && !lowerName.contains(QStringLiteral("mouse"))
+            && !lowerName.contains(QStringLiteral("keyboard")))) {
+        // Extra check: If it claims to be a controller but has no buttons, it's likely a wireless receiver with no
+        // controller connected We can check this by trying to open the device and querying capabilities However, we
+        // need to be careful about permissions. If we can't open it, we assume it's valid to avoid blocking valid
+        // devices due to permission issues. But for "ghost" devices that are readable (like event8 in the user report),
+        // this check will filter them out.
+
+        QString path = QStringLiteral("/dev/input/event%1")
+                           .arg(handlers.section(QStringLiteral("event"), 1, 1).section(QLatin1Char(' '), 0, 0));
         if (!path.isEmpty()) {
             int fd = open(path.toLocal8Bit().constData(), O_RDONLY);
             if (fd >= 0) {
-                unsigned char keyBitmask[KEY_MAX/8 + 1] = {0};
+                unsigned char keyBitmask[KEY_MAX / 8 + 1] = {0};
                 if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBitmask)), keyBitmask) >= 0) {
                     bool hasGamepadBtns = false;
                     // BTN_GAMEPAD is 0x130 (304)
                     for (int i = 0x130; i < 0x140; i++) {
-                        if ((keyBitmask[i/8] >> (i%8)) & 1) {
+                        if ((keyBitmask[i / 8] >> (i % 8)) & 1) {
                             hasGamepadBtns = true;
                             break;
                         }
                     }
-                    
+
                     close(fd);
                     if (!hasGamepadBtns) {
-                         qDebug() << "DeviceManager: Device" << name << "ignored (no gamepad buttons)";
-                         return QStringLiteral("other");
+                        qDebug() << "DeviceManager: Device" << name << "ignored (no gamepad buttons)";
+                        return QStringLiteral("other");
                     }
                 } else {
                     close(fd);
@@ -413,19 +403,16 @@ QString DeviceManager::detectDeviceType(const QString &name, const QString &hand
     }
 
     // Check for keyboards
-    if (lowerName.contains(QStringLiteral("keyboard")) ||
-        (lowerHandlers.contains(QStringLiteral("kbd")) && 
-         !lowerHandlers.contains(QStringLiteral("mouse")) &&
-         !lowerName.contains(QStringLiteral("button")))) {
+    if (lowerName.contains(QStringLiteral("keyboard"))
+        || (lowerHandlers.contains(QStringLiteral("kbd")) && !lowerHandlers.contains(QStringLiteral("mouse"))
+            && !lowerName.contains(QStringLiteral("button")))) {
         return QStringLiteral("keyboard");
     }
 
     // Check for mice
-    if (lowerName.contains(QStringLiteral("mouse")) ||
-        lowerName.contains(QStringLiteral("touchpad")) ||
-        lowerName.contains(QStringLiteral("trackpad")) ||
-        lowerName.contains(QStringLiteral("trackball")) ||
-        lowerHandlers.contains(QStringLiteral("mouse"))) {
+    if (lowerName.contains(QStringLiteral("mouse")) || lowerName.contains(QStringLiteral("touchpad"))
+        || lowerName.contains(QStringLiteral("trackpad")) || lowerName.contains(QStringLiteral("trackball"))
+        || lowerHandlers.contains(QStringLiteral("mouse"))) {
         return QStringLiteral("mouse");
     }
 
@@ -436,41 +423,34 @@ bool DeviceManager::isVirtualDevice(const QString &name, const QString &physPath
 {
     QString lowerName = name.toLower();
     QString lowerPhys = physPath.toLower();
-    
+
     // Virtual devices typically have no physical path or specific patterns
     if (physPath.isEmpty()) {
         return true;
     }
-    
+
     // Common virtual device indicators
-    if (lowerName.contains(QStringLiteral("virtual")) ||
-        lowerName.contains(QStringLiteral("xtest")) ||
-        lowerName.contains(QStringLiteral("uinput")) ||
-        lowerPhys.contains(QStringLiteral("virtual"))) {
+    if (lowerName.contains(QStringLiteral("virtual")) || lowerName.contains(QStringLiteral("xtest"))
+        || lowerName.contains(QStringLiteral("uinput")) || lowerPhys.contains(QStringLiteral("virtual"))) {
         return true;
     }
-    
+
     return false;
 }
 
 bool DeviceManager::isInternalDevice(const QString &name) const
 {
     QString lowerName = name.toLower();
-    
+
     // Internal system devices
-    if (lowerName.contains(QStringLiteral("power button")) ||
-        lowerName.contains(QStringLiteral("sleep button")) ||
-        lowerName.contains(QStringLiteral("lid switch")) ||
-        lowerName.contains(QStringLiteral("video bus")) ||
-        lowerName.contains(QStringLiteral("pc speaker")) ||
-        lowerName.contains(QStringLiteral("acpi")) ||
-        lowerName.contains(QStringLiteral("at translated")) ||
-        lowerName.contains(QStringLiteral("intel hid")) ||
-        lowerName.contains(QStringLiteral("wireless hotkeys")) ||
-        lowerName.contains(QStringLiteral("wmi"))) {
+    if (lowerName.contains(QStringLiteral("power button")) || lowerName.contains(QStringLiteral("sleep button"))
+        || lowerName.contains(QStringLiteral("lid switch")) || lowerName.contains(QStringLiteral("video bus"))
+        || lowerName.contains(QStringLiteral("pc speaker")) || lowerName.contains(QStringLiteral("acpi"))
+        || lowerName.contains(QStringLiteral("at translated")) || lowerName.contains(QStringLiteral("intel hid"))
+        || lowerName.contains(QStringLiteral("wireless hotkeys")) || lowerName.contains(QStringLiteral("wmi"))) {
         return true;
     }
-    
+
     return false;
 }
 
@@ -481,7 +461,7 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
             int previousInstance = m_devices[i].assignedInstance;
             m_devices[i].assigned = (instanceIndex >= 0);
             m_devices[i].assignedInstance = instanceIndex;
-            
+
             // Update persistent assignment cache
             if (!m_devices[i].stableId.isEmpty()) {
                 if (instanceIndex >= 0) {
@@ -490,11 +470,11 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
                     m_assignmentCache.remove(m_devices[i].stableId);
                 }
             }
-            
+
             Q_EMIT devicesChanged();
             Q_EMIT deviceAssigned(eventNumber, instanceIndex, previousInstance);
-            qDebug() << "DeviceManager: Assigned device" << m_devices[i].name 
-                     << "to instance" << instanceIndex << "(was:" << previousInstance << ")";
+            qDebug() << "DeviceManager: Assigned device" << m_devices[i].name << "to instance" << instanceIndex
+                     << "(was:" << previousInstance << ")";
             return true;
         }
     }
@@ -563,15 +543,14 @@ int DeviceManager::autoAssignControllers()
             }
         }
     }
-    
+
     QList<int> controllerIndices;
     for (int i = 0; i < m_devices.size(); ++i) {
-        if (m_devices[i].type == QStringLiteral("controller") && 
-            !m_devices[i].isVirtual) {
+        if (m_devices[i].type == QStringLiteral("controller") && !m_devices[i].isVirtual) {
             controllerIndices.append(i);
         }
     }
-    
+
     int assignedCount = 0;
     for (int instance = 0; instance < m_instanceCount && assignedCount < controllerIndices.size(); ++instance) {
         int deviceIndex = controllerIndices[assignedCount];
@@ -584,7 +563,7 @@ int DeviceManager::autoAssignControllers()
         Q_EMIT deviceAssigned(m_devices[deviceIndex].eventNumber, instance, previousInstance);
         assignedCount++;
     }
-    
+
     Q_EMIT devicesChanged();
     qDebug() << "DeviceManager: Auto-assigned" << assignedCount << "controllers";
     return assignedCount;
@@ -600,25 +579,25 @@ void DeviceManager::identifyDevice(int eventNumber)
             break;
         }
     }
-    
+
     if (!device) {
         Q_EMIT errorOccurred(QStringLiteral("Device not found"));
         return;
     }
-    
+
     // Only controllers support rumble
     if (device->type != QStringLiteral("controller")) {
         qDebug() << "DeviceManager: Device" << device->name << "does not support identification";
         return;
     }
-    
+
     // Try to trigger rumble using force feedback
     int fd = open(device->path.toLocal8Bit().constData(), O_RDWR);
     if (fd < 0) {
         qDebug() << "DeviceManager: Cannot open device for identification:" << device->path;
         return;
     }
-    
+
     // Check for force feedback support
     unsigned long features[4] = {0};
     if (ioctl(fd, EVIOCGBIT(EV_FF, sizeof(features)), features) < 0) {
@@ -636,7 +615,7 @@ void DeviceManager::identifyDevice(int eventNumber)
     effect.u.rumble.weak_magnitude = 0xC000;
     effect.replay.length = 1000; // 1000ms (matched to test_rumble)
     effect.replay.delay = 0;
-    
+
     if (ioctl(fd, EVIOCSFF, &effect) < 0) {
         qWarning() << "DeviceManager: Failed to upload rumble effect to" << device->name << "errno:" << errno;
         close(fd);
@@ -649,7 +628,7 @@ void DeviceManager::identifyDevice(int eventNumber)
     play.type = EV_FF;
     play.code = effect.id;
     play.value = 1;
-    
+
     if (write(fd, &play, sizeof(play)) < 0) {
         qWarning() << "DeviceManager: Failed to play rumble effect on" << device->name << "errno:" << errno;
         close(fd);
@@ -723,7 +702,7 @@ QVariantList DeviceManager::visibleDevicesAsVariant() const
         if (device.type == QStringLiteral("other")) {
             continue;
         }
-        
+
         list.append(deviceToVariantMap(device));
     }
     return list;
@@ -817,7 +796,10 @@ void DeviceManager::setSettingsManager(SettingsManager *manager)
         }
         m_settingsManager = manager;
         if (m_settingsManager) {
-            connect(m_settingsManager, &SettingsManager::ignoredDevicesChanged, this, &DeviceManager::onIgnoredDevicesChanged);
+            connect(m_settingsManager,
+                    &SettingsManager::ignoredDevicesChanged,
+                    this,
+                    &DeviceManager::onIgnoredDevicesChanged);
         }
         Q_EMIT settingsManagerChanged();
         refresh();
@@ -859,7 +841,7 @@ int DeviceManager::findDeviceByStableId(const QString &stableId) const
     if (stableId.isEmpty()) {
         return -1;
     }
-    
+
     for (const auto &device : m_devices) {
         if (device.stableId == stableId) {
             return device.eventNumber;
@@ -900,18 +882,20 @@ QStringList DeviceManager::getDeviceNamesForInstance(int instanceIndex) const
     return result;
 }
 
-void DeviceManager::restoreAssignmentsFromStableIds(int instanceIndex, const QStringList &stableIds, const QStringList &names)
+void DeviceManager::restoreAssignmentsFromStableIds(int instanceIndex,
+                                                    const QStringList &stableIds,
+                                                    const QStringList &names)
 {
     for (int i = 0; i < stableIds.size(); ++i) {
         const QString &stableId = stableIds[i];
         QString name = (i < names.size()) ? names[i] : stableId;
-        
+
         if (assignDeviceByStableId(stableId, instanceIndex)) {
             qDebug() << "DeviceManager: Restored device" << name << "to instance" << instanceIndex;
         } else {
             // Device not connected - add to pending list
             qDebug() << "DeviceManager: Device" << name << "not connected, adding to pending list";
-            
+
             QVariantMap pending;
             pending[QStringLiteral("stableId")] = stableId;
             pending[QStringLiteral("name")] = name;
@@ -919,7 +903,7 @@ void DeviceManager::restoreAssignmentsFromStableIds(int instanceIndex, const QSt
             m_pendingDevices.append(pending);
         }
     }
-    
+
     if (!m_pendingDevices.isEmpty()) {
         Q_EMIT pendingDevicesChanged();
     }
@@ -932,12 +916,12 @@ void DeviceManager::clearPendingDevicesForInstance(int instanceIndex)
         m_pendingDevices.clear();
     } else {
         // Remove only for specific instance
-        m_pendingDevices.erase(
-            std::remove_if(m_pendingDevices.begin(), m_pendingDevices.end(),
-                [instanceIndex](const QVariantMap &p) {
-                    return p[QStringLiteral("instanceIndex")].toInt() == instanceIndex;
-                }),
-            m_pendingDevices.end());
+        m_pendingDevices.erase(std::remove_if(m_pendingDevices.begin(),
+                                              m_pendingDevices.end(),
+                                              [instanceIndex](const QVariantMap &p) {
+                                                  return p[QStringLiteral("instanceIndex")].toInt() == instanceIndex;
+                                              }),
+                               m_pendingDevices.end());
     }
     Q_EMIT pendingDevicesChanged();
 }
@@ -956,15 +940,15 @@ void DeviceManager::checkPendingDevices()
     if (m_pendingDevices.isEmpty()) {
         return;
     }
-    
+
     bool changed = false;
     QList<QVariantMap> stillPending;
-    
+
     for (const auto &pending : m_pendingDevices) {
         QString stableId = pending[QStringLiteral("stableId")].toString();
         QString name = pending[QStringLiteral("name")].toString();
         int instanceIndex = pending[QStringLiteral("instanceIndex")].toInt();
-        
+
         int eventNumber = findDeviceByStableId(stableId);
         if (eventNumber >= 0) {
             // Device reconnected! Assign it
@@ -979,7 +963,7 @@ void DeviceManager::checkPendingDevices()
             stillPending.append(pending);
         }
     }
-    
+
     if (changed) {
         m_pendingDevices = stillPending;
         Q_EMIT pendingDevicesChanged();

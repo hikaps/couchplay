@@ -3,10 +3,10 @@
 
 #include "AudioManager.h"
 
+#include <QDebug>
 #include <QFile>
 #include <QProcess>
 #include <QStandardPaths>
-#include <QDebug>
 
 AudioManager::AudioManager(QObject *parent)
     : QObject(parent)

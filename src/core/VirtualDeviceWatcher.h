@@ -12,7 +12,7 @@ class QTimer;
 
 /**
  * @brief Watches for new input devices appearing during a session
- * 
+ *
  * Used to detect virtual devices created by Steam Input so they can
  * be isolated to the creating user via device ownership transfer.
  */
@@ -29,7 +29,7 @@ public:
      * @param knownEventNumbers Event numbers already known at session start
      */
     void startWatching(const QSet<int> &knownEventNumbers);
-    
+
     /**
      * @brief Stop watching and clear state
      */
@@ -38,7 +38,10 @@ public:
     /**
      * @brief Check if currently watching
      */
-    bool isWatching() const { return m_watching; }
+    bool isWatching() const
+    {
+        return m_watching;
+    }
 
 Q_SIGNALS:
     /**

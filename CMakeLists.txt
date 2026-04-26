@@ -106,3 +106,33 @@ install(FILES data/pipewire/50-couchplay.conf
 
 # Summary
 feature_summary(WHAT ALL INCLUDE_QUIET_PACKAGES FATAL_ON_MISSING_REQUIRED_PACKAGES)
+
+# Linting targets (optional)
+find_program(CLANG_FORMAT_EXE NAMES clang-format)
+find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+
+if(CLANG_FORMAT_EXE)
+    file(GLOB_RECURSE ALL_CPP_FILES
+        ${CMAKE_SOURCE_DIR}/src/*.cpp
+        ${CMAKE_SOURCE_DIR}/src/*.h
+        ${CMAKE_SOURCE_DIR}/helper/*.cpp
+        ${CMAKE_SOURCE_DIR}/helper/*.h
+        ${CMAKE_SOURCE_DIR}/tests/*.cpp
+    )
+    add_custom_target(format
+        COMMAND ${CLANG_FORMAT_EXE} -i ${ALL_CPP_FILES}
+        COMMENT "Running clang-format on all source files"
+    )
+endif()
+
+if(CLANG_TIDY_EXE)
+    file(GLOB_RECURSE SOURCE_CPP_FILES
+        ${CMAKE_SOURCE_DIR}/src/core/*.cpp
+        ${CMAKE_SOURCE_DIR}/src/dbus/*.cpp
+        ${CMAKE_SOURCE_DIR}/helper/*.cpp
+    )
+    add_custom_target(tidy
+        COMMAND ${CLANG_TIDY_EXE} -p ${CMAKE_BINARY_DIR} ${SOURCE_CPP_FILES}
+        COMMENT "Running clang-tidy on source files (not tests)"
+    )
+endif()

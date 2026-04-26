@@ -13,8 +13,8 @@
 #include <QStringList>
 #include <QThread>
 
-#include <pwd.h>
 #include <grp.h>
+#include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>

@@ -4,11 +4,11 @@
 #pragma once
 
 #include <QObject>
+#include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
-#include <qqmlintegration.h>
 
 class CouchPlayHelperClient;
 
@@ -25,11 +25,11 @@ struct SteamPaths {
     Q_PROPERTY(bool valid MEMBER valid)
 
 public:
-    QString steamRoot;           // ~/.steam/steam or ~/.local/share/Steam
-    QString configDir;           // steamRoot/config
-    QString userDataDir;         // steamRoot/userdata/<ID>
-    QString libraryFoldersVdf;   // configDir/libraryfolders.vdf
-    QString shortcutsVdf;        // userDataDir/config/shortcuts.vdf
+    QString steamRoot; // ~/.steam/steam or ~/.local/share/Steam
+    QString configDir; // steamRoot/config
+    QString userDataDir; // steamRoot/userdata/<ID>
+    QString libraryFoldersVdf; // configDir/libraryfolders.vdf
+    QString shortcutsVdf; // userDataDir/config/shortcuts.vdf
     bool valid = false;
 };
 
@@ -71,7 +71,7 @@ Q_DECLARE_METATYPE(SteamShortcut)
 
 /**
  * SteamConfigManager - Manages Steam configuration sharing between users
- * 
+ *
  * Handles syncing shortcuts from the compositor user to gaming users
  * during sessions. Sets ACLs on directories referenced in shortcuts
  * so gaming users can access them.
@@ -80,12 +80,13 @@ class SteamConfigManager : public QObject
 {
     Q_OBJECT
     QML_ELEMENT
-    
+
     Q_PROPERTY(SteamPaths steamPaths READ steamPaths NOTIFY steamPathsChanged)
     Q_PROPERTY(bool steamDetected READ isSteamDetected NOTIFY steamPathsChanged)
     Q_PROPERTY(int shortcutCount READ shortcutCount NOTIFY shortcutsLoaded)
-    Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
-    Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY syncShortcutsEnabledChanged)
+    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
+    Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY
+                   syncShortcutsEnabledChanged)
 
 public:
     explicit SteamConfigManager(QObject *parent = nullptr);
@@ -94,29 +95,44 @@ public:
     /**
      * Sync shortcuts enabled property
      */
-    bool syncShortcutsEnabled() const { return m_syncShortcutsEnabled; }
+    bool syncShortcutsEnabled() const
+    {
+        return m_syncShortcutsEnabled;
+    }
     void setSyncShortcutsEnabled(bool enabled);
 
     /**
      * Set the helper client for privileged file operations
      */
     void setHelperClient(CouchPlayHelperClient *client);
-    CouchPlayHelperClient *helperClient() const { return m_helperClient; }
+    CouchPlayHelperClient *helperClient() const
+    {
+        return m_helperClient;
+    }
 
     /**
      * Get detected Steam paths
      */
-    SteamPaths steamPaths() const { return m_steamPaths; }
+    SteamPaths steamPaths() const
+    {
+        return m_steamPaths;
+    }
 
     /**
      * Check if Steam installation was detected
      */
-    bool isSteamDetected() const { return m_steamPaths.valid; }
+    bool isSteamDetected() const
+    {
+        return m_steamPaths.valid;
+    }
 
     /**
      * Get number of parsed shortcuts
      */
-    int shortcutCount() const { return m_shortcuts.size(); }
+    int shortcutCount() const
+    {
+        return m_shortcuts.size();
+    }
 
     /**
      * Detect Steam installation paths
@@ -131,7 +147,7 @@ public:
     /**
      * Get the Steam user ID for a target user
      * Looks in target user's ~/.steam/steam/userdata/ for their Steam ID
-     * 
+     *
      * @param username Target username
      * @return Steam user ID or empty string if not found
      */
@@ -151,7 +167,7 @@ public:
      * Extract unique directories from all shortcuts
      * Returns directories containing executables, start dirs, and icons
      * Used for setting ACLs on these directories
-     * 
+     *
      * @return List of unique directory paths
      */
     Q_INVOKABLE QStringList extractShortcutDirectories() const;
@@ -160,7 +176,7 @@ public:
      * Sync shortcuts to a target user (simplified - no path rewriting)
      * Copies shortcuts.vdf to target user's Steam userdata folder
      * Uses ACLs for access instead of bind mounts
-     * 
+     *
      * @param targetUsername Username to sync to
      * @return true if successful
      */
@@ -178,10 +194,10 @@ Q_SIGNALS:
 private:
     // VDF parsing
     QList<SteamShortcut> parseShortcutsVdf(const QString &path);
-    
+
     // Get target Steam paths for a user
     SteamPaths getTargetSteamPaths(const QString &username) const;
-    
+
     CouchPlayHelperClient *m_helperClient = nullptr;
     SteamPaths m_steamPaths;
     QList<SteamShortcut> m_shortcuts;

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QTest>
+#include <QDir>
+#include <QFile>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
-#include <QDir>
-#include <QFile>
+#include <QTest>
 
 #define private public
 #include "AudioManager.h"

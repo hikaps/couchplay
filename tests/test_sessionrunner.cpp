@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QTest>
-#include <QSignalSpy>
-#include <QTemporaryDir>
-#include <QList>
+#include <pwd.h>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <pwd.h>
+#include <QList>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QTest>
 #include <unistd.h>
 
 #define private public
 #include "SessionRunner.h"
 #undef private
-#include "SessionManager.h"
-#include "PresetManager.h"
-#include "SteamConfigManager.h"
 #include "HeroicConfigManager.h"
+#include "PresetManager.h"
+#include "SessionManager.h"
+#include "SteamConfigManager.h"
 #define private public
 #include "CouchPlayHelperClient.h"
 #undef private
@@ -56,8 +56,7 @@ public:
         return true;
     }
 
-    int mountSharedDirectories(const QString &username, uint compositorUid,
-                               const QStringList &directories) override
+    int mountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories) override
     {
         mountCalls.append({username, compositorUid, directories});
         return directories.size();
@@ -180,8 +179,7 @@ void TestSessionRunner::createMockLegendaryConfig(const QString &basePath)
 void TestSessionRunner::testSetupSharedDirectoriesFormatting()
 {
     m_sessionManager->setInstanceCount(1);
-    QStringList sharedDirs = {QStringLiteral("/home/compositor/Games"),
-                            QStringLiteral("/home/compositor/Saves")};
+    QStringList sharedDirs = {QStringLiteral("/home/compositor/Games"), QStringLiteral("/home/compositor/Saves")};
     m_sessionManager->setInstanceSharedDirectories(0, sharedDirs);
 
     QStringList expectedFormatted;
@@ -200,15 +198,14 @@ void TestSessionRunner::testSetupSharedDirectoriesMultipleInstances()
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
 
     QStringList dirs1 = {QStringLiteral("/home/compositor/Games1")};
-    QStringList dirs2 = {QStringLiteral("/home/compositor/Games2"),
-                      QStringLiteral("/home/compositor/Saves2")};
+    QStringList dirs2 = {QStringLiteral("/home/compositor/Games2"), QStringLiteral("/home/compositor/Saves2")};
 
     m_sessionManager->setInstanceSharedDirectories(0, dirs1);
     m_sessionManager->setInstanceSharedDirectories(1, dirs2);
 
     QStringList expectedPlayer1 = {QStringLiteral("/home/compositor/Games1|")};
     QStringList expectedPlayer2 = {QStringLiteral("/home/compositor/Games2|"),
-                                 QStringLiteral("/home/compositor/Saves2|")};
+                                   QStringLiteral("/home/compositor/Saves2|")};
 
     QCOMPARE(expectedPlayer1.size(), 1);
     QCOMPARE(expectedPlayer2.size(), 2);

@@ -5,9 +5,9 @@
 #include "Logging.h"
 #include "SessionRunner.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QStandardPaths>
-#include <QDebug>
 
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
@@ -19,8 +19,7 @@ SessionManager::SessionManager(QObject *parent)
 
 QString SessionManager::profilesDir() const
 {
-    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) 
-           + QStringLiteral("/profiles");
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/profiles");
 }
 
 SessionManager::~SessionManager() = default;
@@ -171,12 +170,12 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
         inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
-        inst.overrideGamePath = instGroup.readEntry("overrideGamePath",
-            instGroup.readEntry("overlayGamePath", QString()));
+        inst.overrideGamePath =
+            instGroup.readEntry("overrideGamePath", instGroup.readEntry("overlayGamePath", QString()));
         inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
 
-        inst.overridePatterns = instGroup.readEntry("overridePatterns",
-            instGroup.readEntry("overlayPatterns", QStringList()));
+        inst.overridePatterns =
+            instGroup.readEntry("overridePatterns", instGroup.readEntry("overlayPatterns", QStringList()));
 
         // Migration: copy legacy overrideFiles to overridePatterns if overridePatterns is empty
         if (inst.overridePatterns.isEmpty() && !inst.overrideFiles.isEmpty()) {
@@ -264,8 +263,10 @@ void SessionManager::setCurrentGridSubLayout(const QString &subLayout)
 
 void SessionManager::setInstanceCount(int count)
 {
-    if (count < 2) count = 2;
-    if (count > 4) count = 4;
+    if (count < 2)
+        count = 2;
+    if (count > 4)
+        count = 4;
 
     if (m_currentProfile.instances.size() == count) {
         return;
@@ -416,7 +417,7 @@ void SessionManager::setInstanceDevices(int index, const QList<int> &devices)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].devices = devices;
         Q_EMIT instancesChanged();
-        
+
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -429,7 +430,7 @@ void SessionManager::setInstanceDeviceStableIds(int index, const QStringList &st
         m_currentProfile.instances[index].deviceStableIds = stableIds;
         m_currentProfile.instances[index].deviceStableIdNames = names;
         Q_EMIT instancesChanged();
-        
+
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -441,7 +442,7 @@ void SessionManager::setInstanceGame(int index, const QString &gameCommand)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].gameCommand = gameCommand;
         Q_EMIT instancesChanged();
-        
+
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -453,7 +454,7 @@ void SessionManager::setInstancePreset(int index, const QString &presetId)
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].presetId = presetId;
         Q_EMIT instancesChanged();
-        
+
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -465,7 +466,7 @@ void SessionManager::setInstanceSharedDirectories(int index, const QStringList &
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].sharedDirectories = directories;
         Q_EMIT instancesChanged();
-        
+
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
@@ -513,9 +514,10 @@ void SessionManager::recalculateOutputResolutions(int screenWidth, int screenHei
             inst.outputWidth = screenWidth;
             inst.outputHeight = screenHeight / count;
         } else if (layout == QStringLiteral("grid")) {
-            QList<QRect> layouts = SessionRunner::calculateLayout(
-                layout, count, QRect(0, 0, screenWidth, screenHeight),
-                m_currentProfile.gridSubLayout);
+            QList<QRect> layouts = SessionRunner::calculateLayout(layout,
+                                                                  count,
+                                                                  QRect(0, 0, screenWidth, screenHeight),
+                                                                  m_currentProfile.gridSubLayout);
             if (i < layouts.size()) {
                 inst.outputWidth = layouts[i].width();
                 inst.outputHeight = layouts[i].height();
@@ -546,5 +548,3 @@ QStringList SessionManager::getAssignedUsers(int excludeIndex) const
     }
     return assigned;
 }
-
-

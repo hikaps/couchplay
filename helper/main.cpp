@@ -22,7 +22,7 @@ int main(int argc, char *argv[])
 
     // Register on the system bus
     QDBusConnection systemBus = QDBusConnection::systemBus();
-    
+
     if (!systemBus.isConnected()) {
         qCritical() << "Cannot connect to the D-Bus system bus";
         return 1;
@@ -37,8 +37,9 @@ int main(int argc, char *argv[])
 
     // Register object
     const QString objectPath = QStringLiteral("/io/github/hikaps/CouchPlayHelper");
-    if (!systemBus.registerObject(objectPath, &helper, 
-            QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals)) {
+    if (!systemBus.registerObject(objectPath,
+                                  &helper,
+                                  QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals)) {
         qCritical() << "Cannot register D-Bus object:" << systemBus.lastError().message();
         return 1;
     }

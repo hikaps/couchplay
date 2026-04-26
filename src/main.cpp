@@ -2,25 +2,25 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include <QApplication>
+#include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
-#include <QIcon>
 #include <QtQml>
 
+#include <KIconTheme>
 #include <KLocalizedContext>
 #include <KLocalizedString>
-#include <KIconTheme>
 
 #include "couchplay-version.h"
 
+#include "core/AudioManager.h"
 #include "core/DeviceManager.h"
+#include "core/GamescopeInstance.h"
+#include "core/MonitorManager.h"
+#include "core/PresetManager.h"
 #include "core/SessionManager.h"
 #include "core/SessionRunner.h"
-#include "core/GamescopeInstance.h"
 #include "core/UserManager.h"
-#include "core/MonitorManager.h"
-#include "core/AudioManager.h"
-#include "core/PresetManager.h"
 #include "dbus/CouchPlayHelperClient.h"
 
 // Custom message handler to filter noisy Qt warnings
@@ -29,7 +29,8 @@ static QtMessageHandler s_originalHandler = nullptr;
 void couchplayMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
     // Suppress QStandardPaths permission warnings (common on Bazzite/immutable distros with 0710 permissions)
-    if (type == QtWarningMsg && msg.contains(QStringLiteral("QStandardPaths: wrong permissions on runtime directory"))) {
+    if (type == QtWarningMsg
+        && msg.contains(QStringLiteral("QStandardPaths: wrong permissions on runtime directory"))) {
         return;
     }
 

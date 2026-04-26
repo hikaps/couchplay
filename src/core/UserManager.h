@@ -3,18 +3,18 @@
 
 #pragma once
 
-#include <QObject>
-#include <QString>
 #include <QList>
-#include <QSet>
-#include <QVariantMap>
+#include <QObject>
 #include <qqmlintegration.h>
+#include <QSet>
+#include <QString>
+#include <QVariantMap>
 
 class CouchPlayHelperClient;
 
 /**
  * @brief Manages Linux user accounts for multi-user gaming
- * 
+ *
  * Only shows users in the 'couchplay' group, excluding the current user.
  * This ensures strict boundaries - only users created by CouchPlay can
  * be managed, assigned to sessions, or deleted.
@@ -35,7 +35,10 @@ public:
      * Note: This should be called from C++, not QML
      */
     void setHelperClient(CouchPlayHelperClient *client);
-    CouchPlayHelperClient *helperClient() const { return m_helperClient; }
+    CouchPlayHelperClient *helperClient() const
+    {
+        return m_helperClient;
+    }
 
     /**
      * @brief Set the helper client from QML (takes QObject* for type safety)
@@ -50,7 +53,10 @@ public:
     /**
      * @brief Get the current logged-in user
      */
-    QString currentUser() const { return m_currentUser; }
+    QString currentUser() const
+    {
+        return m_currentUser;
+    }
 
     /**
      * @brief Get list of users in the couchplay group (excluding current user)

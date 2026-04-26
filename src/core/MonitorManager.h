@@ -4,9 +4,9 @@
 #pragma once
 
 #include <QObject>
+#include <qqmlintegration.h>
 #include <QString>
 #include <QVariantMap>
-#include <qqmlintegration.h>
 
 /**
  * @brief Placeholder for monitor detection
@@ -25,7 +25,10 @@ public:
 
     Q_INVOKABLE void refresh();
 
-    int monitorCount() const { return m_monitors.size(); }
+    int monitorCount() const
+    {
+        return m_monitors.size();
+    }
     QVariantList monitorsAsVariant() const;
 
 Q_SIGNALS:

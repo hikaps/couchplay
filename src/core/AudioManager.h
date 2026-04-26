@@ -5,8 +5,8 @@
 
 #include <QObject>
 #include <QProcess>
-#include <QString>
 #include <qqmlintegration.h>
+#include <QString>
 
 class AudioManager : public QObject
 {
@@ -19,8 +19,14 @@ public:
     explicit AudioManager(QObject *parent = nullptr);
     ~AudioManager() override;
 
-    bool isMultiUserConfigured() const { return m_multiUserConfigured; }
-    QString audioServer() const { return m_audioServer; }
+    bool isMultiUserConfigured() const
+    {
+        return m_multiUserConfigured;
+    }
+    QString audioServer() const
+    {
+        return m_audioServer;
+    }
 
     Q_INVOKABLE void checkConfiguration();
 

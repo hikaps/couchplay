@@ -3,17 +3,17 @@
 
 #pragma once
 
+#include <QList>
 #include <QMap>
 #include <QObject>
-#include <QString>
-#include <QList>
-#include <QVariantMap>
-#include <QRect>
 #include <qqmlintegration.h>
+#include <QRect>
+#include <QString>
+#include <QVariantMap>
 
 #include "../dbus/CouchPlayHelperClient.h"
-#include "SteamConfigManager.h"
 #include "HeroicConfigManager.h"
+#include "SteamConfigManager.h"
 #include "VirtualDeviceWatcher.h"
 
 class QAction;
@@ -27,7 +27,7 @@ class PresetManager;
 
 /**
  * @brief Orchestrates running a complete split-screen gaming session
- * 
+ *
  * SessionRunner manages the lifecycle of multiple GamescopeInstance objects,
  * handles window layout calculations, device ownership transfers, and
  * coordinates with the SessionManager for configuration.
@@ -41,15 +41,18 @@ class SessionRunner : public QObject
     Q_PROPERTY(int runningInstanceCount READ runningInstanceCount NOTIFY runningInstanceCountChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
-    
+
     // Dependencies
-    Q_PROPERTY(SessionManager* sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
-    Q_PROPERTY(DeviceManager* deviceManager READ deviceManager WRITE setDeviceManager NOTIFY deviceManagerChanged)
-    Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
-    Q_PROPERTY(PresetManager* presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
-    Q_PROPERTY(SteamConfigManager* steamConfigManager READ steamConfigManager WRITE setSteamConfigManager NOTIFY steamConfigManagerChanged)
-    Q_PROPERTY(HeroicConfigManager* heroicConfigManager READ heroicConfigManager WRITE setHeroicConfigManager NOTIFY heroicConfigManagerChanged)
-    Q_PROPERTY(SettingsManager* settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
+    Q_PROPERTY(SessionManager *sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
+    Q_PROPERTY(DeviceManager *deviceManager READ deviceManager WRITE setDeviceManager NOTIFY deviceManagerChanged)
+    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
+    Q_PROPERTY(PresetManager *presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
+    Q_PROPERTY(SteamConfigManager *steamConfigManager READ steamConfigManager WRITE setSteamConfigManager NOTIFY
+                   steamConfigManagerChanged)
+    Q_PROPERTY(HeroicConfigManager *heroicConfigManager READ heroicConfigManager WRITE setHeroicConfigManager NOTIFY
+                   heroicConfigManagerChanged)
+    Q_PROPERTY(
+        SettingsManager *settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -85,7 +88,10 @@ public:
     /**
      * @brief Get current status message
      */
-    QString status() const { return m_status; }
+    QString status() const
+    {
+        return m_status;
+    }
 
     /**
      * @brief Get list of instances with their status
@@ -93,25 +99,46 @@ public:
     QVariantList instancesAsVariant() const;
 
     // Dependency getters/setters
-    SessionManager* sessionManager() const { return m_sessionManager; }
+    SessionManager *sessionManager() const
+    {
+        return m_sessionManager;
+    }
     void setSessionManager(SessionManager *manager);
 
-    DeviceManager* deviceManager() const { return m_deviceManager; }
+    DeviceManager *deviceManager() const
+    {
+        return m_deviceManager;
+    }
     void setDeviceManager(DeviceManager *manager);
 
-    CouchPlayHelperClient* helperClient() const { return m_helperClient; }
+    CouchPlayHelperClient *helperClient() const
+    {
+        return m_helperClient;
+    }
     void setHelperClient(CouchPlayHelperClient *client);
 
-    PresetManager* presetManager() const { return m_presetManager; }
+    PresetManager *presetManager() const
+    {
+        return m_presetManager;
+    }
     void setPresetManager(PresetManager *manager);
 
-    SteamConfigManager* steamConfigManager() const { return m_steamConfigManager; }
+    SteamConfigManager *steamConfigManager() const
+    {
+        return m_steamConfigManager;
+    }
     void setSteamConfigManager(SteamConfigManager *manager);
 
-    HeroicConfigManager* heroicConfigManager() const { return m_heroicConfigManager; }
+    HeroicConfigManager *heroicConfigManager() const
+    {
+        return m_heroicConfigManager;
+    }
     void setHeroicConfigManager(HeroicConfigManager *manager);
 
-    SettingsManager* settingsManager() const { return m_settingsManager; }
+    SettingsManager *settingsManager() const
+    {
+        return m_settingsManager;
+    }
     void setSettingsManager(SettingsManager *manager);
 
     /**
@@ -119,22 +146,26 @@ public:
      * @param layout Layout type: "horizontal", "vertical", "multi-monitor", "grid"
      * @param instanceCount Number of instances
      * @param screenGeometry Available screen geometry
-     * @param gridSubLayout For "grid" layout with 3 players: "horizontal" (3×1), "grid-2x2" (2×2 with gap), or empty (defaults to horizontal)
+     * @param gridSubLayout For "grid" layout with 3 players: "horizontal" (3×1), "grid-2x2" (2×2 with gap), or empty
+     * (defaults to horizontal)
      * @return List of QRect geometries for each instance
      */
-    static QList<QRect> calculateLayout(const QString &layout, 
-                                         int instanceCount,
-                                         const QRect &screenGeometry,
-                                         const QString &gridSubLayout = QString());
+    static QList<QRect> calculateLayout(const QString &layout,
+                                        int instanceCount,
+                                        const QRect &screenGeometry,
+                                        const QString &gridSubLayout = QString());
 
     static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash);
 
     static QStringList expandPatternsToFiles(const QString &gamePath, const QStringList &patterns);
-    
+
     // Returns override path for a preset (~/.local/share/hikaps/CouchPlay/overrides/<presetId>/), creating it if needed
     Q_INVOKABLE static QString getAndEnsureOverridesPath(const QString &presetId);
-    
-    void loadOverrideFiles(const QString &overridesRoot, const QStringList &matchedFiles, const QString &username, const QString &gameId);
+
+    void loadOverrideFiles(const QString &overridesRoot,
+                           const QStringList &matchedFiles,
+                           const QString &username,
+                           const QString &gameId);
 
 Q_SIGNALS:
     void runningChanged();
@@ -199,12 +230,12 @@ private:
     SettingsManager *m_settingsManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     VirtualDeviceWatcher *m_virtualDeviceWatcher = nullptr;
-    QList<GamescopeInstance*> m_instances;
+    QList<GamescopeInstance *> m_instances;
     QAction *m_stopAction = nullptr;
     QString m_status;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
-    
+
     // Sequential instance launching state
     int m_nextInstanceToStart = 0;
     QList<QVariantMap> m_pendingInstanceConfigs;

@@ -1,21 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QtTest>
-#include <QTemporaryDir>
-#include <QStandardPaths>
-#include <QDir>
-#include <QFileInfo>
 #include "core/HeroicConfigManager.h"
 #include "dbus/CouchPlayHelperClient.h"
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QtTest>
 
 class MockHelperClient : public CouchPlayHelperClient
 {
     Q_OBJECT
 public:
-    explicit MockHelperClient(QObject *parent = nullptr) : CouchPlayHelperClient(parent) {}
+    explicit MockHelperClient(QObject *parent = nullptr)
+        : CouchPlayHelperClient(parent)
+    {
+    }
 
-    bool isAvailable() const override { return true; }
+    bool isAvailable() const override
+    {
+        return true;
+    }
 
     bool createUserDirectory(const QString &path, const QString &username) override
     {
@@ -59,7 +65,7 @@ private:
     void createMockHeroicConfig(const QString &basePath, bool isFlatpak);
     void createMockGameConfigs(const QString &basePath);
     void createMockShortcuts(const QString &basePath);
-    
+
     QByteArray m_originalHome;
     QTemporaryDir m_tempDir;
 };
@@ -85,22 +91,23 @@ void TestHeroicConfigManager::createMockHeroicConfig(const QString &basePath, bo
     } else {
         heroicRoot = basePath + QStringLiteral("/.config/heroic");
     }
-    
+
     QDir().mkpath(heroicRoot);
     QDir().mkpath(heroicRoot + QStringLiteral("/GamesConfig"));
-    
+
     // Create config.json
     QFile configFile(heroicRoot + QStringLiteral("/config.json"));
     if (configFile.open(QIODevice::WriteOnly)) {
         QJsonObject root;
         QJsonObject defaultSettings;
         defaultSettings[QStringLiteral("defaultInstallPath")] = QString(basePath + QStringLiteral("/Games/Heroic"));
-        defaultSettings[QStringLiteral("defaultWinePrefix")] = QString(basePath + QStringLiteral("/Games/Heroic/Prefixes/default"));
+        defaultSettings[QStringLiteral("defaultWinePrefix")] =
+            QString(basePath + QStringLiteral("/Games/Heroic/Prefixes/default"));
         root[QStringLiteral("defaultSettings")] = defaultSettings;
         configFile.write(QJsonDocument(root).toJson());
         configFile.close();
     }
-    
+
     // Create dummy directories referenced in config
     QDir().mkpath(basePath + QStringLiteral("/Games/Heroic"));
     QDir().mkpath(basePath + QStringLiteral("/Games/Heroic/Prefixes/default"));
@@ -109,7 +116,7 @@ void TestHeroicConfigManager::createMockHeroicConfig(const QString &basePath, bo
 void TestHeroicConfigManager::createMockGameConfigs(const QString &basePath)
 {
     QString configRoot = basePath + QStringLiteral("/.config/heroic"); // Assuming native for this helper
-    
+
     // 1. Legendary (Epic)
     QDir().mkpath(basePath + QStringLiteral("/.config/legendary"));
     QFile legendaryFile(basePath + QStringLiteral("/.config/legendary/installed.json"));
@@ -176,11 +183,12 @@ void TestHeroicConfigManager::createMockGameConfigs(const QString &basePath)
         game[QStringLiteral("folder_name")] = QString(basePath + QStringLiteral("/Games/Heroic/SideloadGame"));
         game[QStringLiteral("is_installed")] = true;
         game[QStringLiteral("runner")] = QStringLiteral("sideload");
-        
+
         QJsonObject install;
-        install[QStringLiteral("executable")] = QString(basePath + QStringLiteral("/Games/Heroic/SideloadGame/game.exe"));
+        install[QStringLiteral("executable")] =
+            QString(basePath + QStringLiteral("/Games/Heroic/SideloadGame/game.exe"));
         game[QStringLiteral("install")] = install;
-        
+
         games.append(game);
         root[QStringLiteral("games")] = games;
         sideloadFile.write(QJsonDocument(root).toJson());
@@ -221,9 +229,9 @@ void TestHeroicConfigManager::testDetectNative()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
-    
+
     HeroicConfigManager manager;
     QVERIFY(manager.isHeroicDetected());
     QVERIFY(!manager.isFlatpak());
@@ -236,9 +244,9 @@ void TestHeroicConfigManager::testDetectFlatpak()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), true);
-    
+
     HeroicConfigManager manager;
     QVERIFY(manager.isHeroicDetected());
     QVERIFY(manager.isFlatpak());
@@ -250,13 +258,13 @@ void TestHeroicConfigManager::testParseLegendary()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
-    
+
     HeroicConfigManager manager;
     manager.loadGames();
-    
+
     QList<HeroicGame> games = manager.installedGames();
     bool found = false;
     for (const auto &game : games) {
@@ -275,13 +283,13 @@ void TestHeroicConfigManager::testParseGog()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
-    
+
     HeroicConfigManager manager;
     manager.loadGames();
-    
+
     QList<HeroicGame> games = manager.installedGames();
     bool found = false;
     for (const auto &game : games) {
@@ -300,13 +308,13 @@ void TestHeroicConfigManager::testParseNile()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
-    
+
     HeroicConfigManager manager;
     manager.loadGames();
-    
+
     QList<HeroicGame> games = manager.installedGames();
     bool found = false;
     for (const auto &game : games) {
@@ -327,13 +335,13 @@ void TestHeroicConfigManager::testParseSideload()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
-    
+
     HeroicConfigManager manager;
     manager.loadSideloadedGames();
-    
+
     QList<HeroicGame> games = manager.sideloadedGames();
     bool found = false;
     for (const auto &game : games) {
@@ -353,13 +361,13 @@ void TestHeroicConfigManager::testExtractGameDirectories()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
-    
+
     HeroicConfigManager manager;
     manager.loadGames();
-    
+
     QStringList gameDirs = manager.extractGameDirectories();
     QVERIFY(gameDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame")));
     QVERIFY(gameDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/GogGame")));
@@ -378,17 +386,18 @@ void TestHeroicConfigManager::testSyncShortcutsToUser()
     // Create a "target user" home directory
     QTemporaryDir targetUserDir;
     QVERIFY(targetUserDir.isValid());
-    
+
     // We can't easily mock getpwnam, so we'll skip the actual getpwnam check in the test
     // OR we can pass the current user as the target user, but that might overwrite things.
     // However, the MockHelperClient intercepts the calls, so it's fine.
-    // BUT HeroicConfigManager calls getpwnam. 
+    // BUT HeroicConfigManager calls getpwnam.
     // We can use the current user "notaname" (or whatever `whoami` returns) as the target user.
     // Or we can just mock `getpwnam`? No, C function mocking is hard.
     // Let's use the current user's name.
-    
+
     QString currentUser = QString::fromLocal8Bit(qgetenv("USER"));
-    if (currentUser.isEmpty()) currentUser = QStringLiteral("notaname"); // Fallback
+    if (currentUser.isEmpty())
+        currentUser = QStringLiteral("notaname"); // Fallback
 
     HeroicConfigManager manager;
     manager.detectHeroicPaths(); // Detect shortcuts dir
@@ -398,21 +407,21 @@ void TestHeroicConfigManager::testSyncShortcutsToUser()
 
     // Call sync
     bool result = manager.syncShortcutsToUser(currentUser);
-    
+
     // Since getpwnam will return the REAL home directory of the current user,
     // and our mock HOME env var only affects Qt/app logic, not getpwnam,
     // HeroicConfigManager will try to sync to the REAL user's home.
     // BUT MockHelperClient intercepts copyFileToUser.
     // So `targetPath` passed to `copyFileToUser` will be real home + /.local/share/applications/heroic-....
-    
+
     QVERIFY(result);
     QCOMPARE(mockHelper->copiedFiles.count(), 2);
-    
+
     QStringList copiedSources;
     for (const auto &pair : mockHelper->copiedFiles) {
         copiedSources << pair.first;
     }
-    
+
     QString appsDir = homeDir.path() + QStringLiteral("/.local/share/applications");
     QVERIFY(copiedSources.contains(appsDir + QStringLiteral("/heroic-EpicGame.desktop")));
     QVERIFY(copiedSources.contains(appsDir + QStringLiteral("/heroic-GogGame.desktop")));
@@ -426,13 +435,13 @@ void TestHeroicConfigManager::testExtractSideloadDirectories()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
-    
+
     HeroicConfigManager manager;
     manager.loadSideloadedGames();
-    
+
     QStringList sideloadDirs = manager.extractSideloadDirectories();
     QVERIFY(sideloadDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/SideloadGame")));
 }
@@ -442,13 +451,13 @@ void TestHeroicConfigManager::testSyncSideloadToUser()
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
     qputenv("HOME", homeDir.path().toLocal8Bit());
-    
+
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
-    
+
     HeroicConfigManager manager;
     manager.loadSideloadedGames();
-    
+
     // Test that sync requires a helper client
     bool syncResult = manager.syncSideloadToUser(QStringLiteral("testuser"));
     QVERIFY(!syncResult); // Should fail without helper client

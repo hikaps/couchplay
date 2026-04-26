@@ -32,12 +32,11 @@ void VirtualDeviceWatcher::startWatching(const QSet<int> &knownEventNumbers)
     }
 
     m_knownEventNumbers = knownEventNumbers;
-    
+
     // Watch /dev/input/ directory for changes
     m_watcher->addPath(QStringLiteral("/dev/input"));
-    connect(m_watcher, &QFileSystemWatcher::directoryChanged,
-            this, &VirtualDeviceWatcher::onInputDirectoryChanged);
-    
+    connect(m_watcher, &QFileSystemWatcher::directoryChanged, this, &VirtualDeviceWatcher::onInputDirectoryChanged);
+
     m_watching = true;
     qDebug() << "VirtualDeviceWatcher: Started watching /dev/input";
 }
@@ -49,17 +48,16 @@ void VirtualDeviceWatcher::stopWatching()
     }
 
     m_debounceTimer->stop();
-    disconnect(m_watcher, &QFileSystemWatcher::directoryChanged,
-               this, &VirtualDeviceWatcher::onInputDirectoryChanged);
-    
+    disconnect(m_watcher, &QFileSystemWatcher::directoryChanged, this, &VirtualDeviceWatcher::onInputDirectoryChanged);
+
     QStringList watched = m_watcher->directories();
     if (!watched.isEmpty()) {
         m_watcher->removePaths(watched);
     }
-    
+
     m_knownEventNumbers.clear();
     m_watching = false;
-    
+
     qDebug() << "VirtualDeviceWatcher: Stopped watching";
 }
 
@@ -81,22 +79,22 @@ void VirtualDeviceWatcher::checkForNewDevices()
 {
     QDir dir(QStringLiteral("/dev/input"));
     QStringList eventFiles = dir.entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
-    
+
     static QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
-    
+
     for (const QString &eventFile : eventFiles) {
         QRegularExpressionMatch match = eventRegex.match(eventFile);
         if (!match.hasMatch()) {
             continue;
         }
-        
+
         int eventNumber = match.captured(1).toInt();
-        
+
         // Skip if we already know about this device
         if (m_knownEventNumbers.contains(eventNumber)) {
             continue;
         }
-        
+
         // New device found
         QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
         QString deviceName = getDeviceName(eventNumber);
@@ -105,12 +103,12 @@ void VirtualDeviceWatcher::checkForNewDevices()
             m_knownEventNumbers.insert(eventNumber);
             continue;
         }
-        
+
         qDebug() << "VirtualDeviceWatcher: Virtual device appeared:" << devicePath << deviceName;
-        
+
         // Add to known set so we don't report it again
         m_knownEventNumbers.insert(eventNumber);
-        
+
         // Emit signal
         Q_EMIT virtualDeviceAppeared(eventNumber, devicePath, deviceName);
     }
@@ -130,9 +128,8 @@ bool VirtualDeviceWatcher::isVirtualDevice(int eventNumber, const QString &name)
 {
     QString lowerName = name.toLower();
 
-    if (lowerName.contains(QStringLiteral("virtual")) ||
-        lowerName.contains(QStringLiteral("xtest")) ||
-        lowerName.contains(QStringLiteral("uinput"))) {
+    if (lowerName.contains(QStringLiteral("virtual")) || lowerName.contains(QStringLiteral("xtest"))
+        || lowerName.contains(QStringLiteral("uinput"))) {
         return true;
     }
 

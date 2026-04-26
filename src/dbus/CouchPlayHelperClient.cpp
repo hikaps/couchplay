@@ -16,13 +16,7 @@ static const QString INTERFACE_NAME = QStringLiteral("io.github.hikaps.CouchPlay
 CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
     : QObject(parent)
 {
-    m_interface = new QDBusInterface(
-        SERVICE_NAME,
-        OBJECT_PATH,
-        INTERFACE_NAME,
-        QDBusConnection::systemBus(),
-        this
-    );
+    m_interface = new QDBusInterface(SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, QDBusConnection::systemBus(), this);
 
     if (!m_interface->isValid()) {
         qWarning() << "CouchPlay helper interface not valid:" << m_interface->lastError().message();
@@ -34,13 +28,12 @@ CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
     qWarning() << "CouchPlay helper connected";
     m_available = true;
 
-    QDBusConnection::systemBus().connect(
-        SERVICE_NAME,
-        OBJECT_PATH,
-        INTERFACE_NAME,
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onInstanceStopped(QString, qint64, QString))
-    );
+    QDBusConnection::systemBus().connect(SERVICE_NAME,
+                                         OBJECT_PATH,
+                                         INTERFACE_NAME,
+                                         QStringLiteral("instanceStopped"),
+                                         this,
+                                         SLOT(onInstanceStopped(QString, qint64, QString)));
 }
 
 CouchPlayHelperClient::~CouchPlayHelperClient()
@@ -72,11 +65,7 @@ bool CouchPlayHelperClient::setDeviceOwner(const QString &devicePath, int uid)
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("ChangeDeviceOwner"),
-        devicePath,
-        static_cast<uint>(uid)
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("ChangeDeviceOwner"), devicePath, static_cast<uint>(uid));
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -92,10 +81,7 @@ bool CouchPlayHelperClient::restoreDeviceOwner(const QString &devicePath)
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("ResetDeviceOwner"),
-        devicePath
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("ResetDeviceOwner"), devicePath);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -123,11 +109,7 @@ bool CouchPlayHelperClient::createUser(const QString &username)
 
     QString fullName = QStringLiteral("CouchPlay Player (%1)").arg(username);
 
-    QDBusReply<uint> reply = m_interface->call(
-        QStringLiteral("CreateUser"),
-        username,
-        fullName
-    );
+    QDBusReply<uint> reply = m_interface->call(QStringLiteral("CreateUser"), username, fullName);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -144,11 +126,7 @@ bool CouchPlayHelperClient::deleteUser(const QString &username, bool removeHome)
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("DeleteUser"),
-        username,
-        removeHome
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("DeleteUser"), username, removeHome);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -164,10 +142,7 @@ bool CouchPlayHelperClient::isInCouchPlayGroup(const QString &username)
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("IsInCouchPlayGroup"),
-        username
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("IsInCouchPlayGroup"), username);
 
     if (!reply.isValid()) {
         return false;
@@ -176,26 +151,25 @@ bool CouchPlayHelperClient::isInCouchPlayGroup(const QString &username)
     return reply.value();
 }
 
-qint64 CouchPlayHelperClient::launchInstance(const QString &username, uint compositorUid,
-                                              const QStringList &gamescopeArgs,
-                                              const QString &gameCommand,
-                                              const QStringList &environment,
-                                              const QStringList &bindPaths)
+qint64 CouchPlayHelperClient::launchInstance(const QString &username,
+                                             uint compositorUid,
+                                             const QStringList &gamescopeArgs,
+                                             const QString &gameCommand,
+                                             const QStringList &environment,
+                                             const QStringList &bindPaths)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
         return 0;
     }
 
-    QDBusReply<qint64> reply = m_interface->call(
-        QStringLiteral("LaunchInstance"),
-        username,
-        compositorUid,
-        gamescopeArgs,
-        gameCommand,
-        environment,
-        bindPaths
-    );
+    QDBusReply<qint64> reply = m_interface->call(QStringLiteral("LaunchInstance"),
+                                                 username,
+                                                 compositorUid,
+                                                 gamescopeArgs,
+                                                 gameCommand,
+                                                 environment,
+                                                 bindPaths);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -212,10 +186,7 @@ bool CouchPlayHelperClient::stopInstance(qint64 pid)
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("StopInstance"),
-        pid
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("StopInstance"), pid);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -232,10 +203,7 @@ bool CouchPlayHelperClient::killInstance(qint64 pid)
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("KillInstance"),
-        pid
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("KillInstance"), pid);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -245,8 +213,9 @@ bool CouchPlayHelperClient::killInstance(qint64 pid)
     return reply.value();
 }
 
-int CouchPlayHelperClient::mountSharedDirectories(const QString &username, uint compositorUid,
-                                                    const QStringList &directories)
+int CouchPlayHelperClient::mountSharedDirectories(const QString &username,
+                                                  uint compositorUid,
+                                                  const QStringList &directories)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -257,12 +226,8 @@ int CouchPlayHelperClient::mountSharedDirectories(const QString &username, uint 
         return 0;
     }
 
-    QDBusReply<int> reply = m_interface->call(
-        QStringLiteral("MountSharedDirectories"),
-        username,
-        compositorUid,
-        directories
-    );
+    QDBusReply<int> reply =
+        m_interface->call(QStringLiteral("MountSharedDirectories"), username, compositorUid, directories);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -279,10 +244,7 @@ int CouchPlayHelperClient::unmountSharedDirectories(const QString &username)
         return -1;
     }
 
-    QDBusReply<int> reply = m_interface->call(
-        QStringLiteral("UnmountSharedDirectories"),
-        username
-    );
+    QDBusReply<int> reply = m_interface->call(QStringLiteral("UnmountSharedDirectories"), username);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -299,9 +261,7 @@ int CouchPlayHelperClient::unmountAllSharedDirectories()
         return -1;
     }
 
-    QDBusReply<int> reply = m_interface->call(
-        QStringLiteral("UnmountAllSharedDirectories")
-    );
+    QDBusReply<int> reply = m_interface->call(QStringLiteral("UnmountAllSharedDirectories"));
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -311,11 +271,12 @@ int CouchPlayHelperClient::unmountAllSharedDirectories()
     return reply.value();
 }
 
-bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath, const QString &targetPath,
-                                             const QString &username)
+bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath,
+                                           const QString &targetPath,
+                                           const QString &username)
 {
     qCDebug(couchplayHelper) << "copyFileToUser:" << sourcePath << "->" << targetPath << "for" << username;
-    
+
     if (!m_available) {
         qCWarning(couchplayHelper) << "copyFileToUser: Helper not available";
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -323,14 +284,10 @@ bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath, const QStr
     }
 
     // Use QDBusMessage directly (more reliable than QDBusInterface::call)
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        SERVICE_NAME,
-        OBJECT_PATH,
-        INTERFACE_NAME,
-        QStringLiteral("CopyFileToUser")
-    );
+    QDBusMessage msg =
+        QDBusMessage::createMethodCall(SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, QStringLiteral("CopyFileToUser"));
     msg << sourcePath << targetPath << username;
-    
+
     QDBusMessage replyMsg = QDBusConnection::systemBus().call(msg, QDBus::Block, 30000);
 
     if (replyMsg.type() == QDBusMessage::ErrorMessage) {
@@ -360,11 +317,7 @@ bool CouchPlayHelperClient::createUserDirectory(const QString &path, const QStri
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("CreateUserDirectory"),
-        path,
-        username
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("CreateUserDirectory"), path, username);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -381,12 +334,7 @@ bool CouchPlayHelperClient::setDirectoryAcl(const QString &path, const QString &
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("SetDirectoryAcl"),
-        path,
-        username,
-        recursive
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("SetDirectoryAcl"), path, username, recursive);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -403,11 +351,7 @@ bool CouchPlayHelperClient::setPathAclWithParents(const QString &path, const QSt
         return false;
     }
 
-    QDBusReply<bool> reply = m_interface->call(
-        QStringLiteral("SetPathAclWithParents"),
-        path,
-        username
-    );
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("SetPathAclWithParents"), path, username);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -424,10 +368,7 @@ QString CouchPlayHelperClient::getUserSteamId(const QString &username)
         return QString();
     }
 
-    QDBusReply<QString> reply = m_interface->call(
-        QStringLiteral("GetUserSteamId"),
-        username
-    );
+    QDBusReply<QString> reply = m_interface->call(QStringLiteral("GetUserSteamId"), username);
 
     if (!reply.isValid()) {
         qWarning() << "CouchPlayHelperClient: GetUserSteamId failed:" << reply.error().message();
@@ -437,11 +378,12 @@ QString CouchPlayHelperClient::getUserSteamId(const QString &username)
     return reply.value();
 }
 
-bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content, const QString &targetPath,
-                                             const QString &username)
+bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
+                                            const QString &targetPath,
+                                            const QString &username)
 {
     qCDebug(couchplayHelper) << "writeFileToUser:" << content.size() << "bytes to" << targetPath << "for" << username;
-    
+
     if (!m_available) {
         qCWarning(couchplayHelper) << "writeFileToUser: Helper not available";
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -449,14 +391,10 @@ bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content, const QSt
     }
 
     // Use QDBusMessage directly for reliable byte array transfer
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        SERVICE_NAME,
-        OBJECT_PATH,
-        INTERFACE_NAME,
-        QStringLiteral("WriteFileToUser")
-    );
+    QDBusMessage msg =
+        QDBusMessage::createMethodCall(SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, QStringLiteral("WriteFileToUser"));
     msg << content << targetPath << username;
-    
+
     QDBusMessage replyMsg = QDBusConnection::systemBus().call(msg, QDBus::Block, 30000);
 
     if (replyMsg.type() == QDBusMessage::ErrorMessage) {

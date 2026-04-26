@@ -3,11 +3,11 @@
 
 #pragma once
 
-#include <QObject>
 #include <QDBusInterface>
+#include <QObject>
+#include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
-#include <qqmlintegration.h>
 
 /**
  * @brief D-Bus client for the privileged CouchPlay helper
@@ -22,7 +22,10 @@ public:
     explicit CouchPlayHelperClient(QObject *parent = nullptr);
     ~CouchPlayHelperClient() override;
 
-    virtual bool isAvailable() const { return m_available; }
+    virtual bool isAvailable() const
+    {
+        return m_available;
+    }
 
     Q_INVOKABLE bool setDeviceOwner(const QString &devicePath, int uid);
 
@@ -38,7 +41,7 @@ public:
     /**
      * @brief Delete a CouchPlay user account
      * Only users in the couchplay group can be deleted
-     * 
+     *
      * @param username Username to delete (must be in couchplay group)
      * @param removeHome If true, also delete the user's home directory
      * @return true if successful
@@ -57,11 +60,12 @@ public:
      * @param bindPaths Bind mount entries for per-instance config overrides (source:target format)
      * @return PID of launched process, or 0 on failure
      */
-    Q_INVOKABLE qint64 launchInstance(const QString &username, uint compositorUid,
-                                       const QStringList &gamescopeArgs,
-                                       const QString &gameCommand,
-                                       const QStringList &environment,
-                                       const QStringList &bindPaths);
+    Q_INVOKABLE qint64 launchInstance(const QString &username,
+                                      uint compositorUid,
+                                      const QStringList &gamescopeArgs,
+                                      const QString &gameCommand,
+                                      const QStringList &environment,
+                                      const QStringList &bindPaths);
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)
@@ -86,8 +90,8 @@ public:
      * @param directories List of directories in "source|alias" format
      * @return Number of successful mounts, or -1 on error
      */
-    Q_INVOKABLE virtual int mountSharedDirectories(const QString &username, uint compositorUid,
-                                                   const QStringList &directories);
+    Q_INVOKABLE virtual int
+    mountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories);
 
     /**
      * @brief Unmount shared directories for a user
@@ -109,8 +113,8 @@ public:
      * @param username Target user (file will be owned by this user)
      * @return true if successful
      */
-    Q_INVOKABLE virtual bool copyFileToUser(const QString &sourcePath, const QString &targetPath,
-                                     const QString &username);
+    Q_INVOKABLE virtual bool
+    copyFileToUser(const QString &sourcePath, const QString &targetPath, const QString &username);
 
     /**
      * @brief Create a directory with proper ownership
@@ -131,11 +135,11 @@ public:
 
     /**
      * @brief Set ACLs on a path and all parent directories needed for traversal
-     * 
+     *
      * This is useful for paths on external drives (e.g., /run/media/user/...)
      * where the user needs rx access to all parent directories to reach the
      * target path.
-     * 
+     *
      * @param path Target path to set ACL on
      * @param username User to grant access to
      * @return true if successful
@@ -156,8 +160,7 @@ public:
      * @param username Target user (file will be owned by this user)
      * @return true if successful
      */
-    Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath,
-                                      const QString &username);
+    Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
 Q_SIGNALS:
     void availabilityChanged();

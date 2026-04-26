@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
+#include <QDebug>
 #include <QObject>
 #include <QTest>
-#include <QDebug>
 
 #include <QDir>
 #include <QFile>
@@ -33,7 +33,7 @@ void TestCommandVerifier::testFlatpakDetection()
     // Test flatpak command detection
     QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("flatpak run com.heroicgameslauncher.heroic")));
     QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("flatpak run com.valvesoftware.Steam")));
-    
+
     // Test non-flatpak commands
     QVERIFY(!CommandVerifier::isFlatpakCommand(QStringLiteral("steam")));
     QVERIFY(!CommandVerifier::isFlatpakCommand(QStringLiteral("heroic")));
@@ -45,7 +45,7 @@ void TestCommandVerifier::testUserLocalDetection()
     QVERIFY(CommandVerifier::isUserLocalCommand(QStringLiteral("/home/user/.local/bin/steam")));
     QVERIFY(CommandVerifier::isUserLocalCommand(QStringLiteral("/home/user/.local/share/applications/steam.desktop")));
     QVERIFY(CommandVerifier::isUserLocalCommand(QStringLiteral("/home/user/.config/heroic/config.json")));
-    
+
     QVERIFY(!CommandVerifier::isUserLocalCommand(QStringLiteral("/usr/bin/steam")));
     QVERIFY(!CommandVerifier::isUserLocalCommand(QStringLiteral("/opt/steam/steam")));
     QVERIFY(!CommandVerifier::isUserLocalCommand(QStringLiteral("/home/user/games/steam")));
@@ -83,9 +83,10 @@ void TestCommandVerifier::testAccessibleToOtherUsers()
     QVERIFY(systemResult.isAbsolutePath);
     QVERIFY(!systemResult.isAccessibleToOtherUsers);
 
-    QVERIFY(QFile::setPermissions(systemPath, QFileDevice::ReadUser | QFileDevice::WriteUser | QFileDevice::ExeUser
-                                              | QFileDevice::ReadGroup | QFileDevice::ExeGroup
-                                              | QFileDevice::ReadOther | QFileDevice::ExeOther));
+    QVERIFY(QFile::setPermissions(systemPath,
+                                  QFileDevice::ReadUser | QFileDevice::WriteUser | QFileDevice::ExeUser
+                                      | QFileDevice::ReadGroup | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                                      | QFileDevice::ExeOther));
 
     CommandVerificationResult sharedResult = CommandVerifier::verifyCommand(systemPath);
     QVERIFY(sharedResult.isValid);
@@ -99,7 +100,7 @@ void TestCommandVerifier::testPathResolution()
     QString resolved = CommandVerifier::resolveCommandPath(QStringLiteral("ls"));
     qDebug() << "Resolved 'ls' to:" << resolved;
     // Resolution result depends on test environment PATH
-    
+
     resolved = CommandVerifier::resolveCommandPath(QStringLiteral("/usr/bin/ls"));
     QCOMPARE(resolved, QStringLiteral("/usr/bin/ls")); // Should return unchanged for absolute paths
 }
@@ -110,7 +111,7 @@ void TestCommandVerifier::testAbsoluteValidation()
     QVERIFY(CommandVerifier::isAbsolutePath(QStringLiteral("/usr/bin/steam")));
     QVERIFY(CommandVerifier::isAbsolutePath(QStringLiteral("/home/user/.config/heroic/config.json")));
     QVERIFY(CommandVerifier::isAbsolutePath(QStringLiteral("/opt/games/game")));
-    
+
     // Test invalid paths
     QVERIFY(!CommandVerifier::isAbsolutePath(QStringLiteral("steam"))); // Relative path
     QVERIFY(!CommandVerifier::isAbsolutePath(QStringLiteral("~/.local/bin/steam"))); // Tilde expansion

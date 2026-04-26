@@ -3,11 +3,11 @@
 
 #pragma once
 
+#include <QList>
 #include <QObject>
+#include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
-#include <QList>
-#include <qqmlintegration.h>
 
 #include "../dbus/CouchPlayHelperClient.h"
 
@@ -29,15 +29,15 @@ struct HeroicPaths {
     Q_PROPERTY(bool valid MEMBER valid)
 
 public:
-    QString heroicRoot;           // ~/.config/heroic or Flatpak equivalent
-    QString configJson;           // config.json path
-    QString legendaryInstalled;   // legendaryConfig/legendary/installed.json
-    QString gogInstalled;         // gog_store/installed.json
-    QString nileInstalled;        // nile_config/installed.json (Amazon)
-    QString sideloadLibrary;      // sideload_apps/library.json (manually added)
-    QString gamesConfig;          // GamesConfig/ directory
-    QString toolsPath;            // tools/ directory
-    QString shortcutsDir;         // ~/.local/share/applications/ or ~/.local/share/heroic/shortcuts
+    QString heroicRoot; // ~/.config/heroic or Flatpak equivalent
+    QString configJson; // config.json path
+    QString legendaryInstalled; // legendaryConfig/legendary/installed.json
+    QString gogInstalled; // gog_store/installed.json
+    QString nileInstalled; // nile_config/installed.json (Amazon)
+    QString sideloadLibrary; // sideload_apps/library.json (manually added)
+    QString gamesConfig; // GamesConfig/ directory
+    QString toolsPath; // tools/ directory
+    QString shortcutsDir; // ~/.local/share/applications/ or ~/.local/share/heroic/shortcuts
     bool isFlatpak = false;
     bool valid = false;
 };
@@ -57,11 +57,11 @@ struct HeroicGame {
     Q_PROPERTY(qint64 installSize MEMBER installSize)
 
 public:
-    QString appName;              // Internal ID (e.g., "Egret")
-    QString title;                // Display name
-    QString installPath;          // Full path to game installation
-    QString executable;           // Relative path to executable
-    QString runner;               // "legendary", "gog", "nile"
+    QString appName; // Internal ID (e.g., "Egret")
+    QString title; // Display name
+    QString installPath; // Full path to game installation
+    QString executable; // Relative path to executable
+    QString runner; // "legendary", "gog", "nile"
     qint64 installSize = 0;
 };
 
@@ -69,7 +69,7 @@ Q_DECLARE_METATYPE(HeroicGame)
 
 /**
  * HeroicConfigManager - Manages Heroic Games Launcher integration
- * 
+ *
  * Handles detection of Heroic installation (native or Flatpak),
  * parsing of game configurations from Epic (Legendary), GOG, and Amazon (Nile),
  * and extraction of paths for ACL setup.
@@ -78,14 +78,15 @@ class HeroicConfigManager : public QObject
 {
     Q_OBJECT
     QML_ELEMENT
-    
+
     Q_PROPERTY(HeroicPaths heroicPaths READ heroicPaths NOTIFY heroicPathsChanged)
     Q_PROPERTY(bool heroicDetected READ isHeroicDetected NOTIFY heroicPathsChanged)
     Q_PROPERTY(bool isFlatpak READ isFlatpak NOTIFY heroicPathsChanged)
     Q_PROPERTY(int gameCount READ gameCount NOTIFY gamesLoaded)
     Q_PROPERTY(QString heroicCommand READ heroicCommand NOTIFY heroicPathsChanged)
-    Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
-    Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY syncShortcutsEnabledChanged)
+    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
+    Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY
+                   syncShortcutsEnabledChanged)
 public:
     explicit HeroicConfigManager(QObject *parent = nullptr);
     ~HeroicConfigManager() override = default;
@@ -93,14 +94,20 @@ public:
     /**
      * Sync shortcuts enabled property
      */
-    bool syncShortcutsEnabled() const { return m_syncShortcutsEnabled; }
+    bool syncShortcutsEnabled() const
+    {
+        return m_syncShortcutsEnabled;
+    }
     void setSyncShortcutsEnabled(bool enabled);
 
     /**
      * Set the helper client for privileged file operations
      */
     void setHelperClient(CouchPlayHelperClient *client);
-    CouchPlayHelperClient *helperClient() const { return m_helperClient; }
+    CouchPlayHelperClient *helperClient() const
+    {
+        return m_helperClient;
+    }
     /**
      * @brief Detect Heroic installation paths
      * Checks for native installation and Flatpak
@@ -110,12 +117,18 @@ public:
     /**
      * @brief Check if Heroic installation was detected
      */
-    bool isHeroicDetected() const { return m_heroicPaths.valid; }
+    bool isHeroicDetected() const
+    {
+        return m_heroicPaths.valid;
+    }
 
     /**
      * @brief Check if detected installation is Flatpak
      */
-    bool isFlatpak() const { return m_heroicPaths.isFlatpak; }
+    bool isFlatpak() const
+    {
+        return m_heroicPaths.isFlatpak;
+    }
 
     /**
      * @brief Get the command to launch Heroic
@@ -126,12 +139,18 @@ public:
     /**
      * @brief Get detected Heroic paths
      */
-    HeroicPaths heroicPaths() const { return m_heroicPaths; }
+    HeroicPaths heroicPaths() const
+    {
+        return m_heroicPaths;
+    }
 
     /**
      * @brief Get Heroic config root directory
      */
-    QString configPath() const { return m_heroicPaths.heroicRoot; }
+    QString configPath() const
+    {
+        return m_heroicPaths.heroicRoot;
+    }
 
     /**
      * @brief Load installed games from all backends
@@ -141,12 +160,18 @@ public:
     /**
      * @brief Get list of installed games
      */
-    QList<HeroicGame> installedGames() const { return m_games; }
+    QList<HeroicGame> installedGames() const
+    {
+        return m_games;
+    }
 
     /**
      * @brief Get number of installed games
      */
-    int gameCount() const { return m_games.size(); }
+    int gameCount() const
+    {
+        return m_games.size();
+    }
 
     /**
      * @brief Get installed games as QVariantList for QML
@@ -168,7 +193,7 @@ public:
     /**
      * @brief Sync Heroic shortcuts to a target user
      * Generates .desktop files from game library and copies to target user's local applications folder
-     * 
+     *
      * @param targetUsername Username to sync to
      * @return true if successful
      */
@@ -177,7 +202,7 @@ public:
     /**
      * @brief Sync Heroic config to a target user
      * Copies game configs, library files to target user's Heroic config directory
-     * 
+     *
      * @param targetUsername Username to sync to
      * @return true if successful
      */
@@ -198,12 +223,13 @@ Q_SIGNALS:
     void syncCompleted(const QString &username);
     void syncFailed(const QString &username, const QString &error);
     void errorOccurred(const QString &message);
+
 private:
     QList<HeroicGame> parseLegendaryGames();
     QList<HeroicGame> parseGogGames();
     QList<HeroicGame> parseNileGames();
     QList<HeroicGame> parseSideloadGames();
-    
+
     /**
      * @brief Read Heroic's config.json for default settings
      */
@@ -215,5 +241,4 @@ private:
     QString m_userHome;
     QString m_defaultInstallPath;
     bool m_syncShortcutsEnabled = false;
-
 };
