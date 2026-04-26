@@ -124,11 +124,13 @@ ctest --test-dir build --output-on-failure
 
 ## ANTI-PATTERNS (Project-Specific)
 
-- **No linting config**: No `.clang-format`, `.clang-tidy`, `.editorconfig`
 - **Test source inclusion**: Tests include source files directly instead of linking targets (see `tests/CMakeLists.txt`)
 - **Gamescope host requirement**: App must run on host, not in container (gamescope needs host display)
-- **Incomplete Polkit**: Helper service has `TODO: Implement proper PolicyKit authorization check`
+- **Partial Polkit**: Only `create-user` and `delete-user` actions require Polkit auth; other privileged ops (device ownership, launch, mounts, ACLs) rely on D-Bus bus ACL only (see `helper/SystemOps.cpp:137-179`)
 - **Missing i18n infrastructure**: `KF6::I18n` linked but no `po/` directory or translation files exist
+- **No CI linting**: `make format`/`make tidy` targets exist but are not run in CI
+- **Dual binary install**: `src/CMakeLists.txt` installs couchplay twice (system bindir + `bin/` for Flatpak)
+- **Blocking sleep**: `WindowManager.cpp` uses `QThread::msleep(100)` for window positioning
 
 ## UNIQUE PATTERNS
 
@@ -160,7 +162,7 @@ ctest --test-dir build --output-on-failure
 - **Build artifacts**: Ignore `build/` directory
 - **Root test files**: `test_*.cpp` are temporary/experimental, not part of test suite
 - **CI exclusions**: CI skips 7/14 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
-- **Security TODO**: `helper/SystemOps.cpp:checkAuthorization()` stub returns true (Polkit not implemented)
+- **Linting**: `.clang-format` (WebKit-based, 120-char), `.clang-tidy` (pragmatic Qt6/C++20), `.editorconfig` present — run `make format` / `make tidy` locally
 
 ## GIT META
 

@@ -1,6 +1,6 @@
 # AGENTS.md - Test Guidelines for CouchPlay
 
-QtTest unit test suite for core manager components (13 test files, ~8K lines).
+QtTest unit test suite for core manager components (13 test files, ~9.6K lines).
 
 ## STRUCTURE
 
@@ -78,3 +78,4 @@ class MockCouchPlayHelperClient : public CouchPlayHelperClient {
 - **D-Bus dependency**: `UserManagerTest` requires helper service running
 - **CI exclusions**: 7/13 tests skipped (D-Bus/Polkit/devices) - see `.github/workflows/ci.yml`
 - **Partial coverage**: SessionRunner lacks dedicated tests
+- **Private member access**: `#define private public` / `#undef private` around includes (test_sessionrunner.cpp, test_audiomanager.cpp)

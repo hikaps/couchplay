@@ -6,11 +6,13 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 ## STRUCTURE
 
-**CouchPlayHelper.cpp (1945 lines):** Main service implementation - Polkit authorization, D-Bus slots, systemd-run transient unit spawning, device ownership, mount management, state persistence, runtime ACL cache verification, dynamic gamescope path resolution
+**CouchPlayHelper.cpp (1945 lines):** Main service implementation — partial Polkit authorization (user lifecycle only), D-Bus slots, systemd-run transient unit spawning, device ownership, mount management, state persistence, runtime ACL cache verification, dynamic gamescope path resolution
 
-**CouchPlayHelper.h (375 lines):** D-Bus interface definition - 15 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
+**CouchPlayHelper.h (375 lines):** D-Bus interface definition — 18 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
 
-**SystemOps.h/cpp:** Abstraction layer for system calls (getpwnam, chown, mount, etc.) - enables mocking in tests
+**SystemOps.h/cpp:** Abstraction layer for system calls (getpwnam, chown, mount, etc.) — enables mocking in tests. `RealSystemOps::checkAuthorization()` implements Polkit for `ACTION_CREATE_USER` and `ACTION_DELETE_USER` only; other actions return `true` (D-Bus ACL enforced at bus level)
+
+**PolkitActions.h:** Constants for 8 Polkit action IDs (namespace `PolkitActions`)
 
 ## WHERE TO LOOK
 
@@ -42,11 +44,12 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 ## ANTI-PATTERNS
 
-- **No Polkit authorization**: checkAuthorization() stub returns true (TODO:658)
+- **Partial Polkit**: Only `ACTION_CREATE_USER` and `ACTION_DELETE_USER` require Polkit auth; 5 other actions (device ownership, launch, mounts, linger, wayland access) auto-approve (see `SystemOps.cpp:139-146`)
 - **Process blocking**: QProcess::waitForFinished() used synchronously (acceptable for daemon)
 - **No signal/slot IPC**: D-Bus only - no Qt signals across process boundary
 - **Hardcoded paths**: Uses /usr/sbin/useradd, /usr/bin/mount directly
 - **No rate limiting**: CreateUser/DeleteUser unlimited (should have guard rails)
+- **Shell pipelines**: IPC cleanup uses `bash -c "ipcs | awk | xargs"` pattern (mitigated by trusted UID input)
 
 ## UNIQUE PATTERNS
 

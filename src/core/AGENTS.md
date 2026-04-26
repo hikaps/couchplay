@@ -5,21 +5,21 @@ Core business logic layer: device management, session orchestration, user/monito
 
 ## STRUCTURE
 **15 Manager Classes:**
-- `DeviceManager` (~1008 lines) - Input device detection from /proc/bus/input/devices
-- `SessionRunner` (~1229 lines) - Orchestrates multiple GamescopeInstance launches
-- `SessionManager` - Session profiles, instance configuration
-- `GamescopeInstance` (~380 lines) - Gamescope arg building, delegates execution to D-Bus helper
-- `UserManager` - Linux user creation/management
-- `MonitorManager` - Display detection via RandR
-- `AudioManager` - PipeWire/PulseAudio audio routing and socket ACL checks
-- `SettingsManager` - KConfig-based app settings
-- `PresetManager` - Launch preset profiles
-- `WindowManager` - Window positioning via KWin
+- `SessionRunner` (~1288 lines) - Orchestrates multiple GamescopeInstance launches (6-phase startup)
+- `DeviceManager` (~998 lines) - Input device detection from /proc/bus/input/devices, hotplug state machine
 - `SteamConfigManager` (599 lines) - VDF parsing, shortcuts syncing
-- `HeroicConfigManager` (621 lines) - Heroic launcher config management
-- `CommandVerifier` - Steam game command detection
-- `VirtualDeviceWatcher` - Virtual device monitoring
-- `Logging` - Application logging
+- `HeroicConfigManager` (621 lines) - Heroic launcher config management (Legendary/GOG/Nile)
+- `PresetManager` (526 lines) - Launch preset profiles, .desktop scanning
+- `SessionManager` (550 lines) - Session profiles, instance configuration
+- `WindowManager` (448 lines) - Window positioning via KWin (QML_SINGLETON)
+- `GamescopeInstance` (~380 lines) - Gamescope arg building, delegates execution to D-Bus helper
+- `UserManager` (251 lines) - Linux user creation/management
+- `AudioManager` (~100 lines) - PipeWire/PulseAudio audio routing and socket ACL checks
+- `SettingsManager` (~150 lines) - KConfig-based app settings
+- `MonitorManager` (~50 lines) - Display detection via QGuiApplication screens
+- `VirtualDeviceWatcher` (~150 lines) - Virtual device monitoring during sessions
+- `CommandVerifier` (~200 lines) - Static utility: command validation, Flatpak detection, PATH resolution
+- `Logging` (39 lines) - 6 scoped logging categories
 
 **Data Structures:** `InputDevice`, `InstanceConfig`, `SessionProfile`, `SteamPaths`, `SteamShortcut` (Q_GADGET structs)
 

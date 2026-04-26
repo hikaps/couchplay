@@ -4,13 +4,13 @@
 
 ## OVERVIEW
 
-QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
+QML/Kirigami UI layer: 17 files (~3.7K lines), 6 pages, 5 components, 5 dialogs.
 
 ## STRUCTURE
 
-**Pages (pages/):** HomePage, SessionSetupPage, DeviceAssignmentPage, ProfilesPage, UsersPage, SettingsPage (612 lines)
+**Pages (pages/):** HomePage (325 lines), SessionSetupPage (968 lines), DeviceAssignmentPage (479 lines), UsersPage (404 lines), SettingsPage (729 lines), ProfilesPage (256 lines)
 
-**Components (components/):** SelectableCard (selection state), ActionCard (CTA with badge), InfoCard, PresetSelector (ComboBox)
+**Components (components/):** SelectableCard (selection state + hover), ActionCard (CTA with badge), InfoCard (header + content slot), PresetSelector (ComboBox with icons), CollapsibleSection (animated toggle)
 
 **Dialogs (components/dialogs/):** AddPresetDialog (search/filter ListView), EditPresetDialog (ListModel + FolderDialog), DeletePresetDialog, ResetSettingsDialog, InstallHelperDialog
 
@@ -18,13 +18,14 @@ QML/Kirigami UI layer: 13 files (~9.7K lines), 8 pages, 4 components.
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Manager injection | Main.qml | Creates all backend instances |
-| Page navigation | Main.qml | Helper functions push pages with props |
-| Form layouts | SettingsPage.qml | Kirigami.FormLayout patterns |
-| Custom delegates | PresetSelector.qml | ComboBox with icons |
-| Hover effects | SelectableCard.qml | HoverHandler + animations |
-| Audio settings UI | SettingsPage.qml:468-522 | 3-state audio detection (no server / detected / configured) |
-| Session launch | HomePage.qml | Gamescope availability check, session start/stop buttons |
+| Manager injection | Main.qml | Creates 11 backend instances, cross-manager signal connections |
+| Page navigation | Main.qml | Helper functions push pages with props (single-page, clear stack) |
+| Navigation graph | Main.qml:139-165 | GlobalDrawer: Home → SessionSetup → Profiles → Users → Settings |
+| Device drag-and-drop | DeviceAssignmentPage.qml | Drag.keys = "application/x-couchplay-device", DropArea per player |
+| Form layouts | SettingsPage.qml | 10+ Kirigami.FormLayout groups with conditional visibility |
+| Audio 3-state | SettingsPage.qml | No server / detected / configured (color-coded InlineMessage) |
+| Session config | SessionSetupPage.qml | Layout cards, instance Repeater, CollapsibleSection for advanced |
+| Custom delegates | PresetSelector.qml | ComboBox with icons and "Built-in" badge |
 
 ## CONVENTIONS
 
