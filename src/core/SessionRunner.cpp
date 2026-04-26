@@ -344,6 +344,16 @@ void SessionRunner::stop()
     restoreDeviceOwnership();
     teardownSharedDirectories();
 
+    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_sessionManager) {
+        const auto &profile = m_sessionManager->currentProfile();
+        for (int i = 0; i < profile.instances.size(); ++i) {
+            const QString &username = profile.instances[i].username;
+            if (!username.isEmpty()) {
+                m_steamConfigManager->cleanupLibrarySharing(username);
+            }
+        }
+    }
+
     cleanupInstances();
     cleanupOverrideDirs(overridePaths);
 
@@ -683,6 +693,10 @@ bool SessionRunner::setupLauncherAccess()
     const auto &profile = m_sessionManager->currentProfile();
     bool allSucceeded = true;
 
+    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_steamConfigManager->isSteamDetected()) {
+        m_steamConfigManager->loadLibraryFolders();
+    }
+
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
         const QString &presetId = profile.instances[i].presetId;
@@ -730,11 +744,6 @@ bool SessionRunner::setupLauncherAccess()
             continue;
         }
 
-        if (!m_steamConfigManager->syncShortcutsEnabled()) {
-            qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
-            continue;
-        }
-
         if (!m_steamConfigManager->isSteamDetected()) {
             m_steamConfigManager->detectSteamPaths();
         }
@@ -750,25 +759,38 @@ bool SessionRunner::setupLauncherAccess()
             continue;
         }
 
-        m_steamConfigManager->loadShortcuts();
-        QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
-        qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
+        if (m_steamConfigManager->syncShortcutsEnabled()) {
+            m_steamConfigManager->loadShortcuts();
+            QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
+            qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
 
-        qCDebug(couchplaySteam) << "Setting up Steam shortcuts for user" << username;
+            qCDebug(couchplaySteam) << "Setting up Steam shortcuts for user" << username;
 
-        for (const QString &dir : shortcutDirs) {
-            if (QDir(dir).exists()) {
-                qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
-                if (!m_helperClient->setPathAclWithParents(dir, username)) {
-                    qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
+            for (const QString &dir : shortcutDirs) {
+                if (QDir(dir).exists()) {
+                    qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
+                    if (!m_helperClient->setPathAclWithParents(dir, username)) {
+                        qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
+                    }
                 }
             }
+
+            qCDebug(couchplaySteam) << "Calling syncShortcutsToUser for" << username;
+            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
+                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
+                allSucceeded = false;
+            }
+        } else {
+            qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
         }
 
-        qCDebug(couchplaySteam) << "Calling syncShortcutsToUser for" << username;
-        if (!m_steamConfigManager->syncShortcutsToUser(username)) {
-            qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
-            allSucceeded = false;
+        // Share Steam library if enabled
+        if (m_steamConfigManager->shareLibraryEnabled()) {
+            qCDebug(couchplaySteam) << "Sharing Steam library for user" << username;
+            if (!m_steamConfigManager->shareLibraryToUser(username)) {
+                qCWarning(couchplaySteam) << "Failed to share Steam library to" << username;
+                allSucceeded = false;
+            }
         }
     }
 

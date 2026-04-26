@@ -342,6 +342,21 @@ Kirigami.ScrollablePage {
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }
+
+            Controls.CheckBox {
+                id: shareLibraryCheck
+                Kirigami.FormData.label: i18nc("@option:check", "Share game library with players:")
+                checked: root.steamConfigManager ? root.steamConfigManager.shareLibraryEnabled : false
+                onToggled: {
+                    if (root.steamConfigManager) {
+                        root.steamConfigManager.shareLibraryEnabled = checked
+                    }
+                }
+
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Share your downloaded Steam games with gaming users via bind mounts. Each gaming user must own the game on their Steam account to play it. Disk space is saved because games are only downloaded once.")
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.delay: 1000
+            }
         }
 
         Kirigami.FormLayout {
@@ -421,7 +436,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             visible: (root.steamConfigManager !== null && root.steamConfigManager.steamDetected) 
                       || (root.heroicConfigManager !== null && root.heroicConfigManager.heroicDetected)
-            text: i18nc("@info", "When sync is enabled, shortcuts are copied to gaming users at session start. Access to game directories is granted using filesystem ACLs.")
+            text: i18nc("@info", "When sync is enabled, shortcuts are copied to gaming users at session start. When library sharing is enabled, downloaded games are shared via bind mounts. Access to game directories is granted using filesystem ACLs.")
             type: Kirigami.MessageType.Information
         }
 
