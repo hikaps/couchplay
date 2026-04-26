@@ -40,6 +40,7 @@ SteamConfigManager::SteamConfigManager(QObject *parent)
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup group = config->group(QStringLiteral("Steam"));
     m_syncShortcutsEnabled = group.readEntry(QStringLiteral("SyncShortcutsEnabled"), false);
+    m_shareLibraryEnabled = group.readEntry(QStringLiteral("ShareLibraryEnabled"), false);
 }
 
 void SteamConfigManager::setHelperClient(CouchPlayHelperClient *client)
@@ -62,6 +63,20 @@ void SteamConfigManager::setSyncShortcutsEnabled(bool enabled)
         config->sync();
 
         Q_EMIT syncShortcutsEnabledChanged();
+    }
+}
+
+void SteamConfigManager::setShareLibraryEnabled(bool enabled)
+{
+    if (m_shareLibraryEnabled != enabled) {
+        m_shareLibraryEnabled = enabled;
+        
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        KConfigGroup group = config->group(QStringLiteral("Steam"));
+        group.writeEntry(QStringLiteral("ShareLibraryEnabled"), enabled);
+        config->sync();
+        
+        Q_EMIT shareLibraryEnabledChanged();
     }
 }
 
@@ -609,4 +624,364 @@ QList<SteamShortcut> SteamConfigManager::parseShortcutsVdf(const QString &path)
     }
 
     return result;
+}
+
+void SteamConfigManager::loadLibraryFolders()
+{
+    m_libraries.clear();
+    
+    if (!m_steamPaths.valid || m_steamPaths.libraryFoldersVdf.isEmpty()) {
+        qCWarning(couchplaySteam) << "Cannot load library folders - Steam not detected";
+        Q_EMIT librariesLoaded();
+        return;
+    }
+    
+    if (!QFile::exists(m_steamPaths.libraryFoldersVdf)) {
+        qCDebug(couchplaySteam) << "libraryfolders.vdf not found at" << m_steamPaths.libraryFoldersVdf;
+        Q_EMIT librariesLoaded();
+        return;
+    }
+    
+    m_libraries = parseLibraryFoldersVdf(m_steamPaths.libraryFoldersVdf);
+    qCDebug(couchplaySteam) << "Loaded" << m_libraries.size() << "library folders";
+    
+    Q_EMIT librariesLoaded();
+}
+
+QVariantList SteamConfigManager::librariesAsVariant() const
+{
+    QVariantList list;
+    for (const SteamLibraryFolder &folder : m_libraries) {
+        QVariantMap map;
+        map[QStringLiteral("path")] = folder.path;
+        map[QStringLiteral("label")] = folder.label;
+        map[QStringLiteral("totalSize")] = folder.totalSize;
+        
+        QVariantList appIdList;
+        for (quint32 appId : folder.appIds) {
+            appIdList.append(appId);
+        }
+        map[QStringLiteral("appIds")] = appIdList;
+        
+        list.append(map);
+    }
+    return list;
+}
+
+QList<SteamLibraryFolder> SteamConfigManager::parseLibraryFoldersVdf(const QString &path)
+{
+    QList<SteamLibraryFolder> result;
+    
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qCWarning(couchplaySteam) << "Failed to open libraryfolders.vdf:" << path;
+        return result;
+    }
+    
+    QString content = QString::fromUtf8(file.readAll());
+    file.close();
+    
+    if (content.isEmpty()) {
+        return result;
+    }
+    
+    int pos = 0;
+    
+    auto skipWhitespace = [&]() {
+        while (pos < content.size() && content[pos].isSpace()) {
+            pos++;
+        }
+    };
+    
+    auto readToken = [&]() -> QString {
+        skipWhitespace();
+        if (pos >= content.size()) {
+            return QString();
+        }
+        
+        QChar c = content[pos];
+        if (c == QLatin1Char('{') || c == QLatin1Char('}')) {
+            pos++;
+            return QString(c);
+        }
+        if (c == QLatin1Char('"')) {
+            pos++;
+            QString token;
+            while (pos < content.size() && content[pos] != QLatin1Char('"')) {
+                token += content[pos];
+                pos++;
+            }
+            if (pos < content.size()) {
+                pos++;
+            }
+            return token;
+        }
+        
+        QString token;
+        while (pos < content.size() && !content[pos].isSpace()
+               && content[pos] != QLatin1Char('"')
+               && content[pos] != QLatin1Char('{')
+               && content[pos] != QLatin1Char('}')) {
+            token += content[pos];
+            pos++;
+        }
+        return token;
+    };
+    
+    QString rootKey = readToken();
+    if (rootKey != QStringLiteral("libraryfolders")) {
+        qCWarning(couchplaySteam) << "Unexpected root key in libraryfolders.vdf:" << rootKey;
+        return result;
+    }
+    
+    QString openBrace = readToken();
+    if (openBrace != QStringLiteral("{")) {
+        qCWarning(couchplaySteam) << "Expected { after libraryfolders key";
+        return result;
+    }
+    
+    while (pos < content.size()) {
+        skipWhitespace();
+        if (pos >= content.size()) {
+            break;
+        }
+        
+        QString indexKey = readToken();
+        if (indexKey.isEmpty() || indexKey == QStringLiteral("}")) {
+            break;
+        }
+        
+        QString entryBrace = readToken();
+        if (entryBrace != QStringLiteral("{")) {
+            break;
+        }
+        
+        SteamLibraryFolder folder;
+        
+        while (pos < content.size()) {
+            skipWhitespace();
+            if (pos >= content.size()) {
+                break;
+            }
+            
+            QString key = readToken();
+            if (key.isEmpty() || key == QStringLiteral("}")) {
+                break;
+            }
+            
+            if (key == QStringLiteral("apps")) {
+                QString appsBrace = readToken();
+                if (appsBrace != QStringLiteral("{")) {
+                    break;
+                }
+                
+                while (pos < content.size()) {
+                    QString appIdStr = readToken();
+                    if (appIdStr.isEmpty() || appIdStr == QStringLiteral("}")) {
+                        break;
+                    }
+                    
+                    bool ok;
+                    quint32 appId = appIdStr.toUInt(&ok);
+                    if (ok) {
+                        folder.appIds.append(appId);
+                    }
+                    
+                    readToken();
+                }
+                continue;
+            }
+            
+            QString value = readToken();
+            
+            if (key == QStringLiteral("path")) {
+                folder.path = value;
+            } else if (key == QStringLiteral("label")) {
+                folder.label = value;
+            } else if (key == QStringLiteral("totalsize")) {
+                folder.totalSize = value.toULongLong();
+            }
+        }
+        
+        if (!folder.path.isEmpty()) {
+            result.append(folder);
+        }
+    }
+    
+    return result;
+}
+
+QString SteamConfigManager::generateLibraryFoldersVdf(const QList<SteamLibraryFolder> &libraries)
+{
+    QString vdf;
+    vdf += QStringLiteral("\"libraryfolders\"\n{\n");
+    
+    for (int i = 0; i < libraries.size(); ++i) {
+        const SteamLibraryFolder &library = libraries[i];
+        vdf += QStringLiteral("\t\"%1\"\n\t{\n").arg(i);
+        vdf += QStringLiteral("\t\t\"path\"\t\t\"%1\"\n").arg(library.path);
+        vdf += QStringLiteral("\t\t\"label\"\t\t\"%1\"\n").arg(library.label);
+        vdf += QStringLiteral("\t\t\"contentid\"\t\t\"0\"\n");
+        vdf += QStringLiteral("\t\t\"totalsize\"\t\t\"%1\"\n").arg(library.totalSize);
+        
+        if (!library.appIds.isEmpty()) {
+            vdf += QStringLiteral("\t\t\"apps\"\n\t\t{\n");
+            for (quint32 appId : library.appIds) {
+                vdf += QStringLiteral("\t\t\t\"%1\"\t\t\"%1\"\n").arg(appId);
+            }
+            vdf += QStringLiteral("\t\t}\n");
+        }
+        
+        vdf += QStringLiteral("\t}\n");
+    }
+    
+    vdf += QStringLiteral("}\n");
+    return vdf;
+}
+
+bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
+{
+    qCDebug(couchplaySteam) << "shareLibraryToUser called for" << targetUsername;
+    
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        qCWarning(couchplaySteam) << "shareLibraryToUser failed - Helper not available";
+        return false;
+    }
+    
+    if (!m_steamPaths.valid) {
+        qCWarning(couchplaySteam) << "shareLibraryToUser failed - Steam not detected";
+        return false;
+    }
+    
+    if (m_libraries.isEmpty()) {
+        qCWarning(couchplaySteam) << "shareLibraryToUser failed - No libraries parsed, call loadLibraryFolders() first";
+        return false;
+    }
+    
+    SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
+    if (!targetPaths.valid) {
+        qCWarning(couchplaySteam) << "shareLibraryToUser failed - Could not resolve target Steam paths for" << targetUsername;
+        return false;
+    }
+    
+    struct passwd *pw = getpwnam(targetUsername.toLocal8Bit().constData());
+    if (!pw) {
+        qCWarning(couchplaySteam) << "shareLibraryToUser failed - User not found:" << targetUsername;
+        return false;
+    }
+    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    
+    QString targetSteamId = getTargetSteamUserId(targetUsername);
+    if (targetSteamId.isEmpty()) {
+        qCWarning(couchplaySteam) << "shareLibraryToUser failed - Target user" << targetUsername
+                                   << "has not set up Steam (no userdata found). Launch Steam once first.";
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Target user has not set up Steam"));
+        return false;
+    }
+    
+    QStringList targetLibraryPaths;
+    QList<SteamLibraryFolder> targetLibraries;
+    bool anyFailure = false;
+    
+    for (int i = 0; i < m_libraries.size(); ++i) {
+        const SteamLibraryFolder &library = m_libraries[i];
+        
+        QString sourceCommon = library.path + QStringLiteral("/steamapps/common");
+        QString sourceSteamApps = library.path + QStringLiteral("/steamapps");
+        
+        QString targetLibPath;
+        if (i == 0) {
+            // Library 0 reuses the target's Steam root as the default install location
+            targetLibPath = targetPaths.steamRoot;
+        } else {
+            targetLibPath = targetHome + QStringLiteral("/.couchplay/steam-libs/") + QString::number(i);
+        }
+        
+        QString targetSteamApps = targetLibPath + QStringLiteral("/steamapps");
+        
+        qCDebug(couchplaySteam) << "Setting ACL on library" << library.path << "for" << targetUsername;
+        if (!m_helperClient->setPathAclWithParents(library.path, targetUsername)) {
+            qCWarning(couchplaySteam) << "Failed to set ACL on" << library.path;
+            anyFailure = true;
+        }
+        
+        // Mount spec "source|alias": empty alias (i==0) mounts at natural path,
+        // explicit alias (i>0) mounts into .couchplay/steam-libs/<i>/steamapps/common
+        QString mountSpec;
+        if (i == 0) {
+            mountSpec = sourceCommon + QStringLiteral("|");
+        } else {
+            mountSpec = sourceCommon + QStringLiteral("|/.couchplay/steam-libs/") + QString::number(i) + QStringLiteral("/steamapps/common");
+        }
+        
+        qCDebug(couchplaySteam) << "Mounting" << mountSpec << "for" << targetUsername;
+        int mountResult = m_helperClient->mountSharedDirectories(targetUsername, getuid(), {mountSpec});
+        if (mountResult <= 0) {
+            qCWarning(couchplaySteam) << "Failed to mount library" << i << "for" << targetUsername;
+            anyFailure = true;
+        }
+        
+        QDir sourceSteamAppsDir(sourceSteamApps);
+        QStringList manifests = sourceSteamAppsDir.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files);
+        
+        for (const QString &manifest : manifests) {
+            QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
+            QFile manifestFile(manifestPath);
+            if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QByteArray content = manifestFile.readAll();
+                manifestFile.close();
+                
+                QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
+                if (!m_helperClient->writeFileToUser(content, targetManifestPath, targetUsername)) {
+                    qCWarning(couchplaySteam) << "Failed to write manifest" << manifest << "for" << targetUsername;
+                    anyFailure = true;
+                }
+            }
+        }
+        
+        targetLibraryPaths.append(targetLibPath);
+        
+        // Target path + source metadata (app IDs, label, size) so Steam recognizes installed games
+        SteamLibraryFolder targetLib;
+        targetLib.path = targetLibPath;
+        targetLib.label = library.label;
+        targetLib.totalSize = library.totalSize;
+        targetLib.appIds = library.appIds;
+        targetLibraries.append(targetLib);
+    }
+    
+    QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
+    
+    qCDebug(couchplaySteam) << "Writing libraryfolders.vdf to" << targetPaths.libraryFoldersVdf;
+    if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername)) {
+        qCWarning(couchplaySteam) << "Failed to write libraryfolders.vdf for" << targetUsername;
+        return false;
+    }
+    
+    if (anyFailure) {
+        qCWarning(couchplaySteam) << "Partially failed sharing Steam library to" << targetUsername;
+    } else {
+        qCDebug(couchplaySteam) << "Successfully shared" << m_libraries.size() << "Steam libraries to" << targetUsername;
+    }
+    
+    return !anyFailure;
+}
+
+void SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
+{
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        return;
+    }
+
+    SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
+    if (!targetPaths.valid) {
+        return;
+    }
+
+    // Restore minimal libraryfolders.vdf — clears shared library entries
+    // so Steam doesn't reference bind-mounted paths that no longer exist.
+    QString emptyVdf = QStringLiteral("\"libraryfolders\"\n{\n}\n");
+    m_helperClient->writeFileToUser(emptyVdf.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername);
+
+    qCDebug(couchplaySteam) << "Cleaned up library sharing for" << targetUsername;
 }
