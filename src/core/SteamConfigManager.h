@@ -70,6 +70,25 @@ public:
 Q_DECLARE_METATYPE(SteamShortcut)
 
 /**
+ * SteamLibraryFolder - Represents a Steam library folder
+ */
+struct SteamLibraryFolder {
+    Q_GADGET
+    Q_PROPERTY(QString path MEMBER path)
+    Q_PROPERTY(QString label MEMBER label)
+    Q_PROPERTY(quint64 totalSize MEMBER totalSize)
+    Q_PROPERTY(QList<quint32> appIds MEMBER appIds)
+
+public:
+    QString path;
+    QString label;
+    quint64 totalSize = 0;
+    QList<quint32> appIds;
+};
+
+Q_DECLARE_METATYPE(SteamLibraryFolder)
+
+/**
  * SteamConfigManager - Manages Steam configuration sharing between users
  *
  * Handles syncing shortcuts from the compositor user to gaming users
@@ -84,9 +103,11 @@ class SteamConfigManager : public QObject
     Q_PROPERTY(SteamPaths steamPaths READ steamPaths NOTIFY steamPathsChanged)
     Q_PROPERTY(bool steamDetected READ isSteamDetected NOTIFY steamPathsChanged)
     Q_PROPERTY(int shortcutCount READ shortcutCount NOTIFY shortcutsLoaded)
-    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
-    Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY
-                   syncShortcutsEnabledChanged)
+    Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
+    Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY syncShortcutsEnabledChanged)
+    Q_PROPERTY(bool shareLibraryEnabled READ shareLibraryEnabled WRITE setShareLibraryEnabled NOTIFY shareLibraryEnabledChanged)
+    Q_PROPERTY(int libraryCount READ libraryCount NOTIFY librariesLoaded)
+    Q_PROPERTY(QVariantList libraries READ librariesAsVariant NOTIFY librariesLoaded)
 
 public:
     explicit SteamConfigManager(QObject *parent = nullptr);
@@ -134,6 +155,13 @@ public:
         return m_shortcuts.size();
     }
 
+    bool shareLibraryEnabled() const { return m_shareLibraryEnabled; }
+    void setShareLibraryEnabled(bool enabled);
+
+    int libraryCount() const { return m_libraries.size(); }
+
+    QVariantList librariesAsVariant() const;
+
     /**
      * Detect Steam installation paths
      */
@@ -157,6 +185,16 @@ public:
      * Load and parse shortcuts from the compositor's shortcuts.vdf
      */
     Q_INVOKABLE void loadShortcuts();
+
+    void loadLibraryFolders();
+
+    bool shareLibraryToUser(const QString &targetUsername);
+
+    /**
+     * Clean up library sharing state for a target user
+     * Removes copied manifests and restores original libraryfolders.vdf
+     */
+    void cleanupLibrarySharing(const QString &targetUsername);
 
     /**
      * Get shortcuts as QVariantList for QML
@@ -187,20 +225,26 @@ Q_SIGNALS:
     void shortcutsLoaded();
     void helperClientChanged();
     void syncShortcutsEnabledChanged();
+    void shareLibraryEnabledChanged();
+    void librariesLoaded();
     void syncCompleted(const QString &username);
     void syncFailed(const QString &username, const QString &error);
     void errorOccurred(const QString &message);
 
 private:
-    // VDF parsing
     QList<SteamShortcut> parseShortcutsVdf(const QString &path);
 
-    // Get target Steam paths for a user
+    QList<SteamLibraryFolder> parseLibraryFoldersVdf(const QString &path);
+
+    QString generateLibraryFoldersVdf(const QList<SteamLibraryFolder> &libraries);
+
     SteamPaths getTargetSteamPaths(const QString &username) const;
 
     CouchPlayHelperClient *m_helperClient = nullptr;
     SteamPaths m_steamPaths;
     QList<SteamShortcut> m_shortcuts;
+    QList<SteamLibraryFolder> m_libraries;
     QString m_userHome;
     bool m_syncShortcutsEnabled = false;
+    bool m_shareLibraryEnabled = false;
 };
