@@ -2,10 +2,12 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "PresetManager.h"
+#include "CommandVerifier.h"
 #include "HeroicConfigManager.h"
 #include "Logging.h"
 #include "SteamConfigManager.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -17,6 +19,8 @@
 
 #include <KSharedConfig>
 #include <KConfigGroup>
+
+static constexpr int CACHE_TTL_HOURS = 24;
 
 PresetManager::PresetManager(QObject *parent)
     : QObject(parent)
@@ -82,6 +86,80 @@ QStringList PresetManager::getDefaultSharedDirectories(const QString &id) const
     return dirs;
 }
 
+QString PresetManager::resolveLaunchCommand(const QString &nativeCommand,
+                                              const QString &flatpakAppId,
+                                              const QString &flatpakArgs) const
+{
+    QString binaryName = nativeCommand.split(QStringLiteral(" ")).first();
+
+    if (CommandVerifier::commandExistsInPath(binaryName)) {
+        return nativeCommand;
+    }
+
+    if (!flatpakAppId.isEmpty()
+        && CommandVerifier::isFlatpakAvailable()
+        && CommandVerifier::isFlatpakAppInstalled(flatpakAppId)) {
+        QString cmd = QStringLiteral("flatpak run ") + flatpakAppId;
+        if (!flatpakArgs.isEmpty()) {
+            cmd += QStringLiteral(" ") + flatpakArgs;
+        }
+        return cmd;
+    }
+
+    return nativeCommand;
+}
+
+void PresetManager::loadFlatpakCache()
+{
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup cacheGroup = config->group(QStringLiteral("FlatpakCache"));
+
+    const QStringList keys = cacheGroup.keyList();
+    QSet<QString> presetIds;
+    for (const QString &key : keys) {
+        int slash = key.indexOf(QStringLiteral("/"));
+        if (slash > 0) {
+            presetIds.insert(key.left(slash));
+        }
+    }
+
+    QDateTime now = QDateTime::currentDateTime();
+    for (const QString &presetId : presetIds) {
+        QString timestampStr = cacheGroup.readEntry(presetId + QStringLiteral("/timestamp"), QString());
+        if (timestampStr.isEmpty()) {
+            continue;
+        }
+        QDateTime cachedTime = QDateTime::fromString(timestampStr, QStringLiteral("yyyyMMddTHHmmss"));
+        if (!cachedTime.isValid() || cachedTime.secsTo(now) > CACHE_TTL_HOURS * 3600) {
+            continue;
+        }
+        QString cachedCmd = cacheGroup.readEntry(presetId + QStringLiteral("/command"), QString());
+        if (!cachedCmd.isEmpty()) {
+            for (auto &preset : m_builtinPresets) {
+                if (preset.id == presetId) {
+                    preset.command = cachedCmd;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void PresetManager::saveFlatpakCache()
+{
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup cacheGroup = config->group(QStringLiteral("FlatpakCache"));
+
+    QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddTHHmmss"));
+    for (const auto &preset : m_builtinPresets) {
+        if (!preset.flatpakAppId.isEmpty()) {
+            cacheGroup.writeEntry(preset.id + QStringLiteral("/command"), preset.command);
+            cacheGroup.writeEntry(preset.id + QStringLiteral("/timestamp"), timestamp);
+        }
+    }
+    cacheGroup.sync();
+}
+
 void PresetManager::initBuiltinPresets()
 {
     m_builtinPresets.clear();
@@ -89,7 +167,12 @@ void PresetManager::initBuiltinPresets()
     LaunchPreset steam;
     steam.id = QStringLiteral("steam");
     steam.name = QStringLiteral("Steam Big Picture");
-    steam.command = QStringLiteral("steam -tenfoot -steamdeck");
+    steam.flatpakAppId = QStringLiteral("com.valvesoftware.Steam");
+    steam.flatpakArgs = QStringLiteral("-tenfoot -steamdeck");
+    steam.command = resolveLaunchCommand(
+        QStringLiteral("steam -tenfoot -steamdeck"),
+        steam.flatpakAppId,
+        steam.flatpakArgs);
     steam.iconName = QStringLiteral("steam");
     steam.isBuiltin = true;
     steam.steamIntegration = true;
@@ -104,9 +187,13 @@ void PresetManager::initBuiltinPresets()
     heroic.isBuiltin = true;
     heroic.steamIntegration = false;
     heroic.launcherId = QStringLiteral("heroic");
+    heroic.flatpakAppId = QStringLiteral("com.heroicgameslauncher.hgl");
 
         if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            heroic.command = m_heroicConfigManager->heroicCommand();
+            heroic.command = resolveLaunchCommand(
+                QStringLiteral("heroic"),
+                heroic.flatpakAppId,
+                QString());
             heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
             heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
             heroic.launcherInfo.requiresAcls = true;
@@ -117,7 +204,10 @@ void PresetManager::initBuiltinPresets()
             }
             heroic.launcherInfo.gameDirectories = m_heroicConfigManager->extractGameDirectories();
         } else {
-            heroic.command = QStringLiteral("heroic");
+            heroic.command = resolveLaunchCommand(
+                QStringLiteral("heroic"),
+                heroic.flatpakAppId,
+                QString());
         }
         heroic.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("heroic"));
         m_builtinPresets.append(heroic);
@@ -125,13 +215,20 @@ void PresetManager::initBuiltinPresets()
     LaunchPreset lutris;
     lutris.id = QStringLiteral("lutris");
     lutris.name = QStringLiteral("Lutris");
-    lutris.command = QStringLiteral("lutris");
+    lutris.flatpakAppId = QStringLiteral("net.lutris.Lutris");
+    lutris.command = resolveLaunchCommand(
+        QStringLiteral("lutris"),
+        lutris.flatpakAppId,
+        QString());
     lutris.iconName = QStringLiteral("lutris");
     lutris.isBuiltin = true;
     lutris.steamIntegration = false;
     lutris.launcherId = QStringLiteral("lutris");
     lutris.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("lutris"));
     m_builtinPresets.append(lutris);
+
+    loadFlatpakCache();
+    saveFlatpakCache();
 }
 
 QList<LaunchPreset> PresetManager::presets() const
@@ -157,6 +254,8 @@ QVariantList PresetManager::presetsAsVariant() const
         map[QStringLiteral("launcherId")] = preset.launcherId;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(preset.launcherInfo);
         map[QStringLiteral("sharedDirectories")] = preset.sharedDirectories;
+        map[QStringLiteral("flatpakAppId")] = preset.flatpakAppId;
+        map[QStringLiteral("flatpakArgs")] = preset.flatpakArgs;
         result.append(map);
     }
     return result;
@@ -177,6 +276,8 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
         map[QStringLiteral("steamIntegration")] = app.steamIntegration;
         map[QStringLiteral("launcherId")] = app.launcherId;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(app.launcherInfo);
+        map[QStringLiteral("flatpakAppId")] = app.flatpakAppId;
+        map[QStringLiteral("flatpakArgs")] = app.flatpakArgs;
         result.append(map);
     }
     return result;
@@ -488,6 +589,8 @@ void PresetManager::loadCustomPresets()
         preset.isBuiltin = false;
         preset.steamIntegration = group.readEntry(QStringLiteral("steamIntegration"), false);
         preset.sharedDirectories = group.readEntry(QStringLiteral("sharedDirectories"), QStringList());
+        preset.flatpakAppId = group.readEntry(QStringLiteral("flatpakAppId"), QString());
+        preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
 
         if (!preset.id.isEmpty() && !preset.name.isEmpty()) {
             m_customPresets.append(preset);
@@ -520,6 +623,8 @@ void PresetManager::saveCustomPresets()
         group.writeEntry(QStringLiteral("desktopFilePath"), preset.desktopFilePath);
         group.writeEntry(QStringLiteral("steamIntegration"), preset.steamIntegration);
         group.writeEntry(QStringLiteral("sharedDirectories"), preset.sharedDirectories);
+        group.writeEntry(QStringLiteral("flatpakAppId"), preset.flatpakAppId);
+        group.writeEntry(QStringLiteral("flatpakArgs"), preset.flatpakArgs);
     }
 
     config->sync();

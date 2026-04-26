@@ -52,6 +52,8 @@ struct LaunchPreset {
     Q_PROPERTY(QString launcherId MEMBER launcherId)
     Q_PROPERTY(LauncherInfo launcherInfo MEMBER launcherInfo)
     Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
+    Q_PROPERTY(QString flatpakAppId MEMBER flatpakAppId)
+    Q_PROPERTY(QString flatpakArgs MEMBER flatpakArgs)
 
 public:
     QString id;                     // e.g., "steam", "heroic", "lutris", "custom-abc123"
@@ -66,6 +68,8 @@ public:
     QString launcherId;             // "steam", "heroic", "lutris", "custom" (empty for non-launcher presets)
     LauncherInfo launcherInfo;      // Populated by detection for launcher presets
     QStringList sharedDirectories;  // Per-preset shared directories for ACL/mount setup
+    QString flatpakAppId;           // e.g., "com.valvesoftware.Steam" (empty = no Flatpak alternative)
+    QString flatpakArgs;            // Extra args for Flatpak launch (e.g., "-tenfoot -steamdeck")
 
     bool operator==(const LaunchPreset &other) const { return id == other.id; }
 };
@@ -193,6 +197,11 @@ private:
     void initBuiltinPresets();
     void loadCustomPresets();
     void saveCustomPresets();
+    void loadFlatpakCache();
+    void saveFlatpakCache();
+    QString resolveLaunchCommand(const QString &nativeCommand,
+                                  const QString &flatpakAppId,
+                                  const QString &flatpakArgs) const;
     
     /**
      * @brief Parse a .desktop file and extract preset information
