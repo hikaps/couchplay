@@ -261,10 +261,12 @@ bool SessionRunner::start()
                 presetId = QStringLiteral("steam"); // Default
             }
             config[QStringLiteral("presetId")] = presetId;
+            config[QStringLiteral("launcherId")] = presetId;
             config[QStringLiteral("presetCommand")] = m_presetManager->getCommand(presetId);
             config[QStringLiteral("presetWorkingDirectory")] = m_presetManager->getWorkingDirectory(presetId);
         } else {
             config[QStringLiteral("presetId")] = QStringLiteral("steam");
+            config[QStringLiteral("launcherId")] = QStringLiteral("steam");
             config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
         }
 
@@ -718,76 +720,73 @@ bool SessionRunner::setupLauncherAccess()
             }
         }
 
-        if (preset.launcherId == QStringLiteral("heroic")) {
-            if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-                qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
-                if (!m_heroicConfigManager->syncConfigToUser(username)) {
-                    qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
-                    allSucceeded = false;
-                }
-
-                if (m_heroicConfigManager->syncShortcutsEnabled()) {
-                    qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
-                    if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
-                        qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
+        if (preset.launcherInfo.needsConfigCopy) {
+            if (preset.launcherId == QStringLiteral("heroic")) {
+                if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+                    qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
+                    if (!m_heroicConfigManager->syncConfigToUser(username)) {
+                        qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
                         allSucceeded = false;
                     }
-                } else {
-                    qCDebug(couchplaySteam) << "Heroic shortcut sync disabled, skipping";
-                }
-            }
-        }
 
-        if (!m_steamConfigManager) {
-            continue;
-        }
-
-        if (!m_steamConfigManager->isSteamDetected()) {
-            m_steamConfigManager->detectSteamPaths();
-        }
-
-        if (!m_steamConfigManager->isSteamDetected()) {
-            qCDebug(couchplaySteam) << "Steam not detected, skipping config sync";
-            continue;
-        }
-
-        if (!(preset.launcherId == QStringLiteral("steam"))) {
-            qCDebug(couchplaySteam) << "Skipping instance" << i << "- preset" << presetId
-                                    << "does not use Steam integration";
-            continue;
-        }
-
-        if (m_steamConfigManager->syncShortcutsEnabled()) {
-            m_steamConfigManager->loadShortcuts();
-            QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
-            qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
-
-            qCDebug(couchplaySteam) << "Setting up Steam shortcuts for user" << username;
-
-            for (const QString &dir : shortcutDirs) {
-                if (QDir(dir).exists()) {
-                    qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
-                    if (!m_helperClient->setPathAclWithParents(dir, username)) {
-                        qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
+                    if (m_heroicConfigManager->syncShortcutsEnabled()) {
+                        qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
+                        if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
+                            qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
+                            allSucceeded = false;
+                        }
+                    } else {
+                        qCDebug(couchplaySteam) << "Heroic shortcut sync disabled, skipping";
                     }
                 }
             }
 
-            qCDebug(couchplaySteam) << "Calling syncShortcutsToUser for" << username;
-            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
-                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
-                allSucceeded = false;
+            if (preset.launcherId == QStringLiteral("steam")) {
+                if (m_steamConfigManager) {
+                    if (!m_steamConfigManager->isSteamDetected()) {
+                        m_steamConfigManager->detectSteamPaths();
+                    }
+
+                    if (m_steamConfigManager->isSteamDetected()) {
+                        if (m_steamConfigManager->syncShortcutsEnabled()) {
+                            m_steamConfigManager->loadShortcuts();
+                            QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
+                            qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
+
+                            qCDebug(couchplaySteam) << "Setting up Steam shortcuts for user" << username;
+
+                            for (const QString &dir : shortcutDirs) {
+                                if (QDir(dir).exists()) {
+                                    qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
+                                    if (!m_helperClient->setPathAclWithParents(dir, username)) {
+                                        qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
+                                    }
+                                }
+                            }
+
+                            qCDebug(couchplaySteam) << "Calling syncShortcutsToUser for" << username;
+                            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
+                                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
+                                allSucceeded = false;
+                            }
+                        } else {
+                            qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
+                        }
+                    } else {
+                        qCDebug(couchplaySteam) << "Steam not detected, skipping config sync";
+                    }
+                }
             }
-        } else {
-            qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
         }
 
-        // Share Steam library if enabled
-        if (m_steamConfigManager->shareLibraryEnabled()) {
-            qCDebug(couchplaySteam) << "Sharing Steam library for user" << username;
-            if (!m_steamConfigManager->shareLibraryToUser(username)) {
-                qCWarning(couchplaySteam) << "Failed to share Steam library to" << username;
-                allSucceeded = false;
+        if (preset.launcherInfo.needsDataAcl && preset.launcherId == QStringLiteral("steam")) {
+            if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()
+                && m_steamConfigManager->shareLibraryEnabled()) {
+                qCDebug(couchplaySteam) << "Sharing Steam library for user" << username;
+                if (!m_steamConfigManager->shareLibraryToUser(username)) {
+                    qCWarning(couchplaySteam) << "Failed to share Steam library to" << username;
+                    allSucceeded = false;
+                }
             }
         }
     }

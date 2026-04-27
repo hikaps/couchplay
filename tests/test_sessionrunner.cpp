@@ -14,9 +14,9 @@
 
 #define private public
 #include "SessionRunner.h"
+#include "PresetManager.h"
 #undef private
 #include "HeroicConfigManager.h"
-#include "PresetManager.h"
 #include "SessionManager.h"
 #include "SteamConfigManager.h"
 #define private public
@@ -85,6 +85,11 @@ private Q_SLOTS:
     void testSetupSteamConfigSteamIntegrationDisabled();
     void testSetupSteamConfigAppliesHeroicAcls();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
+
+    // Two-flag model tests
+    void testSetupLauncherAccess_DataAclFlag();
+    void testSetupLauncherAccess_ConfigCopyFlag();
+    void testSetupLauncherAccess_NoFlags();
 
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -320,6 +325,78 @@ void TestSessionRunner::testStartSessionHeroicPresetUsesAclsAndSharedConfig()
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, expectedPath);
     QCOMPARE(m_helperClient->aclCalls[0].username, sessionUser);
+}
+
+void TestSessionRunner::testSetupLauncherAccess_DataAclFlag()
+{
+    for (auto &preset : m_presetManager->m_builtinPresets) {
+        if (preset.id == QStringLiteral("steam")) {
+            preset.launcherInfo.needsDataAcl = true;
+            preset.launcherInfo.needsConfigCopy = false;
+            preset.launcherInfo.gameDirectories = {QStringLiteral("/tmp/test-game-dir")};
+            break;
+        }
+    }
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QVERIFY(m_runner->setupLauncherAccess());
+
+    QCOMPARE(m_helperClient->aclCalls.size(), 1);
+    QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/tmp/test-game-dir"));
+    QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupLauncherAccess_ConfigCopyFlag()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    createMockHeroicConfig(homeDir.path());
+    createMockLegendaryConfig(homeDir.path());
+
+    HeroicConfigManager heroicManager;
+    m_presetManager->setHeroicConfigManager(&heroicManager);
+
+    for (auto &preset : m_presetManager->m_builtinPresets) {
+        if (preset.id == QStringLiteral("heroic")) {
+            preset.launcherInfo.needsDataAcl = false;
+            preset.launcherInfo.gameDirectories.clear();
+            break;
+        }
+    }
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("heroic"));
+
+    QVERIFY(m_runner->setupLauncherAccess());
+
+    QCOMPARE(m_helperClient->aclCalls.size(), 0);
+}
+
+void TestSessionRunner::testSetupLauncherAccess_NoFlags()
+{
+    for (auto &preset : m_presetManager->m_builtinPresets) {
+        if (preset.id == QStringLiteral("steam")) {
+            preset.launcherInfo.needsDataAcl = false;
+            preset.launcherInfo.needsConfigCopy = false;
+            preset.launcherInfo.gameDirectories.clear();
+            break;
+        }
+    }
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QVERIFY(m_runner->setupLauncherAccess());
+
+    QCOMPARE(m_helperClient->aclCalls.size(), 0);
+    QCOMPARE(m_helperClient->mountCalls.size(), 0);
 }
 
 QTEST_MAIN(TestSessionRunner)
