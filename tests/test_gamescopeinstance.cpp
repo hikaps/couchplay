@@ -84,7 +84,7 @@ void TestGamescopeInstance::testBuildArgsMinimal()
     QVariantMap config;
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
 
-    // Should NOT include -e by default (steamIntegration is false)
+    // Should NOT include -e by default (no launcherId set)
     QVERIFY(!args.contains(QStringLiteral("-e")));
 
     // Should NOT include -b by default (decorated windows for resizing)
@@ -220,7 +220,7 @@ void TestGamescopeInstance::testBuildArgsFullConfig()
     QStringList args = GamescopeInstance::buildGamescopeArgs(config);
 
     // Verify all expected args are present
-    QVERIFY(!args.contains(QStringLiteral("-e"))); // Should NOT include -e (steamIntegration is false)
+    QVERIFY(!args.contains(QStringLiteral("-e"))); // Should NOT include -e (no launcherId set)
     QVERIFY(args.contains(QStringLiteral("-b"))); // Now enabled because borderless=true
     QVERIFY(args.contains(QStringLiteral("-w")));
     QVERIFY(args.contains(QStringLiteral("-h")));
@@ -384,6 +384,7 @@ void TestGamescopeInstance::testSteamLaunchMode()
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
     config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
     config[QStringLiteral("steamIntegration")] = true;
+    config[QStringLiteral("launcherId")] = QStringLiteral("steam");
     config[QStringLiteral("steamAppId")] = QStringLiteral("1426210"); // It Takes Two
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
@@ -414,6 +415,7 @@ void TestGamescopeInstance::testSteamLaunchModeNoAppId()
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
     config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
     config[QStringLiteral("steamIntegration")] = true;
+    config[QStringLiteral("launcherId")] = QStringLiteral("steam");
     // No steamAppId set - this is valid, launches Steam Big Picture
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;

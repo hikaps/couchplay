@@ -261,7 +261,7 @@ bool SessionRunner::start()
                 presetId = QStringLiteral("steam"); // Default
             }
             config[QStringLiteral("presetId")] = presetId;
-            config[QStringLiteral("launcherId")] = presetId;
+            config[QStringLiteral("launcherId")] = m_presetManager->getLauncherId(presetId);
             config[QStringLiteral("presetCommand")] = m_presetManager->getCommand(presetId);
             config[QStringLiteral("presetWorkingDirectory")] = m_presetManager->getWorkingDirectory(presetId);
         } else {
