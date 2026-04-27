@@ -201,14 +201,14 @@ void PresetManager::initBuiltinPresets()
     heroic.isBuiltin = true;
     heroic.launcherId = QStringLiteral("heroic");
     heroic.flatpakAppId = QStringLiteral("com.heroicgameslauncher.hgl");
-    heroic.launcherInfo.needsConfigCopy = true;
-    heroic.launcherInfo.needsDataAcl = true;
 
         if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
             heroic.command = resolveLaunchCommand(
                 QStringLiteral("heroic"),
                 heroic.flatpakAppId,
                 QString());
+            heroic.launcherInfo.needsConfigCopy = true;
+            heroic.launcherInfo.needsDataAcl = true;
             heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
             heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
 
@@ -325,6 +325,9 @@ void PresetManager::populateLauncherInfo(LaunchPreset &preset) const
 
 LaunchPreset PresetManager::getPreset(const QString &id) const
 {
+    // Builtin presets have launcherInfo populated at init time and returned as-is.
+    // Custom presets get launcherInfo populated on every access (runtime-enriched)
+    // since their launcherId may resolve to different paths at different times.
     for (const LaunchPreset &preset : m_builtinPresets) {
         if (preset.id == id) {
             return preset;
@@ -570,7 +573,7 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
     return preset;
 }
 
-QString PresetManager::detectLauncherId(const QString &command) const
+QString PresetManager::detectLauncherId(const QString &command)
 {
     if (command.isEmpty()) {
         return QString();
@@ -674,13 +677,6 @@ void PresetManager::loadCustomPresets()
         preset.flatpakAppId = group.readEntry(QStringLiteral("flatpakAppId"), QString());
         preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
         preset.launcherId = group.readEntry(QStringLiteral("launcherId"), QString());
-
-        // Migrate legacy steamIntegration key to launcherId
-        if (preset.launcherId.isEmpty() && group.hasKey(QStringLiteral("steamIntegration"))
-            && group.readEntry(QStringLiteral("steamIntegration"), false)) {
-            preset.launcherId = QStringLiteral("steam");
-            qCDebug(couchplayCore) << "Migrated legacy steamIntegration=true to launcherId=steam for preset" << preset.id;
-        }
 
         if (!preset.id.isEmpty() && !preset.name.isEmpty()) {
             m_customPresets.append(preset);

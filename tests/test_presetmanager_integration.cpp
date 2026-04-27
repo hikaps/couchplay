@@ -224,12 +224,12 @@ void TestPresetManagerIntegration::testHeroicNotDetected()
     QCOMPARE(heroicPreset.launcherId, QStringLiteral("heroic"));
     QCOMPARE(heroicPreset.isBuiltin, true);
 
-    // Verify launcherInfo is NOT populated (empty)
+    // Verify launcherInfo is NOT populated (empty) — flags only set when Heroic is detected
     QVERIFY(heroicPreset.launcherInfo.configPath.isEmpty());
     QVERIFY(heroicPreset.launcherInfo.dataPath.isEmpty());
     QVERIFY(heroicPreset.launcherInfo.gameDirectories.isEmpty());
-    QCOMPARE(heroicPreset.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(heroicPreset.launcherInfo.needsDataAcl, true);
+    QCOMPARE(heroicPreset.launcherInfo.needsConfigCopy, false);
+    QCOMPARE(heroicPreset.launcherInfo.needsDataAcl, false);
 
     // Verify default command is set
     QCOMPARE(heroicPreset.command, QStringLiteral("heroic"));

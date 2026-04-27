@@ -191,7 +191,7 @@ public:
      * @param command The launch command (already cleaned of field codes)
      * @return Launcher ID ("steam", "heroic", "lutris") or empty string
      */
-    QString detectLauncherId(const QString &command) const;
+    static QString detectLauncherId(const QString &command);
 
 private:
     void initBuiltinPresets();

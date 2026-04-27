@@ -38,7 +38,6 @@ private Q_SLOTS:
     void testLauncherInfoFlags();
 
     void testLauncherIdPersistence();
-    void testKConfigMigration();
 
     void testDetectLauncherId_NativeSteam();
     void testDetectLauncherId_NativeHeroic();
@@ -255,8 +254,8 @@ void TestPresetManager::testLauncherInfoFlags()
     QCOMPARE(steam.launcherInfo.needsDataAcl, true);
 
     LaunchPreset heroic = manager.getPreset(QStringLiteral("heroic"));
-    QCOMPARE(heroic.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(heroic.launcherInfo.needsDataAcl, true);
+    QCOMPARE(heroic.launcherInfo.needsConfigCopy, false);
+    QCOMPARE(heroic.launcherInfo.needsDataAcl, false);
 
     LaunchPreset lutris = manager.getPreset(QStringLiteral("lutris"));
     QCOMPARE(lutris.launcherInfo.needsConfigCopy, false);
@@ -291,21 +290,6 @@ void TestPresetManager::testLauncherIdPersistence()
     }
 }
 
-void TestPresetManager::testKConfigMigration()
-{
-    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
-    KConfigGroup group = config->group(QStringLiteral("Preset: custom-migrate-test"));
-    group.writeEntry(QStringLiteral("id"), QStringLiteral("custom-migrate-test"));
-    group.writeEntry(QStringLiteral("name"), QStringLiteral("Migrate Test"));
-    group.writeEntry(QStringLiteral("command"), QStringLiteral("steam"));
-    group.writeEntry(QStringLiteral("steamIntegration"), true);
-    config->sync();
-
-    PresetManager manager;
-    LaunchPreset preset = manager.getPreset(QStringLiteral("custom-migrate-test"));
-    QCOMPARE(preset.launcherId, QStringLiteral("steam"));
-}
-
 void TestPresetManager::testDetectLauncherId_NativeSteam()
 {
     PresetManager manager;
@@ -333,7 +317,8 @@ void TestPresetManager::testDetectLauncherId_FlatpakSteam()
 void TestPresetManager::testDetectLauncherId_FlatpakHeroic()
 {
     PresetManager manager;
-    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run com.heroicgameslauncher.hgl")), QStringLiteral("heroic"));
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run com.heroicgameslauncher.hgl")),
+             QStringLiteral("heroic"));
 }
 
 void TestPresetManager::testDetectLauncherId_FlatpakLutris()
@@ -358,8 +343,7 @@ void TestPresetManager::testPopulateLauncherInfo_SteamCustom()
 {
     PresetManager manager;
 
-    QString id = manager.addCustomPreset(QStringLiteral("My Steam"),
-                                          QStringLiteral("steam -tenfoot"));
+    QString id = manager.addCustomPreset(QStringLiteral("My Steam"), QStringLiteral("steam -tenfoot"));
 
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
@@ -379,8 +363,7 @@ void TestPresetManager::testPopulateLauncherInfo_HeroicCustom()
 {
     PresetManager manager;
 
-    QString id = manager.addCustomPreset(QStringLiteral("My Heroic"),
-                                          QStringLiteral("heroic"));
+    QString id = manager.addCustomPreset(QStringLiteral("My Heroic"), QStringLiteral("heroic"));
 
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
@@ -400,8 +383,7 @@ void TestPresetManager::testPopulateLauncherInfo_EmptyLauncherId()
 {
     PresetManager manager;
 
-    QString id = manager.addCustomPreset(QStringLiteral("Generic Game"),
-                                          QStringLiteral("/usr/bin/my-game"));
+    QString id = manager.addCustomPreset(QStringLiteral("Generic Game"), QStringLiteral("/usr/bin/my-game"));
 
     LaunchPreset preset = manager.getPreset(id);
 
@@ -418,8 +400,7 @@ void TestPresetManager::testPopulateLauncherInfo_FreshOnAccess()
 {
     PresetManager manager;
 
-    QString id = manager.addCustomPreset(QStringLiteral("Fresh Test"),
-                                          QStringLiteral("steam"));
+    QString id = manager.addCustomPreset(QStringLiteral("Fresh Test"), QStringLiteral("steam"));
 
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
