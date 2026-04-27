@@ -288,8 +288,6 @@ void TestPresetManager::testLauncherInfoFlags()
 
 void TestPresetManager::testLauncherIdPersistence()
 {
-    QString presetId = QStringLiteral("custom-heroic-test");
-
     {
         PresetManager manager;
         QString id = manager.addCustomPreset(QStringLiteral("Heroic Preset"),
