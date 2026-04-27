@@ -18,21 +18,21 @@ struct LauncherInfo {
     Q_PROPERTY(QString configPath MEMBER configPath)
     Q_PROPERTY(QString dataPath MEMBER dataPath)
     Q_PROPERTY(QStringList gameDirectories MEMBER gameDirectories)
-    Q_PROPERTY(bool requiresAcls MEMBER requiresAcls)
-    Q_PROPERTY(bool hasShortcutSync MEMBER hasShortcutSync)
+    Q_PROPERTY(bool needsConfigCopy MEMBER needsConfigCopy)
+    Q_PROPERTY(bool needsDataAcl MEMBER needsDataAcl)
 
 public:
     QString configPath;
     QString dataPath;
     QStringList gameDirectories;  // Paths needing ACLs (computed at runtime)
-    bool requiresAcls = false;
-    bool hasShortcutSync = false;
+    bool needsConfigCopy = false;
+    bool needsDataAcl = false;
     
     bool operator==(const LauncherInfo &other) const {
         return configPath == other.configPath && 
                dataPath == other.dataPath &&
-               requiresAcls == other.requiresAcls &&
-               hasShortcutSync == other.hasShortcutSync;
+               needsConfigCopy == other.needsConfigCopy &&
+               needsDataAcl == other.needsDataAcl;
     }
 };
 
