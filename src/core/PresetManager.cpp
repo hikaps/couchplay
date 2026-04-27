@@ -578,6 +578,14 @@ void PresetManager::loadCustomPresets()
         preset.sharedDirectories = group.readEntry(QStringLiteral("sharedDirectories"), QStringList());
         preset.flatpakAppId = group.readEntry(QStringLiteral("flatpakAppId"), QString());
         preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
+        preset.launcherId = group.readEntry(QStringLiteral("launcherId"), QString());
+
+        // Migrate legacy steamIntegration key to launcherId
+        if (preset.launcherId.isEmpty() && group.hasKey(QStringLiteral("steamIntegration"))
+            && group.readEntry(QStringLiteral("steamIntegration"), false)) {
+            preset.launcherId = QStringLiteral("steam");
+            qCDebug(couchplayCore) << "Migrated legacy steamIntegration=true to launcherId=steam for preset" << preset.id;
+        }
 
         if (!preset.id.isEmpty() && !preset.name.isEmpty()) {
             m_customPresets.append(preset);
@@ -611,6 +619,7 @@ void PresetManager::saveCustomPresets()
         group.writeEntry(QStringLiteral("sharedDirectories"), preset.sharedDirectories);
         group.writeEntry(QStringLiteral("flatpakAppId"), preset.flatpakAppId);
         group.writeEntry(QStringLiteral("flatpakArgs"), preset.flatpakArgs);
+        group.writeEntry(QStringLiteral("launcherId"), preset.launcherId);
     }
 
     config->sync();

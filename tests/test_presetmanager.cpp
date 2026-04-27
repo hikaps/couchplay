@@ -37,6 +37,9 @@ private Q_SLOTS:
     void testGetSetSharedDirectories();
     void testLauncherInfoFlags();
 
+    void testLauncherIdPersistence();
+    void testKConfigMigration();
+
 private:
     QTemporaryDir *m_tempDir = nullptr;
 };
@@ -244,6 +247,51 @@ void TestPresetManager::testLauncherInfoFlags()
     LaunchPreset lutris = manager.getPreset(QStringLiteral("lutris"));
     QCOMPARE(lutris.launcherInfo.needsConfigCopy, false);
     QCOMPARE(lutris.launcherInfo.needsDataAcl, false);
+}
+
+void TestPresetManager::testLauncherIdPersistence()
+{
+    QString presetId = QStringLiteral("custom-heroic-test");
+
+    {
+        PresetManager manager;
+        QString id = manager.addCustomPreset(QStringLiteral("Heroic Preset"),
+                                             QStringLiteral("heroic"),
+                                             QString(),
+                                             QStringLiteral("heroic-icon"));
+
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+        group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("heroic"));
+        config->sync();
+    }
+
+    {
+        PresetManager manager;
+        LaunchPreset found;
+        for (const LaunchPreset &p : manager.presets()) {
+            if (p.name == QStringLiteral("Heroic Preset")) {
+                found = p;
+                break;
+            }
+        }
+        QCOMPARE(found.launcherId, QStringLiteral("heroic"));
+    }
+}
+
+void TestPresetManager::testKConfigMigration()
+{
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: custom-migrate-test"));
+    group.writeEntry(QStringLiteral("id"), QStringLiteral("custom-migrate-test"));
+    group.writeEntry(QStringLiteral("name"), QStringLiteral("Migrate Test"));
+    group.writeEntry(QStringLiteral("command"), QStringLiteral("steam"));
+    group.writeEntry(QStringLiteral("steamIntegration"), true);
+    config->sync();
+
+    PresetManager manager;
+    LaunchPreset preset = manager.getPreset(QStringLiteral("custom-migrate-test"));
+    QCOMPARE(preset.launcherId, QStringLiteral("steam"));
 }
 
 QTEST_MAIN(TestPresetManager)
