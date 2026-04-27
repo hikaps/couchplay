@@ -32,7 +32,6 @@ private Q_SLOTS:
     void testStaleFlatpakCacheIgnored();
     void testGetWorkingDirectory();
     void testGetLauncherId();
-    void testGetSteamIntegration();
 
     void testAddCustomPreset();
     void testRemoveCustomPreset();
@@ -176,16 +175,6 @@ void TestPresetManager::testGetLauncherId()
     QCOMPARE(manager.getLauncherId(QStringLiteral("lutris")), QStringLiteral("lutris"));
 }
 
-void TestPresetManager::testGetSteamIntegration()
-{
-    PresetManager manager;
-
-    QVERIFY(manager.getSteamIntegration(QStringLiteral("steam")));
-
-    QVERIFY(!manager.getSteamIntegration(QStringLiteral("heroic")));
-    QVERIFY(!manager.getSteamIntegration(QStringLiteral("lutris")));
-}
-
 void TestPresetManager::testAddCustomPreset()
 {
     PresetManager manager;
@@ -194,8 +183,7 @@ void TestPresetManager::testAddCustomPreset()
     QString id = manager.addCustomPreset(QStringLiteral("Test Game"),
                                          QStringLiteral("/path/to/game"),
                                          QStringLiteral("/working/dir"),
-                                         QStringLiteral("test-icon"),
-                                         true);
+                                         QStringLiteral("test-icon"));
 
     QVERIFY(!id.isEmpty());
     QVERIFY(id.startsWith(QStringLiteral("custom-")));
@@ -211,7 +199,6 @@ void TestPresetManager::testAddCustomPreset()
             QCOMPARE(preset[QStringLiteral("command")].toString(), QStringLiteral("/path/to/game"));
             QCOMPARE(preset[QStringLiteral("workingDirectory")].toString(), QStringLiteral("/working/dir"));
             QCOMPARE(preset[QStringLiteral("iconName")].toString(), QStringLiteral("test-icon"));
-            QCOMPARE(preset[QStringLiteral("steamIntegration")].toBool(), true);
             QCOMPARE(preset[QStringLiteral("isBuiltin")].toBool(), false);
         }
     }

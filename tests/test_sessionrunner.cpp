@@ -267,9 +267,8 @@ void TestSessionRunner::testSetupSteamConfigWithSteamLauncher()
     LaunchPreset steamPreset = m_presetManager->getPreset(QStringLiteral("steam"));
 
     QVERIFY(steamPreset.launcherId == QStringLiteral("steam"));
-    QVERIFY(steamPreset.steamIntegration);
 
-    bool needsSteamSync = steamPreset.steamIntegration || steamPreset.launcherId == QStringLiteral("steam");
+    bool needsSteamSync = steamPreset.launcherId == QStringLiteral("steam");
     QVERIFY(needsSteamSync);
 }
 
@@ -278,9 +277,8 @@ void TestSessionRunner::testSetupSteamConfigWithNonSteamLauncher()
     LaunchPreset heroicPreset = m_presetManager->getPreset(QStringLiteral("heroic"));
 
     QVERIFY(heroicPreset.launcherId == QStringLiteral("heroic"));
-    QVERIFY(!heroicPreset.steamIntegration);
 
-    bool needsSteamSync = heroicPreset.steamIntegration || heroicPreset.launcherId == QStringLiteral("steam");
+    bool needsSteamSync = heroicPreset.launcherId == QStringLiteral("steam");
     QVERIFY(!needsSteamSync);
 }
 
