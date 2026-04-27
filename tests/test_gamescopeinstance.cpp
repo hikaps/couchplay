@@ -383,7 +383,6 @@ void TestGamescopeInstance::testSteamLaunchMode()
     QVariantMap config;
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
     config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
-    config[QStringLiteral("steamIntegration")] = true;
     config[QStringLiteral("launcherId")] = QStringLiteral("steam");
     config[QStringLiteral("steamAppId")] = QStringLiteral("1426210"); // It Takes Two
     config[QStringLiteral("internalWidth")] = 1920;
@@ -414,7 +413,6 @@ void TestGamescopeInstance::testSteamLaunchModeNoAppId()
     QVariantMap config;
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
     config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
-    config[QStringLiteral("steamIntegration")] = true;
     config[QStringLiteral("launcherId")] = QStringLiteral("steam");
     // No steamAppId set - this is valid, launches Steam Big Picture
     config[QStringLiteral("internalWidth")] = 1920;
