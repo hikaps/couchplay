@@ -708,7 +708,7 @@ bool SessionRunner::setupLauncherAccess()
 
         LaunchPreset preset = m_presetManager->getPreset(presetId);
 
-        if (preset.launcherInfo.requiresAcls) {
+        if (preset.launcherInfo.needsDataAcl) {
             for (const QString &dir : preset.launcherInfo.gameDirectories) {
                 if (dir.isEmpty()) {
                     continue;

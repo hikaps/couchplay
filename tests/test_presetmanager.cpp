@@ -36,6 +36,7 @@ private Q_SLOTS:
     void testRemoveCustomPreset();
 
     void testGetSetSharedDirectories();
+    void testLauncherInfoFlags();
 
 private:
     QTemporaryDir *m_tempDir = nullptr;
@@ -239,6 +240,23 @@ void TestPresetManager::testGetSetSharedDirectories()
     // Verify they were set
     dirs = manager.getSharedDirectories(id);
     QCOMPARE(dirs, newDirs);
+}
+
+void TestPresetManager::testLauncherInfoFlags()
+{
+    PresetManager manager;
+
+    LaunchPreset steam = manager.getPreset(QStringLiteral("steam"));
+    QCOMPARE(steam.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(steam.launcherInfo.needsDataAcl, true);
+
+    LaunchPreset heroic = manager.getPreset(QStringLiteral("heroic"));
+    QCOMPARE(heroic.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(heroic.launcherInfo.needsDataAcl, true);
+
+    LaunchPreset lutris = manager.getPreset(QStringLiteral("lutris"));
+    QCOMPARE(lutris.launcherInfo.needsConfigCopy, false);
+    QCOMPARE(lutris.launcherInfo.needsDataAcl, false);
 }
 
 QTEST_MAIN(TestPresetManager)

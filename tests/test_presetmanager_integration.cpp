@@ -170,8 +170,8 @@ void TestPresetManagerIntegration::testHeroicDetected()
     QVERIFY(!heroicPreset.launcherInfo.dataPath.isEmpty());
     QCOMPARE(heroicPreset.launcherInfo.dataPath, homeDir.path() + QStringLiteral("/Games/Heroic"));
 
-    QCOMPARE(heroicPreset.launcherInfo.requiresAcls, true);
-    QCOMPARE(heroicPreset.launcherInfo.hasShortcutSync, true);
+    QCOMPARE(heroicPreset.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(heroicPreset.launcherInfo.needsDataAcl, true);
 
     // Verify gameDirectories are extracted
     QCOMPARE(heroicPreset.launcherInfo.gameDirectories.size(), 3);
@@ -228,7 +228,8 @@ void TestPresetManagerIntegration::testHeroicNotDetected()
     QVERIFY(heroicPreset.launcherInfo.configPath.isEmpty());
     QVERIFY(heroicPreset.launcherInfo.dataPath.isEmpty());
     QVERIFY(heroicPreset.launcherInfo.gameDirectories.isEmpty());
-    QCOMPARE(heroicPreset.launcherInfo.requiresAcls, false);
+    QCOMPARE(heroicPreset.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(heroicPreset.launcherInfo.needsDataAcl, true);
 
     // Verify default command is set
     QCOMPARE(heroicPreset.command, QStringLiteral("heroic"));

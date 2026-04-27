@@ -177,6 +177,8 @@ void PresetManager::initBuiltinPresets()
     steam.isBuiltin = true;
     steam.steamIntegration = true;
     steam.launcherId = QStringLiteral("steam");
+    steam.launcherInfo.needsConfigCopy = true;
+    steam.launcherInfo.needsDataAcl = true;
     steam.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("steam"));
     m_builtinPresets.append(steam);
 
@@ -188,6 +190,8 @@ void PresetManager::initBuiltinPresets()
     heroic.steamIntegration = false;
     heroic.launcherId = QStringLiteral("heroic");
     heroic.flatpakAppId = QStringLiteral("com.heroicgameslauncher.hgl");
+    heroic.launcherInfo.needsConfigCopy = true;
+    heroic.launcherInfo.needsDataAcl = true;
 
         if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
             heroic.command = resolveLaunchCommand(
@@ -196,8 +200,6 @@ void PresetManager::initBuiltinPresets()
                 QString());
             heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
             heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
-            heroic.launcherInfo.requiresAcls = true;
-            heroic.launcherInfo.hasShortcutSync = true;
 
             if (m_heroicConfigManager->gameCount() == 0) {
                 m_heroicConfigManager->loadGames();
