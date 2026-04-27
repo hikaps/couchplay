@@ -10,12 +10,15 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUuid>
+
+#include <functional>
 
 #include <KSharedConfig>
 #include <KConfigGroup>
@@ -51,37 +54,47 @@ void PresetManager::setSteamConfigManager(SteamConfigManager *manager)
 
 QStringList PresetManager::getDefaultSharedDirectories(const QString &id) const
 {
-    QStringList dirs;
-
-    if (id == QStringLiteral("steam")) {
-        if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
-            QString steamRoot = m_steamConfigManager->steamPaths().steamRoot;
-            if (!steamRoot.isEmpty()) {
-                dirs.append(steamRoot);
+    using Resolver = std::function<QStringList(const PresetManager *)>;
+    static const QHash<QString, Resolver> resolvers = {
+        {QStringLiteral("steam"), [](const PresetManager *self) -> QStringList {
+            QStringList dirs;
+            if (self->m_steamConfigManager && self->m_steamConfigManager->isSteamDetected()) {
+                QString steamRoot = self->m_steamConfigManager->steamPaths().steamRoot;
+                if (!steamRoot.isEmpty()) {
+                    dirs.append(steamRoot);
+                }
             }
-        }
-    } else if (id == QStringLiteral("heroic")) {
-        if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            // Don't share configPath: syncConfigToUser() copies specific config files to the gaming user's home,
-            // and bind-mounting the config dir would cause ownership conflicts when syncing.
-            // Only share the install path where games are installed.
-            QString installPath = m_heroicConfigManager->defaultInstallPath();
-            if (!installPath.isEmpty()) {
-                dirs.append(installPath);
+            return dirs;
+        }},
+        {QStringLiteral("heroic"), [](const PresetManager *self) -> QStringList {
+            QStringList dirs;
+            if (self->m_heroicConfigManager && self->m_heroicConfigManager->isHeroicDetected()) {
+                // Don't share configPath: syncConfigToUser() copies specific config files to the gaming user's home,
+                // and bind-mounting the config dir would cause ownership conflicts when syncing.
+                // Only share the install path where games are installed.
+                QString installPath = self->m_heroicConfigManager->defaultInstallPath();
+                if (!installPath.isEmpty()) {
+                    dirs.append(installPath);
+                }
             }
-        }
-    } else if (id == QStringLiteral("lutris")) {
-        QString home = QDir::homePath();
-        QString lutrisData = home + QStringLiteral("/.local/share/lutris");
-        QString lutrisGames = home + QStringLiteral("/Games");
-        if (QDir(lutrisData).exists()) {
-            dirs.append(lutrisData);
-        }
-        if (QDir(lutrisGames).exists()) {
-            dirs.append(lutrisGames);
-        }
-    }
+            return dirs;
+        }},
+        {QStringLiteral("lutris"), [](const PresetManager *) -> QStringList {
+            QStringList dirs;
+            QString home = QDir::homePath();
+            QString lutrisData = home + QStringLiteral("/.local/share/lutris");
+            QString lutrisGames = home + QStringLiteral("/Games");
+            if (QDir(lutrisData).exists()) {
+                dirs.append(lutrisData);
+            }
+            if (QDir(lutrisGames).exists()) {
+                dirs.append(lutrisGames);
+            }
+            return dirs;
+        }},
+    };
 
+    QStringList dirs = resolvers.value(id, [](const PresetManager *) -> QStringList { return {}; })(this);
     dirs.removeDuplicates();
     return dirs;
 }
