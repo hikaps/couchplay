@@ -693,7 +693,8 @@ bool SessionRunner::setupLauncherAccess()
     const auto &profile = m_sessionManager->currentProfile();
     bool allSucceeded = true;
 
-    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_steamConfigManager->isSteamDetected()) {
+    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled()
+        && m_steamConfigManager->isSteamDetected()) {
         m_steamConfigManager->loadLibraryFolders();
     }
 
@@ -757,7 +758,8 @@ bool SessionRunner::setupLauncherAccess()
 
                             for (const QString &dir : shortcutDirs) {
                                 if (QDir(dir).exists()) {
-                                    qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
+                                    qCDebug(couchplaySteam)
+                                        << "Setting ACL with parents on" << dir << "for" << username;
                                     if (!m_helperClient->setPathAclWithParents(dir, username)) {
                                         qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
                                     }

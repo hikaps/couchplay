@@ -13,8 +13,8 @@
 #include <unistd.h>
 
 #define private public
-#include "SessionRunner.h"
 #include "PresetManager.h"
+#include "SessionRunner.h"
 #undef private
 #include "HeroicConfigManager.h"
 #include "SessionManager.h"
