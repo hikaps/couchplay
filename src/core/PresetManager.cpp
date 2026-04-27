@@ -175,7 +175,6 @@ void PresetManager::initBuiltinPresets()
         steam.flatpakArgs);
     steam.iconName = QStringLiteral("steam");
     steam.isBuiltin = true;
-    steam.steamIntegration = true;
     steam.launcherId = QStringLiteral("steam");
     steam.launcherInfo.needsConfigCopy = true;
     steam.launcherInfo.needsDataAcl = true;
@@ -187,7 +186,6 @@ void PresetManager::initBuiltinPresets()
     heroic.name = QStringLiteral("Heroic Games");
     heroic.iconName = QStringLiteral("com.heroicgameslauncher.hgl");
     heroic.isBuiltin = true;
-    heroic.steamIntegration = false;
     heroic.launcherId = QStringLiteral("heroic");
     heroic.flatpakAppId = QStringLiteral("com.heroicgameslauncher.hgl");
     heroic.launcherInfo.needsConfigCopy = true;
@@ -224,7 +222,6 @@ void PresetManager::initBuiltinPresets()
         QString());
     lutris.iconName = QStringLiteral("lutris");
     lutris.isBuiltin = true;
-    lutris.steamIntegration = false;
     lutris.launcherId = QStringLiteral("lutris");
     lutris.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("lutris"));
     m_builtinPresets.append(lutris);
@@ -252,7 +249,6 @@ QVariantList PresetManager::presetsAsVariant() const
         map[QStringLiteral("iconName")] = preset.iconName;
         map[QStringLiteral("desktopFilePath")] = preset.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = preset.isBuiltin;
-        map[QStringLiteral("steamIntegration")] = preset.steamIntegration;
         map[QStringLiteral("launcherId")] = preset.launcherId;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(preset.launcherInfo);
         map[QStringLiteral("sharedDirectories")] = preset.sharedDirectories;
@@ -275,7 +271,6 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
         map[QStringLiteral("iconName")] = app.iconName;
         map[QStringLiteral("desktopFilePath")] = app.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = app.isBuiltin;
-        map[QStringLiteral("steamIntegration")] = app.steamIntegration;
         map[QStringLiteral("launcherId")] = app.launcherId;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(app.launcherInfo);
         map[QStringLiteral("flatpakAppId")] = app.flatpakAppId;
@@ -311,11 +306,6 @@ QString PresetManager::getCommand(const QString &id) const
 QString PresetManager::getWorkingDirectory(const QString &id) const
 {
     return getPreset(id).workingDirectory;
-}
-
-bool PresetManager::getSteamIntegration(const QString &id) const
-{
-    return getPreset(id).steamIntegration;
 }
 
 QString PresetManager::getLauncherId(const QString &id) const
@@ -359,8 +349,7 @@ bool PresetManager::setSharedDirectories(const QString &id, const QStringList &d
 QString PresetManager::addCustomPreset(const QString &name,
                                         const QString &command,
                                         const QString &workingDirectory,
-                                        const QString &iconName,
-                                        bool steamIntegration)
+                                        const QString &iconName)
 {
     LaunchPreset preset;
     preset.id = generateCustomId();
@@ -369,7 +358,6 @@ QString PresetManager::addCustomPreset(const QString &name,
     preset.workingDirectory = workingDirectory;
     preset.iconName = iconName.isEmpty() ? QStringLiteral("application-x-executable") : iconName;
     preset.isBuiltin = false;
-    preset.steamIntegration = steamIntegration;
 
     m_customPresets.append(preset);
     saveCustomPresets();
@@ -406,8 +394,7 @@ bool PresetManager::updateCustomPreset(const QString &id,
                                         const QString &name,
                                         const QString &command,
                                         const QString &workingDirectory,
-                                        const QString &iconName,
-                                        bool steamIntegration)
+                                        const QString &iconName)
 {
     for (int i = 0; i < m_customPresets.size(); ++i) {
         if (m_customPresets[i].id == id) {
@@ -415,7 +402,6 @@ bool PresetManager::updateCustomPreset(const QString &id,
             m_customPresets[i].command = command;
             m_customPresets[i].workingDirectory = workingDirectory;
             m_customPresets[i].iconName = iconName;
-            m_customPresets[i].steamIntegration = steamIntegration;
 
             saveCustomPresets();
             Q_EMIT presetsChanged();
@@ -589,7 +575,6 @@ void PresetManager::loadCustomPresets()
         preset.iconName = group.readEntry(QStringLiteral("iconName"), QString());
         preset.desktopFilePath = group.readEntry(QStringLiteral("desktopFilePath"), QString());
         preset.isBuiltin = false;
-        preset.steamIntegration = group.readEntry(QStringLiteral("steamIntegration"), false);
         preset.sharedDirectories = group.readEntry(QStringLiteral("sharedDirectories"), QStringList());
         preset.flatpakAppId = group.readEntry(QStringLiteral("flatpakAppId"), QString());
         preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
@@ -623,7 +608,6 @@ void PresetManager::saveCustomPresets()
         group.writeEntry(QStringLiteral("workingDirectory"), preset.workingDirectory);
         group.writeEntry(QStringLiteral("iconName"), preset.iconName);
         group.writeEntry(QStringLiteral("desktopFilePath"), preset.desktopFilePath);
-        group.writeEntry(QStringLiteral("steamIntegration"), preset.steamIntegration);
         group.writeEntry(QStringLiteral("sharedDirectories"), preset.sharedDirectories);
         group.writeEntry(QStringLiteral("flatpakAppId"), preset.flatpakAppId);
         group.writeEntry(QStringLiteral("flatpakArgs"), preset.flatpakArgs);

@@ -47,7 +47,6 @@ struct LaunchPreset {
     Q_PROPERTY(QString iconName MEMBER iconName)
     Q_PROPERTY(QString desktopFilePath MEMBER desktopFilePath)
     Q_PROPERTY(bool isBuiltin MEMBER isBuiltin)
-    Q_PROPERTY(bool steamIntegration MEMBER steamIntegration)
 
     Q_PROPERTY(QString launcherId MEMBER launcherId)
     Q_PROPERTY(LauncherInfo launcherInfo MEMBER launcherInfo)
@@ -63,7 +62,6 @@ public:
     QString iconName;
     QString desktopFilePath;        // Source .desktop file (if applicable)
     bool isBuiltin = false;         // true for Steam/Heroic/Lutris
-    bool steamIntegration = false;  // Enable gamescope -e flag
     
     QString launcherId;             // "steam", "heroic", "lutris", "custom" (empty for non-launcher presets)
     LauncherInfo launcherInfo;      // Populated by detection for launcher presets
@@ -112,7 +110,6 @@ public:
     Q_INVOKABLE LaunchPreset getPreset(const QString &id) const;
     Q_INVOKABLE QString getCommand(const QString &id) const;
     Q_INVOKABLE QString getWorkingDirectory(const QString &id) const;
-    Q_INVOKABLE bool getSteamIntegration(const QString &id) const;
     Q_INVOKABLE QString getLauncherId(const QString &id) const;
 
     /**
@@ -129,14 +126,12 @@ public:
      * @param command Launch command
      * @param workingDirectory Optional working directory
      * @param iconName Optional icon name
-     * @param steamIntegration Enable Steam integration (-e flag)
      * @return The ID of the created preset
      */
     Q_INVOKABLE QString addCustomPreset(const QString &name,
                                          const QString &command,
                                          const QString &workingDirectory = QString(),
-                                         const QString &iconName = QString(),
-                                         bool steamIntegration = false);
+                                         const QString &iconName = QString());
 
     /**
      * @brief Add a preset from a .desktop file
@@ -152,15 +147,13 @@ public:
      * @param command New launch command
      * @param workingDirectory New working directory
      * @param iconName New icon name
-     * @param steamIntegration New Steam integration setting
      * @return true if updated successfully
      */
     Q_INVOKABLE bool updateCustomPreset(const QString &id,
                                          const QString &name,
                                          const QString &command,
                                          const QString &workingDirectory,
-                                         const QString &iconName,
-                                         bool steamIntegration);
+                                         const QString &iconName);
 
     /**
      * @brief Remove a custom preset

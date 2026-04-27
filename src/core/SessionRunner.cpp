@@ -263,11 +263,9 @@ bool SessionRunner::start()
             config[QStringLiteral("presetId")] = presetId;
             config[QStringLiteral("presetCommand")] = m_presetManager->getCommand(presetId);
             config[QStringLiteral("presetWorkingDirectory")] = m_presetManager->getWorkingDirectory(presetId);
-            config[QStringLiteral("steamIntegration")] = m_presetManager->getSteamIntegration(presetId);
         } else {
             config[QStringLiteral("presetId")] = QStringLiteral("steam");
             config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
-            config[QStringLiteral("steamIntegration")] = true;
         }
 
         if (m_deviceManager) {
@@ -753,7 +751,7 @@ bool SessionRunner::setupLauncherAccess()
             continue;
         }
 
-        if (!(preset.steamIntegration || preset.launcherId == QStringLiteral("steam"))) {
+        if (!(preset.launcherId == QStringLiteral("steam"))) {
             qCDebug(couchplaySteam) << "Skipping instance" << i << "- preset" << presetId
                                     << "does not use Steam integration";
             continue;
