@@ -49,6 +49,11 @@ private Q_SLOTS:
     void testDetectLauncherId_UnknownBinary();
     void testDetectLauncherId_UrlScheme();
 
+    void testPopulateLauncherInfo_SteamCustom();
+    void testPopulateLauncherInfo_HeroicCustom();
+    void testPopulateLauncherInfo_EmptyLauncherId();
+    void testPopulateLauncherInfo_FreshOnAccess();
+
 private:
     QTemporaryDir *m_tempDir = nullptr;
 };
@@ -349,6 +354,89 @@ void TestPresetManager::testDetectLauncherId_UrlScheme()
 {
     PresetManager manager;
     QCOMPARE(manager.detectLauncherId(QStringLiteral("heroic://launch/gog/abc")), QString());
+}
+
+void TestPresetManager::testPopulateLauncherInfo_SteamCustom()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("My Steam"),
+                                          QStringLiteral("steam -tenfoot"));
+
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+    group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("steam"));
+    config->sync();
+
+    PresetManager manager2;
+    LaunchPreset preset = manager2.getPreset(id);
+
+    QVERIFY(!preset.isBuiltin);
+    QCOMPARE(preset.launcherId, QStringLiteral("steam"));
+    QCOMPARE(preset.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(preset.launcherInfo.needsDataAcl, true);
+}
+
+void TestPresetManager::testPopulateLauncherInfo_HeroicCustom()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("My Heroic"),
+                                          QStringLiteral("heroic"));
+
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+    group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("heroic"));
+    config->sync();
+
+    PresetManager manager2;
+    LaunchPreset preset = manager2.getPreset(id);
+
+    QVERIFY(!preset.isBuiltin);
+    QCOMPARE(preset.launcherId, QStringLiteral("heroic"));
+    QCOMPARE(preset.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(preset.launcherInfo.needsDataAcl, true);
+}
+
+void TestPresetManager::testPopulateLauncherInfo_EmptyLauncherId()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("Generic Game"),
+                                          QStringLiteral("/usr/bin/my-game"));
+
+    LaunchPreset preset = manager.getPreset(id);
+
+    QVERIFY(!preset.isBuiltin);
+    QVERIFY(preset.launcherId.isEmpty());
+    QCOMPARE(preset.launcherInfo.needsConfigCopy, false);
+    QCOMPARE(preset.launcherInfo.needsDataAcl, false);
+    QVERIFY(preset.launcherInfo.configPath.isEmpty());
+    QVERIFY(preset.launcherInfo.dataPath.isEmpty());
+    QVERIFY(preset.launcherInfo.gameDirectories.isEmpty());
+}
+
+void TestPresetManager::testPopulateLauncherInfo_FreshOnAccess()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("Fresh Test"),
+                                          QStringLiteral("steam"));
+
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+    group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("steam"));
+    config->sync();
+
+    PresetManager manager2;
+
+    LaunchPreset first = manager2.getPreset(id);
+    LaunchPreset second = manager2.getPreset(id);
+
+    QCOMPARE(first.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(second.launcherInfo.needsConfigCopy, true);
+    QCOMPARE(first.launcherInfo.needsDataAcl, second.launcherInfo.needsDataAcl);
+    QCOMPARE(first.launcherInfo.gameDirectories, second.launcherInfo.gameDirectories);
 }
 
 QTEST_MAIN(TestPresetManager)

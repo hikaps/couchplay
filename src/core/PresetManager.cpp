@@ -280,6 +280,36 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
     return result;
 }
 
+void PresetManager::populateLauncherInfo(LaunchPreset &preset) const
+{
+    preset.launcherInfo = LauncherInfo();
+
+    if (preset.launcherId == QStringLiteral("steam")) {
+        preset.launcherInfo.needsConfigCopy = true;
+        preset.launcherInfo.needsDataAcl = true;
+
+        if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
+            QString steamRoot = m_steamConfigManager->steamPaths().steamRoot;
+            if (!steamRoot.isEmpty()) {
+                preset.launcherInfo.gameDirectories.append(steamRoot);
+            }
+        }
+    } else if (preset.launcherId == QStringLiteral("heroic")) {
+        preset.launcherInfo.needsConfigCopy = true;
+        preset.launcherInfo.needsDataAcl = true;
+
+        if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            preset.launcherInfo.configPath = m_heroicConfigManager->configPath();
+            preset.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
+
+            if (m_heroicConfigManager->gameCount() == 0) {
+                m_heroicConfigManager->loadGames();
+            }
+            preset.launcherInfo.gameDirectories = m_heroicConfigManager->extractGameDirectories();
+        }
+    }
+}
+
 LaunchPreset PresetManager::getPreset(const QString &id) const
 {
     for (const LaunchPreset &preset : m_builtinPresets) {
@@ -289,7 +319,9 @@ LaunchPreset PresetManager::getPreset(const QString &id) const
     }
     for (const LaunchPreset &preset : m_customPresets) {
         if (preset.id == id) {
-            return preset;
+            LaunchPreset copy = preset;
+            populateLauncherInfo(copy);
+            return copy;
         }
     }
     if (!m_builtinPresets.isEmpty()) {

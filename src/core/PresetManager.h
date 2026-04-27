@@ -212,6 +212,8 @@ private:
 
     static QString generateCustomId();
 
+    void populateLauncherInfo(LaunchPreset &preset) const;
+
     /**
      * @brief Get default shared directories for a built-in preset
      * @param id Preset ID ("steam", "heroic", "lutris")
