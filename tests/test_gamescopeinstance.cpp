@@ -32,6 +32,8 @@ private Q_SLOTS:
     void testBuildArgsPosition();
     void testBuildArgsInputDevices();
     void testBuildArgsFullConfig();
+    void testBuildArgs_SteamLauncherId();
+    void testBuildArgs_NonSteamLauncherId();
 
     // buildEnvironment tests
     void testBuildEnvBasic();
@@ -235,6 +237,26 @@ void TestGamescopeInstance::testBuildArgsFullConfig()
 }
 
 // ============ buildEnvironment Tests ============
+
+void TestGamescopeInstance::testBuildArgs_SteamLauncherId()
+{
+    QVariantMap config;
+    config[QStringLiteral("launcherId")] = QStringLiteral("steam");
+
+    QStringList args = GamescopeInstance::buildGamescopeArgs(config);
+
+    QVERIFY2(args.contains(QStringLiteral("-e")), "Expected -e flag for Steam launcher");
+}
+
+void TestGamescopeInstance::testBuildArgs_NonSteamLauncherId()
+{
+    QVariantMap config;
+    config[QStringLiteral("launcherId")] = QStringLiteral("heroic");
+
+    QStringList args = GamescopeInstance::buildGamescopeArgs(config);
+
+    QVERIFY(!args.contains(QStringLiteral("-e")));
+}
 
 void TestGamescopeInstance::testBuildEnvBasic()
 {
