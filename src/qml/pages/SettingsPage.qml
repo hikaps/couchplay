@@ -208,14 +208,6 @@ Kirigami.ScrollablePage {
                             checkable: false
                         }
 
-                        Kirigami.Chip {
-                            visible: modelData.steamIntegration
-                            text: i18nc("@info", "Steam")
-                            icon.name: "steam"
-                            closable: false
-                            checkable: false
-                        }
-
                         Controls.Button {
                             objectName: "btnEditPreset"
                             Accessible.role: Accessible.Button
