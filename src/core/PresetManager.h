@@ -186,6 +186,13 @@ public:
      */
     static QString cleanExecCommand(const QString &exec);
 
+    /**
+     * @brief Detect launcher type from a command string
+     * @param command The launch command (already cleaned of field codes)
+     * @return Launcher ID ("steam", "heroic", "lutris") or empty string
+     */
+    QString detectLauncherId(const QString &command) const;
+
 private:
     void initBuiltinPresets();
     void loadCustomPresets();

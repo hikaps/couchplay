@@ -40,6 +40,15 @@ private Q_SLOTS:
     void testLauncherIdPersistence();
     void testKConfigMigration();
 
+    void testDetectLauncherId_NativeSteam();
+    void testDetectLauncherId_NativeHeroic();
+    void testDetectLauncherId_NativeLutris();
+    void testDetectLauncherId_FlatpakSteam();
+    void testDetectLauncherId_FlatpakHeroic();
+    void testDetectLauncherId_FlatpakLutris();
+    void testDetectLauncherId_UnknownBinary();
+    void testDetectLauncherId_UrlScheme();
+
 private:
     QTemporaryDir *m_tempDir = nullptr;
 };
@@ -292,6 +301,54 @@ void TestPresetManager::testKConfigMigration()
     PresetManager manager;
     LaunchPreset preset = manager.getPreset(QStringLiteral("custom-migrate-test"));
     QCOMPARE(preset.launcherId, QStringLiteral("steam"));
+}
+
+void TestPresetManager::testDetectLauncherId_NativeSteam()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("steam -tenfoot")), QStringLiteral("steam"));
+}
+
+void TestPresetManager::testDetectLauncherId_NativeHeroic()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("heroic")), QStringLiteral("heroic"));
+}
+
+void TestPresetManager::testDetectLauncherId_NativeLutris()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("lutris")), QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testDetectLauncherId_FlatpakSteam()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run com.valvesoftware.Steam")), QStringLiteral("steam"));
+}
+
+void TestPresetManager::testDetectLauncherId_FlatpakHeroic()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run com.heroicgameslauncher.hgl")), QStringLiteral("heroic"));
+}
+
+void TestPresetManager::testDetectLauncherId_FlatpakLutris()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run net.lutris.Lutris")), QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testDetectLauncherId_UnknownBinary()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("/usr/bin/my-game --flag")), QString());
+}
+
+void TestPresetManager::testDetectLauncherId_UrlScheme()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("heroic://launch/gog/abc")), QString());
 }
 
 QTEST_MAIN(TestPresetManager)

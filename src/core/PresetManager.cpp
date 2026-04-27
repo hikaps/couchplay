@@ -374,6 +374,8 @@ QString PresetManager::addPresetFromDesktopFile(const QString &desktopFilePath)
         return QString();
     }
 
+    preset.launcherId = detectLauncherId(preset.command);
+
     for (const LaunchPreset &existing : m_customPresets) {
         if (existing.desktopFilePath == desktopFilePath) {
             return existing.id;
@@ -516,10 +518,58 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
     preset.workingDirectory = desktop.value(QStringLiteral("Path")).toString();
     preset.iconName = desktop.value(QStringLiteral("Icon")).toString();
     preset.desktopFilePath = filePath;
+    preset.launcherId = detectLauncherId(preset.command);
 
     // QString categories = desktop.value(QStringLiteral("Categories")).toString();
 
     return preset;
+}
+
+QString PresetManager::detectLauncherId(const QString &command) const
+{
+    if (command.isEmpty()) {
+        return QString();
+    }
+
+    const QStringList tokens = command.split(QStringLiteral(" "), Qt::SkipEmptyParts);
+    if (tokens.isEmpty()) {
+        return QString();
+    }
+
+    const QString &firstToken = tokens.first();
+
+    if (firstToken.contains(QStringLiteral("://"))) {
+        return QString();
+    }
+
+    if (firstToken == QStringLiteral("flatpak")) {
+        if (tokens.size() < 3) {
+            return QString();
+        }
+        const QString &appId = tokens.at(2);
+        if (appId == QStringLiteral("com.valvesoftware.Steam")) {
+            return QStringLiteral("steam");
+        }
+        if (appId == QStringLiteral("com.heroicgameslauncher.hgl")) {
+            return QStringLiteral("heroic");
+        }
+        if (appId == QStringLiteral("net.lutris.Lutris")) {
+            return QStringLiteral("lutris");
+        }
+        return QString();
+    }
+
+    if (firstToken == QStringLiteral("steam")) {
+        return QStringLiteral("steam");
+    }
+    if (firstToken == QStringLiteral("heroic")) {
+        return QStringLiteral("heroic");
+    }
+    if (firstToken == QStringLiteral("lutris")) {
+        return QStringLiteral("lutris");
+    }
+
+    return QString();
 }
 
 QString PresetManager::cleanExecCommand(const QString &exec)
