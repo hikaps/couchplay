@@ -38,6 +38,13 @@ struct InstanceConfig {
     Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
     Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
+    Q_PROPERTY(bool borderless MEMBER borderless)
+    Q_PROPERTY(QString outputMode MEMBER outputMode)
+    Q_PROPERTY(QString streamResolution MEMBER streamResolution)
+    Q_PROPERTY(int streamFps MEMBER streamFps)
+    Q_PROPERTY(int streamBitrate MEMBER streamBitrate)
+    Q_PROPERTY(QString streamCodec MEMBER streamCodec)
+    Q_PROPERTY(int sunshinePort MEMBER sunshinePort)
 
 public:
     QString username;
@@ -59,6 +66,13 @@ public:
     QString overrideGamePath;
     QStringList overrideFiles;
     QStringList overridePatterns; // Glob patterns for per-user overrides
+    bool borderless = false;                           // Window border visibility (false = show borders)
+    QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
+    QString streamResolution = QStringLiteral("1920x1080");
+    int streamFps = 60;
+    int streamBitrate = 20000;                        // Kbps (20000 = 20 Mbps)
+    QString streamCodec = QStringLiteral("h264");     // "h264", "h265", "av1"
+    int sunshinePort = 47989;                         // Base port for Sunshine instance
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)

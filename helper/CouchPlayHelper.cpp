@@ -143,7 +143,15 @@ private:
 
 static const QRegularExpression s_validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
 
-using namespace PolkitActions;
+static const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couchplay.change-device-owner");
+static const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couchplay.create-user");
+static const QString ACTION_DELETE_USER = QStringLiteral("io.github.hikaps.couchplay.delete-user");
+static const QString ACTION_ENABLE_LINGER = QStringLiteral("io.github.hikaps.couchplay.enable-linger");
+static const QString ACTION_WAYLAND_ACCESS = QStringLiteral("io.github.hikaps.couchplay.setup-wayland-access");
+static const QString ACTION_LAUNCH_INSTANCE = QStringLiteral("io.github.hikaps.couchplay.launch-instance");
+static const QString ACTION_MANAGE_MOUNTS = QStringLiteral("io.github.hikaps.couchplay.manage-mounts");
+static const QString ACTION_MANAGE_VIRTUAL_DISPLAY = QStringLiteral("io.github.hikaps.couchplay.manage-virtual-display");
+static const QString ACTION_MANAGE_AUDIO_SINK = QStringLiteral("io.github.hikaps.couchplay.manage-audio-sink");
 
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 
@@ -184,6 +192,29 @@ CouchPlayHelper::~CouchPlayHelper()
         }
         m_activeMounts.clear();
     }
+
+    for (const VirtualDisplayInfo &info : m_virtualDisplays) {
+        if (info.pid > 0) {
+            m_ops->killProcess(static_cast<pid_t>(info.pid), SIGTERM);
+        }
+        if (!info.serviceName.isEmpty()) {
+            stopServiceInstance(info.serviceName);
+        }
+    }
+    m_virtualDisplays.clear();
+
+    for (const QString &username : m_nullSinks.keys()) {
+        for (const NullSinkInfo &sink : m_nullSinks[username]) {
+            QProcess *proc = m_ops->createProcess();
+            m_ops->startProcess(proc, QStringLiteral("machinectl"),
+                {QStringLiteral("shell"), username + QStringLiteral("@"),
+                 QStringLiteral("/bin/bash"), QStringLiteral("-c"),
+                 QStringLiteral("pactl unload-module %1").arg(sink.moduleIndex)});
+            m_ops->waitForFinished(proc, 5000);
+            delete proc;
+        }
+    }
+    m_nullSinks.clear();
 
     for (const QString &serviceName : m_usernameToUnitName) {
         m_stoppingUnits.insert(serviceName);
@@ -1719,6 +1750,322 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
     }
 
     return QString();
+}
+
+QString CouchPlayHelper::findGamescopePath()
+{
+    QString gamescopePath = QStringLiteral("/usr/bin/gamescope");
+    if (!m_ops->fileExists(gamescopePath)) {
+        QProcess *whichProc = m_ops->createProcess();
+        m_ops->startProcess(whichProc, QStringLiteral("which"), {QStringLiteral("gamescope")});
+        m_ops->waitForFinished(whichProc, 3000);
+        if (m_ops->processExitCode(whichProc) == 0) {
+            QString resolved = QString::fromLocal8Bit(m_ops->readAllStandardOutput(whichProc)).trimmed();
+            if (!resolved.isEmpty()) {
+                gamescopePath = resolved;
+            }
+        }
+        delete whichProc;
+    }
+    return gamescopePath;
+}
+
+QString CouchPlayHelper::CreateVirtualOutput(const QString &username, int width, int height, int refreshRate)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_VIRTUAL_DISPLAY)) {
+        return QString();
+    }
+
+    if (width <= 0 || height <= 0 || refreshRate <= 0) {
+        sendErrorReply(QDBusError::InvalidArgs,
+            QStringLiteral("Invalid resolution (%1x%2) or refresh rate (%3)")
+                .arg(width).arg(height).arg(refreshRate));
+        return QString();
+    }
+
+    struct passwd *pwd = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!pwd) {
+        sendErrorReply(QDBusError::Failed,
+            QStringLiteral("Failed to resolve UID for user '%1'").arg(username));
+        return QString();
+    }
+
+    uint userUid = pwd->pw_uid;
+    QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
+
+    if (!m_ops->fileExists(userRuntimeDir)) {
+        m_ops->mkpath(userRuntimeDir);
+        m_ops->chown(userRuntimeDir, userUid, pwd->pw_gid);
+    }
+
+    QStringList existingSockets = m_ops->entryList(userRuntimeDir,
+        {QStringLiteral("wayland-*")}, QDir::Files);
+
+    QString gamescopePath = findGamescopePath();
+    if (gamescopePath.isEmpty() || !m_ops->fileExists(gamescopePath)) {
+        sendErrorReply(QDBusError::Failed,
+            QStringLiteral("Gamescope not found on system"));
+        return QString();
+    }
+
+    QString serviceName = QStringLiteral("couchplay-vdisplay-%1.service").arg(username);
+
+    QStringList systemdArgs;
+    systemdArgs << QStringLiteral("--unit") << serviceName;
+    systemdArgs << QStringLiteral("--uid") << username;
+    systemdArgs << QStringLiteral("--property=Type=simple");
+    systemdArgs << QStringLiteral("-E")
+                << QStringLiteral("XDG_RUNTIME_DIR=/run/user/%1").arg(userUid);
+    systemdArgs << QStringLiteral("--");
+    systemdArgs << gamescopePath
+                << QStringLiteral("-W") << QString::number(width)
+                << QStringLiteral("-H") << QString::number(height)
+                << QStringLiteral("-r") << QString::number(refreshRate)
+                << QStringLiteral("--") << QStringLiteral("sleep") << QStringLiteral("infinity");
+
+    QProcess *proc = m_ops->createProcess();
+    m_ops->startProcess(proc, QStringLiteral("systemd-run"), systemdArgs);
+    m_ops->waitForFinished(proc, 10000);
+    int exitCode = m_ops->processExitCode(proc);
+    if (exitCode != 0) {
+        QByteArray errOutput = m_ops->readStandardError(proc);
+        delete proc;
+
+        if (errOutput.contains("already loaded")) {
+            stopServiceInstance(serviceName);
+            QThread::msleep(200);
+
+            proc = m_ops->createProcess();
+            m_ops->startProcess(proc, QStringLiteral("systemd-run"), systemdArgs);
+            m_ops->waitForFinished(proc, 10000);
+            exitCode = m_ops->processExitCode(proc);
+            if (exitCode != 0) {
+                qWarning() << "CreateVirtualOutput: retry failed for" << serviceName;
+                delete proc;
+                sendErrorReply(QDBusError::Failed,
+                    QStringLiteral("Failed to launch virtual display (stale unit)"));
+                return QString();
+            }
+            delete proc;
+        } else {
+            qWarning() << "CreateVirtualOutput: systemd-run failed:" << errOutput;
+            sendErrorReply(QDBusError::Failed,
+                QStringLiteral("Failed to launch virtual display"));
+            return QString();
+        }
+    } else {
+        delete proc;
+    }
+
+    qint64 mainPid = 0;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        QThread::msleep(500);
+        QProcess *showProc = m_ops->createProcess();
+        m_ops->startProcess(showProc, QStringLiteral("systemctl"),
+            {QStringLiteral("show"), serviceName,
+             QStringLiteral("-p"), QStringLiteral("MainPID"),
+             QStringLiteral("--value")});
+        m_ops->waitForFinished(showProc, 5000);
+        QByteArray output = m_ops->readAllStandardOutput(showProc).trimmed();
+        delete showProc;
+
+        bool ok = false;
+        mainPid = output.toLongLong(&ok);
+        if (ok && mainPid > 0) break;
+    }
+
+    if (mainPid <= 0) {
+        qWarning() << "CreateVirtualOutput: Could not get MainPID for" << serviceName;
+        sendErrorReply(QDBusError::Failed,
+            QStringLiteral("Virtual display process started but PID not retrievable"));
+        return QString();
+    }
+
+    QThread::msleep(1000);
+    QStringList newSockets = m_ops->entryList(userRuntimeDir,
+        {QStringLiteral("wayland-*")}, QDir::Files);
+
+    QString socketName;
+    for (const QString &s : newSockets) {
+        if (!existingSockets.contains(s)) {
+            socketName = s;
+            break;
+        }
+    }
+
+    if (socketName.isEmpty()) {
+        if (newSockets.size() > existingSockets.size()) {
+            socketName = newSockets.last();
+        } else if (!newSockets.isEmpty()) {
+            socketName = newSockets.last();
+            qWarning() << "CreateVirtualOutput: Could not detect new socket, using last known:"
+                        << socketName;
+        } else {
+            qWarning() << "CreateVirtualOutput: No wayland sockets found in" << userRuntimeDir;
+            sendErrorReply(QDBusError::Failed,
+                QStringLiteral("Virtual display started but no Wayland socket detected"));
+            return QString();
+        }
+    }
+
+    VirtualDisplayInfo info;
+    info.pid = mainPid;
+    info.waylandSocket = socketName;
+    info.serviceName = serviceName;
+    m_virtualDisplays[username] = info;
+
+    qInfo() << "Created virtual display for" << username
+            << "socket:" << socketName << "PID:" << mainPid;
+
+    return socketName;
+}
+
+bool CouchPlayHelper::DestroyVirtualOutput(const QString &username, const QString &waylandSocketName)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_VIRTUAL_DISPLAY)) {
+        return false;
+    }
+
+    if (!m_virtualDisplays.contains(username)) {
+        sendErrorReply(QDBusError::InvalidArgs,
+            QStringLiteral("No virtual display found for user '%1'").arg(username));
+        return false;
+    }
+
+    VirtualDisplayInfo info = m_virtualDisplays[username];
+
+    if (!waylandSocketName.isEmpty() && info.waylandSocket != waylandSocketName) {
+        sendErrorReply(QDBusError::InvalidArgs,
+            QStringLiteral("Socket name mismatch: expected '%1', got '%2'")
+                .arg(info.waylandSocket, waylandSocketName));
+        return false;
+    }
+
+    if (!info.serviceName.isEmpty()) {
+        stopServiceInstance(info.serviceName);
+    } else if (info.pid > 0) {
+        m_ops->killProcess(static_cast<pid_t>(info.pid), SIGTERM);
+    }
+
+    m_virtualDisplays.remove(username);
+
+    qInfo() << "Destroyed virtual display for" << username;
+    return true;
+}
+
+QString CouchPlayHelper::CreateNullSink(const QString &username, const QString &sinkName)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_AUDIO_SINK)) {
+        return QString();
+    }
+
+    static QRegularExpression validSinkName(QStringLiteral("^[a-zA-Z][a-zA-Z0-9_-]{0,63}$"));
+    if (!validSinkName.match(sinkName).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs,
+            QStringLiteral("Invalid sink name format: '%1'").arg(sinkName));
+        return QString();
+    }
+
+    QProcess *proc = m_ops->createProcess();
+    m_ops->startProcess(proc, QStringLiteral("machinectl"),
+        {QStringLiteral("shell"), username + QStringLiteral("@"),
+         QStringLiteral("/bin/bash"), QStringLiteral("-c"),
+         QStringLiteral("pactl load-module module-null-sink sink_name=%1 "
+                        "sink_properties=device.description=\\\"CouchPlay %1\\\"")
+             .arg(sinkName)});
+    m_ops->waitForFinished(proc, 10000);
+
+    if (m_ops->processExitCode(proc) != 0) {
+        QString errOutput = QString::fromLocal8Bit(m_ops->readStandardError(proc));
+        qWarning() << "CreateNullSink: pactl failed:" << errOutput;
+        sendErrorReply(QDBusError::Failed,
+            QStringLiteral("Failed to create null-sink: %1").arg(errOutput));
+        delete proc;
+        return QString();
+    }
+
+    QString output = QString::fromLocal8Bit(m_ops->readAllStandardOutput(proc)).trimmed();
+    delete proc;
+
+    static QRegularExpression moduleRegex(QStringLiteral("Module #(\\d+)"));
+    auto match = moduleRegex.match(output);
+    int moduleIndex = 0;
+    if (match.hasMatch()) {
+        moduleIndex = match.captured(1).toInt();
+    } else {
+        bool ok = false;
+        moduleIndex = output.toInt(&ok);
+        if (!ok || moduleIndex <= 0) {
+            qWarning() << "CreateNullSink: Could not parse module index from:" << output;
+            sendErrorReply(QDBusError::Failed,
+                QStringLiteral("Null-sink created but module index not retrievable"));
+            return QString();
+        }
+    }
+
+    NullSinkInfo info;
+    info.moduleIndex = moduleIndex;
+    info.sinkName = sinkName;
+    m_nullSinks[username].append(info);
+
+    qInfo() << "Created null-sink" << sinkName << "module #" << moduleIndex << "for" << username;
+    return sinkName;
+}
+
+bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &sinkName)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_AUDIO_SINK)) {
+        return false;
+    }
+
+    int moduleIndex = -1;
+    if (m_nullSinks.contains(username)) {
+        for (int i = 0; i < m_nullSinks[username].size(); ++i) {
+            if (m_nullSinks[username][i].sinkName == sinkName) {
+                moduleIndex = m_nullSinks[username][i].moduleIndex;
+                m_nullSinks[username].removeAt(i);
+                break;
+            }
+        }
+    }
+
+    if (moduleIndex <= 0) {
+        QProcess *listProc = m_ops->createProcess();
+        m_ops->startProcess(listProc, QStringLiteral("machinectl"),
+            {QStringLiteral("shell"), username + QStringLiteral("@"),
+             QStringLiteral("/bin/bash"), QStringLiteral("-c"),
+             QStringLiteral("pactl list modules short | grep 'module-null-sink.*sink_name=%1' | awk '{print $1}'").arg(sinkName)});
+        m_ops->waitForFinished(listProc, 5000);
+        QString listOutput = QString::fromLocal8Bit(m_ops->readAllStandardOutput(listProc)).trimmed();
+        delete listProc;
+
+        bool ok = false;
+        moduleIndex = listOutput.split(QLatin1Char('\n')).first().toInt(&ok);
+        if (!ok || moduleIndex <= 0) {
+            sendErrorReply(QDBusError::Failed,
+                QStringLiteral("Could not find null-sink '%1' for user '%2'")
+                    .arg(sinkName, username));
+            return false;
+        }
+    }
+
+    QProcess *proc = m_ops->createProcess();
+    m_ops->startProcess(proc, QStringLiteral("machinectl"),
+        {QStringLiteral("shell"), username + QStringLiteral("@"),
+         QStringLiteral("/bin/bash"), QStringLiteral("-c"),
+         QStringLiteral("pactl unload-module %1").arg(moduleIndex)});
+    m_ops->waitForFinished(proc, 10000);
+    bool ok = (m_ops->processExitCode(proc) == 0);
+    delete proc;
+
+    if (!ok) {
+        sendErrorReply(QDBusError::Failed,
+            QStringLiteral("Failed to unload null-sink module %1").arg(moduleIndex));
+        return false;
+    }
+
+    qInfo() << "Destroyed null-sink" << sinkName << "module #" << moduleIndex << "for" << username;
+    return true;
 }
 
 void CouchPlayHelper::saveState()
