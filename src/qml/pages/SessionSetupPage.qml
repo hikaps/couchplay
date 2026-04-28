@@ -350,6 +350,13 @@ Kirigami.ScrollablePage {
                     return config?.presetId || "steam"
                 }
                 
+                property bool isStreaming: {
+                    void(cardRevision)
+                    if (!cardSessionManager) return false
+                    let config = cardSessionManager.getInstanceConfig(instanceCard.index)
+                    return config?.outputMode === "streaming"
+                }
+                
                 property var overridePatternsModel: {
                     void(cardRevision)
                     if (!cardSessionManager) return []
@@ -361,6 +368,13 @@ Kirigami.ScrollablePage {
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
                 readonly property string labelUser: i18nc("@label", "User:")
                 readonly property string labelLauncher: i18nc("@label", "Launcher:")
+                readonly property string labelOutputMode: i18nc("@label", "Output Mode:")
+                readonly property string optionPhysical: i18nc("@option", "Physical Display")
+                readonly property string optionStreaming: i18nc("@option", "Moonlight Stream")
+                readonly property string labelStreamResolution: i18nc("@label", "Stream Resolution:")
+                readonly property string labelFrameRate: i18nc("@label", "Frame Rate:")
+                readonly property string labelBitrate: i18nc("@label", "Bitrate:")
+                readonly property string labelCodec: i18nc("@label", "Video Codec:")
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
@@ -379,10 +393,31 @@ Kirigami.ScrollablePage {
                 readonly property string textAssign: i18nc("@action:button", "Assign...")
                 readonly property string tooltipRemovePattern: i18nc("@info:tooltip", "Remove pattern")
 
-                header: Kirigami.Heading {
-                    text: i18nc("@title", "Player %1", instanceCard.index + 1)
-                    level: 3
+                header: RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
                     padding: Kirigami.Units.smallSpacing
+
+                    Kirigami.Heading {
+                        text: i18nc("@title", "Player %1", instanceCard.index + 1)
+                        level: 3
+                    }
+
+                    Kirigami.Icon {
+                        visible: instanceCard.isStreaming
+                        source: "network-wireless"
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                        opacity: 0.7
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.text: i18nc("@info:tooltip", "Streaming via Moonlight")
+                        Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+
+                        HoverHandler { id: streamIconHover }
+                        // Workaround: Kirigami.Icon doesn't natively expose hovered
+                        property bool hovered: streamIconHover.hovered
+                    }
+
+                    Item { Layout.fillWidth: true }
                 }
 
                 contentItem: ColumnLayout {
@@ -460,11 +495,149 @@ Kirigami.ScrollablePage {
                             }
                         }
 
+                        Controls.ComboBox {
+                            Kirigami.FormData.label: instanceCard.labelOutputMode
+                            Layout.fillWidth: true
+                            
+                            model: ListModel {
+                                ListElement { text: "Physical Display"; value: "physical" }
+                                ListElement { text: "Moonlight Stream"; value: "streaming" }
+                            }
+                            
+                            textRole: "text"
+                            valueRole: "value"
+                            
+                            Component.onCompleted: {
+                                // Translate model items after creation
+                                model.setProperty(0, "text", instanceCard.optionPhysical)
+                                model.setProperty(1, "text", instanceCard.optionStreaming)
+                            }
+                            
+                            currentIndex: instanceCard.isStreaming ? 1 : 0
+                            
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.outputMode = currentValue
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
+                        }
+
                         // Resolution is auto-calculated from monitor size and layout
                         Controls.Label {
                             Kirigami.FormData.label: instanceCard.labelResolution
+                            visible: !instanceCard.isStreaming
                             text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
                             opacity: 0.8
+                        }
+                        
+                        Controls.ComboBox {
+                            Kirigami.FormData.label: instanceCard.labelStreamResolution
+                            visible: instanceCard.isStreaming
+                            Layout.fillWidth: true
+                            model: ["1280x720", "1920x1080", "2560x1440", "3840x2160"]
+                            
+                            currentIndex: {
+                                if (!instanceCard.cardSessionManager) return 1
+                                let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamResolution || "1920x1080"
+                                let idx = model.indexOf(res)
+                                return idx >= 0 ? idx : 1
+                            }
+                            
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.streamResolution = currentText
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
+                        }
+                        
+                        Controls.ComboBox {
+                            Kirigami.FormData.label: instanceCard.labelFrameRate
+                            visible: instanceCard.isStreaming
+                            Layout.fillWidth: true
+                            model: [30, 60, 120]
+                            textRole: "" // Just use the integer values directly
+                            
+                            displayText: i18nc("@unit", "%1 FPS", currentText)
+                            
+                            currentIndex: {
+                                if (!instanceCard.cardSessionManager) return 1
+                                let fps = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamFps || 60
+                                let idx = model.indexOf(fps)
+                                return idx >= 0 ? idx : 1
+                            }
+                            
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.streamFps = currentValue
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
+                        }
+                        
+                        RowLayout {
+                            Kirigami.FormData.label: instanceCard.labelBitrate
+                            visible: instanceCard.isStreaming
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+                            
+                            Controls.Slider {
+                                id: bitrateSlider
+                                Layout.fillWidth: true
+                                from: 5000
+                                to: 80000
+                                stepSize: 1000
+                                
+                                value: {
+                                    if (!instanceCard.cardSessionManager) return 20000
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    return config.streamBitrate || 20000
+                                }
+                                
+                                onMoved: {
+                                    if (instanceCard.cardSessionManager) {
+                                        let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                        config.streamBitrate = value
+                                        instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                    }
+                                }
+                            }
+                            
+                            Controls.Label {
+                                text: i18nc("@unit", "%1 Mbps", (bitrateSlider.value / 1000).toFixed(0))
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 4
+                                horizontalAlignment: Text.AlignRight
+                            }
+                        }
+                        
+                        Controls.ComboBox {
+                            Kirigami.FormData.label: instanceCard.labelCodec
+                            visible: instanceCard.isStreaming
+                            Layout.fillWidth: true
+                            model: ["H.264", "H.265", "AV1"]
+                            
+                            currentIndex: {
+                                if (!instanceCard.cardSessionManager) return 0
+                                let codec = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamCodec || "h264"
+                                if (codec === "h265" || codec === "hevc") return 1
+                                if (codec === "av1") return 2
+                                return 0
+                            }
+                            
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    let codecStr = "h264"
+                                    if (currentIndex === 1) codecStr = "h265"
+                                    if (currentIndex === 2) codecStr = "av1"
+                                    config.streamCodec = codecStr
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
                         }
 
                         RowLayout {
@@ -699,6 +872,15 @@ Kirigami.ScrollablePage {
                                 }
                             }
                         }
+                    }
+
+                    // Streaming status indicator
+                    Kirigami.InlineMessage {
+                        Layout.fillWidth: true
+                        visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.running
+                        type: Kirigami.MessageType.Information
+                        text: i18nc("@info", "Sunshine streaming is active on port %1",
+                                    root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).sunshinePort : 47989)
                     }
 
                     // Warning for missing devices

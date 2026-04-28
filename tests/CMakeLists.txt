@@ -48,6 +48,10 @@ set(TEST_MANAGER_SOURCES
     ../src/core/CommandVerifier.h
     ../src/core/VirtualDeviceWatcher.cpp
     ../src/core/VirtualDeviceWatcher.h
+    ../src/core/SunshineConfig.cpp
+    ../src/core/SunshineConfig.h
+    ../src/core/StreamManager.cpp
+    ../src/core/StreamManager.h
     ../src/dbus/CouchPlayHelperClient.cpp
     ../src/dbus/CouchPlayHelperClient.h
 )
@@ -141,6 +145,10 @@ add_couchplay_test(test_presetmanager_integration)
 add_couchplay_test(test_scanapplications)
 add_couchplay_test(test_sessionmanager)
 add_couchplay_test(test_sessionrunner)
+add_couchplay_test(test_streaming_config)
+add_couchplay_test(test_streaming_session)
+add_couchplay_test(test_streammanager)
+add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
 
 # Add helper tests
