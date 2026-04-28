@@ -11,6 +11,8 @@
 
 #include "../dbus/CouchPlayHelperClient.h"
 
+struct DataDirectory;
+
 /**
  * HeroicPaths - Detected Heroic installation paths
  */
@@ -214,6 +216,9 @@ public:
      * @return Number of shortcuts generated
      */
     Q_INVOKABLE int generateShortcuts();
+
+    bool prepareDataDir(const DataDirectory &dir, const QString &username);
+    bool finalizeDataDir(const DataDirectory &dir, const QString &username);
 
 Q_SIGNALS:
     void heroicPathsChanged();

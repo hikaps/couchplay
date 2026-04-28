@@ -534,6 +534,27 @@ bool CouchPlayHelperClient::destroyVirtualOutput(const QString &username, const 
     return reply.value();
 }
 
+bool CouchPlayHelperClient::setupOverlayMount(const QString &username,
+                                               uint compositorUid,
+                                               const QString &sourceDir,
+                                               const QString &targetAlias)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply =
+        m_interface->call(QStringLiteral("SetupOverlayMount"), username, compositorUid, sourceDir, targetAlias);
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
 QString CouchPlayHelperClient::createNullSink(const QString &username, const QString &sinkName)
 {
     if (!m_available) {
@@ -567,6 +588,26 @@ bool CouchPlayHelperClient::destroyNullSink(const QString &username, const QStri
         username,
         sinkName
     );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::copyDirectoryToUser(const QString &username,
+                                                 const QString &sourceDir,
+                                                 const QString &targetRelativePath)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply =
+        m_interface->call(QStringLiteral("CopyDirectoryToUser"), username, sourceDir, targetRelativePath);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
