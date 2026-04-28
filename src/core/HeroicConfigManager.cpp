@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "HeroicConfigManager.h"
+#include "PresetManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
 
@@ -613,4 +614,36 @@ QList<HeroicGame> HeroicConfigManager::parseSideloadGames()
 
     qDebug() << "HeroicConfigManager: Loaded" << games.size() << "sideload games";
     return games;
+}
+
+bool HeroicConfigManager::prepareDataDir(const DataDirectory &dir, const QString &username)
+{
+    Q_UNUSED(username)
+
+    // Config copy: copy mode on heroic config root
+    if (dir.mode == QStringLiteral("copy") && !m_heroicPaths.heroicRoot.isEmpty()
+        && dir.path == m_heroicPaths.heroicRoot) {
+        // Flatpak vs native path resolution is handled by syncConfigToUser internally
+        return true;
+    }
+
+    // Game ACL: acl mode on game install directories
+    if (dir.mode == QStringLiteral("acl") && m_heroicPaths.valid) {
+        bool isGameDir = !m_defaultInstallPath.isEmpty()
+            && (dir.path == m_defaultInstallPath
+                || dir.path.startsWith(m_defaultInstallPath + QLatin1Char('/')));
+
+        if (isGameDir && m_games.isEmpty()) {
+            loadGames();
+        }
+    }
+
+    return true;
+}
+
+bool HeroicConfigManager::finalizeDataDir(const DataDirectory &dir, const QString &username)
+{
+    Q_UNUSED(dir)
+    Q_UNUSED(username)
+    return true;
 }

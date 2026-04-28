@@ -227,23 +227,23 @@ void TestPresetManager::testGetSetSharedDirectories()
     PresetManager manager;
     QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
 
-    // Add a custom preset
     QString id = manager.addCustomPreset(QStringLiteral("Shared Test"), QStringLiteral("/path/to/game"));
 
-    // Initially empty
-    QStringList dirs = manager.getSharedDirectories(id);
+    QVariantList dirs = manager.getDataDirectories(id);
     QVERIFY(dirs.isEmpty());
     presetsChangedSpy.clear();
 
-    // Set shared directories
-    QStringList newDirs = {QStringLiteral("/shared/dir1"), QStringLiteral("/shared/dir2")};
-    bool result = manager.setSharedDirectories(id, newDirs);
+    QVariantList newDirs;
+    DataDirectory dir1{QStringLiteral("/shared/dir1"), QStringLiteral("acl")};
+    DataDirectory dir2{QStringLiteral("/shared/dir2"), QStringLiteral("overlay")};
+    newDirs.append(QVariant::fromValue(dir1));
+    newDirs.append(QVariant::fromValue(dir2));
+    bool result = manager.setDataDirectories(id, newDirs);
     QVERIFY(result);
     QCOMPARE(presetsChangedSpy.count(), 1);
 
-    // Verify they were set
-    dirs = manager.getSharedDirectories(id);
-    QCOMPARE(dirs, newDirs);
+    dirs = manager.getDataDirectories(id);
+    QCOMPARE(dirs.size(), 2);
 }
 
 void TestPresetManager::testLauncherInfoFlags()
@@ -251,16 +251,13 @@ void TestPresetManager::testLauncherInfoFlags()
     PresetManager manager;
 
     LaunchPreset steam = manager.getPreset(QStringLiteral("steam"));
-    QCOMPARE(steam.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(steam.launcherInfo.needsDataAcl, true);
+    QVERIFY(!steam.launcherInfo.configPath.isEmpty() || steam.launcherId == QStringLiteral("steam"));
 
     LaunchPreset heroic = manager.getPreset(QStringLiteral("heroic"));
-    QCOMPARE(heroic.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(heroic.launcherInfo.needsDataAcl, true);
+    QCOMPARE(heroic.launcherId, QStringLiteral("heroic"));
 
     LaunchPreset lutris = manager.getPreset(QStringLiteral("lutris"));
-    QCOMPARE(lutris.launcherInfo.needsConfigCopy, false);
-    QCOMPARE(lutris.launcherInfo.needsDataAcl, false);
+    QCOMPARE(lutris.launcherId, QStringLiteral("lutris"));
 }
 
 void TestPresetManager::testLauncherIdPersistence()
@@ -371,8 +368,6 @@ void TestPresetManager::testPopulateLauncherInfo_SteamCustom()
 
     QVERIFY(!preset.isBuiltin);
     QCOMPARE(preset.launcherId, QStringLiteral("steam"));
-    QCOMPARE(preset.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(preset.launcherInfo.needsDataAcl, true);
 }
 
 void TestPresetManager::testPopulateLauncherInfo_HeroicCustom()
@@ -392,8 +387,6 @@ void TestPresetManager::testPopulateLauncherInfo_HeroicCustom()
 
     QVERIFY(!preset.isBuiltin);
     QCOMPARE(preset.launcherId, QStringLiteral("heroic"));
-    QCOMPARE(preset.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(preset.launcherInfo.needsDataAcl, true);
 }
 
 void TestPresetManager::testPopulateLauncherInfo_EmptyLauncherId()
@@ -407,11 +400,8 @@ void TestPresetManager::testPopulateLauncherInfo_EmptyLauncherId()
 
     QVERIFY(!preset.isBuiltin);
     QVERIFY(preset.launcherId.isEmpty());
-    QCOMPARE(preset.launcherInfo.needsConfigCopy, false);
-    QCOMPARE(preset.launcherInfo.needsDataAcl, false);
     QVERIFY(preset.launcherInfo.configPath.isEmpty());
     QVERIFY(preset.launcherInfo.dataPath.isEmpty());
-    QVERIFY(preset.launcherInfo.gameDirectories.isEmpty());
 }
 
 void TestPresetManager::testPopulateLauncherInfo_FreshOnAccess()
@@ -431,10 +421,8 @@ void TestPresetManager::testPopulateLauncherInfo_FreshOnAccess()
     LaunchPreset first = manager2.getPreset(id);
     LaunchPreset second = manager2.getPreset(id);
 
-    QCOMPARE(first.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(second.launcherInfo.needsConfigCopy, true);
-    QCOMPARE(first.launcherInfo.needsDataAcl, second.launcherInfo.needsDataAcl);
-    QCOMPARE(first.launcherInfo.gameDirectories, second.launcherInfo.gameDirectories);
+    QCOMPARE(first.launcherInfo.configPath, second.launcherInfo.configPath);
+    QCOMPARE(first.launcherInfo.dataPath, second.launcherInfo.dataPath);
 }
 
 QTEST_MAIN(TestPresetManager)

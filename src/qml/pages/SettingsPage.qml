@@ -196,7 +196,7 @@ Kirigami.ScrollablePage {
                             onClicked: {
                                 editPresetDialog.presetId = modelData.id
                                 editPresetDialog.presetName = modelData.name
-                                editPresetDialog.setDirectoriesFromBackend(activePresetManager.getSharedDirectories(modelData.id))
+                                editPresetDialog.setDirectoriesFromBackend(activePresetManager.getDataDirectories(modelData.id))
                                 editPresetDialog.open()
                             }
                         }

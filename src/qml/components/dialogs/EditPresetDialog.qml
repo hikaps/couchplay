@@ -32,14 +32,15 @@ Kirigami.Dialog {
     function setDirectoriesFromBackend(dirs) {
         directoriesModel.clear()
         for (let i = 0; i < dirs.length; i++) {
-            directoriesModel.append({ path: dirs[i] })
+            directoriesModel.append({ path: dirs[i].path, mode: dirs[i].mode })
         }
     }
 
     function getDirectoriesArray() {
         let arr = []
         for (let i = 0; i < directoriesModel.count; i++) {
-            arr.push(directoriesModel.get(i).path)
+            let item = directoriesModel.get(i)
+            arr.push({ path: item.path, mode: item.mode })
         }
         return arr
     }
@@ -49,13 +50,13 @@ Kirigami.Dialog {
         
         Kirigami.Heading {
             level: 3
-            text: i18nc("@title", "Shared Directories")
+            text: i18nc("@title", "Data Directories")
             Layout.fillWidth: true
         }
         
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            text: i18nc("@info", "These directories will be accessible to this application when running.")
+            text: i18nc("@info", "Choose how to share data: 'Shared (ACL)' shares a single folder among all users, 'Copy' duplicates it for each user, and 'Overlay' creates a per-user copy-on-write overlay.")
             type: Kirigami.MessageType.Information
             visible: true
         }
@@ -86,12 +87,31 @@ Kirigami.Dialog {
                         elide: Text.ElideMiddle
                     }
 
+                    Kirigami.ComboBox {
+                        model: [
+                            { value: "acl", text: i18nc("@item:inlistbox", "Shared (ACL)") },
+                            { value: "copy", text: i18nc("@item:inlistbox", "Copy files") },
+                            { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay") }
+                        ]
+                        textRole: "text"
+                        valueRole: "value"
+                        currentIndex: {
+                            if (mode === "copy") return 1;
+                            if (mode === "overlay") return 2;
+                            return 0;
+                        }
+                        onActivated: {
+                            directoriesModel.setProperty(index, "mode", currentValue)
+                            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
+                        }
+                    }
+
                     Controls.Button {
                         icon.name: "edit-delete"
                         display: Controls.AbstractButton.IconOnly
                         onClicked: {
                             directoriesModel.remove(index)
-                            root.presetManager.setSharedDirectories(root.presetId, root.getDirectoriesArray())
+                            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
                         }
                     }
                 }
@@ -99,7 +119,7 @@ Kirigami.Dialog {
                 Kirigami.PlaceholderMessage {
                     anchors.centerIn: parent
                     visible: sharedDirsList.count === 0
-                    text: i18nc("@info", "No shared directories configured")
+                    text: i18nc("@info", "No data directories configured")
                     icon.name: "folder-open"
                 }
             }
@@ -108,7 +128,7 @@ Kirigami.Dialog {
 
     FolderDialog {
         id: folderDialog
-        title: i18nc("@title:dialog", "Select Directory to Share")
+        title: i18nc("@title:dialog", "Select Directory")
         onAccepted: {
             let path = selectedFolder.toString()
             if (path.startsWith("file://")) path = path.substring(7)
@@ -123,8 +143,8 @@ Kirigami.Dialog {
             }
             
             if (!exists) {
-                directoriesModel.append({ path: path })
-                root.presetManager.setSharedDirectories(root.presetId, root.getDirectoriesArray())
+                directoriesModel.append({ path: path, mode: "acl" })
+                root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
             }
         }
     }

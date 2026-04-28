@@ -162,6 +162,27 @@ public:
      */
     Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
+    /**
+     * @brief Set up an overlay mount for a user's instance
+     * @param username Target user
+     * @param compositorUid UID of compositor user (for resolving source paths)
+     * @param sourceDir Source directory to overlay
+     * @param targetAlias Alias path for the overlay target
+     * @return true if successful
+     */
+    Q_INVOKABLE virtual bool
+    setupOverlayMount(const QString &username, uint compositorUid, const QString &sourceDir, const QString &targetAlias);
+
+    /**
+     * @brief Copy a directory tree to a user's home with proper ownership
+     * @param username Target user
+     * @param sourceDir Source directory to copy
+     * @param targetRelativePath Relative path under user's home for the target
+     * @return true if successful
+     */
+    Q_INVOKABLE virtual bool
+    copyDirectoryToUser(const QString &username, const QString &sourceDir, const QString &targetRelativePath);
+
 Q_SIGNALS:
     void availabilityChanged();
     void errorOccurred(const QString &message);

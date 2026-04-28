@@ -207,6 +207,24 @@ public Q_SLOTS:
     int MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories);
 
     /**
+     * Set up an OverlayFS mount for a user
+     *
+     * Creates an overlay filesystem that provides a writable layer over a shared
+     * source directory. The user sees the source contents but writes go to a
+     * private upper directory, keeping the source unchanged.
+     *
+     * @param username Target user (must exist)
+     * @param compositorUid UID of the compositor user (for determining home-relative paths)
+     * @param sourceDir Source directory to use as lower layer
+     * @param targetAlias Mount alias (empty for home-relative path)
+     * @return true if successful
+     */
+    bool SetupOverlayMount(const QString &username,
+                           uint compositorUid,
+                           const QString &sourceDir,
+                           const QString &targetAlias);
+
+    /**
      * Unmount all shared directories for a user
      *
      * @param username Target user
@@ -234,6 +252,23 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool CopyFileToUser(const QString &sourcePath, const QString &targetPath, const QString &username);
+
+    /**
+     * Copy a directory to a user's home with proper ownership
+     *
+     * Copies a source directory into the user's home at the specified relative path.
+     * Uses cp -a to preserve ownership, permissions, and symlinks.
+     * The targetRelativePath must be relative (no leading /) and must not
+     * contain ".." components to prevent escaping the user's home.
+     *
+     * @param username Target user
+     * @param sourceDir Source directory path (must exist and be a directory)
+     * @param targetRelativePath Relative path under user's home (e.g., ".local/share/steam")
+     * @return true if successful
+     */
+    bool CopyDirectoryToUser(const QString &username,
+                             const QString &sourceDir,
+                             const QString &targetRelativePath);
 
     /**
      * Create a directory with proper ownership
@@ -345,6 +380,9 @@ private:
     struct MountInfo {
         QString source;
         QString target;
+        QString mountType; // "bind" or "overlay"
+        QString upperDir;  // overlay only: upper directory
+        QString workDir;   // overlay only: work directory
     };
     QMap<QString, QList<MountInfo>> m_activeMounts; // username -> list of mounts
 

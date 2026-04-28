@@ -7,10 +7,13 @@
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QString>
+#include <QVariantList>
 #include <QVariantMap>
 
 #include <KConfig>
 #include <KConfigGroup>
+
+#include "PresetManager.h"
 
 class SessionManager;
 
@@ -34,7 +37,7 @@ struct InstanceConfig {
     Q_PROPERTY(QString gameCommand MEMBER gameCommand)
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
     Q_PROPERTY(QString presetId MEMBER presetId)
-    Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
+    Q_PROPERTY(QVariantList dataDirectories READ dataDirectoriesAsVariant WRITE setDataDirectoriesFromVariant)
     Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
     Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
@@ -55,7 +58,9 @@ public:
     QString gameCommand;
     QString steamAppId; // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam"); // ID of the launch preset to use
-    QStringList sharedDirectories; // Per-instance shared directories (from preset)
+    QList<DataDirectory> dataDirectories; // Per-instance data directories (from preset)
+    QVariantList dataDirectoriesAsVariant() const;
+    void setDataDirectoriesFromVariant(const QVariantList &dirs);
     QString overrideGamePath;
     QStringList overrideFiles;
     QStringList overridePatterns; // Glob patterns for per-user overrides
@@ -130,7 +135,7 @@ public:
     Q_INVOKABLE void setInstanceDeviceStableIds(int index, const QStringList &stableIds, const QStringList &names);
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
-    Q_INVOKABLE void setInstanceSharedDirectories(int index, const QStringList &directories);
+    Q_INVOKABLE void setInstanceDataDirectories(int index, const QVariantList &directories);
 
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;
