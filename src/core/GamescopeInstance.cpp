@@ -22,6 +22,14 @@ GamescopeInstance::~GamescopeInstance()
     stop();
 }
 
+void GamescopeInstance::setVirtualDisplaySocket(const QString &socket)
+{
+    if (m_virtualDisplaySocket != socket) {
+        m_virtualDisplaySocket = socket;
+        Q_EMIT configChanged();
+    }
+}
+
 bool GamescopeInstance::start(const QVariantMap &config, int index)
 {
     if (m_helperPid > 0) {
@@ -210,8 +218,24 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     args << QStringLiteral("-w") << QString::number(internalW);
     args << QStringLiteral("-h") << QString::number(internalH);
 
-    int outputW = config.value(QStringLiteral("outputWidth"), 960).toInt();
-    int outputH = config.value(QStringLiteral("outputHeight"), 1080).toInt();
+    QString outputMode = config.value(QStringLiteral("outputMode")).toString();
+    bool isStreaming = (outputMode == QStringLiteral("streaming"));
+
+    int outputW, outputH;
+    if (isStreaming) {
+        QString streamRes = config.value(QStringLiteral("streamResolution"), QStringLiteral("1920x1080")).toString();
+        QStringList parts = streamRes.split(QLatin1Char('x'));
+        if (parts.size() == 2) {
+            outputW = parts[0].toInt();
+            outputH = parts[1].toInt();
+        } else {
+            outputW = 1920;
+            outputH = 1080;
+        }
+    } else {
+        outputW = config.value(QStringLiteral("outputWidth"), 960).toInt();
+        outputH = config.value(QStringLiteral("outputHeight"), 1080).toInt();
+    }
     args << QStringLiteral("-W") << QString::number(outputW);
     args << QStringLiteral("-H") << QString::number(outputH);
 
@@ -235,9 +259,11 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     // Window positioning is handled by WindowManager via KWin scripting
     // (gamescope does not have a --position flag)
 
-    QString monitorName = config.value(QStringLiteral("monitorName")).toString();
-    if (!monitorName.isEmpty()) {
-        args << QStringLiteral("--prefer-output") << monitorName;
+    if (!isStreaming) {
+        QString monitorName = config.value(QStringLiteral("monitorName")).toString();
+        if (!monitorName.isEmpty()) {
+            args << QStringLiteral("--prefer-output") << monitorName;
+        }
     }
 
     // NOTE: Input device isolation is handled via device ownership (chown/chmod),
@@ -267,6 +293,12 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     // Set desktop environment for XDG portal integration (native file dialogs in Steam etc.)
     envVars << QStringLiteral("XDG_CURRENT_DESKTOP=KDE");
     envVars << QStringLiteral("GTK_USE_PORTAL=1");
+
+    // For streaming instances, redirect to virtual Wayland display
+    QString virtualSocket = config.value(QStringLiteral("virtualDisplaySocket")).toString();
+    if (!virtualSocket.isEmpty()) {
+        envVars << QStringLiteral("WAYLAND_DISPLAY=%1").arg(virtualSocket);
+    }
 
     return envVars;
 }

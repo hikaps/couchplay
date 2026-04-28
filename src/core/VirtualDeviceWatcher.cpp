@@ -133,6 +133,11 @@ bool VirtualDeviceWatcher::isVirtualDevice(int eventNumber, const QString &name)
         return true;
     }
 
+    if (lowerName.contains(QStringLiteral("sunshine")) ||
+        lowerName.contains(QStringLiteral("passthrough"))) {
+        return true;
+    }
+
     QString physPath = QStringLiteral("/sys/class/input/event%1/device/phys").arg(eventNumber);
     QFile physFile(physPath);
     if (physFile.open(QIODevice::ReadOnly)) {
