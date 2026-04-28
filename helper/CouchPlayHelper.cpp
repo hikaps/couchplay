@@ -1215,22 +1215,65 @@ void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString
     m_monitors.insert(serviceName, monitor);
 }
 
+bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
+{
+    if (path.contains(QStringLiteral(".."))) {
+        return false;
+    }
+
+    static const QStringList allowedPrefixes = {
+        QStringLiteral("/home/"),
+        QStringLiteral("/var/home/"), // Bazzite/Fedora Silverblue
+        QStringLiteral("/run/media/"),
+        QStringLiteral("/tmp/"),
+    };
+
+    for (const QString &prefix : allowedPrefixes) {
+        if (path.startsWith(prefix)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 QString CouchPlayHelper::computeMountTarget(const QString &source,
                                             const QString &alias,
                                             const QString &userHome,
                                             const QString &compositorHome)
 {
+    // Reject alias with path traversal
+    if (alias.contains(QStringLiteral(".."))) {
+        qWarning() << "computeMountTarget: alias contains path traversal:" << alias;
+        return {};
+    }
+
+    QString target;
     if (source.startsWith(compositorHome) && alias.isEmpty()) {
+        // Prevent traversal via source containing ../ after compositorHome prefix
         QString relativePath = source.mid(compositorHome.length());
-        return userHome + relativePath;
+        if (relativePath.contains(QStringLiteral(".."))) {
+            qWarning() << "computeMountTarget: source relative path contains '..':" << source;
+            return {};
+        }
+        target = userHome + relativePath;
     } else if (!alias.isEmpty()) {
         if (alias.startsWith(QLatin1Char('/'))) {
-            return userHome + alias;
+            target = userHome + alias;
+        } else {
+            target = userHome + QStringLiteral("/") + alias;
         }
-        return userHome + QStringLiteral("/") + alias;
     } else {
-        return userHome + QStringLiteral("/.couchplay/mounts") + source;
+        target = userHome + QStringLiteral("/.couchplay/mounts") + source;
     }
+
+    // Verify the target stays within userHome
+    if (!target.startsWith(userHome)) {
+        qWarning() << "computeMountTarget: target escapes user home:" << target;
+        return {};
+    }
+
+    return target;
 }
 
 int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories)
@@ -1273,7 +1316,16 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
             continue;
         }
 
+        if (!isPathWithinAllowedPrefix(source)) {
+            qWarning() << "MountSharedDirectories: Source path is outside allowed prefixes:" << source;
+            continue;
+        }
+
         QString target = computeMountTarget(source, alias, userHome, compositorHome);
+        if (target.isEmpty()) {
+            qWarning() << "MountSharedDirectories: Invalid mount target computed";
+            continue;
+        }
 
         if (!m_ops->fileExists(target)) {
             if (!m_ops->mkpath(target)) {
@@ -1334,6 +1386,12 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
         return false;
     }
 
+    if (!isPathWithinAllowedPrefix(sourceDir)) {
+        qWarning() << "SetupOverlayMount: Source path is outside allowed prefixes:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
     QString userHome = getUserHome(username);
     if (userHome.isEmpty()) {
         sendErrorReply(QDBusError::Failed,
@@ -1348,6 +1406,11 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
     }
 
     QString target = computeMountTarget(sourceDir, targetAlias, userHome, compositorHome);
+    if (target.isEmpty()) {
+        qWarning() << "SetupOverlayMount: Invalid mount target computed";
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid mount target"));
+        return false;
+    }
 
     if (!m_ops->fileExists(target)) {
         if (!m_ops->mkpath(target)) {
@@ -1734,6 +1797,12 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
         return false;
     }
 
+    if (!isPathWithinAllowedPrefix(path)) {
+        qWarning() << "SetDirectoryAcl: Path is outside allowed prefixes:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is outside allowed prefixes"));
+        return false;
+    }
+
     if (!m_ops->fileExists(path)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path does not exist: %1").arg(path));
         return false;
@@ -1770,6 +1839,12 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
 bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(path)) {
+        qWarning() << "SetPathAclWithParents: Path is outside allowed prefixes:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is outside allowed prefixes"));
         return false;
     }
 

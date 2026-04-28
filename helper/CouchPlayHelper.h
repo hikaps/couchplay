@@ -373,6 +373,7 @@ private:
                                const QString &compositorHome);
     bool
     validateUserPath(const QString &path, const QString &username, const QString &callerName, QStringList &dirsToChown);
+    bool isPathWithinAllowedPrefix(const QString &path) const;
 
     QStringList m_modifiedDevices;
 
