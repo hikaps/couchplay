@@ -475,6 +475,7 @@ private:
     validateUserPath(const QString &path, const QString &username, const QString &callerName, QStringList &dirsToChown);
     QString findGamescopePath();
     bool unloadNullSinkModule(const QString &username, const QString &sinkName);
+    bool isPathWithinAllowedPrefix(const QString &path) const;
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;
