@@ -1,24 +1,24 @@
 # AGENTS.md - Test Guidelines for CouchPlay
 
-QtTest unit test suite for core manager components (13 test files, ~9.6K lines).
+QtTest unit test suite for core manager components (13 test files, ~5.2K lines).
 
 ## STRUCTURE
 
 | Test File | Test Class | Lines | Focus |
 |-----------|-------------|-------|-------|
-| test_devicemanager.cpp | DeviceManagerTest | 671 | Device detection, assignment, stable IDs |
-| test_gamescopeinstance.cpp | GamescopeInstanceTest | 446 | Process wrapping, arg building |
-| test_presetmanager.cpp | PresetManagerTest | 479 | Built-in/custom presets, app scanning |
-| test_sessionmanager.cpp | SessionManagerTest | 364 | Session profiles, layout configs |
+| test_couchplayhelper.cpp | CouchPlayHelperTest | 1501 | Helper service (MockSystemOps, 25 overrides) |
+| test_devicemanager.cpp | DeviceManagerTest | 664 | Device detection, assignment, stable IDs |
+| test_heroicconfigmanager.cpp | HeroicConfigManagerTest | 468 | Heroic config parsing (Legendary/GOG/Nile) |
+| test_gamescopeinstance.cpp | GamescopeInstanceTest | 444 | Process wrapping, arg building |
 | test_usermanager.cpp | UserManagerTest | 363 | User creation, D-Bus mocking |
-| test_heroicconfigmanager.cpp | HeroicConfigManagerTest | 340 | Heroic config parsing (Legendary/GOG/Nile) |
+| test_sessionmanager.cpp | SessionManagerTest | 330 | Session profiles, layout configs |
+| test_sessionrunner.cpp | SessionRunnerTest | 328 | Instance orchestration, mock D-Bus client |
+| test_presetmanager.cpp | PresetManagerTest | 245 | Built-in/custom presets, app scanning |
+| test_presetmanager_integration.cpp | PresetManagerIntegrationTest | 242 | End-to-end preset + app scanning |
+| test_audiomanager.cpp | TestAudioManager | 204 | PipeWire/PulseAudio detection, socket ACL checking |
 | test_monitormanager.cpp | MonitorManagerTest | 166 | Display detection |
-| test_commandverifier.cpp | CommandVerifierTest | 102 | Path validation, flatpak detection |
-| test_scanapplications.cpp | ScanApplicationsTest | 65 | .desktop file scanning |
-| test_audiomanager.cpp | TestAudioManager | 217 | PipeWire/PulseAudio detection, socket ACL checking |
-| test_couchplayhelper.cpp | CouchPlayHelperTest | 1655 | Helper service (MockSystemOps, 25 overrides) |
-| test_sessionrunner.cpp | SessionRunnerTest | 382 | Instance orchestration, mock D-Bus client |
-| test_presetmanager_integration.cpp | PresetManagerIntegrationTest | 243 | End-to-end preset + app scanning |
+| test_commandverifier.cpp | CommandVerifierTest | 139 | Path validation, flatpak detection |
+| test_scanapplications.cpp | ScanApplicationsTest | 66 | .desktop file scanning |
 
 ## WHERE TO LOOK
 
@@ -77,5 +77,5 @@ class MockCouchPlayHelperClient : public CouchPlayHelperClient {
 - **Flaky environment tests**: Desktop files or installed flatpaks may not exist
 - **D-Bus dependency**: `UserManagerTest` requires helper service running
 - **CI exclusions**: 7/13 tests skipped (D-Bus/Polkit/devices) - see `.github/workflows/ci.yml`
-- **Partial coverage**: SessionRunner lacks dedicated tests
+- **Partial coverage**: Some managers lack dedicated tests
 - **Private member access**: `#define private public` / `#undef private` around includes (test_sessionrunner.cpp, test_audiomanager.cpp)
