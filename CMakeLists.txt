@@ -49,13 +49,9 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     GlobalAccel
 )
 
-# Find PolkitQt6-1 (optional — helper will deny user-management actions without it)
-find_package(PolkitQt6-1)
-if(NOT PolkitQt6-1_FOUND)
-    message(WARNING "PolkitQt6-1 not found: CouchPlay helper will compile WITHOUT Polkit "
-                     "authorization. User management actions will be denied. "
-                     "Install polkit-qt6-devel (or equivalent) to enable.")
-endif()
+# PolkitQt6-1 is required for user management authorization.
+# Without it the helper silently denies all user creation/deletion at runtime.
+find_package(PolkitQt6-1 REQUIRED)
 
 # Find QML modules at runtime
 ecm_find_qmlmodule(org.kde.kirigami REQUIRED)
