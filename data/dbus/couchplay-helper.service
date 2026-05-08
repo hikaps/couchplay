@@ -29,7 +29,7 @@ MemoryDenyWriteExecute=true
 ReadWritePaths=/dev/input
 # Allow access to user home directories for PipeWire config
 ReadWritePaths=/home
-ReadWritePaths=/var/home
+ReadWritePaths=-/var/home
 # Allow access to /etc for user creation (useradd needs to modify passwd, group, shadow)
 ReadWritePaths=/etc
 
