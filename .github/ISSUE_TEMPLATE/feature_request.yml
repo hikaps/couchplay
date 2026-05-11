@@ -1,0 +1,61 @@
+name: Feature Request
+description: Suggest an idea for CouchPlay
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for CouchPlay? Describe it below.
+        The more context you provide about *why* you want something, the easier it is to evaluate.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What are you trying to do that CouchPlay doesn't support yet? What's frustrating or missing?
+      placeholder: |
+        I'm trying to... but CouchPlay currently...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How do you think this should work? Even a rough idea helps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you tried working around this? Are there other tools that do what you need?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of CouchPlay does this relate to?
+      options:
+        - Session management (layouts, profiles, launching)
+        - Input (device detection, assignment, isolation)
+        - Display (Gamescope, resolutions, multi-monitor)
+        - Audio (PipeWire, routing)
+        - User management (accounts, permissions)
+        - UI/UX (Kirigami pages, navigation, settings)
+        - Installation / packaging (Flatpak, build system)
+        - D-Bus / privileged helper
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Screenshots, mockups, links to related issues, etc.
+    validations:
+      required: false

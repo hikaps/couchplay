@@ -1,0 +1,114 @@
+name: Bug Report
+description: Report a problem with CouchPlay
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the sections below.
+        If you're unsure about something, leave it blank — partial reports are still helpful.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen instead?
+      placeholder: |
+        Steps to reproduce:
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation Method
+      description: How did you install CouchPlay?
+      options:
+        - Flatpak
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: CouchPlay Version
+      description: Which version are you running? (Check the About page or commit hash if built from source.)
+      placeholder: e.g. 0.4.0 or commit abc1234
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution
+      description: What Linux distro are you running?
+      placeholder: e.g. Bazzite, Fedora Silverblue, Fedora Workstation, Nobara, Arch
+    validations:
+      required: true
+
+  - type: dropdown
+    id: display_server
+    attributes:
+      label: Display Server
+      options:
+        - Wayland
+        - X11
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop Environment / Compositor
+      placeholder: e.g. KDE Plasma 6, GNOME 46, Sway
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: Your graphics card and driver.
+      placeholder: e.g. AMD RX 7800 XT (amdgpu), NVIDIA RTX 3060 (nvidia)
+
+  - type: input
+    id: gamescope_version
+    attributes:
+      label: Gamescope Version
+      description: Run `gamescope --version` if unsure.
+      placeholder: e.g. 3.15.14
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: |
+        Paste any relevant log output. If running from terminal, include the output from the session.
+        For Flatpak installs, you can find logs with `flatpak run io.github.hikaps.couchplay`.
+      render: shell
+
+  - type: textarea
+    id: session_config
+    attributes:
+      label: Session Configuration
+      description: |
+        What session layout were you using? How many players? Which launchers?
+        e.g. "2-player side-by-side, both using Steam Big Picture"
+      placeholder: |
+        Layout: side-by-side
+        Players: 2
+        Launchers: Steam Big Picture, Heroic
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Screenshots, related issues, workarounds you've tried, etc.
+    validations:
+      required: false
