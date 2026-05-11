@@ -28,10 +28,10 @@ ctest --test-dir build --output-on-failure
 
 ```
 ./
-├── src/core/       # 15 manager classes (30 files, ~10.5K lines) - SEE ./src/core/AGENTS.md
-├── src/qml/        # UI layer (pages + components) - SEE ./src/qml/AGENTS.md
-├── helper/         # Privileged D-Bus service (CouchPlayHelper.cpp 1945 lines) - SEE ./helper/AGENTS.md
-├── tests/          # QtTest unit tests (14 files, ~9.6K lines) - SEE ./tests/AGENTS.md
+├── src/core/       # 15 classes (30 files, ~9.3K lines) - SEE ./src/core/AGENTS.md
+├── src/qml/        # UI layer (17 files, ~4.3K lines) - SEE ./src/qml/AGENTS.md
+├── helper/         # Privileged D-Bus service (CouchPlayHelper.cpp 1960 lines) - SEE ./helper/AGENTS.md
+├── tests/          # QtTest unit tests (13 files, ~5.2K lines) - SEE ./tests/AGENTS.md
 ├── src/dbus/       # D-Bus client for helper service
 └── data/           # Icons, polkit policy, D-Bus service files
 ```
@@ -152,7 +152,7 @@ ctest --test-dir build --output-on-failure
 
 - **develop**: Main development branch, all PRs merge here
 - **main**: Stable releases only
-- **Feature branches**: Pattern `feature/<feature-name>`
+- **Branch prefixes**: `feature/`, `feat/`, `fix/`, `ci/`, `remove/` (e.g., `feature/steam-input`, `fix/ci-tests`)
 - **Releases**: Tag and release only from `main`, never from `develop`. Merge develop into main, tag, push.
 
 ## NOTES
@@ -161,10 +161,10 @@ ctest --test-dir build --output-on-failure
 - **Local docs**: `PLAN.md` has architecture overview and feature roadmap
 - **Build artifacts**: Ignore `build/` directory
 - **Root test files**: `test_*.cpp` are temporary/experimental, not part of test suite
-- **CI exclusions**: CI skips 7/14 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
+- **CI exclusions**: CI skips 7/13 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
 - **Linting**: `.clang-format` (WebKit-based, 120-char), `.clang-tidy` (pragmatic Qt6/C++20), `.editorconfig` present — run `make format` / `make tidy` locally
 
 ## GIT META
 
-- **Commit**: `8d9a171`
-- **Branch**: `fix/ui`
+- **Commit**: `521059b`
+- **Branch**: `develop`

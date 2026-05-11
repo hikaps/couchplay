@@ -103,6 +103,20 @@ check_dependencies() {
         echo "  sudo pacman -S ${missing_deps[*]}"
         exit 1
     fi
+
+    # Check for runtime dependencies (warn but don't fail)
+    if ! command -v gamescope &>/dev/null; then
+        print_warn "gamescope is not installed. CouchPlay requires gamescope to launch game sessions."
+        echo ""
+        echo "On Debian/Ubuntu:"
+        echo "  sudo apt install gamescope"
+        echo ""
+        echo "On Fedora:"
+        echo "  sudo dnf install gamescope"
+        echo ""
+        echo "On Arch Linux:"
+        echo "  sudo pacman -S gamescope"
+    fi
 }
 
 check_architecture() {

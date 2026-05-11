@@ -2,13 +2,13 @@
 
 ## OVERVIEW
 
-D-Bus privileged service for split-screen gaming: user creation, device ownership, IPC orchestration, state persistence (2 files, 2320 lines)
+D-Bus privileged service for split-screen gaming: user creation, device ownership, IPC orchestration, state persistence (7 files, ~2.7K lines)
 
 ## STRUCTURE
 
-**CouchPlayHelper.cpp (1945 lines):** Main service implementation — partial Polkit authorization (user lifecycle only), D-Bus slots, systemd-run transient unit spawning, device ownership, mount management, state persistence, runtime ACL cache verification, dynamic gamescope path resolution
+**CouchPlayHelper.cpp (1960 lines):** Main service implementation — partial Polkit authorization (user lifecycle only), D-Bus slots, systemd-run transient unit spawning, device ownership, mount management, state persistence, runtime ACL cache verification, dynamic gamescope path resolution
 
-**CouchPlayHelper.h (375 lines):** D-Bus interface definition — 18 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
+**CouchPlayHelper.h (373 lines):** D-Bus interface definition — 18 Q_SLOT methods exposed via io.github.hikaps.CouchPlayHelper
 
 **SystemOps.h/cpp:** Abstraction layer for system calls (getpwnam, chown, mount, etc.) — enables mocking in tests. `RealSystemOps::checkAuthorization()` implements Polkit for `ACTION_CREATE_USER` and `ACTION_DELETE_USER` only; other actions return `true` (D-Bus ACL enforced at bus level)
 

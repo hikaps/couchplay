@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-QML/Kirigami UI layer: 17 files (~3.7K lines), 6 pages, 5 components, 5 dialogs.
+QML/Kirigami UI layer: 17 files (~4.3K lines), 6 pages, 5 components, 5 dialogs.
 
 ## STRUCTURE
 

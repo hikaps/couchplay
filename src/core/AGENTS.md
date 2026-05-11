@@ -5,21 +5,21 @@ Core business logic layer: device management, session orchestration, user/monito
 
 ## STRUCTURE
 **15 Manager Classes:**
-- `SessionRunner` (~1288 lines) - Orchestrates multiple GamescopeInstance launches (6-phase startup)
-- `DeviceManager` (~998 lines) - Input device detection from /proc/bus/input/devices, hotplug state machine
-- `SteamConfigManager` (599 lines) - VDF parsing, shortcuts syncing
-- `HeroicConfigManager` (621 lines) - Heroic launcher config management (Legendary/GOG/Nile)
-- `PresetManager` (526 lines) - Launch preset profiles, .desktop scanning
+- `SessionRunner` (1310 lines) - Orchestrates multiple GamescopeInstance launches (6-phase startup)
+- `DeviceManager` (998 lines) - Input device detection from /proc/bus/input/devices, hotplug state machine
+- `SteamConfigManager` (987 lines) - VDF parsing, shortcuts syncing
+- `HeroicConfigManager` (616 lines) - Heroic launcher config management (Legendary/GOG/Nile)
+- `PresetManager` (631 lines) - Launch preset profiles, .desktop scanning
 - `SessionManager` (550 lines) - Session profiles, instance configuration
 - `WindowManager` (448 lines) - Window positioning via KWin (QML_SINGLETON)
-- `GamescopeInstance` (~380 lines) - Gamescope arg building, delegates execution to D-Bus helper
+- `GamescopeInstance` (337 lines) - Gamescope arg building, delegates execution to D-Bus helper
 - `UserManager` (251 lines) - Linux user creation/management
-- `AudioManager` (~100 lines) - PipeWire/PulseAudio audio routing and socket ACL checks
-- `SettingsManager` (~150 lines) - KConfig-based app settings
-- `MonitorManager` (~50 lines) - Display detection via QGuiApplication screens
-- `VirtualDeviceWatcher` (~150 lines) - Virtual device monitoring during sessions
-- `CommandVerifier` (~200 lines) - Static utility: command validation, Flatpak detection, PATH resolution
-- `Logging` (39 lines) - 6 scoped logging categories
+- `CommandVerifier` (340 lines) - Static utility: command validation, Flatpak detection, PATH resolution
+- `SettingsManager` (177 lines) - KConfig-based app settings
+- `VirtualDeviceWatcher` (146 lines) - Virtual device monitoring during sessions
+- `AudioManager` (103 lines) - PipeWire/PulseAudio audio routing and socket ACL checks
+- `MonitorManager` (67 lines) - Display detection via QGuiApplication screens
+- `Logging` (14 lines) - 6 scoped logging categories
 
 **Data Structures:** `InputDevice`, `InstanceConfig`, `SessionProfile`, `SteamPaths`, `SteamShortcut` (Q_GADGET structs)
 
