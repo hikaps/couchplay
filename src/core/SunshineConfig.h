@@ -61,5 +61,6 @@ public:
 private:
     static bool ensureConfigDirectory(const QString &configDir);
     static bool writeAppsJson(const QString &configDir);
+    static bool writeCredentialsFile(const QString &configDir, const QString &username, const QString &password);
     static QString buildConfigContent(const QVariantMap &instanceConfig, int instanceIndex, const QString &configDir);
 };

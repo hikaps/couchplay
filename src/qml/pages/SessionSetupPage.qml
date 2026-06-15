@@ -496,6 +496,7 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.ComboBox {
+                            id: outputModeCombo
                             Kirigami.FormData.label: instanceCard.labelOutputMode
                             Layout.fillWidth: true
                             
@@ -508,12 +509,17 @@ Kirigami.ScrollablePage {
                             valueRole: "value"
                             
                             Component.onCompleted: {
-                                // Translate model items after creation
                                 model.setProperty(0, "text", instanceCard.optionPhysical)
                                 model.setProperty(1, "text", instanceCard.optionStreaming)
+                                currentIndex = instanceCard.isStreaming ? 1 : 0
                             }
                             
-                            currentIndex: instanceCard.isStreaming ? 1 : 0
+                            Connections {
+                                target: instanceCard
+                                function onIsStreamingChanged() {
+                                    outputModeCombo.currentIndex = instanceCard.isStreaming ? 1 : 0
+                                }
+                            }
                             
                             onActivated: {
                                 if (instanceCard.cardSessionManager) {
@@ -531,18 +537,25 @@ Kirigami.ScrollablePage {
                             text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
                             opacity: 0.8
                         }
-                        
                         Controls.ComboBox {
+                            id: streamResolutionCombo
                             Kirigami.FormData.label: instanceCard.labelStreamResolution
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
                             model: ["1280x720", "1920x1080", "2560x1440", "3840x2160"]
                             
-                            currentIndex: {
-                                if (!instanceCard.cardSessionManager) return 1
+                            function updateIndex() {
+                                if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
                                 let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamResolution || "1920x1080"
                                 let idx = model.indexOf(res)
-                                return idx >= 0 ? idx : 1
+                                currentIndex = idx >= 0 ? idx : 1
+                            }
+                            
+                            Component.onCompleted: { updateIndex() }
+                            
+                            Connections {
+                                target: instanceCard
+                                function onCardRevisionChanged() { streamResolutionCombo.updateIndex() }
                             }
                             
                             onActivated: {
@@ -555,6 +568,7 @@ Kirigami.ScrollablePage {
                         }
                         
                         Controls.ComboBox {
+                            id: frameRateCombo
                             Kirigami.FormData.label: instanceCard.labelFrameRate
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
@@ -563,11 +577,18 @@ Kirigami.ScrollablePage {
                             
                             displayText: i18nc("@unit", "%1 FPS", currentText)
                             
-                            currentIndex: {
-                                if (!instanceCard.cardSessionManager) return 1
+                            function updateIndex() {
+                                if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
                                 let fps = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamFps || 60
                                 let idx = model.indexOf(fps)
-                                return idx >= 0 ? idx : 1
+                                currentIndex = idx >= 0 ? idx : 1
+                            }
+                            
+                            Component.onCompleted: { updateIndex() }
+                            
+                            Connections {
+                                target: instanceCard
+                                function onCardRevisionChanged() { frameRateCombo.updateIndex() }
                             }
                             
                             onActivated: {
@@ -615,17 +636,25 @@ Kirigami.ScrollablePage {
                         }
                         
                         Controls.ComboBox {
+                            id: codecCombo
                             Kirigami.FormData.label: instanceCard.labelCodec
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
                             model: ["H.264", "H.265", "AV1"]
                             
-                            currentIndex: {
-                                if (!instanceCard.cardSessionManager) return 0
+                            function updateIndex() {
+                                if (!instanceCard.cardSessionManager) { currentIndex = 0; return }
                                 let codec = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamCodec || "h264"
-                                if (codec === "h265" || codec === "hevc") return 1
-                                if (codec === "av1") return 2
-                                return 0
+                                if (codec === "h265" || codec === "hevc") currentIndex = 1
+                                else if (codec === "av1") currentIndex = 2
+                                else currentIndex = 0
+                            }
+                            
+                            Component.onCompleted: { updateIndex() }
+                            
+                            Connections {
+                                target: instanceCard
+                                function onCardRevisionChanged() { codecCombo.updateIndex() }
                             }
                             
                             onActivated: {

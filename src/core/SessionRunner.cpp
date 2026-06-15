@@ -326,7 +326,7 @@ bool SessionRunner::start()
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
         config[QStringLiteral("gameCommand")] = instConfig.gameCommand;
         config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
-        config[QStringLiteral("borderless")] = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
+        config[QStringLiteral("borderless")] = instConfig.borderless;
 
         if (m_presetManager) {
             QString presetId = instConfig.presetId;
@@ -442,11 +442,14 @@ void SessionRunner::stop()
 void SessionRunner::stopInstance(int index)
 {
     if (index >= 0 && index < m_instances.size()) {
-        if (m_streamingInstances.contains(index)) {
+        bool isStreaming = m_streamingInstances.contains(index);
+        if (isStreaming) {
             m_streamManager->stopStream(index);
-            cleanupStreamingInstance(index);
         }
         m_instances[index]->stop();
+        if (isStreaming) {
+            cleanupStreamingInstance(index);
+        }
     }
 }
 
@@ -1075,7 +1078,14 @@ void SessionRunner::onInstanceStopped()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
     if (instance) {
-        Q_EMIT instanceStopped(instance->index());
+        int idx = instance->index();
+
+        if (m_streamingInstances.contains(idx)) {
+            m_streamManager->stopStream(idx);
+            cleanupStreamingInstance(idx);
+        }
+
+        Q_EMIT instanceStopped(idx);
         Q_EMIT instancesChanged();
         Q_EMIT runningInstanceCountChanged();
 
@@ -1109,7 +1119,14 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 
     QRect targetGeometry = instance->windowGeometry();
     int instanceIndex = instance->index();
-    bool borderless = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
+
+    bool borderless = false;
+    if (m_sessionManager) {
+        const auto &instances = m_sessionManager->currentProfile().instances;
+        if (instanceIndex >= 0 && instanceIndex < instances.size()) {
+            borderless = instances[instanceIndex].borderless;
+        }
+    }
 
     m_windowManager->queuePositionRequest(instanceIndex, targetGeometry, m_positionedWindowIds, borderless, 60000);
 }

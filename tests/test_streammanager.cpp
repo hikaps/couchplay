@@ -6,6 +6,7 @@
 #include <QTemporaryDir>
 #include <QDir>
 #include <QStandardPaths>
+#include <QTimer>
 
 #define private public
 #include "StreamManager.h"
@@ -42,7 +43,7 @@ private Q_SLOTS:
     // startStream validation tests
     void testStartStreamNegativeIndex();
     void testStartStreamEmptyUsername();
-    void testStartStreamAlreadyStreaming();
+    void testStartStreamAlreadyActive();
 
     // stopStream tests
     void testStopStreamNonExistent();
@@ -52,6 +53,8 @@ private Q_SLOTS:
 
     // Helper unavailable path (assumes no CouchPlayHelper D-Bus service)
     void testStartStreamHelperUnavailable();
+    // Startup timeout transition (Waiting → Streaming)
+    void testStartupTimeoutTransition();
 
 private:
     StreamManager *m_manager = nullptr;
@@ -218,24 +221,37 @@ void TestStreamManager::testStartStreamEmptyUsername()
     QVERIFY(m_manager->streams().isEmpty());
 }
 
-void TestStreamManager::testStartStreamAlreadyStreaming()
+void TestStreamManager::testStartStreamAlreadyActive()
 {
-    StreamManager::StreamEntry entry;
-    entry.state = StreamManager::Streaming;
-    entry.pid = 12345;
-    entry.instanceIndex = 0;
-    m_manager->m_streams[0] = entry;
+    // Test rejection when entry exists in any state
+    const QList<StreamManager::StreamState> statesToTest = {
+        StreamManager::Streaming,
+        StreamManager::Waiting,
+        StreamManager::Error
+    };
 
-    QSignalSpy errorSpy(m_manager, &StreamManager::streamError);
+    for (StreamManager::StreamState state : statesToTest) {
+        StreamManager::StreamEntry entry;
+        entry.state = state;
+        entry.pid = 12345;
+        entry.instanceIndex = 0;
+        m_manager->m_streams[0] = entry;
 
-    QVariantMap config;
-    config.insert(QStringLiteral("username"), QStringLiteral("player1"));
+        QSignalSpy errorSpy(m_manager, &StreamManager::streamError);
 
-    QVERIFY(!m_manager->startStream(0, config));
-    QCOMPARE(errorSpy.count(), 1);
+        QVariantMap config;
+        config.insert(QStringLiteral("username"), QStringLiteral("player1"));
 
-    // Original entry preserved
-    QCOMPARE(m_manager->streams().size(), 1);
+        QVERIFY(!m_manager->startStream(0, config));
+        QCOMPARE(errorSpy.count(), 1);
+        QCOMPARE(errorSpy.at(0).at(1).toString(), QStringLiteral("Instance already active"));
+
+        // Original entry preserved
+        QCOMPARE(m_manager->streams().size(), 1);
+        QCOMPARE(m_manager->streamState(0), state);
+
+        m_manager->m_streams.remove(0);
+    }
 }
 
 // --- stopStream tests ---
@@ -318,6 +334,43 @@ void TestStreamManager::testStartStreamHelperUnavailable()
 
     // Config dir cleaned up by error path
     QVERIFY(!QDir(configDir).exists());
+}
+
+// --- Startup timeout transition ---
+
+void TestStreamManager::testStartupTimeoutTransition()
+{
+    // Simulate a stream in Waiting state with a startup timer
+    StreamManager::StreamEntry entry;
+    entry.state = StreamManager::Waiting;
+    entry.pid = 99999;
+    entry.instanceIndex = 0;
+    entry.configDir = QStringLiteral("/tmp/test-config-0");
+    m_manager->m_streams[0] = entry;
+
+    QTimer *timer = new QTimer(m_manager);
+    timer->setSingleShot(true);
+    connect(timer, &QTimer::timeout, m_manager, &StreamManager::onStartupTimeout);
+    m_manager->m_startupTimers[0] = timer;
+
+    QSignalSpy startedSpy(m_manager, &StreamManager::streamStarted);
+    QSignalSpy changedSpy(m_manager, &StreamManager::streamsChanged);
+
+    QCOMPARE(m_manager->streamState(0), StreamManager::Waiting);
+    QVERIFY(!m_manager->isStreaming(0));
+
+    // Fire the timeout — should transition to Streaming and emit signals
+    timer->start(0);
+    QTest::qWait(50);
+
+    QCOMPARE(m_manager->streamState(0), StreamManager::Streaming);
+    QVERIFY(m_manager->isStreaming(0));
+    QCOMPARE(startedSpy.count(), 1);
+    QCOMPARE(startedSpy.at(0).at(0).toInt(), 0);
+    QCOMPARE(changedSpy.count(), 1);
+
+    // Timer removed from map
+    QVERIFY(!m_manager->m_startupTimers.contains(0));
 }
 
 QTEST_MAIN(TestStreamManager)

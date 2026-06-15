@@ -3,10 +3,14 @@
 
 #include "SunshineConfig.h"
 
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRandomGenerator>
 
 SunshineConfig::SunshineConfig(QObject *parent)
     : QObject(parent)
@@ -50,12 +54,25 @@ QString SunshineConfig::generateConfig(const QVariantMap &instanceConfig, int in
         return {};
     }
 
+    const QString username = instanceConfig.value(QStringLiteral("username"), QStringLiteral("couchplay")).toString();
+    const QString password = instanceConfig.value(QStringLiteral("password"), QStringLiteral("couchplay")).toString();
+    if (!writeCredentialsFile(configDir, username, password)) {
+        return {};
+    }
+
     return configFilePath;
 }
 
 int SunshineConfig::calculatePort(int instanceIndex, int basePort)
 {
-    return basePort + (instanceIndex * PORT_SPACING);
+    int port = basePort + (instanceIndex * PORT_SPACING);
+    if (port > MAX_PORT) {
+        return MAX_PORT;
+    }
+    if (port < MIN_PORT) {
+        return MIN_PORT;
+    }
+    return port;
 }
 
 QString SunshineConfig::defaultConfigDir(int instanceIndex)
@@ -106,14 +123,44 @@ bool SunshineConfig::writeAppsJson(const QString &configDir)
     return true;
 }
 
+bool SunshineConfig::writeCredentialsFile(const QString &configDir, const QString &username, const QString &password)
+{
+    const QString chars = QStringLiteral("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+    QString salt;
+    salt.reserve(16);
+    for (int i = 0; i < 16; ++i) {
+        salt.append(chars[QRandomGenerator::global()->bounded(chars.size())]);
+    }
+
+    const QByteArray hash = QCryptographicHash::hash((salt + password).toUtf8(), QCryptographicHash::Sha256);
+    const QString hashHex = QString::fromLatin1(hash.toHex()).toUpper();
+
+    QJsonObject creds;
+    creds[QStringLiteral("username")] = username;
+    creds[QStringLiteral("salt")] = salt;
+    creds[QStringLiteral("password")] = hashHex;
+
+    QJsonDocument doc(creds);
+
+    const QString credsPath = configDir + QStringLiteral("/credentials.json");
+    QFile file(credsPath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        qWarning() << "SunshineConfig: Failed to open credentials file" << credsPath;
+        return false;
+    }
+    file.write(doc.toJson(QJsonDocument::Compact));
+    file.close();
+    return true;
+}
+
 QString SunshineConfig::buildConfigContent(const QVariantMap &instanceConfig, int instanceIndex, const QString &configDir)
 {
     const int port = instanceConfig.value(QStringLiteral("sunshinePort")).toInt();
-    const int actualPort = (port > 0) ? port : calculatePort(instanceIndex);
+    const int actualPort = (port > 0)
+        ? qBound(MIN_PORT, port, MAX_PORT)
+        : calculatePort(instanceIndex);
 
     const QString outputName = instanceConfig.value(QStringLiteral("outputName")).toString();
-    const QString username = instanceConfig.value(QStringLiteral("username"), QStringLiteral("couchplay")).toString();
-    const QString password = instanceConfig.value(QStringLiteral("password"), QStringLiteral("couchplay")).toString();
     const int bitrate = instanceConfig.value(QStringLiteral("streamBitrate")).toInt();
 
     QString content;
@@ -136,12 +183,9 @@ QString SunshineConfig::buildConfigContent(const QVariantMap &instanceConfig, in
         content.append(QStringLiteral("encoder = %1\n").arg(codec));
     }
 
-    content.append(QStringLiteral("\nusername = %1\n").arg(username));
-    content.append(QStringLiteral("password = %1\n").arg(password));
-
     content.append(QStringLiteral("\nfile_apps = %1/apps.json\n").arg(configDir));
     content.append(QStringLiteral("credentials_file = %1/credentials.json\n").arg(configDir));
-    content.append(QStringLiteral("log_file = %1/sunshine.log\n").arg(configDir));
+    content.append(QStringLiteral("log_path = %1/sunshine.log\n").arg(configDir));
 
     content.append(QStringLiteral("\ngamepad = auto\n"));
     content.append(QStringLiteral("controller = enabled\n"));

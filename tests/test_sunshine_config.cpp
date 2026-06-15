@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
+#include <QCryptographicHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QObject>
 #include <QTest>
 #include <QDebug>
@@ -8,7 +11,6 @@
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
-
 #include "../src/core/SunshineConfig.h"
 
 class TestSunshineConfig : public QObject
@@ -17,8 +19,8 @@ class TestSunshineConfig : public QObject
 
 private Q_SLOTS:
     void initTestCase();
+    void cleanupTestCase();
     void cleanup();
-
     void testPortCalculation();
     void testPortCalculationWithCustomBase();
     void testGenerateConfigCreatesFiles();
@@ -35,14 +37,22 @@ private Q_SLOTS:
     void testNegativeIndexFails();
     void testDefaultConfigDir();
     void testDirectoryPermissions();
+
+private:
+    QTemporaryDir *m_tempDir = nullptr;
 };
 
-QTemporaryDir *m_tempDir = nullptr;
 
 void TestSunshineConfig::initTestCase()
 {
     m_tempDir = new QTemporaryDir(QDir::tempPath() + QStringLiteral("/couchplay-sunshine-test-XXXXXX"));
     QVERIFY(m_tempDir->isValid());
+}
+
+void TestSunshineConfig::cleanupTestCase()
+{
+    delete m_tempDir;
+    m_tempDir = nullptr;
 }
 
 void TestSunshineConfig::cleanup()
@@ -108,8 +118,8 @@ void TestSunshineConfig::testGeneratedConfigContent()
 
     QVERIFY(content.contains(QStringLiteral("port = 48019")));
     QVERIFY(content.contains(QStringLiteral("output_name = 2")));
-    QVERIFY(content.contains(QStringLiteral("username = player1")));
-    QVERIFY(content.contains(QStringLiteral("password = s3cret")));
+    QVERIFY(!content.contains(QStringLiteral("username = ")));
+    QVERIFY(!content.contains(QStringLiteral("password = ")));
     QVERIFY(content.contains(QStringLiteral("max_bitrate = 15000")));
     QVERIFY(content.contains(QStringLiteral("gamepad = auto")));
     QVERIFY(content.contains(QStringLiteral("controller = enabled")));
@@ -120,6 +130,9 @@ void TestSunshineConfig::testGeneratedConfigContent()
     QVERIFY(content.contains(configDir + QStringLiteral("/apps.json")));
     QVERIFY(content.contains(configDir + QStringLiteral("/credentials.json")));
     QVERIFY(content.contains(configDir + QStringLiteral("/sunshine.log")));
+
+    // Credentials should be in a separate JSON file, not in sunshine.conf
+    QVERIFY(QFile::exists(configDir + QStringLiteral("/credentials.json")));
 }
 
 void TestSunshineConfig::testDifferentInstancesProduceDifferentPorts()
@@ -207,13 +220,15 @@ void TestSunshineConfig::testDefaultCredentials()
     QString configPath = SunshineConfig::generateConfig(config, 0, configDir);
     QVERIFY(!configPath.isEmpty());
 
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content = QString::fromUtf8(file.readAll());
-    file.close();
+    // credentials.json should contain the default username
+    QFile credsFile(configDir + QStringLiteral("/credentials.json"));
+    QVERIFY(credsFile.open(QIODevice::ReadOnly));
+    QJsonDocument doc = QJsonDocument::fromJson(credsFile.readAll());
+    credsFile.close();
 
-    QVERIFY(content.contains(QStringLiteral("username = couchplay")));
-    QVERIFY(content.contains(QStringLiteral("password = couchplay")));
+    QCOMPARE(doc.object().value(QStringLiteral("username")).toString(), QStringLiteral("couchplay"));
+    QVERIFY(!doc.object().value(QStringLiteral("salt")).toString().isEmpty());
+    QVERIFY(!doc.object().value(QStringLiteral("password")).toString().isEmpty());
 }
 
 void TestSunshineConfig::testCustomCredentials()
@@ -226,14 +241,17 @@ void TestSunshineConfig::testCustomCredentials()
     QString configPath = SunshineConfig::generateConfig(config, 0, configDir);
     QVERIFY(!configPath.isEmpty());
 
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content = QString::fromUtf8(file.readAll());
-    file.close();
+    QFile credsFile(configDir + QStringLiteral("/credentials.json"));
+    QVERIFY(credsFile.open(QIODevice::ReadOnly));
+    QJsonDocument doc = QJsonDocument::fromJson(credsFile.readAll());
+    credsFile.close();
 
-    QVERIFY(content.contains(QStringLiteral("username = admin")));
-    QVERIFY(content.contains(QStringLiteral("password = hunter2")));
-    QVERIFY(!content.contains(QStringLiteral("username = couchplay")));
+    QCOMPARE(doc.object().value(QStringLiteral("username")).toString(), QStringLiteral("admin"));
+    // Verify the hash matches SHA256(salt + "hunter2")
+    QString salt = doc.object().value(QStringLiteral("salt")).toString();
+    QString expectedHash = QString::fromLatin1(
+        QCryptographicHash::hash((salt + QStringLiteral("hunter2")).toUtf8(), QCryptographicHash::Sha256).toHex()).toUpper();
+    QCOMPARE(doc.object().value(QStringLiteral("password")).toString(), expectedHash);
 }
 
 void TestSunshineConfig::testOutputNameIncluded()

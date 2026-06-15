@@ -83,9 +83,9 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
         return false;
     }
 
-    if (m_streams.contains(instanceIndex) && m_streams[instanceIndex].state == Streaming) {
-        qWarning() << "StreamManager::startStream: instance" << instanceIndex << "already streaming";
-        Q_EMIT streamError(instanceIndex, QStringLiteral("Already streaming"));
+    if (m_streams.contains(instanceIndex)) {
+        qWarning() << "StreamManager::startStream: instance" << instanceIndex << "already active";
+        Q_EMIT streamError(instanceIndex, QStringLiteral("Instance already active"));
         return false;
     }
 
@@ -180,7 +180,7 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
 
                     if (retryReply.isValid() && retryReply.value() > 0) {
                         m_streams[instanceIndex].pid = retryReply.value();
-                        setStreamState(instanceIndex, Streaming);
+                        setStreamState(instanceIndex, Waiting);
 
                         QDBusConnection::systemBus().connect(
                             s_helperService, s_helperPath, s_helperInterface,
@@ -195,7 +195,6 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
                         timer->start(m_startupTimeout);
 
                         Q_EMIT streamsChanged();
-                        Q_EMIT streamStarted(instanceIndex);
                         return true;
                     }
                 }
@@ -229,7 +228,7 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     }
 
     m_streams[instanceIndex].pid = pid;
-    setStreamState(instanceIndex, Streaming);
+    setStreamState(instanceIndex, Waiting);
 
     QDBusConnection::systemBus().connect(
         s_helperService, s_helperPath, s_helperInterface,
@@ -244,7 +243,6 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     timer->start(m_startupTimeout);
 
     Q_EMIT streamsChanged();
-    Q_EMIT streamStarted(instanceIndex);
 
     return true;
 }
@@ -267,12 +265,6 @@ bool StreamManager::stopStream(int instanceIndex)
         Q_EMIT streamsChanged();
         return true;
     }
-
-    QDBusConnection::systemBus().disconnect(
-        s_helperService, s_helperPath, s_helperInterface,
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-    );
 
     QDBusInterface helper(s_helperService, s_helperPath, s_helperInterface,
                           QDBusConnection::systemBus());
@@ -338,12 +330,6 @@ void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid,
         delete m_startupTimers.take(foundIndex);
     }
 
-    QDBusConnection::systemBus().disconnect(
-        s_helperService, s_helperPath, s_helperInterface,
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-    );
-
     const QString errorMsg = (reason == QStringLiteral("crashed"))
         ? QStringLiteral("Sunshine crashed")
         : (reason == QStringLiteral("failed"))
@@ -402,39 +388,10 @@ void StreamManager::onStartupTimeout()
         return;
     }
 
-    qWarning() << "StreamManager: startup timeout for instance" << timedOutIndex;
-
-    QDBusConnection::systemBus().disconnect(
-        s_helperService, s_helperPath, s_helperInterface,
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-    );
-
-    const qint64 pid = m_streams[timedOutIndex].pid;
-    if (pid > 0) {
-        QDBusInterface helper(s_helperService, s_helperPath, s_helperInterface,
-                              QDBusConnection::systemBus());
-        if (helper.isValid()) {
-            helper.call(QStringLiteral("KillInstance"), pid);
-        }
-    }
-
-    setStreamState(timedOutIndex, Error);
-    Q_EMIT streamError(timedOutIndex, QStringLiteral("Sunshine failed to start within timeout"));
-
-    if (m_autoRestart && m_streams[timedOutIndex].restartAttempts < StreamEntry::MAX_RESTART_ATTEMPTS) {
-        cleanupConfigDir(timedOutIndex);
-        m_streams[timedOutIndex].pid = 0;
-
-        QTimer::singleShot(RESTART_DELAY_MS, this, [this, timedOutIndex]() {
-            attemptRestart(timedOutIndex);
-        });
-    } else {
-        cleanupConfigDir(timedOutIndex);
-        m_streams.remove(timedOutIndex);
-        Q_EMIT streamsChanged();
-        Q_EMIT streamStopped(timedOutIndex);
-    }
+    // Startup grace period elapsed, process still alive → confirm streaming
+    setStreamState(timedOutIndex, Streaming);
+    Q_EMIT streamsChanged();
+    Q_EMIT streamStarted(timedOutIndex);
 }
 
 void StreamManager::attemptRestart(int instanceIndex)
@@ -532,7 +489,7 @@ void StreamManager::attemptRestart(int instanceIndex)
     }
 
     entry.pid = reply.value();
-    setStreamState(instanceIndex, Streaming);
+    setStreamState(instanceIndex, Waiting);
 
     QDBusConnection::systemBus().connect(
         s_helperService, s_helperPath, s_helperInterface,
@@ -547,7 +504,6 @@ void StreamManager::attemptRestart(int instanceIndex)
     timer->start(m_startupTimeout);
 
     Q_EMIT streamsChanged();
-    Q_EMIT streamStarted(instanceIndex);
 }
 
 void StreamManager::setStreamState(int instanceIndex, StreamState state)

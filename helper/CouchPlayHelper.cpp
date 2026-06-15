@@ -1913,6 +1913,7 @@ QString CouchPlayHelper::CreateVirtualOutput(const QString &username, int width,
     info.waylandSocket = socketName;
     info.serviceName = serviceName;
     m_virtualDisplays[username] = info;
+    saveState();
 
     qInfo() << "Created virtual display for" << username
             << "socket:" << socketName << "PID:" << mainPid;
@@ -1948,6 +1949,7 @@ bool CouchPlayHelper::DestroyVirtualOutput(const QString &username, const QStrin
     }
 
     m_virtualDisplays.remove(username);
+    saveState();
 
     qInfo() << "Destroyed virtual display for" << username;
     return true;
@@ -2007,6 +2009,7 @@ QString CouchPlayHelper::CreateNullSink(const QString &username, const QString &
     info.moduleIndex = moduleIndex;
     info.sinkName = sinkName;
     m_nullSinks[username].append(info);
+    saveState();
 
     qInfo() << "Created null-sink" << sinkName << "module #" << moduleIndex << "for" << username;
     return sinkName;
@@ -2017,6 +2020,12 @@ bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &si
     if (!validateUserAndAuth(username, ACTION_MANAGE_AUDIO_SINK)) {
         return false;
     }
+    static QRegularExpression validSinkName(QStringLiteral("^[a-zA-Z][a-zA-Z0-9_-]{0,63}$"));
+    if (!validSinkName.match(sinkName).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs,
+            QStringLiteral("Invalid sink name format: '%1'").arg(sinkName));
+        return false;
+    }
 
     int moduleIndex = -1;
     if (m_nullSinks.contains(username)) {
@@ -2024,6 +2033,7 @@ bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &si
             if (m_nullSinks[username][i].sinkName == sinkName) {
                 moduleIndex = m_nullSinks[username][i].moduleIndex;
                 m_nullSinks[username].removeAt(i);
+                saveState();
                 break;
             }
         }
@@ -2115,6 +2125,28 @@ void CouchPlayHelper::saveState()
         compositorUidObject[it.key()] = static_cast<qint64>(it.value());
     }
     root[QStringLiteral("compositorUidForUsername")] = compositorUidObject;
+    QJsonObject vdisplayObject;
+    for (auto it = m_virtualDisplays.constBegin(); it != m_virtualDisplays.constEnd(); ++it) {
+        QJsonObject infoObj;
+        infoObj[QStringLiteral("pid")] = static_cast<qint64>(it.value().pid);
+        infoObj[QStringLiteral("waylandSocket")] = it.value().waylandSocket;
+        infoObj[QStringLiteral("serviceName")] = it.value().serviceName;
+        vdisplayObject[it.key()] = infoObj;
+    }
+    root[QStringLiteral("virtualDisplays")] = vdisplayObject;
+
+    QJsonObject nullSinksObject;
+    for (auto it = m_nullSinks.constBegin(); it != m_nullSinks.constEnd(); ++it) {
+        QJsonArray sinksArray;
+        for (const NullSinkInfo &sink : it.value()) {
+            QJsonObject sinkObj;
+            sinkObj[QStringLiteral("moduleIndex")] = sink.moduleIndex;
+            sinkObj[QStringLiteral("sinkName")] = sink.sinkName;
+            sinksArray.append(sinkObj);
+        }
+        nullSinksObject[it.key()] = sinksArray;
+    }
+    root[QStringLiteral("nullSinks")] = nullSinksObject;
 
     QJsonDocument doc(root);
     QByteArray data = doc.toJson(QJsonDocument::Compact);
@@ -2299,6 +2331,40 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
     m_compositorUidForUsername = loadedCompositorUid;
+    // Restore virtual displays - reconcile against active systemd units
+    QJsonObject vdisplayObject = root.value(QStringLiteral("virtualDisplays")).toObject();
+    for (auto it = vdisplayObject.constBegin(); it != vdisplayObject.constEnd(); ++it) {
+        QJsonObject infoObj = it.value().toObject();
+        QString serviceName = infoObj.value(QStringLiteral("serviceName")).toString();
+        if (activeSystemdUnits.contains(serviceName)) {
+            VirtualDisplayInfo info;
+            info.pid = static_cast<qint64>(infoObj.value(QStringLiteral("pid")).toVariant().toLongLong());
+            info.waylandSocket = infoObj.value(QStringLiteral("waylandSocket")).toString();
+            info.serviceName = serviceName;
+            m_virtualDisplays[it.key()] = info;
+        } else {
+            qDebug() << "loadAndReconcileState: Removing stale virtual display" << serviceName << "for user" << it.key();
+            changed = true;
+        }
+    }
+
+    // Restore null sinks - restore unconditionally (PipeWire modules are per-user-session;
+    // if the session is gone, the module is gone too, but tracking allows destructor cleanup)
+    QJsonObject nullSinksObject = root.value(QStringLiteral("nullSinks")).toObject();
+    for (auto it = nullSinksObject.constBegin(); it != nullSinksObject.constEnd(); ++it) {
+        QJsonArray sinksArray = it.value().toArray();
+        QList<NullSinkInfo> sinks;
+        for (const QJsonValue &sinkVal : sinksArray) {
+            QJsonObject sinkObj = sinkVal.toObject();
+            NullSinkInfo info;
+            info.moduleIndex = sinkObj.value(QStringLiteral("moduleIndex")).toInt();
+            info.sinkName = sinkObj.value(QStringLiteral("sinkName")).toString();
+            sinks.append(info);
+        }
+        if (!sinks.isEmpty()) {
+            m_nullSinks[it.key()] = sinks;
+        }
+    }
 
     if (changed) {
         saveState();

@@ -7,8 +7,9 @@
 #include <QDir>
 #include <QFile>
 #include <QStandardPaths>
-#include <QSet>
-
+#include <QJsonDocument>
+#include <QJsonObject>
+ #include <QSet>
 #include "SessionManager.h"
 #include "SunshineConfig.h"
 
@@ -196,7 +197,12 @@ void TestStreamingSession::testStreamingConfigToSunshineConfig()
 
     QVERIFY(content.contains(QStringLiteral("port = 48019")));
     QVERIFY(content.contains(QStringLiteral("max_bitrate = 25000")));
-    QVERIFY(content.contains(QStringLiteral("username = streamer")));
+    // Username is now in credentials.json, not sunshine.conf
+    QFile credsFile(instanceDir + QStringLiteral("/credentials.json"));
+    QVERIFY(credsFile.open(QIODevice::ReadOnly));
+    QJsonObject creds = QJsonDocument::fromJson(credsFile.readAll()).object();
+    credsFile.close();
+    QCOMPARE(creds.value(QStringLiteral("username")).toString(), QStringLiteral("streamer"));
     QVERIFY(content.contains(QStringLiteral("sunshine_name = CouchPlay Player 1")));
 }
 
