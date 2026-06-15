@@ -27,5 +27,6 @@ qrc_*.cpp
 # Documentation (kept in docs/branches/ only)
 .sisyphus
 .opencode
+.omo
 compile_commands.json
 .cache/

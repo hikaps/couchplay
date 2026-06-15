@@ -351,6 +351,8 @@ private Q_SLOTS:
     void testCreateUserAuthDenied();
     void testCreateUserProcessFailure();
     void testCreateUserLingerFailure();
+    void testCreateUserWithoutInputGroup();
+    void testCreateUserWithInputGroup();
     void testDeleteUserSuccess();
     void testDeleteUserInvalidUsername();
     void testDeleteUserNonexistent();
@@ -568,6 +570,54 @@ void TestCouchPlayHelper::testCreateUserLingerFailure()
 
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::Failed);
+}
+
+void TestCouchPlayHelper::testCreateUserWithoutInputGroup()
+{
+    // "input" group absent (simulates Bazzite) — must not appear in -G
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
+    m_ops->setProcessExitCode(0);
+
+    m_dbusInterface->call(QStringLiteral("CreateUser"), QStringLiteral("newuser"), QStringLiteral("New User"));
+
+    QStringList useraddArgs;
+    for (const auto &inv : m_ops->m_processInvocations) {
+        if (inv.command == QStringLiteral("useradd")) {
+            useraddArgs = inv.args;
+            break;
+        }
+    }
+    QVERIFY(!useraddArgs.isEmpty());
+
+    int gIdx = useraddArgs.indexOf(QStringLiteral("-G"));
+    QVERIFY(gIdx >= 0);
+    QVERIFY(gIdx + 1 < useraddArgs.size());
+    QCOMPARE(useraddArgs.at(gIdx + 1), QStringLiteral("couchplay"));
+}
+
+void TestCouchPlayHelper::testCreateUserWithInputGroup()
+{
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    m_ops->setProcessExitCode(0);
+
+    m_dbusInterface->call(QStringLiteral("CreateUser"), QStringLiteral("newuser"), QStringLiteral("New User"));
+
+    QStringList useraddArgs;
+    for (const auto &inv : m_ops->m_processInvocations) {
+        if (inv.command == QStringLiteral("useradd")) {
+            useraddArgs = inv.args;
+            break;
+        }
+    }
+    QVERIFY(!useraddArgs.isEmpty());
+
+    int gIdx = useraddArgs.indexOf(QStringLiteral("-G"));
+    QVERIFY(gIdx >= 0);
+    QVERIFY(gIdx + 1 < useraddArgs.size());
+    QCOMPARE(useraddArgs.at(gIdx + 1), QStringLiteral("input,couchplay"));
 }
 
 void TestCouchPlayHelper::testDeleteUserSuccess()
