@@ -190,7 +190,7 @@ bool SessionManager::loadProfile(const QString &name)
             qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
         }
 
-        inst.borderless = instGroup.readEntry("borderless", false);
+        inst.borderless = instGroup.readEntry("borderless", true);
         inst.outputMode = instGroup.readEntry("outputMode", QStringLiteral("physical"));
         inst.streamResolution = instGroup.readEntry("streamResolution", QStringLiteral("1920x1080"));
         inst.streamFps = instGroup.readEntry("streamFps", 60);

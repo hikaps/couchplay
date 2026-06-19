@@ -66,7 +66,7 @@ public:
     QString overrideGamePath;
     QStringList overrideFiles;
     QStringList overridePatterns; // Glob patterns for per-user overrides
-    bool borderless = false;                           // Window border visibility (false = show borders)
+    bool borderless = true;                            // Window border visibility (false = show borders)
     QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
     QString streamResolution = QStringLiteral("1920x1080");
     int streamFps = 60;

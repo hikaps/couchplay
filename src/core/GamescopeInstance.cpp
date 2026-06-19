@@ -45,6 +45,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     int outputW = config.value(QStringLiteral("outputWidth"), 960).toInt();
     int outputH = config.value(QStringLiteral("outputHeight"), 1080).toInt();
     m_windowGeometry = QRect(posX, posY, outputW, outputH);
+    m_virtualDisplaySocket = config.value(QStringLiteral("virtualDisplaySocket")).toString();
     Q_EMIT configChanged();
 
     QStringList gamescopeArgs = buildGamescopeArgs(config);
@@ -277,8 +278,6 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
 
 QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
 {
-    Q_UNUSED(config)
-
     QStringList envVars;
 
     // Enable Gamescope WSI layer - critical for Vulkan games to work inside gamescope
@@ -298,6 +297,12 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     QString virtualSocket = config.value(QStringLiteral("virtualDisplaySocket")).toString();
     if (!virtualSocket.isEmpty()) {
         envVars << QStringLiteral("WAYLAND_DISPLAY=%1").arg(virtualSocket);
+    }
+
+    // Route game audio to the per-instance null sink for Sunshine capture
+    QString sinkName = config.value(QStringLiteral("sink")).toString();
+    if (!sinkName.isEmpty()) {
+        envVars << QStringLiteral("PULSE_SINK=%1").arg(sinkName);
     }
 
     return envVars;

@@ -9,6 +9,7 @@
 #include <QVariantMap>
 #include <QMap>
 #include <QTimer>
+#include <QPointer>
 #include <qqmlintegration.h>
 
 struct InstanceConfig;
@@ -85,6 +86,7 @@ private:
 
     QMap<int, StreamEntry> m_streams;
     QMap<int, QTimer *> m_startupTimers;
+    QMap<int, QPointer<QTimer>> m_restartTimers;
     bool m_autoRestart = true;
     int m_startupTimeout = 15000;
 };

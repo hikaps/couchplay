@@ -149,65 +149,6 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
         const QString errorMsg = reply.error().message();
         qWarning() << "StreamManager: LaunchInstance failed:" << errorMsg;
 
-        if (errorMsg.contains(QStringLiteral("address already in use"), Qt::CaseInsensitive) ||
-            errorMsg.contains(QStringLiteral("bind"), Qt::CaseInsensitive) ||
-            errorMsg.contains(QStringLiteral("EADDRINUSE"), Qt::CaseInsensitive)) {
-
-            const int currentPort = config.value(QStringLiteral("sunshinePort"),
-                                                  SunshineConfig::calculatePort(instanceIndex)).toInt();
-            const int newPort = currentPort + SunshineConfig::PORT_SPACING;
-
-            if (newPort <= SunshineConfig::MAX_PORT) {
-                qDebug() << "StreamManager: port conflict detected, retrying with port" << newPort;
-                QVariantMap retryConfig = config;
-                retryConfig[QStringLiteral("sunshinePort")] = newPort;
-
-                cleanupConfigDir(instanceIndex);
-                const QString retryConfigPath = SunshineConfig::generateConfig(retryConfig, instanceIndex, configDir);
-                if (!retryConfigPath.isEmpty()) {
-                    m_streams[instanceIndex].lastConfig = retryConfig;
-
-                    const QString retryCommand = s_sunshineBinary + QLatin1Char(' ') + retryConfigPath;
-                    QDBusReply<qint64> retryReply = helper.call(
-                        QStringLiteral("LaunchInstance"),
-                        username,
-                        static_cast<uint>(compositorUid),
-                        gamescopeArgs,
-                        retryCommand,
-                        envVars,
-                        bindPaths
-                    );
-
-                    if (retryReply.isValid() && retryReply.value() > 0) {
-                        m_streams[instanceIndex].pid = retryReply.value();
-                        setStreamState(instanceIndex, Waiting);
-
-                        QDBusConnection::systemBus().connect(
-                            s_helperService, s_helperPath, s_helperInterface,
-                            QStringLiteral("instanceStopped"),
-                            this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-                        );
-
-                        QTimer *timer = new QTimer(this);
-                        timer->setSingleShot(true);
-                        connect(timer, &QTimer::timeout, this, &StreamManager::onStartupTimeout);
-                        m_startupTimers[instanceIndex] = timer;
-                        timer->start(m_startupTimeout);
-
-                        Q_EMIT streamsChanged();
-                        return true;
-                    }
-                }
-            }
-
-            setStreamState(instanceIndex, Error);
-            Q_EMIT streamError(instanceIndex, QStringLiteral("Port conflict detected and retry also failed. Try a different base port."));
-            cleanupConfigDir(instanceIndex);
-            m_streams.remove(instanceIndex);
-            Q_EMIT streamsChanged();
-            return false;
-        }
-
         setStreamState(instanceIndex, Error);
         Q_EMIT streamError(instanceIndex, QStringLiteral("Failed to launch Sunshine: %1").arg(errorMsg));
         cleanupConfigDir(instanceIndex);
@@ -257,6 +198,14 @@ bool StreamManager::stopStream(int instanceIndex)
 
     if (m_startupTimers.contains(instanceIndex)) {
         delete m_startupTimers.take(instanceIndex);
+    }
+
+    if (m_restartTimers.contains(instanceIndex)) {
+        if (m_restartTimers[instanceIndex]) {
+            m_restartTimers[instanceIndex]->stop();
+            m_restartTimers[instanceIndex]->deleteLater();
+        }
+        m_restartTimers.remove(instanceIndex);
     }
 
     if (entry.pid == 0) {
@@ -326,7 +275,8 @@ void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid,
         return;
     }
 
-    if (m_startupTimers.contains(foundIndex)) {
+    bool crashedDuringStartup = m_startupTimers.contains(foundIndex);
+    if (crashedDuringStartup) {
         delete m_startupTimers.take(foundIndex);
     }
 
@@ -341,15 +291,26 @@ void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid,
     cleanupConfigDir(foundIndex);
 
     if (m_autoRestart && m_streams[foundIndex].restartAttempts < StreamEntry::MAX_RESTART_ATTEMPTS) {
+        if (crashedDuringStartup) {
+            const int currentPort = m_streams[foundIndex].lastConfig.value(
+                QStringLiteral("sunshinePort"), SunshineConfig::calculatePort(foundIndex)).toInt();
+            m_streams[foundIndex].lastConfig[QStringLiteral("sunshinePort")] =
+                currentPort + SunshineConfig::PORT_SPACING;
+        }
         Q_EMIT streamError(foundIndex, QStringLiteral("%1 (auto-restarting attempt %2/%3)")
             .arg(errorMsg)
             .arg(m_streams[foundIndex].restartAttempts + 1)
             .arg(StreamEntry::MAX_RESTART_ATTEMPTS));
         Q_EMIT streamsChanged();
 
-        QTimer::singleShot(RESTART_DELAY_MS, this, [this, foundIndex]() {
+        QTimer *restartTimer = new QTimer(this);
+        restartTimer->setSingleShot(true);
+        connect(restartTimer, &QTimer::timeout, this, [this, foundIndex]() {
+            m_restartTimers.remove(foundIndex);
             attemptRestart(foundIndex);
         });
+        m_restartTimers[foundIndex] = restartTimer;
+        restartTimer->start(RESTART_DELAY_MS);
     } else {
         if (m_autoRestart) {
             Q_EMIT streamError(foundIndex, QStringLiteral("%1 (max restart attempts reached)").arg(errorMsg));

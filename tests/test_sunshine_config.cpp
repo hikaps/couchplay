@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include <QCryptographicHash>
+#include <algorithm>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QObject>
@@ -247,10 +248,11 @@ void TestSunshineConfig::testCustomCredentials()
     credsFile.close();
 
     QCOMPARE(doc.object().value(QStringLiteral("username")).toString(), QStringLiteral("admin"));
-    // Verify the hash matches SHA256(salt + "hunter2")
+    // Verify the hash matches reversed SHA256("hunter2" + salt)
     QString salt = doc.object().value(QStringLiteral("salt")).toString();
-    QString expectedHash = QString::fromLatin1(
-        QCryptographicHash::hash((salt + QStringLiteral("hunter2")).toUtf8(), QCryptographicHash::Sha256).toHex()).toUpper();
+    QByteArray expectedRaw = QCryptographicHash::hash((QStringLiteral("hunter2") + salt).toUtf8(), QCryptographicHash::Sha256);
+    std::reverse(expectedRaw.begin(), expectedRaw.end());
+    QString expectedHash = QString::fromLatin1(expectedRaw.toHex()).toUpper();
     QCOMPARE(doc.object().value(QStringLiteral("password")).toString(), expectedHash);
 }
 

@@ -375,7 +375,7 @@ bool SessionRunner::start()
 
 void SessionRunner::stop()
 {
-    if (!isRunning()) {
+    if (!isRunning() && m_streamingInstances.isEmpty()) {
         return;
     }
 
@@ -543,6 +543,7 @@ void SessionRunner::cleanupInstances()
 
     m_pendingInstanceConfigs.clear();
     m_layouts.clear();
+    teardownStreamingInstances();
     m_streamingInstances.clear();
     m_nextInstanceToStart = 0;
 }

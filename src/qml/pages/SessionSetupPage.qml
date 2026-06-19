@@ -395,11 +395,11 @@ Kirigami.ScrollablePage {
 
                 header: RowLayout {
                     spacing: Kirigami.Units.smallSpacing
-                    padding: Kirigami.Units.smallSpacing
 
                     Kirigami.Heading {
                         text: i18nc("@title", "Player %1", instanceCard.index + 1)
                         level: 3
+                        padding: Kirigami.Units.smallSpacing
                     }
 
                     Kirigami.Icon {
@@ -612,13 +612,20 @@ Kirigami.ScrollablePage {
                                 from: 5000
                                 to: 80000
                                 stepSize: 1000
-                                
-                                value: {
-                                    if (!instanceCard.cardSessionManager) return 20000
+
+                                function updateValue() {
+                                    if (!instanceCard.cardSessionManager) { value = 20000; return }
                                     let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    return config.streamBitrate || 20000
+                                    value = config.streamBitrate || 20000
                                 }
-                                
+
+                                Component.onCompleted: { updateValue() }
+
+                                Connections {
+                                    target: instanceCard
+                                    function onCardRevisionChanged() { bitrateSlider.updateValue() }
+                                }
+
                                 onMoved: {
                                     if (instanceCard.cardSessionManager) {
                                         let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)

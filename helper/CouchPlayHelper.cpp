@@ -1876,6 +1876,7 @@ QString CouchPlayHelper::CreateVirtualOutput(const QString &username, int width,
 
     if (mainPid <= 0) {
         qWarning() << "CreateVirtualOutput: Could not get MainPID for" << serviceName;
+        stopServiceInstance(serviceName);
         sendErrorReply(QDBusError::Failed,
             QStringLiteral("Virtual display process started but PID not retrievable"));
         return QString();
@@ -1902,6 +1903,7 @@ QString CouchPlayHelper::CreateVirtualOutput(const QString &username, int width,
                         << socketName;
         } else {
             qWarning() << "CreateVirtualOutput: No wayland sockets found in" << userRuntimeDir;
+            stopServiceInstance(serviceName);
             sendErrorReply(QDBusError::Failed,
                 QStringLiteral("Virtual display started but no Wayland socket detected"));
             return QString();

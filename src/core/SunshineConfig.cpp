@@ -4,6 +4,7 @@
 #include "SunshineConfig.h"
 
 #include <QCryptographicHash>
+#include <algorithm>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -132,7 +133,8 @@ bool SunshineConfig::writeCredentialsFile(const QString &configDir, const QStrin
         salt.append(chars[QRandomGenerator::global()->bounded(chars.size())]);
     }
 
-    const QByteArray hash = QCryptographicHash::hash((salt + password).toUtf8(), QCryptographicHash::Sha256);
+    QByteArray hash = QCryptographicHash::hash((password + salt).toUtf8(), QCryptographicHash::Sha256);
+    std::reverse(hash.begin(), hash.end());
     const QString hashHex = QString::fromLatin1(hash.toHex()).toUpper();
 
     QJsonObject creds;
@@ -186,6 +188,11 @@ QString SunshineConfig::buildConfigContent(const QVariantMap &instanceConfig, in
     content.append(QStringLiteral("\nfile_apps = %1/apps.json\n").arg(configDir));
     content.append(QStringLiteral("credentials_file = %1/credentials.json\n").arg(configDir));
     content.append(QStringLiteral("log_path = %1/sunshine.log\n").arg(configDir));
+
+    const QString sink = instanceConfig.value(QStringLiteral("sink")).toString();
+    if (!sink.isEmpty()) {
+        content.append(QStringLiteral("sink = %1\n").arg(sink));
+    }
 
     content.append(QStringLiteral("\ngamepad = auto\n"));
     content.append(QStringLiteral("controller = enabled\n"));
