@@ -35,6 +35,8 @@ private Q_SLOTS:
     void testGetInstanceConfig();
     void testSetInstanceConfig();
     void testSetInstanceResolution();
+    void testRecalculateOutputResolutionsHorizontal();
+    void testRecalculateOutputResolutionsVertical();
     void testSetInstanceUser();
 
     // Profile management tests
@@ -168,6 +170,37 @@ void TestSessionManager::testSetInstanceResolution()
     QCOMPARE(config.value(KEY("internalHeight")).toInt(), 1440);
     QCOMPARE(config.value(KEY("outputWidth")).toInt(), 1920);
     QCOMPARE(config.value(KEY("outputHeight")).toInt(), 1080);
+}
+
+void TestSessionManager::testRecalculateOutputResolutionsHorizontal()
+{
+    // Internal matches output so the game adapts its UI to the split-screen aspect ratio
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setCurrentLayout(QStringLiteral("horizontal"));
+
+    QSignalSpy spy(m_sessionManager, &SessionManager::instancesChanged);
+    m_sessionManager->recalculateOutputResolutions(1920, 1080);
+    QVERIFY(spy.count() >= 1);
+
+    QVariantMap config0 = m_sessionManager->getInstanceConfig(0);
+    QCOMPARE(config0.value(KEY("outputWidth")).toInt(), 960);
+    QCOMPARE(config0.value(KEY("outputHeight")).toInt(), 1080);
+    QCOMPARE(config0.value(KEY("internalWidth")).toInt(), 960);
+    QCOMPARE(config0.value(KEY("internalHeight")).toInt(), 1080);
+}
+
+void TestSessionManager::testRecalculateOutputResolutionsVertical()
+{
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setCurrentLayout(QStringLiteral("vertical"));
+
+    m_sessionManager->recalculateOutputResolutions(1920, 1080);
+
+    QVariantMap config0 = m_sessionManager->getInstanceConfig(0);
+    QCOMPARE(config0.value(KEY("outputWidth")).toInt(), 1920);
+    QCOMPARE(config0.value(KEY("outputHeight")).toInt(), 540);
+    QCOMPARE(config0.value(KEY("internalWidth")).toInt(), 1920);
+    QCOMPARE(config0.value(KEY("internalHeight")).toInt(), 540);
 }
 
 void TestSessionManager::testSetInstanceUser()

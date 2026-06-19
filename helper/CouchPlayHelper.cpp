@@ -329,7 +329,12 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     args << QStringLiteral("-m") << QStringLiteral("-c") << fullName << QStringLiteral("-s")
          << QStringLiteral("/bin/bash");
 
-    args << QStringLiteral("-G") << QStringLiteral("input,") + COUCHPLAY_GROUP;
+    // "input" group is optional (absent on Bazzite); omit if missing to avoid useradd failure (issue #23)
+    QString supplementaryGroups = COUCHPLAY_GROUP;
+    if (m_ops->getgrnam("input")) {
+        supplementaryGroups = QStringLiteral("input,") + COUCHPLAY_GROUP;
+    }
+    args << QStringLiteral("-G") << supplementaryGroups;
 
     args << username;
 
