@@ -9,7 +9,8 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
-#   sudo ./install.sh
+#   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
+#   sudo ./install.sh --beta
 #
 # Requirements:
 #   - curl: for downloading files
@@ -169,6 +170,36 @@ get_latest_release() {
         exit 1
     fi
     
+    echo "$response"
+}
+
+get_beta_release() {
+    # Fetches the beta (pre-release) metadata from GitHub Releases API
+    # Uses the /releases/tags/beta endpoint to get the rolling beta release
+    # Returns JSON with: tag_name, name, assets[], etc.
+
+    local api_url="${GITHUB_API}/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/beta"
+    local response
+    local http_code
+
+    print_info "Fetching beta release information..."
+
+    response=$(curl -sL -w "\n%{http_code}" "$api_url" 2>/dev/null)
+    http_code=$(echo "$response" | tail -n1)
+    response=$(echo "$response" | sed '$d')
+
+    if [[ "$http_code" != "200" ]]; then
+        print_error "Failed to fetch beta release information (HTTP $http_code)"
+        echo ""
+        echo "This could mean:"
+        echo "  - No beta release has been published yet"
+        echo "  - GitHub API rate limit exceeded"
+        echo "  - Network connectivity issues"
+        echo ""
+        echo "Please check: https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/beta"
+        exit 1
+    fi
+
     echo "$response"
 }
 
@@ -399,6 +430,14 @@ cleanup() {
 # =============================================================================
 
 main() {
+    local BETA=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --beta) BETA=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
     print_info "CouchPlay Installer"
     echo ""
     
@@ -409,9 +448,14 @@ main() {
     
     echo ""
     
-    # Get latest release info
+    # Get release info (beta or stable)
     local release_json
-    release_json=$(get_latest_release)
+    if $BETA; then
+        release_json=$(get_beta_release)
+        print_warn "Installing BETA build from develop — not a stable release!"
+    else
+        release_json=$(get_latest_release)
+    fi
     
     local tag_name
     tag_name=$(get_release_tag "$release_json")

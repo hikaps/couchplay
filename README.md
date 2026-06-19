@@ -77,6 +77,16 @@ curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/insta
 
 > **Requirements**: Linux x86_64, root privileges (sudo). This downloads and installs the latest release from GitHub, including the privileged helper service.
 
+### Beta (from develop)
+
+Install the latest build from the `develop` branch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
+```
+
+> **Warning**: Beta builds include unreleased features and may be unstable. For production use, install the stable release above.
+
 ## Installation (Bazzite / Fedora Atomic)
 
 CouchPlay uses a privileged helper to manage devices and users.
