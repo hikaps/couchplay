@@ -191,9 +191,7 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
 {
     QStringList args;
 
-    // Steam integration - only enable for presets that require it (e.g., Steam Big Picture)
-    bool steamIntegration = config.value(QStringLiteral("steamIntegration"), false).toBool();
-    if (steamIntegration) {
+    if (config.value(QStringLiteral("launcherId")).toString() == QStringLiteral("steam")) {
         args << QStringLiteral("-e");
     }
 

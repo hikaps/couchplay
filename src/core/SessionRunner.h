@@ -200,10 +200,9 @@ private:
     void cleanupInstances();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
-    bool setupSharedDirectories();
+    bool setupDataDirectories();
     void teardownSharedDirectories();
     bool buildBindPaths();
-    bool setupLauncherAccess();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();

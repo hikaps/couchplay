@@ -30,12 +30,29 @@ private Q_SLOTS:
     void testGetCommand();
     void testGetWorkingDirectory();
     void testGetLauncherId();
-    void testGetSteamIntegration();
 
     void testAddCustomPreset();
     void testRemoveCustomPreset();
 
     void testGetSetSharedDirectories();
+    void testLauncherInfoFlags();
+
+    void testLauncherIdPersistence();
+    void testKConfigMigration();
+
+    void testDetectLauncherId_NativeSteam();
+    void testDetectLauncherId_NativeHeroic();
+    void testDetectLauncherId_NativeLutris();
+    void testDetectLauncherId_FlatpakSteam();
+    void testDetectLauncherId_FlatpakHeroic();
+    void testDetectLauncherId_FlatpakLutris();
+    void testDetectLauncherId_UnknownBinary();
+    void testDetectLauncherId_UrlScheme();
+
+    void testPopulateLauncherInfo_SteamCustom();
+    void testPopulateLauncherInfo_HeroicCustom();
+    void testPopulateLauncherInfo_EmptyLauncherId();
+    void testPopulateLauncherInfo_FreshOnAccess();
 
 private:
     QTemporaryDir *m_tempDir = nullptr;
@@ -152,16 +169,6 @@ void TestPresetManager::testGetLauncherId()
     QCOMPARE(manager.getLauncherId(QStringLiteral("lutris")), QStringLiteral("lutris"));
 }
 
-void TestPresetManager::testGetSteamIntegration()
-{
-    PresetManager manager;
-
-    QVERIFY(manager.getSteamIntegration(QStringLiteral("steam")));
-
-    QVERIFY(!manager.getSteamIntegration(QStringLiteral("heroic")));
-    QVERIFY(!manager.getSteamIntegration(QStringLiteral("lutris")));
-}
-
 void TestPresetManager::testAddCustomPreset()
 {
     PresetManager manager;
@@ -170,8 +177,7 @@ void TestPresetManager::testAddCustomPreset()
     QString id = manager.addCustomPreset(QStringLiteral("Test Game"),
                                          QStringLiteral("/path/to/game"),
                                          QStringLiteral("/working/dir"),
-                                         QStringLiteral("test-icon"),
-                                         true);
+                                         QStringLiteral("test-icon"));
 
     QVERIFY(!id.isEmpty());
     QVERIFY(id.startsWith(QStringLiteral("custom-")));
@@ -187,7 +193,6 @@ void TestPresetManager::testAddCustomPreset()
             QCOMPARE(preset[QStringLiteral("command")].toString(), QStringLiteral("/path/to/game"));
             QCOMPARE(preset[QStringLiteral("workingDirectory")].toString(), QStringLiteral("/working/dir"));
             QCOMPARE(preset[QStringLiteral("iconName")].toString(), QStringLiteral("test-icon"));
-            QCOMPARE(preset[QStringLiteral("steamIntegration")].toBool(), true);
             QCOMPARE(preset[QStringLiteral("isBuiltin")].toBool(), false);
         }
     }
@@ -222,23 +227,202 @@ void TestPresetManager::testGetSetSharedDirectories()
     PresetManager manager;
     QSignalSpy presetsChangedSpy(&manager, &PresetManager::presetsChanged);
 
-    // Add a custom preset
     QString id = manager.addCustomPreset(QStringLiteral("Shared Test"), QStringLiteral("/path/to/game"));
 
-    // Initially empty
-    QStringList dirs = manager.getSharedDirectories(id);
+    QVariantList dirs = manager.getDataDirectories(id);
     QVERIFY(dirs.isEmpty());
     presetsChangedSpy.clear();
 
-    // Set shared directories
-    QStringList newDirs = {QStringLiteral("/shared/dir1"), QStringLiteral("/shared/dir2")};
-    bool result = manager.setSharedDirectories(id, newDirs);
+    QVariantList newDirs;
+    DataDirectory dir1{QStringLiteral("/shared/dir1"), QStringLiteral("acl")};
+    DataDirectory dir2{QStringLiteral("/shared/dir2"), QStringLiteral("overlay")};
+    newDirs.append(QVariant::fromValue(dir1));
+    newDirs.append(QVariant::fromValue(dir2));
+    bool result = manager.setDataDirectories(id, newDirs);
     QVERIFY(result);
     QCOMPARE(presetsChangedSpy.count(), 1);
 
-    // Verify they were set
-    dirs = manager.getSharedDirectories(id);
-    QCOMPARE(dirs, newDirs);
+    dirs = manager.getDataDirectories(id);
+    QCOMPARE(dirs.size(), 2);
+}
+
+void TestPresetManager::testLauncherInfoFlags()
+{
+    PresetManager manager;
+
+    LaunchPreset steam = manager.getPreset(QStringLiteral("steam"));
+    QVERIFY(!steam.launcherInfo.configPath.isEmpty() || steam.launcherId == QStringLiteral("steam"));
+
+    LaunchPreset heroic = manager.getPreset(QStringLiteral("heroic"));
+    QCOMPARE(heroic.launcherId, QStringLiteral("heroic"));
+
+    LaunchPreset lutris = manager.getPreset(QStringLiteral("lutris"));
+    QCOMPARE(lutris.launcherId, QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testLauncherIdPersistence()
+{
+    {
+        PresetManager manager;
+        QString id = manager.addCustomPreset(QStringLiteral("Heroic Preset"),
+                                             QStringLiteral("heroic"),
+                                             QString(),
+                                             QStringLiteral("heroic-icon"));
+
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+        group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("heroic"));
+        config->sync();
+    }
+
+    {
+        PresetManager manager;
+        LaunchPreset found;
+        for (const LaunchPreset &p : manager.presets()) {
+            if (p.name == QStringLiteral("Heroic Preset")) {
+                found = p;
+                break;
+            }
+        }
+        QCOMPARE(found.launcherId, QStringLiteral("heroic"));
+    }
+}
+
+void TestPresetManager::testKConfigMigration()
+{
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: custom-migrate-test"));
+    group.writeEntry(QStringLiteral("id"), QStringLiteral("custom-migrate-test"));
+    group.writeEntry(QStringLiteral("name"), QStringLiteral("Migrate Test"));
+    group.writeEntry(QStringLiteral("command"), QStringLiteral("steam"));
+    group.writeEntry(QStringLiteral("steamIntegration"), true);
+    config->sync();
+
+    PresetManager manager;
+    LaunchPreset preset = manager.getPreset(QStringLiteral("custom-migrate-test"));
+    QCOMPARE(preset.launcherId, QStringLiteral("steam"));
+}
+
+void TestPresetManager::testDetectLauncherId_NativeSteam()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("steam -tenfoot")), QStringLiteral("steam"));
+}
+
+void TestPresetManager::testDetectLauncherId_NativeHeroic()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("heroic")), QStringLiteral("heroic"));
+}
+
+void TestPresetManager::testDetectLauncherId_NativeLutris()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("lutris")), QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testDetectLauncherId_FlatpakSteam()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run com.valvesoftware.Steam")), QStringLiteral("steam"));
+}
+
+void TestPresetManager::testDetectLauncherId_FlatpakHeroic()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run com.heroicgameslauncher.hgl")), QStringLiteral("heroic"));
+}
+
+void TestPresetManager::testDetectLauncherId_FlatpakLutris()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run net.lutris.Lutris")), QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testDetectLauncherId_UnknownBinary()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("/usr/bin/my-game --flag")), QString());
+}
+
+void TestPresetManager::testDetectLauncherId_UrlScheme()
+{
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("heroic://launch/gog/abc")), QString());
+}
+
+void TestPresetManager::testPopulateLauncherInfo_SteamCustom()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("My Steam"),
+                                          QStringLiteral("steam -tenfoot"));
+
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+    group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("steam"));
+    config->sync();
+
+    PresetManager manager2;
+    LaunchPreset preset = manager2.getPreset(id);
+
+    QVERIFY(!preset.isBuiltin);
+    QCOMPARE(preset.launcherId, QStringLiteral("steam"));
+}
+
+void TestPresetManager::testPopulateLauncherInfo_HeroicCustom()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("My Heroic"),
+                                          QStringLiteral("heroic"));
+
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+    group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("heroic"));
+    config->sync();
+
+    PresetManager manager2;
+    LaunchPreset preset = manager2.getPreset(id);
+
+    QVERIFY(!preset.isBuiltin);
+    QCOMPARE(preset.launcherId, QStringLiteral("heroic"));
+}
+
+void TestPresetManager::testPopulateLauncherInfo_EmptyLauncherId()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("Generic Game"),
+                                          QStringLiteral("/usr/bin/my-game"));
+
+    LaunchPreset preset = manager.getPreset(id);
+
+    QVERIFY(!preset.isBuiltin);
+    QVERIFY(preset.launcherId.isEmpty());
+    QVERIFY(preset.launcherInfo.configPath.isEmpty());
+    QVERIFY(preset.launcherInfo.dataPath.isEmpty());
+}
+
+void TestPresetManager::testPopulateLauncherInfo_FreshOnAccess()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("Fresh Test"),
+                                          QStringLiteral("steam"));
+
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: ") + id);
+    group.writeEntry(QStringLiteral("launcherId"), QStringLiteral("steam"));
+    config->sync();
+
+    PresetManager manager2;
+
+    LaunchPreset first = manager2.getPreset(id);
+    LaunchPreset second = manager2.getPreset(id);
+
+    QCOMPARE(first.launcherInfo.configPath, second.launcherInfo.configPath);
+    QCOMPARE(first.launcherInfo.dataPath, second.launcherInfo.dataPath);
 }
 
 QTEST_MAIN(TestPresetManager)

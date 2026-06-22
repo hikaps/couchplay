@@ -10,12 +10,15 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUuid>
+
+#include <functional>
 
 #include <KSharedConfig>
 #include <KConfigGroup>
@@ -49,41 +52,90 @@ void PresetManager::setSteamConfigManager(SteamConfigManager *manager)
     }
 }
 
-QStringList PresetManager::getDefaultSharedDirectories(const QString &id) const
+QList<DataDirectory> PresetManager::getDefaultDataDirectories(const QString &id) const
 {
-    QStringList dirs;
+    using Resolver = std::function<QList<DataDirectory>(const PresetManager *)>;
+    static const QHash<QString, Resolver> resolvers = {
+        {QStringLiteral("steam"), [](const PresetManager *self) -> QList<DataDirectory> {
+            QList<DataDirectory> dirs;
+            if (!self->m_steamConfigManager || !self->m_steamConfigManager->isSteamDetected()) {
+                return dirs;
+            }
 
-    if (id == QStringLiteral("steam")) {
-        if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
-            QString steamRoot = m_steamConfigManager->steamPaths().steamRoot;
+            QString steamRoot = self->m_steamConfigManager->steamPaths().steamRoot;
             if (!steamRoot.isEmpty()) {
-                dirs.append(steamRoot);
+                dirs.append({steamRoot, QStringLiteral("overlay")});
             }
-        }
-    } else if (id == QStringLiteral("heroic")) {
-        if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            // Don't share configPath: syncConfigToUser() copies specific config files to the gaming user's home,
-            // and bind-mounting the config dir would cause ownership conflicts when syncing.
-            // Only share the install path where games are installed.
-            QString installPath = m_heroicConfigManager->defaultInstallPath();
+
+            if (self->m_steamConfigManager->syncShortcutsEnabled()) {
+                if (self->m_steamConfigManager->shortcutCount() == 0) {
+                    self->m_steamConfigManager->loadShortcuts();
+                }
+                QStringList shortcutDirs = self->m_steamConfigManager->extractShortcutDirectories();
+                for (const QString &dir : shortcutDirs) {
+                    if (QDir(dir).exists()) {
+                        dirs.append({dir, QStringLiteral("acl")});
+                    }
+                }
+            }
+
+            return dirs;
+        }},
+        {QStringLiteral("heroic"), [](const PresetManager *self) -> QList<DataDirectory> {
+            QList<DataDirectory> dirs;
+            if (!self->m_heroicConfigManager || !self->m_heroicConfigManager->isHeroicDetected()) {
+                return dirs;
+            }
+
+            QString configPath = self->m_heroicConfigManager->configPath();
+            if (!configPath.isEmpty()) {
+                dirs.append({configPath, QStringLiteral("copy")});
+            }
+
+            QString installPath = self->m_heroicConfigManager->defaultInstallPath();
             if (!installPath.isEmpty()) {
-                dirs.append(installPath);
+                dirs.append({installPath, QStringLiteral("overlay")});
             }
-        }
-    } else if (id == QStringLiteral("lutris")) {
-        QString home = QDir::homePath();
-        QString lutrisData = home + QStringLiteral("/.local/share/lutris");
-        QString lutrisGames = home + QStringLiteral("/Games");
-        if (QDir(lutrisData).exists()) {
-            dirs.append(lutrisData);
-        }
-        if (QDir(lutrisGames).exists()) {
-            dirs.append(lutrisGames);
+
+            if (self->m_heroicConfigManager->gameCount() == 0) {
+                self->m_heroicConfigManager->loadGames();
+            }
+            QStringList gameDirs = self->m_heroicConfigManager->extractGameDirectories();
+            for (const QString &dir : gameDirs) {
+                if (QDir(dir).exists()) {
+                    dirs.append({dir, QStringLiteral("acl")});
+                }
+            }
+
+            return dirs;
+        }},
+        {QStringLiteral("lutris"), [](const PresetManager *) -> QList<DataDirectory> {
+            QList<DataDirectory> dirs;
+            QString home = QDir::homePath();
+            QString lutrisData = home + QStringLiteral("/.local/share/lutris");
+            QString lutrisGames = home + QStringLiteral("/Games");
+            if (QDir(lutrisData).exists()) {
+                dirs.append({lutrisData, QStringLiteral("acl")});
+            }
+            if (QDir(lutrisGames).exists()) {
+                dirs.append({lutrisGames, QStringLiteral("acl")});
+            }
+            return dirs;
+        }},
+    };
+
+    QList<DataDirectory> dirs = resolvers.value(id, [](const PresetManager *) -> QList<DataDirectory> { return {}; })(this);
+
+    // Deduplicate by path
+    QStringList seen;
+    QList<DataDirectory> unique;
+    for (const DataDirectory &d : dirs) {
+        if (!seen.contains(d.path)) {
+            seen.append(d.path);
+            unique.append(d);
         }
     }
-
-    dirs.removeDuplicates();
-    return dirs;
+    return unique;
 }
 
 QString PresetManager::resolveLaunchCommand(const QString &nativeCommand,
@@ -175,9 +227,13 @@ void PresetManager::initBuiltinPresets()
         steam.flatpakArgs);
     steam.iconName = QStringLiteral("steam");
     steam.isBuiltin = true;
-    steam.steamIntegration = true;
     steam.launcherId = QStringLiteral("steam");
-    steam.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("steam"));
+
+    if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
+        steam.launcherInfo.configPath = m_steamConfigManager->steamPaths().steamRoot;
+    }
+
+    steam.dataDirectories = getDefaultDataDirectories(QStringLiteral("steam"));
     m_builtinPresets.append(steam);
 
     LaunchPreset heroic;
@@ -185,32 +241,25 @@ void PresetManager::initBuiltinPresets()
     heroic.name = QStringLiteral("Heroic Games");
     heroic.iconName = QStringLiteral("com.heroicgameslauncher.hgl");
     heroic.isBuiltin = true;
-    heroic.steamIntegration = false;
     heroic.launcherId = QStringLiteral("heroic");
     heroic.flatpakAppId = QStringLiteral("com.heroicgameslauncher.hgl");
 
-        if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            heroic.command = resolveLaunchCommand(
-                QStringLiteral("heroic"),
-                heroic.flatpakAppId,
-                QString());
-            heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
-            heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
-            heroic.launcherInfo.requiresAcls = true;
-            heroic.launcherInfo.hasShortcutSync = true;
+    if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+        heroic.command = resolveLaunchCommand(
+            QStringLiteral("heroic"),
+            heroic.flatpakAppId,
+            QString());
+        heroic.launcherInfo.configPath = m_heroicConfigManager->configPath();
+        heroic.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
+    } else {
+        heroic.command = resolveLaunchCommand(
+            QStringLiteral("heroic"),
+            heroic.flatpakAppId,
+            QString());
+    }
 
-            if (m_heroicConfigManager->gameCount() == 0) {
-                m_heroicConfigManager->loadGames();
-            }
-            heroic.launcherInfo.gameDirectories = m_heroicConfigManager->extractGameDirectories();
-        } else {
-            heroic.command = resolveLaunchCommand(
-                QStringLiteral("heroic"),
-                heroic.flatpakAppId,
-                QString());
-        }
-        heroic.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("heroic"));
-        m_builtinPresets.append(heroic);
+    heroic.dataDirectories = getDefaultDataDirectories(QStringLiteral("heroic"));
+    m_builtinPresets.append(heroic);
 
     LaunchPreset lutris;
     lutris.id = QStringLiteral("lutris");
@@ -222,9 +271,8 @@ void PresetManager::initBuiltinPresets()
         QString());
     lutris.iconName = QStringLiteral("lutris");
     lutris.isBuiltin = true;
-    lutris.steamIntegration = false;
     lutris.launcherId = QStringLiteral("lutris");
-    lutris.sharedDirectories = getDefaultSharedDirectories(QStringLiteral("lutris"));
+    lutris.dataDirectories = getDefaultDataDirectories(QStringLiteral("lutris"));
     m_builtinPresets.append(lutris);
 
     loadFlatpakCache();
@@ -250,10 +298,15 @@ QVariantList PresetManager::presetsAsVariant() const
         map[QStringLiteral("iconName")] = preset.iconName;
         map[QStringLiteral("desktopFilePath")] = preset.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = preset.isBuiltin;
-        map[QStringLiteral("steamIntegration")] = preset.steamIntegration;
         map[QStringLiteral("launcherId")] = preset.launcherId;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(preset.launcherInfo);
-        map[QStringLiteral("sharedDirectories")] = preset.sharedDirectories;
+
+        QVariantList dataDirsVariant;
+        for (const DataDirectory &dir : preset.dataDirectories) {
+            dataDirsVariant.append(QVariant::fromValue(dir));
+        }
+        map[QStringLiteral("dataDirectories")] = dataDirsVariant;
+
         map[QStringLiteral("flatpakAppId")] = preset.flatpakAppId;
         map[QStringLiteral("flatpakArgs")] = preset.flatpakArgs;
         result.append(map);
@@ -273,7 +326,6 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
         map[QStringLiteral("iconName")] = app.iconName;
         map[QStringLiteral("desktopFilePath")] = app.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = app.isBuiltin;
-        map[QStringLiteral("steamIntegration")] = app.steamIntegration;
         map[QStringLiteral("launcherId")] = app.launcherId;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(app.launcherInfo);
         map[QStringLiteral("flatpakAppId")] = app.flatpakAppId;
@@ -281,6 +333,22 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
         result.append(map);
     }
     return result;
+}
+
+void PresetManager::populateLauncherInfo(LaunchPreset &preset) const
+{
+    preset.launcherInfo = LauncherInfo();
+
+    if (preset.launcherId == QStringLiteral("steam")) {
+        if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
+            preset.launcherInfo.configPath = m_steamConfigManager->steamPaths().steamRoot;
+        }
+    } else if (preset.launcherId == QStringLiteral("heroic")) {
+        if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            preset.launcherInfo.configPath = m_heroicConfigManager->configPath();
+            preset.launcherInfo.dataPath = m_heroicConfigManager->defaultInstallPath();
+        }
+    }
 }
 
 LaunchPreset PresetManager::getPreset(const QString &id) const
@@ -292,7 +360,9 @@ LaunchPreset PresetManager::getPreset(const QString &id) const
     }
     for (const LaunchPreset &preset : m_customPresets) {
         if (preset.id == id) {
-            return preset;
+            LaunchPreset copy = preset;
+            populateLauncherInfo(copy);
+            return copy;
         }
     }
     if (!m_builtinPresets.isEmpty()) {
@@ -311,54 +381,56 @@ QString PresetManager::getWorkingDirectory(const QString &id) const
     return getPreset(id).workingDirectory;
 }
 
-bool PresetManager::getSteamIntegration(const QString &id) const
-{
-    return getPreset(id).steamIntegration;
-}
-
 QString PresetManager::getLauncherId(const QString &id) const
 {
     return getPreset(id).launcherId;
 }
 
-QStringList PresetManager::getGameDirectories(const QString &id) const
+QVariantList PresetManager::getDataDirectories(const QString &id) const
 {
-    return getPreset(id).launcherInfo.gameDirectories;
+    QVariantList result;
+    const QList<DataDirectory> dirs = getPreset(id).dataDirectories;
+    for (const DataDirectory &dir : dirs) {
+        result.append(QVariant::fromValue(dir));
+    }
+    return result;
 }
 
-QStringList PresetManager::getSharedDirectories(const QString &id) const
+bool PresetManager::setDataDirectories(const QString &id, const QVariantList &directories)
 {
-    return getPreset(id).sharedDirectories;
-}
+    QList<DataDirectory> dataDirs;
+    for (const QVariant &var : directories) {
+        DataDirectory dir = var.value<DataDirectory>();
+        if (!dir.path.isEmpty()) {
+            dataDirs.append(dir);
+        }
+    }
 
-bool PresetManager::setSharedDirectories(const QString &id, const QStringList &directories)
-{
     for (int i = 0; i < m_builtinPresets.size(); ++i) {
         if (m_builtinPresets[i].id == id) {
-            m_builtinPresets[i].sharedDirectories = directories;
+            m_builtinPresets[i].dataDirectories = dataDirs;
             Q_EMIT presetsChanged();
             return true;
         }
     }
-    
+
     for (int i = 0; i < m_customPresets.size(); ++i) {
         if (m_customPresets[i].id == id) {
-            m_customPresets[i].sharedDirectories = directories;
+            m_customPresets[i].dataDirectories = dataDirs;
             saveCustomPresets();
             Q_EMIT presetsChanged();
             return true;
         }
     }
 
-    qWarning() << "Cannot set shared directories - preset not found:" << id;
+    qWarning() << "Cannot set data directories - preset not found:" << id;
     return false;
 }
 
 QString PresetManager::addCustomPreset(const QString &name,
                                         const QString &command,
                                         const QString &workingDirectory,
-                                        const QString &iconName,
-                                        bool steamIntegration)
+                                        const QString &iconName)
 {
     LaunchPreset preset;
     preset.id = generateCustomId();
@@ -367,7 +439,6 @@ QString PresetManager::addCustomPreset(const QString &name,
     preset.workingDirectory = workingDirectory;
     preset.iconName = iconName.isEmpty() ? QStringLiteral("application-x-executable") : iconName;
     preset.isBuiltin = false;
-    preset.steamIntegration = steamIntegration;
 
     m_customPresets.append(preset);
     saveCustomPresets();
@@ -383,6 +454,8 @@ QString PresetManager::addPresetFromDesktopFile(const QString &desktopFilePath)
         Q_EMIT errorOccurred(QStringLiteral("Failed to parse desktop file: %1").arg(desktopFilePath));
         return QString();
     }
+
+    preset.launcherId = detectLauncherId(preset.command);
 
     for (const LaunchPreset &existing : m_customPresets) {
         if (existing.desktopFilePath == desktopFilePath) {
@@ -404,8 +477,7 @@ bool PresetManager::updateCustomPreset(const QString &id,
                                         const QString &name,
                                         const QString &command,
                                         const QString &workingDirectory,
-                                        const QString &iconName,
-                                        bool steamIntegration)
+                                        const QString &iconName)
 {
     for (int i = 0; i < m_customPresets.size(); ++i) {
         if (m_customPresets[i].id == id) {
@@ -413,7 +485,6 @@ bool PresetManager::updateCustomPreset(const QString &id,
             m_customPresets[i].command = command;
             m_customPresets[i].workingDirectory = workingDirectory;
             m_customPresets[i].iconName = iconName;
-            m_customPresets[i].steamIntegration = steamIntegration;
 
             saveCustomPresets();
             Q_EMIT presetsChanged();
@@ -528,10 +599,58 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
     preset.workingDirectory = desktop.value(QStringLiteral("Path")).toString();
     preset.iconName = desktop.value(QStringLiteral("Icon")).toString();
     preset.desktopFilePath = filePath;
+    preset.launcherId = detectLauncherId(preset.command);
 
     // QString categories = desktop.value(QStringLiteral("Categories")).toString();
 
     return preset;
+}
+
+QString PresetManager::detectLauncherId(const QString &command) const
+{
+    if (command.isEmpty()) {
+        return QString();
+    }
+
+    const QStringList tokens = command.split(QStringLiteral(" "), Qt::SkipEmptyParts);
+    if (tokens.isEmpty()) {
+        return QString();
+    }
+
+    const QString &firstToken = tokens.first();
+
+    if (firstToken.contains(QStringLiteral("://"))) {
+        return QString();
+    }
+
+    if (firstToken == QStringLiteral("flatpak")) {
+        if (tokens.size() < 3) {
+            return QString();
+        }
+        const QString &appId = tokens.at(2);
+        if (appId == QStringLiteral("com.valvesoftware.Steam")) {
+            return QStringLiteral("steam");
+        }
+        if (appId == QStringLiteral("com.heroicgameslauncher.hgl")) {
+            return QStringLiteral("heroic");
+        }
+        if (appId == QStringLiteral("net.lutris.Lutris")) {
+            return QStringLiteral("lutris");
+        }
+        return QString();
+    }
+
+    if (firstToken == QStringLiteral("steam")) {
+        return QStringLiteral("steam");
+    }
+    if (firstToken == QStringLiteral("heroic")) {
+        return QStringLiteral("heroic");
+    }
+    if (firstToken == QStringLiteral("lutris")) {
+        return QStringLiteral("lutris");
+    }
+
+    return QString();
 }
 
 QString PresetManager::cleanExecCommand(const QString &exec)
@@ -559,7 +678,7 @@ QString PresetManager::cleanExecCommand(const QString &exec)
 
 QString PresetManager::generateCustomId()
 {
-    return QStringLiteral("custom-") + 
+    return QStringLiteral("custom-") +
            QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
 }
 
@@ -587,10 +706,34 @@ void PresetManager::loadCustomPresets()
         preset.iconName = group.readEntry(QStringLiteral("iconName"), QString());
         preset.desktopFilePath = group.readEntry(QStringLiteral("desktopFilePath"), QString());
         preset.isBuiltin = false;
-        preset.steamIntegration = group.readEntry(QStringLiteral("steamIntegration"), false);
-        preset.sharedDirectories = group.readEntry(QStringLiteral("sharedDirectories"), QStringList());
         preset.flatpakAppId = group.readEntry(QStringLiteral("flatpakAppId"), QString());
         preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
+        preset.launcherId = group.readEntry(QStringLiteral("launcherId"), QString());
+
+        // Load dataDirectories from "path|mode" entries, newline-separated
+        QString dataDirsRaw = group.readEntry(QStringLiteral("dataDirectories"), QString());
+        if (!dataDirsRaw.isEmpty()) {
+            const QStringList entries = dataDirsRaw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+            for (const QString &entry : entries) {
+                int pipePos = entry.indexOf(QLatin1Char('|'));
+                if (pipePos > 0) {
+                    DataDirectory dir;
+                    dir.path = entry.left(pipePos);
+                    dir.mode = entry.mid(pipePos + 1);
+                    if (dir.mode.isEmpty()) {
+                        dir.mode = QStringLiteral("acl");
+                    }
+                    preset.dataDirectories.append(dir);
+                }
+            }
+        }
+
+        // Migrate legacy steamIntegration key to launcherId
+        if (preset.launcherId.isEmpty() && group.hasKey(QStringLiteral("steamIntegration"))
+            && group.readEntry(QStringLiteral("steamIntegration"), false)) {
+            preset.launcherId = QStringLiteral("steam");
+            qCDebug(couchplayCore) << "Migrated legacy steamIntegration=true to launcherId=steam for preset" << preset.id;
+        }
 
         if (!preset.id.isEmpty() && !preset.name.isEmpty()) {
             m_customPresets.append(preset);
@@ -621,10 +764,16 @@ void PresetManager::saveCustomPresets()
         group.writeEntry(QStringLiteral("workingDirectory"), preset.workingDirectory);
         group.writeEntry(QStringLiteral("iconName"), preset.iconName);
         group.writeEntry(QStringLiteral("desktopFilePath"), preset.desktopFilePath);
-        group.writeEntry(QStringLiteral("steamIntegration"), preset.steamIntegration);
-        group.writeEntry(QStringLiteral("sharedDirectories"), preset.sharedDirectories);
         group.writeEntry(QStringLiteral("flatpakAppId"), preset.flatpakAppId);
         group.writeEntry(QStringLiteral("flatpakArgs"), preset.flatpakArgs);
+        group.writeEntry(QStringLiteral("launcherId"), preset.launcherId);
+
+        // Save dataDirectories as newline-separated "path|mode" entries
+        QStringList dirEntries;
+        for (const DataDirectory &dir : preset.dataDirectories) {
+            dirEntries.append(dir.path + QLatin1Char('|') + dir.mode);
+        }
+        group.writeEntry(QStringLiteral("dataDirectories"), dirEntries.join(QLatin1Char('\n')));
     }
 
     config->sync();

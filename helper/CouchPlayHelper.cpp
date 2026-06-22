@@ -1220,22 +1220,65 @@ void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString
     m_monitors.insert(serviceName, monitor);
 }
 
+bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
+{
+    if (path.contains(QStringLiteral(".."))) {
+        return false;
+    }
+
+    static const QStringList allowedPrefixes = {
+        QStringLiteral("/home/"),
+        QStringLiteral("/var/home/"), // Bazzite/Fedora Silverblue
+        QStringLiteral("/run/media/"),
+        QStringLiteral("/tmp/"),
+    };
+
+    for (const QString &prefix : allowedPrefixes) {
+        if (path.startsWith(prefix)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 QString CouchPlayHelper::computeMountTarget(const QString &source,
                                             const QString &alias,
                                             const QString &userHome,
                                             const QString &compositorHome)
 {
+    // Reject alias with path traversal
+    if (alias.contains(QStringLiteral(".."))) {
+        qWarning() << "computeMountTarget: alias contains path traversal:" << alias;
+        return {};
+    }
+
+    QString target;
     if (source.startsWith(compositorHome) && alias.isEmpty()) {
+        // Prevent traversal via source containing ../ after compositorHome prefix
         QString relativePath = source.mid(compositorHome.length());
-        return userHome + relativePath;
+        if (relativePath.contains(QStringLiteral(".."))) {
+            qWarning() << "computeMountTarget: source relative path contains '..':" << source;
+            return {};
+        }
+        target = userHome + relativePath;
     } else if (!alias.isEmpty()) {
         if (alias.startsWith(QLatin1Char('/'))) {
-            return userHome + alias;
+            target = userHome + alias;
+        } else {
+            target = userHome + QStringLiteral("/") + alias;
         }
-        return userHome + QStringLiteral("/") + alias;
     } else {
-        return userHome + QStringLiteral("/.couchplay/mounts") + source;
+        target = userHome + QStringLiteral("/.couchplay/mounts") + source;
     }
+
+    // Verify the target stays within userHome
+    if (!target.startsWith(userHome)) {
+        qWarning() << "computeMountTarget: target escapes user home:" << target;
+        return {};
+    }
+
+    return target;
 }
 
 int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories)
@@ -1278,7 +1321,16 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
             continue;
         }
 
+        if (!isPathWithinAllowedPrefix(source)) {
+            qWarning() << "MountSharedDirectories: Source path is outside allowed prefixes:" << source;
+            continue;
+        }
+
         QString target = computeMountTarget(source, alias, userHome, compositorHome);
+        if (target.isEmpty()) {
+            qWarning() << "MountSharedDirectories: Invalid mount target computed";
+            continue;
+        }
 
         if (!m_ops->fileExists(target)) {
             if (!m_ops->mkpath(target)) {
@@ -1307,6 +1359,7 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
         MountInfo info;
         info.source = source;
         info.target = target;
+        info.mountType = QStringLiteral("bind");
         m_activeMounts[username].append(info);
 
         successCount++;
@@ -1315,6 +1368,128 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
     saveState();
 
     return successCount;
+}
+
+bool CouchPlayHelper::SetupOverlayMount(const QString &username,
+                                        uint compositorUid,
+                                        const QString &sourceDir,
+                                        const QString &targetAlias)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (!m_ops->fileExists(sourceDir)) {
+        qWarning() << "SetupOverlayMount: Source path does not exist:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path does not exist: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!m_ops->isDirectory(sourceDir)) {
+        qWarning() << "SetupOverlayMount: Source is not a directory:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source is not a directory: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(sourceDir)) {
+        qWarning() << "SetupOverlayMount: Source path is outside allowed prefixes:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
+        return false;
+    }
+
+    QString compositorHome = getUserHomeByUid(compositorUid);
+    if (compositorHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not determine home directory for compositor user"));
+        return false;
+    }
+
+    QString target = computeMountTarget(sourceDir, targetAlias, userHome, compositorHome);
+    if (target.isEmpty()) {
+        qWarning() << "SetupOverlayMount: Invalid mount target computed";
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid mount target"));
+        return false;
+    }
+
+    if (!m_ops->fileExists(target)) {
+        if (!m_ops->mkpath(target)) {
+            qWarning() << "SetupOverlayMount: Failed to create target directory:" << target;
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory: %1").arg(target));
+            return false;
+        }
+        uint userUid = getUserUid(username);
+        struct passwd *pw = m_ops->getpwuid(userUid);
+        if (pw) {
+            m_ops->chown(target, userUid, pw->pw_gid);
+        }
+    }
+
+    QByteArray hashBytes =
+        QCryptographicHash::hash(sourceDir.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+    QString hash = QString::fromUtf8(hashBytes);
+
+    QString overlayBase = userHome + QStringLiteral("/.local/share/couchplay/overlays/%1/%2").arg(username, hash);
+    QString upperDir = overlayBase + QStringLiteral("/upper");
+    QString workDir = overlayBase + QStringLiteral("/work");
+
+    if (!m_ops->mkpath(upperDir)) {
+        qWarning() << "SetupOverlayMount: Failed to create upper directory:" << upperDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay upper directory"));
+        return false;
+    }
+    if (!m_ops->mkpath(workDir)) {
+        qWarning() << "SetupOverlayMount: Failed to create work directory:" << workDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay work directory"));
+        return false;
+    }
+
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (pw) {
+        m_ops->chown(upperDir, userUid, pw->pw_gid);
+        m_ops->chown(workDir, userUid, pw->pw_gid);
+    }
+
+    QString mountOpts = QStringLiteral("lowerdir=%1,upperdir=%2,workdir=%3,metacopy=on,xino=auto")
+                            .arg(sourceDir, upperDir, workDir);
+
+    QProcess *mountProcess = m_ops->createProcess();
+    m_ops->startProcess(mountProcess,
+                        QStringLiteral("/usr/bin/mount"),
+                        {QStringLiteral("-t"),
+                         QStringLiteral("overlay"),
+                         QStringLiteral("overlay"),
+                         QStringLiteral("-o"),
+                         mountOpts,
+                         target});
+    m_ops->waitForFinished(mountProcess, 10000);
+
+    if (m_ops->processExitCode(mountProcess) != 0) {
+        qWarning() << "SetupOverlayMount: Failed to mount overlay on" << target << ":"
+                   << QString::fromLocal8Bit(m_ops->readStandardError(mountProcess));
+        delete mountProcess;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to mount overlay filesystem"));
+        return false;
+    }
+    delete mountProcess;
+
+    MountInfo info;
+    info.source = sourceDir;
+    info.target = target;
+    info.mountType = QStringLiteral("overlay");
+    info.upperDir = upperDir;
+    info.workDir = workDir;
+    m_activeMounts[username].append(info);
+
+    saveState();
+
+    return true;
 }
 
 int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
@@ -1468,6 +1643,80 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
     return true;
 }
 
+bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
+                                          const QString &sourceDir,
+                                          const QString &targetRelativePath)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (targetRelativePath.startsWith(QLatin1Char('/'))) {
+        qWarning() << "CopyDirectoryToUser: targetRelativePath must be relative:" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must be relative"));
+        return false;
+    }
+
+    if (targetRelativePath.contains(QStringLiteral(".."))) {
+        qWarning() << "CopyDirectoryToUser: targetRelativePath contains '..':" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must not contain '..'"));
+        return false;
+    }
+
+    if (!m_ops->fileExists(sourceDir)) {
+        qWarning() << "CopyDirectoryToUser: Source directory does not exist:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source directory does not exist: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!m_ops->isDirectory(sourceDir)) {
+        qWarning() << "CopyDirectoryToUser: Source is not a directory:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source is not a directory: %1").arg(sourceDir));
+        return false;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
+        return false;
+    }
+
+    QString targetPath = userHome + QLatin1Char('/') + targetRelativePath;
+
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "CopyDirectoryToUser: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+
+    QString parentDir = targetPath.left(targetPath.lastIndexOf(QLatin1Char('/')));
+    if (!parentDir.isEmpty() && !m_ops->fileExists(parentDir)) {
+        if (!m_ops->mkpath(parentDir)) {
+            qWarning() << "CopyDirectoryToUser: Failed to create parent directory:" << parentDir;
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create parent directory: %1").arg(parentDir));
+            return false;
+        }
+        m_ops->chown(parentDir, userUid, pw->pw_gid);
+    }
+
+    if (!runCommand(QStringLiteral("/usr/bin/cp"), {QStringLiteral("-a"), sourceDir, targetPath})) {
+        qWarning() << "CopyDirectoryToUser: Failed to copy directory" << sourceDir << "to" << targetPath;
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Failed to copy directory from %1 to %2").arg(sourceDir, targetPath));
+        return false;
+    }
+
+    if (m_ops->chown(targetPath, userUid, pw->pw_gid) != 0) {
+        qWarning() << "CopyDirectoryToUser: Failed to set ownership on" << targetPath;
+    }
+
+    qDebug() << "CopyDirectoryToUser: Copied" << sourceDir << "to" << targetPath << "for user" << username;
+    return true;
+}
+
 bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
@@ -1553,6 +1802,12 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
         return false;
     }
 
+    if (!isPathWithinAllowedPrefix(path)) {
+        qWarning() << "SetDirectoryAcl: Path is outside allowed prefixes:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is outside allowed prefixes"));
+        return false;
+    }
+
     if (!m_ops->fileExists(path)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path does not exist: %1").arg(path));
         return false;
@@ -1589,6 +1844,12 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
 bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(path)) {
+        qWarning() << "SetPathAclWithParents: Path is outside allowed prefixes:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is outside allowed prefixes"));
         return false;
     }
 
@@ -1739,6 +2000,15 @@ void CouchPlayHelper::saveState()
             QJsonObject mountObj;
             mountObj[QStringLiteral("source")] = info.source;
             mountObj[QStringLiteral("target")] = info.target;
+            if (!info.mountType.isEmpty()) {
+                mountObj[QStringLiteral("mountType")] = info.mountType;
+            }
+            if (!info.upperDir.isEmpty()) {
+                mountObj[QStringLiteral("upperDir")] = info.upperDir;
+            }
+            if (!info.workDir.isEmpty()) {
+                mountObj[QStringLiteral("workDir")] = info.workDir;
+            }
             mountsArray.append(mountObj);
         }
         mountsObject[it.key()] = mountsArray;
@@ -1910,6 +2180,9 @@ void CouchPlayHelper::loadAndReconcileState()
                 MountInfo info;
                 info.source = mountObj.value(QStringLiteral("source")).toString();
                 info.target = target;
+                info.mountType = mountObj.value(QStringLiteral("mountType")).toString();
+                info.upperDir = mountObj.value(QStringLiteral("upperDir")).toString();
+                info.workDir = mountObj.value(QStringLiteral("workDir")).toString();
                 userMounts.append(info);
             } else {
                 qDebug() << "loadAndReconcileState: Removing inactive mount" << target;

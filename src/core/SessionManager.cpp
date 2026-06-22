@@ -17,6 +17,33 @@ SessionManager::SessionManager(QObject *parent)
     refreshProfiles();
 }
 
+QVariantList InstanceConfig::dataDirectoriesAsVariant() const
+{
+    QVariantList list;
+    for (const DataDirectory &dir : dataDirectories) {
+        QVariantMap dirMap;
+        dirMap[QStringLiteral("path")] = dir.path;
+        dirMap[QStringLiteral("mode")] = dir.mode;
+        list.append(dirMap);
+    }
+    return list;
+}
+
+void InstanceConfig::setDataDirectoriesFromVariant(const QVariantList &dirs)
+{
+    dataDirectories.clear();
+    for (const QVariant &var : dirs) {
+        const QVariantMap dirMap = var.toMap();
+        DataDirectory dir;
+        dir.path = dirMap[QStringLiteral("path")].toString();
+        dir.mode = dirMap[QStringLiteral("mode")].toString();
+        if (dir.mode.isEmpty()) {
+            dir.mode = QStringLiteral("acl");
+        }
+        dataDirectories.append(dir);
+    }
+}
+
 QString SessionManager::profilesDir() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/profiles");
@@ -108,7 +135,11 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("gameCommand", inst.gameCommand);
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
-        instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
+        QStringList dirEntries;
+        for (const DataDirectory &dir : inst.dataDirectories) {
+            dirEntries.append(dir.path + QLatin1Char('|') + dir.mode);
+        }
+        instGroup.writeEntry("dataDirectories", dirEntries.join(QLatin1Char('\n')));
         instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
@@ -169,7 +200,31 @@ bool SessionManager::loadProfile(const QString &name)
         inst.gameCommand = instGroup.readEntry("gameCommand", QString());
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
-        inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
+        QString dataDirsRaw = instGroup.readEntry("dataDirectories", instGroup.readEntry("sharedDirectories", QString()));
+        if (!dataDirsRaw.isEmpty()) {
+            const QStringList entries = dataDirsRaw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+            for (const QString &entry : entries) {
+                int pipePos = entry.indexOf(QLatin1Char('|'));
+                if (pipePos > 0) {
+                    DataDirectory dir;
+                    dir.path = entry.left(pipePos);
+                    dir.mode = entry.mid(pipePos + 1);
+                    if (dir.mode.isEmpty()) {
+                        dir.mode = QStringLiteral("acl");
+                    }
+                    inst.dataDirectories.append(dir);
+                }
+            }
+        } else {
+            // Legacy: sharedDirectories was a plain QStringList (paths only), migrate to DataDirectory with "acl" mode
+            QStringList legacyDirs = instGroup.readEntry("sharedDirectories", QStringList());
+            for (const QString &path : legacyDirs) {
+                DataDirectory dir;
+                dir.path = path;
+                dir.mode = QStringLiteral("acl");
+                inst.dataDirectories.append(dir);
+            }
+        }
         inst.overrideGamePath =
             instGroup.readEntry("overrideGamePath", instGroup.readEntry("overlayGamePath", QString()));
         inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
@@ -308,7 +363,14 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("steamAppId")] = inst.steamAppId;
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
-    map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
+    QVariantList dataDirsVariant;
+    for (const DataDirectory &dir : inst.dataDirectories) {
+        QVariantMap dirMap;
+        dirMap[QStringLiteral("path")] = dir.path;
+        dirMap[QStringLiteral("mode")] = dir.mode;
+        dataDirsVariant.append(dirMap);
+    }
+    map[QStringLiteral("dataDirectories")] = dataDirsVariant;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -367,6 +429,21 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.overridePatterns = config[QStringLiteral("overridePatterns")].toStringList();
     if (config.contains(QStringLiteral("overrideGamePath")))
         inst.overrideGamePath = config[QStringLiteral("overrideGamePath")].toString();
+    if (config.contains(QStringLiteral("dataDirectories"))) {
+        const QVariantList dirs = config[QStringLiteral("dataDirectories")].toList();
+        QList<DataDirectory> dataDirs;
+        for (const QVariant &var : dirs) {
+            const QVariantMap dirMap = var.toMap();
+            DataDirectory dir;
+            dir.path = dirMap[QStringLiteral("path")].toString();
+            dir.mode = dirMap[QStringLiteral("mode")].toString();
+            if (dir.mode.isEmpty()) {
+                dir.mode = QStringLiteral("acl");
+            }
+            dataDirs.append(dir);
+        }
+        inst.dataDirectories = dataDirs;
+    }
 
     Q_EMIT instancesChanged();
 
@@ -461,10 +538,21 @@ void SessionManager::setInstancePreset(int index, const QString &presetId)
     }
 }
 
-void SessionManager::setInstanceSharedDirectories(int index, const QStringList &directories)
+void SessionManager::setInstanceDataDirectories(int index, const QVariantList &directories)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].sharedDirectories = directories;
+        QList<DataDirectory> dataDirs;
+        for (const QVariant &var : directories) {
+            const QVariantMap dirMap = var.toMap();
+            DataDirectory dir;
+            dir.path = dirMap[QStringLiteral("path")].toString();
+            dir.mode = dirMap[QStringLiteral("mode")].toString();
+            if (dir.mode.isEmpty()) {
+                dir.mode = QStringLiteral("acl");
+            }
+            dataDirs.append(dir);
+        }
+        m_currentProfile.instances[index].dataDirectories = dataDirs;
         Q_EMIT instancesChanged();
 
         if (!m_currentProfile.name.isEmpty()) {

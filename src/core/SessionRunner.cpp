@@ -223,15 +223,11 @@ bool SessionRunner::start()
         qWarning() << "Failed to set up device ownership - continuing anyway";
     }
 
-    if (!setupSharedDirectories()) {
-        qWarning() << "Failed to set up shared directories - continuing anyway";
+    if (!setupDataDirectories()) {
+        qWarning() << "Failed to set up data directories - continuing anyway";
     }
 
     buildBindPaths();
-
-    if (!setupLauncherAccess()) {
-        qWarning() << "Failed to set up launcher access - continuing anyway";
-    }
 
     // Sequential launch: fixes race condition with window positioning
     m_pendingInstanceConfigs.clear();
@@ -261,13 +257,13 @@ bool SessionRunner::start()
                 presetId = QStringLiteral("steam"); // Default
             }
             config[QStringLiteral("presetId")] = presetId;
+            config[QStringLiteral("launcherId")] = m_presetManager->getLauncherId(presetId);
             config[QStringLiteral("presetCommand")] = m_presetManager->getCommand(presetId);
             config[QStringLiteral("presetWorkingDirectory")] = m_presetManager->getWorkingDirectory(presetId);
-            config[QStringLiteral("steamIntegration")] = m_presetManager->getSteamIntegration(presetId);
         } else {
             config[QStringLiteral("presetId")] = QStringLiteral("steam");
+            config[QStringLiteral("launcherId")] = QStringLiteral("steam");
             config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
-            config[QStringLiteral("steamIntegration")] = true;
         }
 
         if (m_deviceManager) {
@@ -555,48 +551,88 @@ void SessionRunner::restoreDeviceOwnership()
     m_ownedDevicePaths.clear();
 }
 
-bool SessionRunner::setupSharedDirectories()
+bool SessionRunner::setupDataDirectories()
 {
-    if (!m_helperClient || !m_sessionManager) {
+    if (!m_helperClient || !m_sessionManager || !m_presetManager) {
         return true;
     }
 
     if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, skipping shared directory setup";
+        qWarning() << "SessionRunner: Helper not available, skipping data directory setup";
         return true;
     }
 
     uint compositorUid = static_cast<uint>(getuid());
+    struct passwd *compositorPw = getpwuid(getuid());
+    QString compositorHome = compositorPw ? QString::fromLocal8Bit(compositorPw->pw_dir) : QString();
 
     const auto &profile = m_sessionManager->currentProfile();
     bool allSucceeded = true;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
-        const QStringList &sharedDirs = profile.instances[i].sharedDirectories;
+        const QString &presetId = profile.instances[i].presetId;
 
         if (username.isEmpty()) {
             continue;
         }
 
-        if (sharedDirs.isEmpty()) {
-            qDebug() << "SessionRunner: No shared directories for instance" << i << "user" << username;
+        LaunchPreset preset = m_presetManager->getPreset(presetId.isEmpty() ? QStringLiteral("steam") : presetId);
+
+        QObject *configManager = nullptr;
+        if (preset.launcherId == QStringLiteral("steam")) {
+            configManager = m_steamConfigManager;
+        } else if (preset.launcherId == QStringLiteral("heroic")) {
+            configManager = m_heroicConfigManager;
+        }
+
+        const QList<DataDirectory> &dataDirs = preset.dataDirectories;
+        if (dataDirs.isEmpty()) {
+            qDebug() << "SessionRunner: No data directories for instance" << i << "user" << username;
             continue;
         }
 
-        qDebug() << "SessionRunner: Mounting" << sharedDirs.size() << "shared directories for user" << username;
+        qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
 
-        QStringList formattedDirs;
-        for (const QString &dir : sharedDirs) {
-            formattedDirs << dir + QLatin1Char('|');
-        }
+        for (const DataDirectory &dir : dataDirs) {
+            if (configManager) {
+                if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager) {
+                    m_steamConfigManager->prepareDataDir(dir, username);
+                } else if (preset.launcherId == QStringLiteral("heroic") && m_heroicConfigManager) {
+                    m_heroicConfigManager->prepareDataDir(dir, username);
+                }
+            }
 
-        int mountResult = m_helperClient->mountSharedDirectories(username, compositorUid, formattedDirs);
-        if (mountResult < 0) {
-            qWarning() << "SessionRunner: Failed to mount shared directories for user" << username;
-            allSucceeded = false;
-        } else {
-            qDebug() << "SessionRunner: Mounted" << mountResult << "directories for user" << username;
+            if (dir.mode == QStringLiteral("copy")) {
+                QString relativePath;
+                if (dir.path.startsWith(compositorHome)) {
+                    relativePath = dir.path.mid(compositorHome.length() + 1);
+                } else {
+                    relativePath = dir.path.mid(dir.path.lastIndexOf(QLatin1Char('/')) + 1);
+                }
+                if (!m_helperClient->copyDirectoryToUser(username, dir.path, relativePath)) {
+                    qWarning() << "SessionRunner: Failed to copy directory" << dir.path << "for user" << username;
+                    allSucceeded = false;
+                }
+            } else if (dir.mode == QStringLiteral("overlay")) {
+                if (!m_helperClient->setupOverlayMount(username, compositorUid, dir.path, QString())) {
+                    qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path << "user" << username;
+                    allSucceeded = false;
+                }
+            } else if (dir.mode == QStringLiteral("acl")) {
+                if (!m_helperClient->setPathAclWithParents(dir.path, username)) {
+                    qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
+                    allSucceeded = false;
+                }
+            }
+
+            if (configManager) {
+                if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager) {
+                    m_steamConfigManager->finalizeDataDir(dir, username);
+                } else if (preset.launcherId == QStringLiteral("heroic") && m_heroicConfigManager) {
+                    m_heroicConfigManager->finalizeDataDir(dir, username);
+                }
+            }
         }
     }
 
@@ -682,119 +718,6 @@ bool SessionRunner::buildBindPaths()
     }
 
     return true;
-}
-
-bool SessionRunner::setupLauncherAccess()
-{
-    if (!m_sessionManager || !m_presetManager || !m_helperClient) {
-        return true;
-    }
-
-    const auto &profile = m_sessionManager->currentProfile();
-    bool allSucceeded = true;
-
-    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_steamConfigManager->isSteamDetected()) {
-        m_steamConfigManager->loadLibraryFolders();
-    }
-
-    for (int i = 0; i < profile.instances.size(); ++i) {
-        const QString &username = profile.instances[i].username;
-        const QString &presetId = profile.instances[i].presetId;
-
-        if (username.isEmpty()) {
-            qCDebug(couchplaySteam) << "Skipping instance" << i << "- no username";
-            continue;
-        }
-
-        LaunchPreset preset = m_presetManager->getPreset(presetId);
-
-        if (preset.launcherInfo.requiresAcls) {
-            for (const QString &dir : preset.launcherInfo.gameDirectories) {
-                if (dir.isEmpty()) {
-                    continue;
-                }
-                qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
-                if (!m_helperClient->setPathAclWithParents(dir, username)) {
-                    qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
-                }
-            }
-        }
-
-        if (preset.launcherId == QStringLiteral("heroic")) {
-            if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-                qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
-                if (!m_heroicConfigManager->syncConfigToUser(username)) {
-                    qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
-                    allSucceeded = false;
-                }
-
-                if (m_heroicConfigManager->syncShortcutsEnabled()) {
-                    qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
-                    if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
-                        qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
-                        allSucceeded = false;
-                    }
-                } else {
-                    qCDebug(couchplaySteam) << "Heroic shortcut sync disabled, skipping";
-                }
-            }
-        }
-
-        if (!m_steamConfigManager) {
-            continue;
-        }
-
-        if (!m_steamConfigManager->isSteamDetected()) {
-            m_steamConfigManager->detectSteamPaths();
-        }
-
-        if (!m_steamConfigManager->isSteamDetected()) {
-            qCDebug(couchplaySteam) << "Steam not detected, skipping config sync";
-            continue;
-        }
-
-        if (!(preset.steamIntegration || preset.launcherId == QStringLiteral("steam"))) {
-            qCDebug(couchplaySteam) << "Skipping instance" << i << "- preset" << presetId
-                                    << "does not use Steam integration";
-            continue;
-        }
-
-        if (m_steamConfigManager->syncShortcutsEnabled()) {
-            m_steamConfigManager->loadShortcuts();
-            QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
-            qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
-
-            qCDebug(couchplaySteam) << "Setting up Steam shortcuts for user" << username;
-
-            for (const QString &dir : shortcutDirs) {
-                if (QDir(dir).exists()) {
-                    qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
-                    if (!m_helperClient->setPathAclWithParents(dir, username)) {
-                        qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
-                    }
-                }
-            }
-
-            qCDebug(couchplaySteam) << "Calling syncShortcutsToUser for" << username;
-            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
-                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
-                allSucceeded = false;
-            }
-        } else {
-            qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
-        }
-
-        // Share Steam library if enabled
-        if (m_steamConfigManager->shareLibraryEnabled()) {
-            qCDebug(couchplaySteam) << "Sharing Steam library for user" << username;
-            if (!m_steamConfigManager->shareLibraryToUser(username)) {
-                qCWarning(couchplaySteam) << "Failed to share Steam library to" << username;
-                allSucceeded = false;
-            }
-        }
-    }
-
-    return allSucceeded;
 }
 
 QRect SessionRunner::getScreenGeometry() const

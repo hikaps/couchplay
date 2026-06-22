@@ -419,8 +419,8 @@ Kirigami.ScrollablePage {
                                     instanceCard.cardSessionManager.setInstancePreset(instanceCard.index, presetId)
 
                                     if (instanceCard.cardPresetManager) {
-                                        let directories = instanceCard.cardPresetManager.getSharedDirectories(presetId) || []
-                                        instanceCard.cardSessionManager.setInstanceSharedDirectories(instanceCard.index, directories)
+                                        let directories = instanceCard.cardPresetManager.getDataDirectories(presetId) || []
+                                        instanceCard.cardSessionManager.setInstanceDataDirectories(instanceCard.index, directories)
                                     }
                                 }
                             }

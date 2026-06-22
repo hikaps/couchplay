@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SteamConfigManager.h"
+#include "PresetManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
 
@@ -984,4 +985,147 @@ void SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
     m_helperClient->writeFileToUser(emptyVdf.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername);
 
     qCDebug(couchplaySteam) << "Cleaned up library sharing for" << targetUsername;
+}
+
+bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString &username)
+{
+    // Library sharing: overlay mode on steamRoot
+    if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
+        && dir.path == m_steamPaths.steamRoot) {
+        if (!m_steamPaths.valid) {
+            qCWarning(couchplaySteam) << "prepareDataDir: Steam not detected";
+            return false;
+        }
+
+        if (m_libraries.isEmpty()) {
+            loadLibraryFolders();
+        }
+        if (m_libraries.isEmpty()) {
+            qCWarning(couchplaySteam) << "prepareDataDir: No Steam libraries loaded";
+            return false;
+        }
+        if (!m_helperClient || !m_helperClient->isAvailable()) {
+            qCWarning(couchplaySteam) << "prepareDataDir: Helper not available";
+            return false;
+        }
+
+        bool anyFailure = false;
+        for (const SteamLibraryFolder &library : m_libraries) {
+            qCDebug(couchplaySteam) << "prepareDataDir: Setting ACL on" << library.path << "for" << username;
+            if (!m_helperClient->setPathAclWithParents(library.path, username)) {
+                qCWarning(couchplaySteam) << "prepareDataDir: Failed to set ACL on" << library.path;
+                anyFailure = true;
+            }
+        }
+        return !anyFailure;
+    }
+
+    // Shortcuts sync: copy mode on shortcuts config directory
+    if (dir.mode == QStringLiteral("copy") && !m_steamPaths.shortcutsVdf.isEmpty()) {
+        QString shortcutsDir = QFileInfo(m_steamPaths.shortcutsVdf).absolutePath();
+        if (dir.path == shortcutsDir || dir.path == m_steamPaths.shortcutsVdf) {
+            loadShortcuts();
+            extractShortcutDirectories();
+            return true;
+        }
+    }
+
+    return true;
+}
+
+bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString &username)
+{
+    // Library sharing: overlay mode on steamRoot
+    if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
+        && dir.path == m_steamPaths.steamRoot) {
+        if (!m_helperClient || !m_helperClient->isAvailable()) {
+            return false;
+        }
+        if (m_libraries.isEmpty()) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: No libraries loaded";
+            return false;
+        }
+
+        SteamPaths targetPaths = getTargetSteamPaths(username);
+        if (!targetPaths.valid) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Could not resolve target paths for" << username;
+            return false;
+        }
+
+        struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
+        if (!pw) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: User not found:" << username;
+            return false;
+        }
+        QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+
+        QString targetSteamId = getTargetSteamUserId(username);
+        if (targetSteamId.isEmpty()) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Target user has not set up Steam:" << username;
+            return false;
+        }
+
+        QList<SteamLibraryFolder> targetLibraries;
+        bool anyFailure = false;
+
+        for (int i = 0; i < m_libraries.size(); ++i) {
+            const SteamLibraryFolder &library = m_libraries[i];
+            QString sourceSteamApps = library.path + QStringLiteral("/steamapps");
+
+            QString targetLibPath;
+            if (i == 0) {
+                targetLibPath = targetPaths.steamRoot;
+            } else {
+                targetLibPath = targetHome + QStringLiteral("/.couchplay/steam-libs/") + QString::number(i);
+            }
+            QString targetSteamApps = targetLibPath + QStringLiteral("/steamapps");
+
+            QDir sourceSteamAppsDir(sourceSteamApps);
+            QStringList manifests =
+                sourceSteamAppsDir.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files);
+
+            for (const QString &manifest : manifests) {
+                QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
+                QFile manifestFile(manifestPath);
+                if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    QByteArray content = manifestFile.readAll();
+                    manifestFile.close();
+
+                    QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
+                    if (!m_helperClient->writeFileToUser(content, targetManifestPath, username)) {
+                        qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write manifest" << manifest;
+                        anyFailure = true;
+                    }
+                }
+            }
+
+            SteamLibraryFolder targetLib;
+            targetLib.path = targetLibPath;
+            targetLib.label = library.label;
+            targetLib.totalSize = library.totalSize;
+            targetLib.appIds = library.appIds;
+            targetLibraries.append(targetLib);
+        }
+
+        QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
+        if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, username)) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write libraryfolders.vdf for" << username;
+            return false;
+        }
+
+        if (!anyFailure) {
+            qCDebug(couchplaySteam) << "finalizeDataDir: Shared" << m_libraries.size() << "libraries to" << username;
+        }
+        return !anyFailure;
+    }
+
+    // Shortcuts sync: copy mode on shortcuts config directory
+    if (dir.mode == QStringLiteral("copy") && !m_steamPaths.shortcutsVdf.isEmpty()) {
+        QString shortcutsDir = QFileInfo(m_steamPaths.shortcutsVdf).absolutePath();
+        if (dir.path == shortcutsDir || dir.path == m_steamPaths.shortcutsVdf) {
+            return syncShortcutsToUser(username);
+        }
+    }
+
+    return true;
 }
