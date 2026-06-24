@@ -38,7 +38,6 @@ class MockHelper(dbus.service.Object):
         super().__init__(bus, OBJECT_PATH)
         self._next_pid = 10000
         self._launched_pids = set()
-        self._stub_procs = {}
         self._created_users = {}
         # Truncate any stale launch log from a previous run.
         try:
@@ -138,20 +137,8 @@ class MockHelper(dbus.service.Object):
     def LaunchInstance(
         self, username, compositorUid, gamescopeArgs, gameCommand, environment, bindPaths
     ):
-        stub = os.environ.get("COUCHPLAY_STUB_GAMESCOPE")
-        if stub:
-            # Launch the stub gamescope so a real window exists for the app's
-            # WindowManager to position; return its actual PID.
-            proc = subprocess.Popen(
-                [sys.executable, stub],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            pid = proc.pid
-            self._stub_procs[pid] = proc
-        else:
-            pid = self._next_pid
-            self._next_pid += 1
+        pid = self._next_pid
+        self._next_pid += 1
         self._launched_pids.add(pid)
         _record_launch(
             pid=pid,
@@ -175,15 +162,7 @@ class MockHelper(dbus.service.Object):
         return True
 
     def _stop(self, pid):
-        pid = int(pid)
-        proc = self._stub_procs.pop(pid, None)
-        if proc is not None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        self._launched_pids.discard(pid)
+        self._launched_pids.discard(int(pid))
 
     @dbus.service.method(INTERFACE_NAME, in_signature="suas", out_signature="i")
     def MountSharedDirectories(self, username, compositorUid, directories):

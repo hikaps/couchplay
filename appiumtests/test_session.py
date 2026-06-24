@@ -26,11 +26,11 @@ class TestSessionLifecycle(BaseTest):
 
     @pytest.mark.xfail(
         reason="WindowManager queries org.kde.KWin on the shared host session "
-               "bus (host KWin), but the stub gamescope window runs in the "
-               "nested kwin and is invisible there -- a compositor/session-bus "
-               "mismatch inherent to the selenium-webdriver-at-spi harness. The "
-               "D-Bus lifecycle (LaunchInstance/StopInstance) is verified via the "
-               "mock launch log; only the KWin window-positioning layer can't be "
+               "bus (host KWin), but a gamescope window runs in the nested kwin "
+               "and is invisible there -- a compositor/session-bus mismatch "
+               "inherent to the selenium-webdriver-at-spi harness. The D-Bus "
+               "lifecycle (LaunchInstance/StopInstance) is verified via the mock "
+               "launch log; only the KWin window-positioning layer can't be "
                "isolated here. Needs a nested session bus or a real compositor.",
         strict=False,
     )

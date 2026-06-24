@@ -17,7 +17,6 @@ from selenium.webdriver.support import expected_conditions as EC
 
 HELPERS_DIR = os.path.join(os.path.dirname(__file__), "helpers")
 MOCK_HELPER_SCRIPT = os.path.join(HELPERS_DIR, "mock_helper.py")
-STUB_GAMESCOPE = os.path.join(HELPERS_DIR, "stub_gamescope.py")
 
 
 def pytest_configure(config):
@@ -64,12 +63,7 @@ def mock_helper():
 
     import signal as _signal
 
-    env = {
-        **os.environ,
-        "QT_QPA_PLATFORM": "wayland",
-        "GDK_BACKEND": "wayland",
-        "COUCHPLAY_STUB_GAMESCOPE": STUB_GAMESCOPE,
-    }
+    env = {**os.environ, "QT_QPA_PLATFORM": "wayland"}
     proc = subprocess.Popen(
         [sys.executable, MOCK_HELPER_SCRIPT],
         stderr=subprocess.PIPE,
