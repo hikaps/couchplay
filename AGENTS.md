@@ -16,12 +16,16 @@ cmake --build build
 # Run (on HOST - gamescope requires host environment)
 ./build/bin/couchplay
 
-# Tests
+# Unit tests
 ctest --test-dir build --output-on-failure
 
 # Single test: ctest --test-dir build -R DeviceManagerTest --output-on-failure
 # List tests: ctest --test-dir build -N
 # Direct run: ./build/bin/test_devicemanager
+
+# E2E tests (local-only; requires KDE Plasma Wayland + selenium-webdriver-at-spi)
+pip install -r appiumtests/requirements.txt
+QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 selenium-webdriver-at-spi-run pytest appiumtests/ -v
 ```
 
 ## Structure
@@ -32,6 +36,7 @@ ctest --test-dir build --output-on-failure
 ├── src/qml/        # UI layer (17 files, ~4.3K lines) - SEE ./src/qml/AGENTS.md
 ├── helper/         # Privileged D-Bus service (CouchPlayHelper.cpp 1960 lines) - SEE ./helper/AGENTS.md
 ├── tests/          # QtTest unit tests (13 files, ~5.2K lines) - SEE ./tests/AGENTS.md
+├── appiumtests/    # E2E tests (selenium-webdriver-at-spi) - SEE ./appiumtests/AGENTS.md (local-only, NOT in CI)
 ├── src/dbus/       # D-Bus client for helper service
 └── data/           # Icons, polkit policy, D-Bus service files
 ```
@@ -161,7 +166,7 @@ ctest --test-dir build --output-on-failure
 - **Local docs**: `PLAN.md` has architecture overview and feature roadmap
 - **Build artifacts**: Ignore `build/` directory
 - **Root test files**: `test_*.cpp` are temporary/experimental, not part of test suite
-- **CI exclusions**: CI skips 7/13 tests requiring D-Bus/Polkit/devices (see `.github/workflows/ci.yml`)
+- **CI tests**: CI runs all 13 unit tests under `dbus-run-session` (see `.github/workflows/ci.yml`); E2E (`appiumtests/`) is local-only — run manually during development and before release/beta.
 - **Linting**: `.clang-format` (WebKit-based, 120-char), `.clang-tidy` (pragmatic Qt6/C++20), `.editorconfig` present — run `make format` / `make tidy` locally
 
 ## GIT META

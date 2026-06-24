@@ -19,6 +19,10 @@ import org.kde.kirigami as Kirigami
 Kirigami.AbstractCard {
     id: root
 
+    Accessible.role: Accessible.Button
+    Accessible.name: root.title
+    Accessible.onPressAction: clicked()
+
     // Required properties
     required property string title
     

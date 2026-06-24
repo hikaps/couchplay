@@ -9,9 +9,12 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.Dialog {
     id: root
-    title: i18nc("@title:dialog", "Edit Preset: %1", presetName)
+    objectName: "dialogEditPreset"
+    Accessible.role: Accessible.Dialog
+    Accessible.name: title
     standardButtons: Kirigami.Dialog.Close
     preferredWidth: Kirigami.Units.gridUnit * 30
+    title: i18nc("@title:dialog", "Edit Preset: %1", presetName)
 
     required property var presetManager
     property var steamConfigManager: null
@@ -20,8 +23,12 @@ Kirigami.Dialog {
     property string presetName: ""
 
     footerLeadingComponent: Controls.Button {
+        objectName: "btnAddDirectory"
         text: i18nc("@action:button", "Add Directory...")
         icon.name: "folder-add"
+        Accessible.role: Accessible.Button
+        Accessible.name: text
+        Accessible.onPressAction: clicked()
         onClicked: folderDialog.open()
     }
 
@@ -87,8 +94,12 @@ Kirigami.Dialog {
                     }
 
                     Controls.Button {
+                        objectName: "btnRemoveDirectory"
                         icon.name: "edit-delete"
                         display: Controls.AbstractButton.IconOnly
+                        Accessible.role: Accessible.Button
+                        Accessible.name: i18nc("@action:button", "Remove directory")
+                        Accessible.onPressAction: clicked()
                         onClicked: {
                             directoriesModel.remove(index)
                             root.presetManager.setSharedDirectories(root.presetId, root.getDirectoriesArray())

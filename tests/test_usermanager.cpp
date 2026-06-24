@@ -3,6 +3,7 @@
 
 #include <QSignalSpy>
 #include <QTest>
+#include <unistd.h>
 
 #include "UserManager.h"
 
@@ -337,10 +338,16 @@ void TestUserManager::testDeleteUserRequiresHelper()
 {
     QSignalSpy errorSpy(m_manager, &UserManager::errorOccurred);
 
-    // Try to delete root (exists, not current, no helper)
-    // Note: This will fail with "helper not available" because root is not in couchplay group
-    // but we check helper first, then the helper checks the group
-    bool result = m_manager->deleteUser(QStringLiteral("root"), false);
+    // Deleting requires a user that exists but isn't the current user. Under CI
+    // the runner is often root, so "root" is the current user -- use "nobody".
+    QString target = QStringLiteral("root");
+    if (getuid() == 0) {  // CI runs as root -> 'root' is the current user
+        target = QStringLiteral("nobody");
+    }
+    if (!m_manager->userExists(target)) {
+        QSKIP("No non-current user available to test delete-requires-helper");
+    }
+    bool result = m_manager->deleteUser(target, false);
 
     QVERIFY(!result);
     QCOMPARE(errorSpy.count(), 1);

@@ -21,6 +21,10 @@ Kirigami.ScrollablePage {
 
     actions: [
         Kirigami.Action {
+            objectName: "actionNewProfile"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "New Profile")
+            Accessible.onPressAction: triggered()
             icon.name: "list-add"
             text: i18nc("@action:button", "New Profile")
             onTriggered: {
@@ -28,6 +32,10 @@ Kirigami.ScrollablePage {
             }
         },
         Kirigami.Action {
+            objectName: "actionRefresh"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "Refresh")
+            Accessible.onPressAction: triggered()
             icon.name: "view-refresh"
             text: i18nc("@action:button", "Refresh")
             onTriggered: sessionManager?.refreshProfiles()
@@ -36,6 +44,9 @@ Kirigami.ScrollablePage {
 
     Kirigami.PromptDialog {
         id: deleteDialog
+        objectName: "dialogDeleteProfile"
+        Accessible.role: Accessible.Dialog
+        Accessible.name: i18nc("@title:dialog", "Delete Profile")
         title: i18nc("@title:dialog", "Delete Profile")
         subtitle: i18nc("@info", "Are you sure you want to delete the profile '%1'?", deleteDialog.profileName)
         standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.No
@@ -111,6 +122,10 @@ Kirigami.ScrollablePage {
         icon.name: "bookmark"
 
         helpfulAction: Kirigami.Action {
+            objectName: "actionCreateNewSession"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "Create New Session")
+            Accessible.onPressAction: triggered()
             icon.name: "list-add"
             text: i18nc("@action:button", "Create New Session")
             onTriggered: {
@@ -225,6 +240,10 @@ Kirigami.ScrollablePage {
                 spacing: Kirigami.Units.smallSpacing
 
                 Controls.Button {
+                    objectName: "btnLaunchProfile"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Launch")
+                    Accessible.onPressAction: clicked()
                     text: i18nc("@action:button", "Launch")
                     icon.name: "media-playback-start"
                     highlighted: true
@@ -232,6 +251,10 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnEditProfile"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Edit")
+                    Accessible.onPressAction: clicked()
                     text: i18nc("@action:button", "Edit")
                     icon.name: "document-edit"
                     flat: true
@@ -241,6 +264,10 @@ Kirigami.ScrollablePage {
                 Item { Layout.fillWidth: true }
 
                 Controls.Button {
+                    objectName: "btnDeleteProfile"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@info:tooltip", "Delete profile")
+                    Accessible.onPressAction: clicked()
                     icon.name: "edit-delete"
                     flat: true
                     display: Controls.AbstractButton.IconOnly

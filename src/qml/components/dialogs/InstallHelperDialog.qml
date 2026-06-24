@@ -8,6 +8,9 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.Dialog {
     id: root
+    objectName: "dialogInstallHelper"
+    Accessible.role: Accessible.Dialog
+    Accessible.name: title
     title: i18nc("@title:dialog", "Install Helper Service")
     standardButtons: Kirigami.Dialog.Close
     preferredWidth: Kirigami.Units.gridUnit * 30

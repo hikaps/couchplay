@@ -138,26 +138,46 @@ Kirigami.ApplicationWindow {
 
         actions: [
             Kirigami.Action {
+                objectName: "actionHome"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Home")
+                Accessible.onPressAction: triggered()
                 icon.name: "go-home"
                 text: i18nc("@action:button", "Home")
                 onTriggered: pushHomePage()
             },
             Kirigami.Action {
+                objectName: "actionNewSession"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "New Session")
+                Accessible.onPressAction: triggered()
                 icon.name: "list-add"
                 text: i18nc("@action:button", "New Session")
                 onTriggered: pushSessionSetupPage()
             },
             Kirigami.Action {
+                objectName: "actionProfiles"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Profiles")
+                Accessible.onPressAction: triggered()
                 icon.name: "bookmark"
                 text: i18nc("@action:button", "Profiles")
                 onTriggered: pushProfilesPage()
             },
             Kirigami.Action {
+                objectName: "actionUsers"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Users")
+                Accessible.onPressAction: triggered()
                 icon.name: "system-users"
                 text: i18nc("@action:button", "Users")
                 onTriggered: pushUsersPage()
             },
             Kirigami.Action {
+                objectName: "actionSettings"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Settings")
+                Accessible.onPressAction: triggered()
                 icon.name: "configure"
                 text: i18nc("@action:button", "Settings")
                 onTriggered: pushSettingsPage()

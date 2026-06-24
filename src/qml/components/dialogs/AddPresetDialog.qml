@@ -8,6 +8,9 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.Dialog {
     id: root
+    objectName: "dialogAddPreset"
+    Accessible.role: Accessible.Dialog
+    Accessible.name: title
     title: i18nc("@title:dialog", "Add Preset from Application")
     standardButtons: Kirigami.Dialog.Close
     preferredWidth: Kirigami.Units.gridUnit * 30
@@ -26,8 +29,11 @@ Kirigami.Dialog {
 
         Controls.TextField {
             id: appSearchField
+            objectName: "fieldAppSearch"
             Layout.fillWidth: true
             placeholderText: i18nc("@info:placeholder", "Search applications...")
+            Accessible.role: Accessible.EditableText
+            Accessible.name: placeholderText
             onTextChanged: appListView.filterText = text.toLowerCase()
         }
 
@@ -84,8 +90,12 @@ Kirigami.Dialog {
                         }
 
                         Controls.Button {
+                            objectName: "btnAddApplication"
                             text: i18nc("@action:button", "Add")
                             icon.name: "list-add"
+                            Accessible.role: Accessible.Button
+                            Accessible.name: text
+                            Accessible.onPressAction: clicked()
                             onClicked: {
                                 let id = root.presetManager.addPresetFromDesktopFile(modelData.desktopFilePath)
                                 if (id !== "") {
