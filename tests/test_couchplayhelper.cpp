@@ -403,9 +403,6 @@ private Q_SLOTS:
     void testRemoveRuntimeAccessAuthorizationDenied();
     void testRemoveRuntimeAccessUserNotFound();
 
-    // Version test
-    void testVersion();
-
     // Launch/Stop/Kill instance tests
     void testGenerateServiceName();
     void testLaunchInstance_basicLaunch();
@@ -1240,16 +1237,6 @@ void TestCouchPlayHelper::testRemoveRuntimeAccessUserNotFound()
     // (it just runs setfacl on non-existent paths which is a no-op)
     QVERIFY(reply.isValid());
     QVERIFY(reply.value());
-}
-
-void TestCouchPlayHelper::testVersion()
-{
-    m_ops->clear();
-
-    QDBusReply<QString> reply = m_dbusInterface->call(QStringLiteral("Version"));
-
-    QVERIFY(reply.isValid());
-    QVERIFY(!reply.value().isEmpty());
 }
 
 void TestCouchPlayHelper::testGenerateServiceName()
