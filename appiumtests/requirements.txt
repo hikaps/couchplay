@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2025 CouchPlay Contributors
+
+Appium-Python-Client>=3.1.0
+pytest>=8.0.0

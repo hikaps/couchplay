@@ -44,8 +44,12 @@ Kirigami.ScrollablePage {
 
     actions: [
         Kirigami.Action {
+            objectName: "actionResetDefaults"
             icon.name: "edit-undo"
             text: i18nc("@action:button", "Reset to Defaults")
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            Accessible.onPressAction: triggered()
             onTriggered: resetConfirmDialog.open()
         }
     ]
@@ -64,7 +68,10 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: hidePanelsCheck
+                objectName: "checkHidePanels"
                 Kirigami.FormData.label: i18nc("@option:check", "Hide panels during session")
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Kirigami.FormData.label
                 checked: root.hidePanels
                 onToggled: if (root.settingsManager) root.settingsManager.hidePanels = checked
 
@@ -75,7 +82,10 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: killSteamOption
+                objectName: "checkKillSteam"
                 Kirigami.FormData.label: i18nc("@option:check", "Close Steam before starting")
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Kirigami.FormData.label
                 checked: root.killSteam
                 onToggled: if (root.settingsManager) root.settingsManager.killSteam = checked
 
@@ -86,7 +96,10 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: restoreSessionCheck
+                objectName: "checkRestoreSession"
                 Kirigami.FormData.label: i18nc("@option:check", "Restore last session on startup")
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Kirigami.FormData.label
                 checked: root.restoreSession
                 onToggled: if (root.settingsManager) root.settingsManager.restoreSession = checked
 
@@ -107,7 +120,10 @@ Kirigami.ScrollablePage {
 
             Controls.ComboBox {
                 id: scalingCombo
+                objectName: "comboScaling"
                 Kirigami.FormData.label: i18nc("@label", "Scaling mode")
+                Accessible.role: Accessible.ComboBox
+                Accessible.name: Kirigami.FormData.label
                 model: [
                     { value: "fit", text: i18nc("@item:inlistbox", "Fit (maintain aspect ratio)") },
                     { value: "fill", text: i18nc("@item:inlistbox", "Fill (crop to fill)") },
@@ -122,7 +138,10 @@ Kirigami.ScrollablePage {
 
             Controls.ComboBox {
                 id: filterCombo
+                objectName: "comboFilter"
                 Kirigami.FormData.label: i18nc("@label", "Upscaling filter")
+                Accessible.role: Accessible.ComboBox
+                Accessible.name: Kirigami.FormData.label
                 model: [
                     { value: "linear", text: i18nc("@item:inlistbox", "Linear (smooth)") },
                     { value: "nearest", text: i18nc("@item:inlistbox", "Nearest (sharp/pixelated)") },
@@ -137,7 +156,10 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: borderlessCheck
+                objectName: "checkBorderless"
                 Kirigami.FormData.label: i18nc("@option:check", "Borderless windows")
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Kirigami.FormData.label
                 checked: root.borderlessWindows
                 onToggled: if (root.settingsManager) root.settingsManager.borderlessWindows = checked
 
@@ -195,6 +217,10 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.Button {
+                            objectName: "btnEditPreset"
+                            Accessible.role: Accessible.Button
+                            Accessible.name: i18nc("@action:button", "Edit preset")
+                            Accessible.onPressAction: clicked()
                             icon.name: "document-edit"
                             display: Controls.AbstractButton.IconOnly
                             Controls.ToolTip.text: i18nc("@info:tooltip", "Edit preset")
@@ -210,6 +236,10 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.Button {
+                            objectName: "btnRemovePreset"
+                            Accessible.role: Accessible.Button
+                            Accessible.name: i18nc("@action:button", "Remove preset")
+                            Accessible.onPressAction: clicked()
                             visible: !modelData.isBuiltin
                             icon.name: "edit-delete"
                             display: Controls.AbstractButton.IconOnly
@@ -226,6 +256,10 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnAddPreset"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    Accessible.onPressAction: clicked()
                     text: i18nc("@action:button", "Add from Application...")
                     icon.name: "list-add"
                     onClicked: {
@@ -272,6 +306,10 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.Button {
+                            objectName: "btnUnignoreDevice"
+                            Accessible.role: Accessible.Button
+                            Accessible.name: i18nc("@action:button", "Stop ignoring this device")
+                            Accessible.onPressAction: clicked()
                             icon.name: "list-remove"
                             display: Controls.AbstractButton.IconOnly
                             Controls.ToolTip.text: i18nc("@info:tooltip", "Stop ignoring this device")
@@ -317,6 +355,10 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnReloadSteam"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Reload")
+                    Accessible.onPressAction: clicked()
                     visible: root.steamConfigManager && root.steamConfigManager.steamDetected
                     text: i18nc("@action:button", "Reload")
                     icon.name: "view-refresh"
@@ -330,7 +372,10 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: syncShortcutsCheck
+                objectName: "checkSyncSteamShortcuts"
                 Kirigami.FormData.label: i18nc("@option:check", "Sync shortcuts to players:")
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Kirigami.FormData.label
                 checked: root.steamConfigManager ? root.steamConfigManager.syncShortcutsEnabled : false
                 onToggled: {
                     if (root.steamConfigManager) {
@@ -396,6 +441,10 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnReloadHeroic"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Reload")
+                    Accessible.onPressAction: clicked()
                     visible: root.heroicConfigManager && root.heroicConfigManager.heroicDetected
                     text: i18nc("@action:button", "Reload")
                     icon.name: "view-refresh"
@@ -418,7 +467,10 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: heroicSyncShortcutsCheck
+                objectName: "checkSyncHeroicShortcuts"
                 Kirigami.FormData.label: i18nc("@option:check", "Sync shortcuts to players:")
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Kirigami.FormData.label
                 checked: root.heroicConfigManager ? root.heroicConfigManager.syncShortcutsEnabled : false
                 onToggled: {
                     if (root.heroicConfigManager) {
@@ -522,6 +574,10 @@ Kirigami.ScrollablePage {
             }
 
             Controls.Button {
+                objectName: "btnInstallHelper"
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+                Accessible.onPressAction: clicked()
                 visible: !root.helperAvailable
                 Kirigami.FormData.label: " "
                 text: i18nc("@action:button", "Install Helper...")
@@ -549,6 +605,10 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnConfigureShortcuts"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    Accessible.onPressAction: clicked()
                     text: i18nc("@action:button", "Configure...")
                     icon.name: "configure-shortcuts"
                     onClicked: {
@@ -573,6 +633,10 @@ Kirigami.ScrollablePage {
 
             actions: [
                 Kirigami.Action {
+                    objectName: "actionLearnMore"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Learn More")
+                    Accessible.onPressAction: triggered()
                     icon.name: "help-about"
                     text: i18nc("@action:button", "Learn More")
                     onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#helper-setup")

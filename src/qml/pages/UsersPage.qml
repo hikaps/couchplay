@@ -20,11 +20,19 @@ Kirigami.ScrollablePage {
 
     actions: [
         Kirigami.Action {
+            objectName: "actionRefresh"
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            Accessible.onPressAction: triggered()
             icon.name: "view-refresh"
             text: i18nc("@action:button", "Refresh")
             onTriggered: userManager?.refresh()
         },
         Kirigami.Action {
+            objectName: "actionAddUser"
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            Accessible.onPressAction: triggered()
             icon.name: "list-add"
             text: i18nc("@action:button", "Add User")
             onTriggered: {
@@ -144,6 +152,10 @@ Kirigami.ScrollablePage {
 
                         // Delete button
                         Controls.Button {
+                            objectName: "btnDeleteUser"
+                            Accessible.role: Accessible.Button
+                            Accessible.name: text
+                            Accessible.onPressAction: clicked()
                             icon.name: "edit-delete"
                             text: i18nc("@action:button", "Delete")
                             enabled: helperClient?.available ?? false
@@ -176,6 +188,10 @@ Kirigami.ScrollablePage {
             explanation: i18nc("@info", "Create dedicated gaming users to enable split-screen multiplayer. Each user will have their own Steam installation and game saves.")
 
             helpfulAction: Kirigami.Action {
+                objectName: "actionCreateGamingUser"
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+                Accessible.onPressAction: triggered()
                 icon.name: "list-add-user"
                 text: i18nc("@action:button", "Create Gaming User")
                 enabled: helperClient?.available ?? false
@@ -206,6 +222,10 @@ Kirigami.ScrollablePage {
 
             actions: [
                 Kirigami.Action {
+                    objectName: "actionLearnMore"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    Accessible.onPressAction: triggered()
                     icon.name: "help-about"
                     text: i18nc("@action:button", "Learn More")
                     onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#helper-setup")
@@ -268,6 +288,9 @@ Kirigami.ScrollablePage {
     // Add User Dialog
     Kirigami.Dialog {
         id: addUserDialog
+        objectName: "dialogAddUser"
+        Accessible.role: Accessible.Dialog
+        Accessible.name: title
         title: i18nc("@title:dialog", "Create Gaming User")
         standardButtons: Kirigami.Dialog.NoButton
         preferredWidth: Kirigami.Units.gridUnit * 20
@@ -302,6 +325,9 @@ Kirigami.ScrollablePage {
             Kirigami.FormLayout {
                 Controls.TextField {
                     id: usernameField
+                    objectName: "fieldUsername"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Username")
                     Kirigami.FormData.label: i18nc("@label", "Username:")
                     placeholderText: i18nc("@info:placeholder", "player2")
                     validator: RegularExpressionValidator {
@@ -337,6 +363,9 @@ Kirigami.ScrollablePage {
     // Delete User Confirmation Dialog
     Kirigami.Dialog {
         id: deleteUserDialog
+        objectName: "dialogDeleteUser"
+        Accessible.role: Accessible.Dialog
+        Accessible.name: title
         title: i18nc("@title:dialog", "Delete User")
         standardButtons: Kirigami.Dialog.NoButton
         preferredWidth: Kirigami.Units.gridUnit * 22
@@ -389,6 +418,9 @@ Kirigami.ScrollablePage {
 
             Controls.CheckBox {
                 id: deleteHomeCheckbox
+                objectName: "checkDeleteHome"
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: text
                 text: i18nc("@option:check", "Also delete home directory and all user data")
                 Layout.fillWidth: true
             }

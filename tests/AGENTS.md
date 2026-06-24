@@ -75,7 +75,7 @@ class MockCouchPlayHelperClient : public CouchPlayHelperClient {
 ## ANTI-PATTERNS
 - **No test doubles framework**: Manual mock creation is verbose
 - **Flaky environment tests**: Desktop files or installed flatpaks may not exist
-- **D-Bus dependency**: `UserManagerTest` requires helper service running
-- **CI exclusions**: 7/13 tests skipped (D-Bus/Polkit/devices) - see `.github/workflows/ci.yml`
+- **D-Bus**: tests run under `dbus-run-session` in CI (no real helper/polkit/devices needed)
+- **CI**: all 13 unit tests run in CI under `dbus-run-session` (see `.github/workflows/ci.yml`); E2E is in `appiumtests/` (local-only)
 - **Partial coverage**: Some managers lack dedicated tests
 - **Private member access**: `#define private public` / `#undef private` around includes (test_sessionrunner.cpp, test_audiomanager.cpp)

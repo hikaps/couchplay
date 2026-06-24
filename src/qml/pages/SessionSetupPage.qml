@@ -96,6 +96,12 @@ Kirigami.ScrollablePage {
 
     actions: [
         Kirigami.Action {
+            objectName: "actionStartSession"
+            Accessible.role: Accessible.Button
+            Accessible.name: sessionRunner && sessionRunner.running
+                ? i18nc("@action:button", "Stop Session")
+                : i18nc("@action:button", "Start Session")
+            Accessible.onPressAction: triggered()
             icon.name: "media-playback-start"
             text: sessionRunner && sessionRunner.running 
                 ? i18nc("@action:button", "Stop Session")
@@ -109,13 +115,20 @@ Kirigami.ScrollablePage {
             }
         },
         Kirigami.Action {
-            icon.name: "go-next"
+            objectName: "actionAssignDevices"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "Assign Devices")
+            Accessible.onPressAction: triggered()
             text: i18nc("@action:button", "Assign Devices")
             onTriggered: {
                 applicationWindow().pushDeviceAssignmentPage()
             }
         },
         Kirigami.Action {
+            objectName: "actionSaveProfile"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "Save Profile")
+            Accessible.onPressAction: triggered()
             icon.name: "document-save"
             text: i18nc("@action:button", "Save Profile")
             onTriggered: saveProfileDialog.open()
@@ -124,6 +137,9 @@ Kirigami.ScrollablePage {
 
     Kirigami.PromptDialog {
         id: saveProfileDialog
+        objectName: "dialogSaveProfile"
+        Accessible.role: Accessible.Dialog
+        Accessible.name: i18nc("@title:dialog", "Save Profile")
         title: i18nc("@title:dialog", "Save Profile")
         subtitle: sessionManager?.currentProfileName 
             ? i18nc("@info", "Save changes to '%1' or enter a new name", sessionManager.currentProfileName)
@@ -132,6 +148,9 @@ Kirigami.ScrollablePage {
 
         Controls.TextField {
             id: profileNameField
+            objectName: "fieldProfileName"
+            Accessible.role: Accessible.EditableText
+            Accessible.name: i18nc("@label", "Profile name")
             placeholderText: i18nc("@info:placeholder", "Profile name")
             text: sessionManager?.currentProfileName ?? ""
             Layout.fillWidth: true
@@ -163,6 +182,10 @@ Kirigami.ScrollablePage {
             
             actions: [
                 Kirigami.Action {
+                    objectName: "actionStop"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Stop")
+                    Accessible.onPressAction: triggered()
                     text: i18nc("@action:button", "Stop")
                     icon.name: "media-playback-stop"
                     onTriggered: sessionRunner.stop()
@@ -192,6 +215,9 @@ Kirigami.ScrollablePage {
 
             Controls.SpinBox {
                 id: playerCountSpin
+                objectName: "spinPlayerCount"
+                Accessible.role: Accessible.SpinBox
+                Accessible.name: i18nc("@label", "Number of players")
                 from: 2
                 to: 4
                 value: root.instanceCount
@@ -205,6 +231,7 @@ Kirigami.ScrollablePage {
             Layout.topMargin: Kirigami.Units.smallSpacing
 
             LayoutCard {
+                objectName: "cardLayoutHorizontal"
                 Layout.fillWidth: true
                 layoutType: "horizontal"
                 selected: layoutMode === "horizontal"
@@ -215,6 +242,7 @@ Kirigami.ScrollablePage {
             }
 
             LayoutCard {
+                objectName: "cardLayoutVertical"
                 Layout.fillWidth: true
                 layoutType: "vertical"
                 selected: layoutMode === "vertical"
@@ -223,8 +251,8 @@ Kirigami.ScrollablePage {
                 instanceCount: root.instanceCount
                 onClicked: layoutMode = "vertical"
             }
-
             LayoutCard {
+                objectName: "cardLayoutGrid"
                 Layout.fillWidth: true
                 layoutType: "grid"
                 selected: layoutMode === "grid"
@@ -242,6 +270,7 @@ Kirigami.ScrollablePage {
             }
 
             LayoutCard {
+                objectName: "cardLayoutMultiMonitor"
                 Layout.fillWidth: true
                 layoutType: "multi-monitor"
                 selected: layoutMode === "multi-monitor"
@@ -366,6 +395,9 @@ Kirigami.ScrollablePage {
 
                         Controls.ComboBox {
                             id: userCombo
+                            objectName: "comboUser"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelUser
                             Kirigami.FormData.label: instanceCard.labelUser
                             Layout.fillWidth: true
 
@@ -409,6 +441,7 @@ Kirigami.ScrollablePage {
 
                         Components.PresetSelector {
                             id: presetSelector
+                            objectName: "comboLauncher"
                             Kirigami.FormData.label: instanceCard.labelLauncher
                             Layout.fillWidth: true
                             presetManager: instanceCard.cardPresetManager
@@ -452,6 +485,10 @@ Kirigami.ScrollablePage {
                             }
 
                             Controls.Button {
+                                objectName: "btnAssignDevices"
+                                Accessible.role: Accessible.Button
+                                Accessible.name: instanceCard.textAssign
+                                Accessible.onPressAction: clicked()
                                 text: instanceCard.textAssign
                                 flat: true
                                 onClicked: applicationWindow().pushDeviceAssignmentPage()
@@ -476,6 +513,9 @@ Kirigami.ScrollablePage {
 
                                 Controls.TextField {
                                     id: patternInput
+                                    objectName: "fieldPattern"
+                                    Accessible.role: Accessible.EditableText
+                                    Accessible.name: instanceCard.labelOverlay
                                     placeholderText: instanceCard.placeholderPattern
                                     Layout.fillWidth: true
                                     onAccepted: {
@@ -490,6 +530,10 @@ Kirigami.ScrollablePage {
                                     }
                                 }
                                 Controls.Button {
+                                    objectName: "btnAddPattern"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.buttonAdd
+                                    Accessible.onPressAction: clicked()
                                     text: instanceCard.buttonAdd
                                     flat: true
                                     onClicked: {
@@ -515,6 +559,9 @@ Kirigami.ScrollablePage {
 
                             Controls.SpinBox {
                                 id: refreshSpin
+                                objectName: "spinRefreshRate"
+                                Accessible.role: Accessible.SpinBox
+                                Accessible.name: instanceCard.labelRefreshRate
                                 Kirigami.FormData.label: instanceCard.labelRefreshRate
                                 from: 30
                                 to: 240
@@ -532,6 +579,9 @@ Kirigami.ScrollablePage {
                             }
 
                             Controls.ComboBox {
+                                objectName: "comboScaling"
+                                Accessible.role: Accessible.ComboBox
+                                Accessible.name: instanceCard.labelScaling
                                 Kirigami.FormData.label: instanceCard.labelScaling
                                 model: ["fit", "stretch", "integer", "auto"]
                                 currentIndex: 0
@@ -576,6 +626,10 @@ Kirigami.ScrollablePage {
                                     }
                                     Item { Layout.fillWidth: true }
                                     Controls.Button {
+                                        objectName: "btnOpenFolder"
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: i18nc("@action:button", "Open Folder")
+                                        Accessible.onPressAction: clicked()
                                         text: i18nc("@action:button", "Open Folder")
                                         icon.name: "folder-open"
                                         flat: true
@@ -608,6 +662,9 @@ Kirigami.ScrollablePage {
                                             font.family: "monospace"
                                         }
                                         Controls.ToolButton {
+                                            objectName: "btnRemovePattern"
+                                            Accessible.role: Accessible.Button
+                                            Accessible.name: i18nc("@action:button", "Remove pattern")
                                             icon.name: "list-remove"
                                             onClicked: {
                                                 if (!instanceCard.cardSessionManager) return
@@ -708,6 +765,10 @@ Kirigami.ScrollablePage {
             spacing: Kirigami.Units.largeSpacing
 
             Controls.Button {
+                objectName: "btnAutoAssign"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Auto-Assign Controllers")
+                Accessible.onPressAction: clicked()
                 text: i18nc("@action:button", "Auto-Assign Controllers")
                 icon.name: "input-gamepad"
                 onClicked: {
@@ -732,6 +793,10 @@ Kirigami.ScrollablePage {
         required property string title
         required property string description
         required property int instanceCount
+
+        Accessible.role: Accessible.Button
+        Accessible.name: layoutCard.title
+        Accessible.onPressAction: layoutCard.clicked()
 
         background: Rectangle {
             color: layoutCard.selected 

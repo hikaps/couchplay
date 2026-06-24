@@ -7,6 +7,9 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.PromptDialog {
     id: root
+    objectName: "dialogDeletePreset"
+    Accessible.role: Accessible.Dialog
+    Accessible.name: title
     title: i18nc("@title:dialog", "Remove Preset")
     subtitle: i18nc("@info", "Remove the preset \"%1\"?", presetName)
     standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.Cancel

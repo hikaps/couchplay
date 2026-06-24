@@ -21,11 +21,19 @@ Kirigami.ScrollablePage {
             onTriggered: applicationWindow().pushSessionSetupPage()
         },
         Kirigami.Action {
+            objectName: "actionRefresh"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "Refresh")
+            Accessible.onPressAction: triggered()
             text: i18nc("@action:button", "Refresh")
             icon.name: "view-refresh"
             onTriggered: deviceManager?.refresh()
         },
         Kirigami.Action {
+            objectName: "actionAutoAssign"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "Auto-Assign")
+            Accessible.onPressAction: triggered()
             text: i18nc("@action:button", "Auto-Assign")
             icon.name: "distribute-horizontal"
             tooltip: i18nc("@info:tooltip", "Automatically assign one controller per player")
@@ -42,6 +50,10 @@ Kirigami.ScrollablePage {
             }
         },
         Kirigami.Action {
+            objectName: "actionClearAll"
+            Accessible.role: Accessible.Button
+            Accessible.name: i18nc("@action:button", "Clear All")
+            Accessible.onPressAction: triggered()
             text: i18nc("@action:button", "Clear All")
             icon.name: "edit-clear-all"
             onTriggered: deviceManager?.unassignAll()
@@ -55,12 +67,11 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
 
-            QQC2.Label {
-                text: i18nc("@label", "Players:")
-            }
-
             QQC2.SpinBox {
                 id: instanceCountSpin
+                objectName: "spinInstanceCount"
+                Accessible.role: Accessible.SpinBox
+                Accessible.name: i18nc("@label", "Players")
                 from: 2
                 to: 4
                 value: root.instanceCount
@@ -73,6 +84,10 @@ Kirigami.ScrollablePage {
             Item { Layout.fillWidth: true }
 
             QQC2.CheckBox {
+                id: checkShowVirtual
+                objectName: "checkShowVirtual"
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: i18nc("@option:check", "Show virtual devices")
                 text: i18nc("@option:check", "Show virtual devices")
                 checked: deviceManager?.showVirtualDevices ?? false
                 onToggled: { if (deviceManager) deviceManager.showVirtualDevices = checked }
@@ -127,14 +142,23 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
 
             QQC2.TabButton {
+                objectName: "tabControllers"
+                Accessible.role: Accessible.PageTab
+                Accessible.name: "Controllers"
                 text: "Controllers (" + (deviceManager?.controllers?.length ?? 0) + ")"
                 icon.name: "input-gamepad"
             }
             QQC2.TabButton {
+                objectName: "tabKeyboards"
+                Accessible.role: Accessible.PageTab
+                Accessible.name: "Keyboards"
                 text: "Keyboards (" + (deviceManager?.keyboards?.length ?? 0) + ")"
                 icon.name: "input-keyboard"
             }
             QQC2.TabButton {
+                objectName: "tabMice"
+                Accessible.role: Accessible.PageTab
+                Accessible.name: "Mice"
                 text: "Mice (" + (deviceManager?.mice?.length ?? 0) + ")"
                 icon.name: "input-mouse"
             }
@@ -189,6 +213,10 @@ Kirigami.ScrollablePage {
             icon.name: "input-gamepad"
             
             helpfulAction: Kirigami.Action {
+                objectName: "actionRefreshDevices"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Refresh Devices")
+                Accessible.onPressAction: triggered()
                 text: i18nc("@action:button", "Refresh Devices")
                 icon.name: "view-refresh"
                 onTriggered: deviceManager?.refresh()
@@ -388,6 +416,10 @@ Kirigami.ScrollablePage {
             }
 
             Kirigami.Chip {
+                id: chipPlayerAssignment
+                objectName: "chipPlayerAssignment"
+                Accessible.role: Accessible.Button
+                Accessible.name: text
                 visible: deviceCard.device?.assigned ?? false
                 text: i18nc("@info", "Player %1", (deviceCard.device?.assignedInstance ?? 0) + 1)
                 closable: true
@@ -402,6 +434,10 @@ Kirigami.ScrollablePage {
                 model: deviceCard.instanceCount
                 
                 QQC2.Button {
+                    objectName: "btnAssignPlayer"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Assign to Player %1", index + 1)
+                    Accessible.onPressAction: clicked()
                     required property int index
                     text: (index + 1).toString()
                     visible: !(deviceCard.device?.assigned ?? true)
@@ -419,6 +455,10 @@ Kirigami.ScrollablePage {
             }
 
             QQC2.Button {
+                objectName: "btnIdentifyDevice"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Identify controller")
+                Accessible.onPressAction: clicked()
                 icon.name: "flashlight-on"
                 flat: true
                 visible: deviceCard.device?.type === "controller"
@@ -434,6 +474,10 @@ Kirigami.ScrollablePage {
             }
 
             QQC2.Button {
+                objectName: "btnIgnoreDevice"
+                Accessible.role: Accessible.Button
+                Accessible.name: i18nc("@action:button", "Ignore this device")
+                Accessible.onPressAction: clicked()
                 icon.name: "dialog-cancel"
                 flat: true
                 visible: !(deviceCard.device?.assigned ?? true) // Only allow ignoring unassigned devices

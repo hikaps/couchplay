@@ -8,6 +8,9 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.PromptDialog {
     id: root
+    objectName: "dialogResetSettings"
+    Accessible.role: Accessible.Dialog
+    Accessible.name: title
     
     required property var settingsManager
     
