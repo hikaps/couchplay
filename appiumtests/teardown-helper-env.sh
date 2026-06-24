@@ -23,10 +23,16 @@ for u in player2 player3; do
 done
 sudo groupdel couchplay 2>/dev/null || true
 
-echo "== stopping the container D-Bus system bus =="
-# Only the bus setup started (the host's is not visible inside the container).
-# The script's own cmdline does not contain this pattern, so it is not self-matched.
-sudo pkill -f 'dbus-daemon --system' 2>/dev/null || true
-sudo rm -f /run/dbus/system_bus_socket /run/dbus/pid
+echo "== stopping the D-Bus system bus this setup started (PID-pinned, never pkill) =="
+DBUS_PIDFILE=/tmp/couchplay-test-dbus.pid
+if [ -f "$DBUS_PIDFILE" ]; then
+    pid=$(cat "$DBUS_PIDFILE" 2>/dev/null || true)
+    if [ -n "$pid" ]; then
+        sudo kill "$pid" 2>/dev/null || true
+    fi
+    sudo rm -f "$DBUS_PIDFILE" /run/dbus/system_bus_socket /run/dbus/pid
+else
+    echo "  (no pidfile: setup did not start a bus; leaving any existing bus alone)"
+fi
 
 echo "helper-tier environment torn down (no remnants)."

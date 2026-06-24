@@ -64,7 +64,6 @@ Kirigami.ScrollablePage {
                     objectName: "chipSessionStatus"
                     Accessible.role: Accessible.Button
                     Accessible.name: i18nc("@info", "%1 instances running", sessionRunner ? sessionRunner.runningInstanceCount : 0)
-                    Accessible.onPressAction: removed()
                     visible: sessionRunner?.running ?? false
                     text: i18nc("@info", "%1 instances running", sessionRunner ? sessionRunner.runningInstanceCount : 0)
                     icon.name: "media-playback-start"

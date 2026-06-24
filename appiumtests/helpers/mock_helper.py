@@ -264,9 +264,28 @@ def main():
     time.sleep(0.2)
 
     bus_name = dbus.service.BusName(BUS_NAME, bus)
+    # dbus.service.BusName does NOT raise if RequestName loses to an existing
+    # owner (e.g. the real helper is running). Verify we are the primary owner;
+    # exit loudly so the fixture doesn't silently drive the REAL helper.
+    dbus_daemon = dbus.Interface(
+        bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus"),
+        "org.freedesktop.DBus",
+    )
+    try:
+        owner = str(dbus_daemon.GetNameOwner(BUS_NAME))
+    except dbus.exceptions.DBusException:
+        owner = ""
+    if owner != bus.get_unique_name():
+        print(
+            f"mock helper failed to acquire {BUS_NAME} "
+            f"(owner={owner!r}; is the real couchplay-helper running?)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # The service Object must receive the BusName (not the raw bus), else name
     # acquisition silently fails on the GLib mainloop.
-    MockHelper(bus_name)
+    helper = MockHelper(bus_name)
 
     print(f"Mock helper running on {BUS_NAME} at {OBJECT_PATH}", file=sys.stderr)
     sys.stdout.flush()
@@ -281,6 +300,7 @@ def main():
     signal.signal(signal.SIGINT, handle_signal)
 
     stop.wait()
+    helper.cleanup()  # delete any user accounts CreateUser made, so none leak
     loop.quit()
 
 

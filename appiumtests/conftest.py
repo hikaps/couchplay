@@ -87,7 +87,7 @@ def mock_helper():
             ],
             capture_output=True, text=True,
         )
-        if "true" in r.stdout:
+        if "true" in r.stdout and proc.poll() is None:
             owned = True
             break
         time.sleep(1)

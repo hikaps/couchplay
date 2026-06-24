@@ -67,6 +67,9 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
 
+            QQC2.Label {
+                text: i18nc("@label", "Players:")
+            }
             QQC2.SpinBox {
                 id: instanceCountSpin
                 objectName: "spinInstanceCount"

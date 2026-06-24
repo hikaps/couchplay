@@ -216,15 +216,16 @@ void TestDeviceManager::testGetDevicePathsForInstance()
     // Get paths for instance 0
     QStringList paths = m_deviceManager->getDevicePathsForInstance(0);
 
-    // Each path should start with /dev/input/event. In containers the resolved
-    // paths can be empty/odd, so skip rather than fail in those environments.
+    // No usable input devices in some environments (CI container) -> skip.
     if (paths.isEmpty()) {
         QSKIP("No device paths resolved for the instance (no usable input devices)");
     }
+    // getDevicePathsForInstance returns /dev/input/eventN and/or /dev/input/jsN;
+    // both are valid. Assert each is a real input-device path (don't skip on the
+    // joydev paths real controllers expose).
     for (const QString &path : paths) {
-        if (!path.startsWith(QStringLiteral("/dev/input/event"))) {
-            QSKIP("Device path is not /dev/input/event* in this environment");
-        }
+        QVERIFY2(path.startsWith(QStringLiteral("/dev/input/")),
+                 qPrintable(QStringLiteral("Unexpected device path: %1").arg(path)));
     }
 }
 

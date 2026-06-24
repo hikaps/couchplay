@@ -17,7 +17,7 @@ if ! dbus-send --system --dest=org.freedesktop.DBus --print-reply \
     # stale socket file may linger after a killed daemon -> remove and restart
     sudo rm -f /run/dbus/system_bus_socket /run/dbus/pid
     sudo mkdir -p /run/dbus
-    sudo dbus-daemon --system --fork
+    sudo dbus-daemon --system --fork --pidfile=/tmp/couchplay-test-dbus.pid
 fi
 
 POLICY=/usr/share/dbus-1/system.d/io.github.hikaps.CouchPlayHelper-test.conf

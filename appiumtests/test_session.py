@@ -80,7 +80,16 @@ class TestSessionLifecycle(BaseTest):
         def read_launches():
             try:
                 with open(log_path) as f:
-                    return [json.loads(line) for line in f if line.strip()]
+                    out = []
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            out.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue  # partial/interleaved write; retry next poll
+                    return out
             except FileNotFoundError:
                 return []
 

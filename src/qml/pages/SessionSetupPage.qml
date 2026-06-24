@@ -119,6 +119,7 @@ Kirigami.ScrollablePage {
             Accessible.role: Accessible.Button
             Accessible.name: i18nc("@action:button", "Assign Devices")
             Accessible.onPressAction: triggered()
+            icon.name: "go-next"
             text: i18nc("@action:button", "Assign Devices")
             onTriggered: {
                 applicationWindow().pushDeviceAssignmentPage()
@@ -665,6 +666,7 @@ Kirigami.ScrollablePage {
                                             objectName: "btnRemovePattern"
                                             Accessible.role: Accessible.Button
                                             Accessible.name: i18nc("@action:button", "Remove pattern")
+                                            Accessible.onPressAction: clicked()
                                             icon.name: "list-remove"
                                             onClicked: {
                                                 if (!instanceCard.cardSessionManager) return
