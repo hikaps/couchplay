@@ -202,8 +202,11 @@ void TestDeviceManager::testGetDevicePathsForInstance()
 {
     m_deviceManager->unassignAll();
 
-    // Assign some devices
+    // Requires real input devices; skip in environments without them (CI).
     QVariantList devices = m_deviceManager->devicesAsVariant();
+    if (devices.size() < 2) {
+        QSKIP("Not enough input devices to test getDevicePathsForInstance");
+    }
     for (int i = 0; i < qMin(devices.size(), 2); ++i) {
         QVariantMap device = devices.at(i).toMap();
         int eventNumber = device.value(KEY("eventNumber")).toInt();

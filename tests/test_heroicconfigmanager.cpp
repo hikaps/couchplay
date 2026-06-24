@@ -8,6 +8,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <pwd.h>
 
 class MockHelperClient : public CouchPlayHelperClient
 {
@@ -396,8 +397,14 @@ void TestHeroicConfigManager::testSyncShortcutsToUser()
     // Let's use the current user's name.
 
     QString currentUser = QString::fromLocal8Bit(qgetenv("USER"));
-    if (currentUser.isEmpty())
+    if (currentUser.isEmpty()) {
         currentUser = QStringLiteral("notaname"); // Fallback
+    }
+    // syncShortcutsToUser resolves the home dir via getpwnam; skip if the user
+    // isn't a real system user (the CI container lacks the developer's user).
+    if (!getpwnam(currentUser.toLocal8Bit().constData())) {
+        QSKIP("Current user is not a real system user in this environment");
+    }
 
     HeroicConfigManager manager;
     manager.detectHeroicPaths(); // Detect shortcuts dir
