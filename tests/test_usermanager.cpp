@@ -3,6 +3,7 @@
 
 #include <QSignalSpy>
 #include <QTest>
+#include <unistd.h>
 
 #include "UserManager.h"
 
@@ -340,7 +341,7 @@ void TestUserManager::testDeleteUserRequiresHelper()
     // Deleting requires a user that exists but isn't the current user. Under CI
     // the runner is often root, so "root" is the current user -- use "nobody".
     QString target = QStringLiteral("root");
-    if (target == QString::fromLocal8Bit(qgetenv("USER"))) {
+    if (getuid() == 0) {  // CI runs as root -> 'root' is the current user
         target = QStringLiteral("nobody");
     }
     if (!m_manager->userExists(target)) {
