@@ -47,4 +47,22 @@ for u in player2 player3; do
     sudo loginctl enable-linger "$u" 2>/dev/null || true
 done
 
+echo "== provisioning per-user PipeWire audio config (cross-user routing) =="
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PW_CONF="$REPO_ROOT/data/pipewire/50-couchplay.conf"
+if [ -f "$PW_CONF" ]; then
+    for u in player2 player3; do
+        home=$(getent passwd "$u" | cut -d: -f6) || continue
+        [ -n "$home" ] || continue
+        sudo mkdir -p "$home/.config/pipewire/pipewire-pulse.conf.d"
+        sudo install -o "$u" -g "$u" -m 644 "$PW_CONF" \
+            "$home/.config/pipewire/pipewire-pulse.conf.d/50-couchplay.conf"
+    done
+else
+    echo "  (data/pipewire/50-couchplay.conf not found; skipping audio config)"
+fi
+# NOTE: PipeWire/wireplumber daemons are managed by the test runner for the
+# nested session (and the host's are shared via the container PID namespace, so
+# this script intentionally does not start/stop them).
+
 echo "helper-tier environment ready."

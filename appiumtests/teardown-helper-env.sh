@@ -15,9 +15,11 @@ sudo rm -f "$POLICY"
 sudo dbus-send --system --dest=org.freedesktop.DBus --type=method_call \
     /org/freedesktop/DBus org.freedesktop.DBus.ReloadConfig 2>/dev/null || true
 
-echo "== deleting player2/player3 users =="
+echo "== removing per-user PipeWire audio config + deleting test users =="
 for u in player2 player3; do
-    sudo userdel -r "$u" 2>/dev/null || true
+    home=$(getent passwd "$u" | cut -d: -f6) || true
+    [ -n "$home" ] && sudo rm -f "$home/.config/pipewire/pipewire-pulse.conf.d/50-couchplay.conf" 2>/dev/null || true
+    sudo userdel -r "$u" 2>/dev/null || true  # -r also removes the home dir (and any remaining config)
 done
 sudo groupdel couchplay 2>/dev/null || true
 
