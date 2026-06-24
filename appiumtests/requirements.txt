@@ -3,3 +3,6 @@
 
 Appium-Python-Client>=3.1.0
 pytest>=8.0.0
+# PySide6 (Qt6) for stub_gamescope (the window the mock helper spawns so
+# WindowManager can position it during session-lifecycle tests).
+PySide6>=6.5
