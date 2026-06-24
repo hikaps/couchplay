@@ -5,6 +5,10 @@ import pytest
 from appium.webdriver.common.appiumby import AppiumBy
 from helpers.base_test import BaseTest
 
+import json
+import os
+import time
+
 # These exercise the mock D-Bus helper (system bus) + pre-created users; skip in
 # the no-helper smoke tier.
 pytestmark = pytest.mark.requires_helper
@@ -59,6 +63,50 @@ class TestSessionLifecycle(BaseTest):
             driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT
         )
         assert start_btn.is_displayed()
+
+    def test_two_instances_launch(self, driver, mock_helper, test_users):
+        """A 2-player session issues two distinct LaunchInstance calls.
+
+        Verified via the mock helper's launch log (COUCHPLAY_MOCK_LAUNCH_LOG),
+        not the UI: the window-positioning side-effect is untestable in this
+        harness (see test_start_and_stop_session), but the D-Bus launch fan-out
+        -- the part that proves two sessions actually launch with per-instance
+        geometry/command -- is fully observable here.
+        """
+        log_path = os.environ.get(
+            "COUCHPLAY_MOCK_LAUNCH_LOG", "/tmp/couchplay-mock-launch.jsonl"
+        )
+
+        def read_launches():
+            try:
+                with open(log_path) as f:
+                    return [json.loads(line) for line in f if line.strip()]
+            except FileNotFoundError:
+                return []
+
+        before = len(read_launches())
+        self.navigate_to_session_setup(driver)  # default player count is 2
+        self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
+
+        launches = []
+        for _ in range(LONG_TIMEOUT):
+            launches = read_launches()[before:]
+            if len(launches) >= 2:
+                break
+            time.sleep(1)
+
+        assert len(launches) >= 2, (
+            f"expected >=2 LaunchInstance calls for a 2-player session, got {len(launches)}"
+        )
+        # Two distinct instances (distinct PIDs).
+        assert launches[0]["pid"] != launches[1]["pid"]
+        # Each carries a game command and gamescope output geometry args.
+        for entry in launches[:2]:
+            assert entry.get("gameCommand"), "LaunchInstance had no game command"
+            args = entry.get("gamescopeArgs", [])
+            assert "-W" in args and "-H" in args, (
+                "LaunchInstance missing output geometry (-W/-H)"
+            )
 
     def test_device_assignment_page_with_helper(self, driver, mock_helper):
         self.navigate_to_device_assignment(driver)
