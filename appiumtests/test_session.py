@@ -117,6 +117,56 @@ class TestSessionLifecycle(BaseTest):
                 "LaunchInstance missing output geometry (-W/-H)"
             )
 
+    def test_streaming_session_calls_helper(self, driver, mock_helper, test_users):
+        """A streaming instance provisions a virtual display + null sink via the
+        helper before launch. Verified via the mock launch log (not the UI):
+        setting an instance's output mode to 'Moonlight Stream' and starting the
+        session must produce CreateVirtualOutput + CreateNullSink D-Bus calls --
+        the part that proves the streaming orchestration actually reaches the
+        privileged helper.
+        """
+        log_path = os.environ.get(
+            "COUCHPLAY_MOCK_LAUNCH_LOG", "/tmp/couchplay-mock-launch.jsonl"
+        )
+
+        def read_calls():
+            try:
+                with open(log_path) as f:
+                    out = []
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            out.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+                    return out
+            except FileNotFoundError:
+                return []
+
+        before = len(read_calls())
+        self.navigate_to_session_setup(driver)
+        # Switch the first instance to streaming output.
+        self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
+        self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
+
+        methods = set()
+        for _ in range(LONG_TIMEOUT):
+            for entry in read_calls()[before:]:
+                # LaunchInstance entries have no "method" key.
+                methods.add(entry.get("method") or "LaunchInstance")
+            if {"CreateVirtualOutput", "CreateNullSink"} <= methods:
+                break
+            time.sleep(1)
+
+        assert "CreateVirtualOutput" in methods, (
+            "streaming session did not call CreateVirtualOutput on the helper"
+        )
+        assert "CreateNullSink" in methods, (
+            "streaming session did not call CreateNullSink on the helper"
+        )
+
     def test_device_assignment_page_with_helper(self, driver, mock_helper):
         self.navigate_to_device_assignment(driver)
         self.wait_for_element(driver, AppiumBy.NAME, "Assign Devices", LONG_TIMEOUT)
