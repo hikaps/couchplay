@@ -497,6 +497,9 @@ Kirigami.ScrollablePage {
 
                         Controls.ComboBox {
                             id: outputModeCombo
+                            objectName: "comboOutputMode"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelOutputMode
                             Kirigami.FormData.label: instanceCard.labelOutputMode
                             Layout.fillWidth: true
                             
@@ -539,6 +542,9 @@ Kirigami.ScrollablePage {
                         }
                         Controls.ComboBox {
                             id: streamResolutionCombo
+                            objectName: "comboStreamResolution"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelStreamResolution
                             Kirigami.FormData.label: instanceCard.labelStreamResolution
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
@@ -569,6 +575,9 @@ Kirigami.ScrollablePage {
                         
                         Controls.ComboBox {
                             id: frameRateCombo
+                            objectName: "comboFrameRate"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelFrameRate
                             Kirigami.FormData.label: instanceCard.labelFrameRate
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
@@ -608,6 +617,9 @@ Kirigami.ScrollablePage {
                             
                             Controls.Slider {
                                 id: bitrateSlider
+                                objectName: "sliderStreamBitrate"
+                                Accessible.role: Accessible.Slider
+                                Accessible.name: instanceCard.labelBitrate
                                 Layout.fillWidth: true
                                 from: 5000
                                 to: 80000
@@ -644,6 +656,9 @@ Kirigami.ScrollablePage {
                         
                         Controls.ComboBox {
                             id: codecCombo
+                            objectName: "comboCodec"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelCodec
                             Kirigami.FormData.label: instanceCard.labelCodec
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true

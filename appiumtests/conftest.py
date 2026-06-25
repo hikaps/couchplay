@@ -185,6 +185,30 @@ def click_by_object_name(driver, object_name, timeout=DEFAULT_TIMEOUT):
     element.click()
     return element
 
+
+def select_combo_option(driver, combo_object_name, option_name, timeout=DEFAULT_TIMEOUT):
+    # Open a ComboBox popup via its objectName, then click the option by its
+    # visible name. Qt ComboBox popup items are exposed by NAME, not objectName.
+    click_by_object_name(driver, combo_object_name, timeout)
+    time.sleep(0.3)  # let the popup populate the AT-SPI tree
+    click_by_name(driver, option_name, timeout)
+    time.sleep(0.2)  # let the onActivated binding settle
+
+
+def wait_for_absence(driver, by, value, timeout=3):
+    # True when no matching element appears within `timeout`. Used to assert a
+    # control is not rendered (e.g. streaming fields hidden in physical mode);
+    # presence-of is used so it tolerates elements that exist but stay invisible.
+    from selenium.common.exceptions import TimeoutException
+
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((by, value))
+        )
+        return False
+    except TimeoutException:
+        return True
+
 def click_by_class_name(driver, class_name, timeout=DEFAULT_TIMEOUT):
     element = wait_for_element_clickable(driver, AppiumBy.CLASS_NAME, class_name, timeout)
     element.click()
