@@ -38,7 +38,6 @@ struct InstanceConfig {
     Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
     Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
-    Q_PROPERTY(bool borderless MEMBER borderless)
     Q_PROPERTY(QString outputMode MEMBER outputMode)
     Q_PROPERTY(QString streamResolution MEMBER streamResolution)
     Q_PROPERTY(int streamFps MEMBER streamFps)
@@ -66,7 +65,6 @@ public:
     QString overrideGamePath;
     QStringList overrideFiles;
     QStringList overridePatterns; // Glob patterns for per-user overrides
-    bool borderless = true;                            // Window border visibility (false = show borders)
     QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
     QString streamResolution = QStringLiteral("1920x1080");
     int streamFps = 60;

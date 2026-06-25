@@ -112,7 +112,6 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
-        instGroup.writeEntry("borderless", inst.borderless);
         instGroup.writeEntry("outputMode", inst.outputMode);
         instGroup.writeEntry("streamResolution", inst.streamResolution);
         instGroup.writeEntry("streamFps", inst.streamFps);
@@ -190,7 +189,6 @@ bool SessionManager::loadProfile(const QString &name)
             qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
         }
 
-        inst.borderless = instGroup.readEntry("borderless", true);
         inst.outputMode = instGroup.readEntry("outputMode", QStringLiteral("physical"));
         inst.streamResolution = instGroup.readEntry("streamResolution", QStringLiteral("1920x1080"));
         inst.streamFps = instGroup.readEntry("streamFps", 60);
@@ -324,7 +322,6 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
     map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
-    map[QStringLiteral("borderless")] = inst.borderless;
     map[QStringLiteral("outputMode")] = inst.outputMode;
     map[QStringLiteral("streamResolution")] = inst.streamResolution;
     map[QStringLiteral("streamFps")] = inst.streamFps;
@@ -389,8 +386,6 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.overridePatterns = config[QStringLiteral("overridePatterns")].toStringList();
     if (config.contains(QStringLiteral("overrideGamePath")))
         inst.overrideGamePath = config[QStringLiteral("overrideGamePath")].toString();
-    if (config.contains(QStringLiteral("borderless")))
-        inst.borderless = config[QStringLiteral("borderless")].toBool();
     if (config.contains(QStringLiteral("outputMode")))
         inst.outputMode = config[QStringLiteral("outputMode")].toString();
     if (config.contains(QStringLiteral("streamResolution")))

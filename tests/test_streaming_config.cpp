@@ -128,7 +128,6 @@ void TestStreamingConfig::testBackwardCompatibilityOldProfile()
         "filterMode=linear\n"
         "gameCommand=steam\n"
         "presetId=steam\n"
-        "borderless=false\n"
         "\n"
         "[Instance1]\n"
         "username=player2\n"
@@ -142,7 +141,6 @@ void TestStreamingConfig::testBackwardCompatibilityOldProfile()
         "filterMode=linear\n"
         "gameCommand=steam\n"
         "presetId=steam\n"
-        "borderless=false\n"
     );
     file.close();
 

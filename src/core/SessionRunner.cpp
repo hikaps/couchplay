@@ -326,7 +326,7 @@ bool SessionRunner::start()
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
         config[QStringLiteral("gameCommand")] = instConfig.gameCommand;
         config[QStringLiteral("steamAppId")] = instConfig.steamAppId;
-        config[QStringLiteral("borderless")] = instConfig.borderless;
+        config[QStringLiteral("borderless")] = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
 
         if (m_presetManager) {
             QString presetId = instConfig.presetId;
@@ -1121,13 +1121,7 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
     QRect targetGeometry = instance->windowGeometry();
     int instanceIndex = instance->index();
 
-    bool borderless = false;
-    if (m_sessionManager) {
-        const auto &instances = m_sessionManager->currentProfile().instances;
-        if (instanceIndex >= 0 && instanceIndex < instances.size()) {
-            borderless = instances[instanceIndex].borderless;
-        }
-    }
+    const bool borderless = m_settingsManager && m_settingsManager->borderlessWindows();
 
     m_windowManager->queuePositionRequest(instanceIndex, targetGeometry, m_positionedWindowIds, borderless, 60000);
 }
