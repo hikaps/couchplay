@@ -57,6 +57,11 @@ def mock_helper():
     # depends on this fixture, so the mock is up before the app launches. No-op
     # when no system bus is available (smoke tier). Tears down the mock and any
     # child processes (stub gamescope windows) via the process group.
+    if os.environ.get("COUCHPLAY_MOCK_EXTERNAL"):
+        # The container entrypoint owns the helper name on a user-owned system
+        # bus (DBUS_SYSTEM_BUS_ADDRESS) before pytest starts; nothing to do.
+        yield None
+        return
     if not os.path.exists("/run/dbus/system_bus_socket"):
         yield None
         return

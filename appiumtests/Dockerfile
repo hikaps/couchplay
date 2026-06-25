@@ -55,6 +55,12 @@ RUN git clone --depth 1 https://invent.kde.org/sdk/selenium-webdriver-at-spi.git
  && cmake --install /tmp/swa/build >/dev/null 2>&1 \
  && rm -rf /tmp/swa
 
+# Pre-install the runner's python deps into SYSTEM python. At runtime the runner
+# runs `pip3 install -r requirements.txt` with system pip; rootless it cannot
+# write /usr/local, so pre-satisfy everything here (build runs as root). The
+# venv below uses --system-site-packages, so it inherits these too.
+RUN pip3 install --no-cache-dir -r /usr/share/selenium-webdriver-at-spi/requirements.txt
+
 # --- python test deps (venv inherits system gi/pyatspi/flask/lxml/numpy/dbus) ---
 RUN python3 -m venv --system-site-packages /opt/e2e-venv \
  && /opt/e2e-venv/bin/pip install --no-cache-dir Appium-Python-Client pytest
