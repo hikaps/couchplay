@@ -91,6 +91,12 @@ bool SunshineConfig::ensureConfigDirectory(const QString &configDir)
         }
     }
 
+    // NOTE: world-traversable so the streaming user (different UID, launched via
+    // the helper) can read these files. credentials.json is therefore readable
+    // by any local user. The secure fix is to make the streaming user OWN this
+    // dir (helper CreateUserDirectory + CopyFileToUser) and drop "Other" bits —
+    // needs runtime validation against real Sunshine (writes sunshine.log/state
+    // here), so it is deferred. See PR #22 review.
     QFile::setPermissions(configDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
                                      | QFileDevice::ReadGroup | QFileDevice::ExeGroup
                                      | QFileDevice::ReadOther | QFileDevice::ExeOther);
@@ -155,6 +161,14 @@ bool SunshineConfig::writeCredentialsFile(const QString &configDir, const QStrin
     return true;
 }
 
+// Strip CR/LF so a malformed value can never inject additional config lines.
+static QString sanitizeConfValue(const QString &value)
+{
+    QString sanitized = value;
+    sanitized.remove(QLatin1Char('\r'));
+    sanitized.remove(QLatin1Char('\n'));
+    return sanitized.trimmed();
+}
 QString SunshineConfig::buildConfigContent(const QVariantMap &instanceConfig, int instanceIndex, const QString &configDir)
 {
     const int port = instanceConfig.value(QStringLiteral("sunshinePort")).toInt();
@@ -162,7 +176,7 @@ QString SunshineConfig::buildConfigContent(const QVariantMap &instanceConfig, in
         ? qBound(MIN_PORT, port, MAX_PORT)
         : calculatePort(instanceIndex);
 
-    const QString outputName = instanceConfig.value(QStringLiteral("outputName")).toString();
+    const QString outputName = sanitizeConfValue(instanceConfig.value(QStringLiteral("outputName")).toString());
     const int bitrate = instanceConfig.value(QStringLiteral("streamBitrate")).toInt();
 
     QString content;
@@ -180,7 +194,7 @@ QString SunshineConfig::buildConfigContent(const QVariantMap &instanceConfig, in
         content.append(QStringLiteral("max_bitrate = %1\n").arg(bitrate));
     }
 
-    const QString codec = instanceConfig.value(QStringLiteral("streamCodec")).toString().toLower();
+    const QString codec = sanitizeConfValue(instanceConfig.value(QStringLiteral("streamCodec")).toString()).toLower();
     if (!codec.isEmpty()) {
         content.append(QStringLiteral("encoder = %1\n").arg(codec));
     }
@@ -189,7 +203,7 @@ QString SunshineConfig::buildConfigContent(const QVariantMap &instanceConfig, in
     content.append(QStringLiteral("credentials_file = %1/credentials.json\n").arg(configDir));
     content.append(QStringLiteral("log_path = %1/sunshine.log\n").arg(configDir));
 
-    const QString sink = instanceConfig.value(QStringLiteral("sink")).toString();
+    const QString sink = sanitizeConfValue(instanceConfig.value(QStringLiteral("sink")).toString());
     if (!sink.isEmpty()) {
         content.append(QStringLiteral("sink = %1\n").arg(sink));
     }
