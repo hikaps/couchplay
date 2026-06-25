@@ -43,7 +43,8 @@ RUN cmake -B build -DBUILD_TESTING=ON >/tmp/cfg.log 2>&1 \
  && cmake --build build -j"$(nproc)" -t couchplay >/tmp/bld.log 2>&1
 
 # --- compiled gamescope stub (basename "gamescope" -> resourceClass "gamescope") ---
-RUN g++ appiumtests/helpers/stub_gamescope.cpp \
+RUN mkdir -p /opt/couchplay-e2e \
+ && g++ appiumtests/helpers/stub_gamescope.cpp \
       -o /opt/couchplay-e2e/gamescope \
       $(pkg-config --cflags --libs Qt6Widgets Qt6Gui Qt6Core) -fPIC
 

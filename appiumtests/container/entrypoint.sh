@@ -9,7 +9,10 @@
 # WindowManager queries. Test args are passed through to pytest.
 set -e
 
-echo "[entrypoint] starting system bus + mock helper + PipeWire"
+mkdir -p /run/user/0
+export XDG_RUNTIME_DIR=/run/user/0
+
+ echo "[entrypoint] starting system bus + mock helper + PipeWire"
 mkdir -p /run/dbus
 dbus-daemon --system --fork
 
