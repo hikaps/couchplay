@@ -13,7 +13,8 @@
         "--device=dri",
         "--talk-name=org.kde.StatusNotifierWatcher",
         "--system-talk-name=org.freedesktop.login1",
-        "--filesystem=/run/udev:ro"
+        "--filesystem=/run/udev:ro",
+        "--filesystem=home"
     ],
     "modules": [
         {

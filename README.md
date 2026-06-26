@@ -128,6 +128,15 @@ sudo ./install-helper.sh uninstall
    sudo ~/.local/share/couchplay/install-helper.sh install
    ```
 
+   The `export` step copies the helper and install script to `~/.local/share/couchplay`
+   on your host (this requires the `--filesystem=home` permission, included in current
+   builds). If you are on an **older Flatpak build** where `export` produced no files in
+   `~/.local/share/couchplay`, the files were written to the Flatpak sandbox home instead —
+   install from there:
+   ```bash
+   sudo ~/.var/app/io.github.hikaps.couchplay/.local/share/couchplay/install-helper.sh install
+   ```
+
 > **Note**: The tarball installation method above is also available if you prefer it or your distribution doesn't support Flatpak.
 
 ## Development

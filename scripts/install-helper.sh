@@ -61,8 +61,20 @@ fi
 # Binary name
 HELPER_BINARY="couchplay-helper"
 
-# Export directory for Flatpak (user's local share)
-EXPORT_DIR="${EXPORT_DIR:-${HOME}/.local/share/couchplay}"
+# Resolve the real host home directory.
+# Inside a Flatpak, $HOME is redirected to the sandbox (~/.var/app/<id>) unless
+# host-home filesystem access is granted. Exporting to the sandbox home means the
+# host-side `sudo ... install` command (and the README) cannot find the files, so
+# resolve the real home from /etc/passwd (shared with the host) instead.
+if [[ "$IN_FLATPAK" == "true" ]]; then
+    REAL_HOME="$(awk -F: -v uid="$UID" '$3==uid{print $6}' /etc/passwd 2>/dev/null || true)"
+    HOST_HOME="${REAL_HOME:-$HOME}"
+else
+    HOST_HOME="$HOME"
+fi
+
+# Export directory for Flatpak (user's local share, on the real host home)
+EXPORT_DIR="${EXPORT_DIR:-${HOST_HOME}/.local/share/couchplay}"
 
 # Source paths (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -116,6 +128,28 @@ check_binary() {
         echo "    make"
         exit 1
     fi
+}
+
+reload_dbus() {
+    # Ask the D-Bus daemon to re-read its configuration so policy files dropped
+    # into /etc/dbus-1/system.d/ (e.g. the helper's ownership allow-rule) take
+    # effect. Without this the helper cannot register its service name and the
+    # Type=dbus systemd unit fails to start. Tries the systemd unit reload first,
+    # then falls back to signalling the daemon directly via its pid file.
+    if systemctl reload dbus 2>/dev/null; then
+        return 0
+    fi
+    local pidfile dbus_pid
+    for pidfile in /run/dbus/pid /var/run/dbus/pid; do
+        if [[ -r "$pidfile" ]]; then
+            dbus_pid="$(cat "$pidfile" 2>/dev/null || true)"
+            if [[ -n "$dbus_pid" ]] && kill -HUP "$dbus_pid" 2>/dev/null; then
+                print_warn "systemctl reload dbus unavailable; sent SIGHUP to dbus-daemon (pid ${dbus_pid})."
+                return 0
+            fi
+        fi
+    done
+    return 1
 }
 
 export_helper() {
@@ -222,14 +256,30 @@ install_helper() {
     print_info "Reloading systemd..."
     systemctl daemon-reload
 
-    # Reload D-Bus
+    # Reload D-Bus so the new ownership policy in /etc/dbus-1/system.d/ takes
+    # effect. Without this the helper cannot register its service name and the
+    # Type=dbus unit fails to start. Do not silently mask a reload failure.
     print_info "Reloading D-Bus configuration..."
-    systemctl reload dbus 2>/dev/null || true
+    if ! reload_dbus; then
+        print_warn "Could not reload D-Bus configuration automatically."
+        print_warn "If the service fails to start, run: sudo systemctl reload dbus  (or reboot)"
+    fi
 
     # Enable and restart service (restart ensures new binary is loaded)
     print_info "Enabling and restarting service..."
     systemctl enable couchplay-helper.service
-    systemctl restart couchplay-helper.service
+    if ! systemctl restart couchplay-helper.service; then
+        echo ""
+        print_error "Failed to start couchplay-helper.service"
+        echo ""
+        echo "---- journalctl (last 30 lines) ----"
+        journalctl -u couchplay-helper.service -n 30 --no-pager 2>&1 || true
+        echo "------------------------------------"
+        echo ""
+        echo "For full logs, run:"
+        echo "    journalctl -xeu couchplay-helper.service"
+        exit 1
+    fi
 
     print_info "Installation complete!"
     echo ""
@@ -260,9 +310,9 @@ uninstall_helper() {
     print_info "Reloading systemd..."
     systemctl daemon-reload
 
-    # Reload D-Bus
+    # Reload D-Bus so the removed ownership policy takes effect.
     print_info "Reloading D-Bus configuration..."
-    systemctl reload dbus 2>/dev/null || true
+    reload_dbus || print_warn "Could not reload D-Bus; changes apply after a reboot."
 
     print_info "Uninstallation complete!"
 }
