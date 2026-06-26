@@ -55,8 +55,9 @@ def mock_helper():
     # Own io.github.hikaps.CouchPlayHelper on the system bus BEFORE the app
     # starts (the client checks availability once at construction). `driver`
     # depends on this fixture, so the mock is up before the app launches. No-op
-    # when no system bus is available (smoke tier). Tears down the mock and any
-    # child processes (stub gamescope windows) via the process group.
+    # when no system bus is available (smoke tier) or when the container
+    # entrypoint already owns the name (COUCHPLAY_MOCK_EXTERNAL). On the dev-box
+    # path it tears down the mock + its process group at session end.
     if os.environ.get("COUCHPLAY_MOCK_EXTERNAL"):
         # The container entrypoint owns the helper name on a user-owned system
         # bus (DBUS_SYSTEM_BUS_ADDRESS) before pytest starts; nothing to do.

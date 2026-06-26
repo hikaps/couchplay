@@ -38,16 +38,26 @@ pipewire >/tmp/pipewire.log 2>&1 &
 sleep 1
 wireplumber >/tmp/wireplumber.log 2>&1 &
 
-# wait for the mock to own the helper name on the user-owned system bus
+# wait for the mock to own the helper name on the user-owned system bus. This is
+# the ONLY gate (backgrounded processes aren't caught by `set -e`), so if the
+# mock never comes up we must fail loudly -- otherwise the helper-dependent suite
+# runs against a missing mock with confusing, non-actionable failures.
+mock_ready=0
 for _ in $(seq 1 20); do
     if dbus-send --system --dest=org.freedesktop.DBus --print-reply \
             /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner \
             string:io.github.hikaps.CouchPlayHelper 2>/dev/null | grep -q true; then
         echo "[entrypoint] mock helper ready"
+        mock_ready=1
         break
     fi
     sleep 1
 done
+if [ "$mock_ready" -ne 1 ]; then
+    echo "[entrypoint] FATAL: mock helper did not acquire io.github.hikaps.CouchPlayHelper" >&2
+    cat /tmp/mock-helper.log >&2 || true
+    exit 1
+fi
 
 export QT_QPA_PLATFORM=wayland
 export TEST_WITH_VIDEO_RECORDER=0

@@ -1,20 +1,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 #
-# Test image for CouchPlay e2e (appiumtests). Bakes the ENTIRE environment so
+# Test image for CouchPlay e2e (appiumtests). Bakes the entire environment so
 # there is no setup/teardown script: nested KDE/KWin + gamescope + PipeWire +
 # virtual input + the mock D-Bus helper + player2/player3 users + per-user audio
-# config + the built app + the KDE selenium driver + the compiled gamescope stub.
+# config + the built app + the KDE selenium driver.
 #
 # Build (from repo root):  podman build -f appiumtests/Dockerfile -t couchplay-e2e .
-# Run (smoke tier):        podman run --rm couchplay-e2e appiumtests/ -m "not requires_helper"
-# Run (full, incl helper): podman run --rm couchplay-e2e appiumtests/
-# Teardown: the --rm flag; nothing else.
 #
-# For real gamepad/audio testing add device + audio passthrough, e.g.:
-#   --device /dev/input --group-add $(getent group audio | cut -d: -f3) \
-#   -v /run/user/$(id -u)/pipewire-0:/run/user/0/pipewire-0
-# or just use it via distrobox (which shares those automatically).
+# Run ROOTLESS via distrobox (shares host graphics/input/audio, runs as the host
+# user). The entrypoint brings up a user-owned "system" bus + mock helper +
+# PipeWire, then runs the suite under an isolated dbus-run-session (nested kwin):
+#   distrobox create --image localhost/couchplay-e2e --name cp-test --yes
+#   distrobox enter cp-test -- /entrypoint.sh appiumtests/   # full suite
+#   distrobox rm cp-test -f                                  # teardown
+#
+# A bare `podman run` is NOT the supported flow: the image has no USER directive,
+# so it would run the rootless entrypoint as root (kwin/pipewire as root is
+# untested). Use distrobox, or `podman run --user` with device/audio passthrough.
 FROM fedora:43
 
 # --- runtime + build deps ---
@@ -26,7 +29,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       ruby rubygems \
       python3-flask python3-gobject python3-lxml python3-numpy python3-pyatspi \
       python3-dbus python3-pip python3-virtualenv at-spi2-core gtk3-devel \
-      cmake extra-cmake-modules ninja-build gcc-c++ pkg-config git sudo \
+      cmake extra-cmake-modules ninja-build gcc-c++ pkg-config git \
       qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
       qt6-qtwayland-devel qt6-qtbase-private-devel \
       kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel kf6-kconfig-devel \
@@ -39,14 +42,20 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 # --- app source + build couchplay ---
 WORKDIR /src/couchplay
 COPY . .
-RUN cmake -B build -DBUILD_TESTING=ON >/tmp/cfg.log 2>&1 \
- && cmake --build build -j"$(nproc)" -t couchplay >/tmp/bld.log 2>&1
+RUN cmake -B build -DBUILD_TESTING=ON \
+ && cmake --build build -j"$(nproc)" -t couchplay
 
 # --- KDE selenium driver (source-only; not on PyPI/in distros) ---
-RUN git clone --depth 1 https://invent.kde.org/sdk/selenium-webdriver-at-spi.git /tmp/swa \
- && cmake -B /tmp/swa/build -S /tmp/swa >/dev/null 2>&1 \
- && cmake --build /tmp/swa/build -j"$(nproc)" >/dev/null 2>&1 \
- && cmake --install /tmp/swa/build >/dev/null 2>&1 \
+# Pinned to a specific commit for reproducibility (it drives the whole suite;
+# tracking HEAD would silently change e2e behavior). Bump deliberately.
+ARG SWA_REF=6e64f164819284007a1aae9e0f9dc31da91d5f9d
+RUN git init /tmp/swa \
+ && git -C /tmp/swa remote add origin https://invent.kde.org/sdk/selenium-webdriver-at-spi.git \
+ && git -C /tmp/swa fetch --depth 1 origin "$SWA_REF" \
+ && git -C /tmp/swa checkout FETCH_HEAD \
+ && cmake -B /tmp/swa/build -S /tmp/swa \
+ && cmake --build /tmp/swa/build -j"$(nproc)" \
+ && cmake --install /tmp/swa/build \
  && rm -rf /tmp/swa
 
 # Pre-install the runner's python deps into SYSTEM python. At runtime the runner
