@@ -42,12 +42,6 @@ COPY . .
 RUN cmake -B build -DBUILD_TESTING=ON >/tmp/cfg.log 2>&1 \
  && cmake --build build -j"$(nproc)" -t couchplay >/tmp/bld.log 2>&1
 
-# --- compiled gamescope stub (basename "gamescope" -> resourceClass "gamescope") ---
-RUN mkdir -p /opt/couchplay-e2e \
- && g++ appiumtests/helpers/stub_gamescope.cpp \
-      -o /opt/couchplay-e2e/gamescope \
-      $(pkg-config --cflags --libs Qt6Widgets Qt6Gui Qt6Core) -fPIC
-
 # --- KDE selenium driver (source-only; not on PyPI/in distros) ---
 RUN git clone --depth 1 https://invent.kde.org/sdk/selenium-webdriver-at-spi.git /tmp/swa \
  && cmake -B /tmp/swa/build -S /tmp/swa >/dev/null 2>&1 \
@@ -65,9 +59,7 @@ RUN pip3 install --no-cache-dir -r /usr/share/selenium-webdriver-at-spi/requirem
 RUN python3 -m venv --system-site-packages /opt/e2e-venv \
  && /opt/e2e-venv/bin/pip install --no-cache-dir Appium-Python-Client pytest
 
-# --- baked environment: permissive D-Bus policy + test users + per-user audio config ---
-COPY appiumtests/container/dbus-policy.conf \
-     /usr/share/dbus-1/system.d/io.github.hikaps.CouchPlayHelper-test.conf
+# --- baked environment: test users + per-user audio config ---
 RUN groupadd -f couchplay \
  && for u in player2 player3; do \
         useradd -m -G couchplay "$u"; \
@@ -78,8 +70,7 @@ RUN groupadd -f couchplay \
         chown -R "$u:$u" "/home/$u/.config"; \
     done
 
-ENV COUCHPLAY_STUB_GAMESCOPE=/opt/couchplay-e2e/gamescope \
-    QT_QPA_PLATFORM=wayland \
+ENV QT_QPA_PLATFORM=wayland \
     PATH=/opt/e2e-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY appiumtests/container/entrypoint.sh /entrypoint.sh
