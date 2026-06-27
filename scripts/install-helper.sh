@@ -61,20 +61,17 @@ fi
 # Binary name
 HELPER_BINARY="couchplay-helper"
 
-# Resolve the real host home directory.
-# Inside a Flatpak, $HOME is redirected to the sandbox (~/.var/app/<id>) unless
-# host-home filesystem access is granted. Exporting to the sandbox home means the
-# host-side `sudo ... install` command (and the README) cannot find the files, so
-# resolve the real home from /etc/passwd (shared with the host) instead.
+# Export directory: where the helper files are staged for the host-side `sudo ... install`.
+# Inside a Flatpak the sandbox home ($HOME) is NOT persisted to the host, so writing to
+# $HOME/.local/share silently vanishes (export appears to succeed but no files reach the
+# host). Flatpak persists XDG_DATA_HOME to ~/.var/app/<id>/data on the host — the same
+# absolute path inside the sandbox — so stage files there. No extra filesystem permission
+# is required and the result is host-visible immediately.
 if [[ "$IN_FLATPAK" == "true" ]]; then
-    REAL_HOME="$(awk -F: -v uid="$UID" '$3==uid{print $6}' /etc/passwd 2>/dev/null || true)"
-    HOST_HOME="${REAL_HOME:-$HOME}"
+    EXPORT_DIR="${EXPORT_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/couchplay}"
 else
-    HOST_HOME="$HOME"
+    EXPORT_DIR="${EXPORT_DIR:-${HOME}/.local/share/couchplay}"
 fi
-
-# Export directory for Flatpak (user's local share, on the real host home)
-EXPORT_DIR="${EXPORT_DIR:-${HOST_HOME}/.local/share/couchplay}"
 
 # Source paths (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

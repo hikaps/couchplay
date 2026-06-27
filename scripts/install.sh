@@ -138,6 +138,44 @@ check_architecture() {
     print_info "Architecture check passed: $arch"
 }
 
+check_binary_deps() {
+    # The release tarball does NOT bundle runtime libraries; the helper and GUI link
+    # against system Qt6, KDE Frameworks 6, Polkit and PipeWire. If a required shared
+    # library is missing the helper fails to start with an opaque exit code (e.g. the
+    # "Main process exited" / ERRNO 2 seen on minimal Arch installs). Detect missing
+    # libs up front so the user gets a clear, actionable message instead.
+    local extract_dir="$1"
+    local bin_dir helper missing
+    bin_dir=$(find "$extract_dir" -type d -name "bin" | head -1)
+    [[ -z "$bin_dir" ]] && return 0
+    helper="${bin_dir}/couchplay-helper"
+    [[ -x "$helper" ]] || return 0
+
+    if ! missing=$(ldd "$helper" 2>/dev/null | grep -i 'not found'); then
+        return 0
+    fi
+    [[ -z "$missing" ]] && return 0
+
+    print_error "The helper binary is missing required shared libraries on this system:"
+    echo ""
+    echo "$missing" | sed -E 's/^[[:space:]]+//; s/[[:space:]]*=>.*//' | sort -u \
+        | while IFS= read -r lib; do [[ -n "$lib" ]] && echo "  $lib"; done
+    echo ""
+    echo "The CouchPlay release does not bundle runtime libraries; it links against"
+    echo "system Qt6, KDE Frameworks 6, Polkit and PipeWire. Install the packages"
+    echo "providing the libraries listed above, then re-run this installer."
+    echo ""
+    echo "On Arch Linux / CachyOS:"
+    echo "  sudo pacman -S qt6-base polkit-qt6 kirigami pipewire"
+    echo ""
+    echo "On Fedora:"
+    echo "  sudo dnf install qt6-qtbase polkit-qt6-1-devel kf6-kirigami pipewire"
+    echo ""
+    echo "On Debian/Ubuntu:"
+    echo "  sudo apt install qt6-base-dev libpolkit-qt6-1-1 kirigami pipewire"
+    exit 1
+}
+
 # =============================================================================
 # GitHub API Functions
 # =============================================================================
@@ -510,6 +548,9 @@ main() {
     if ! extract_tarball "$tarball_file" "$extract_dir"; then
         exit 1
     fi
+
+    # Verify the helper's runtime libraries are present (the tarball doesn't bundle them).
+    check_binary_deps "$extract_dir"
     
     # Install main binary
     echo ""

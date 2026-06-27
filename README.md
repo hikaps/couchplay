@@ -125,17 +125,16 @@ sudo ./install-helper.sh uninstall
 4. **Install the helper service** (required for device management):
    ```bash
    flatpak run --command=bash io.github.hikaps.couchplay -c "/app/share/couchplay/install-helper.sh export"
-   sudo ~/.local/share/couchplay/install-helper.sh install
+   sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh install
    ```
 
-   The `export` step copies the helper and install script to `~/.local/share/couchplay`
-   on your host (this requires the `--filesystem=home` permission, included in current
-   builds). If you are on an **older Flatpak build** where `export` produced no files in
-   `~/.local/share/couchplay`, the files were written to the Flatpak sandbox home instead —
-   install from there:
-   ```bash
-   sudo ~/.var/app/io.github.hikaps.couchplay/.local/share/couchplay/install-helper.sh install
-   ```
+   The `export` step stages the helper in the Flatpak's persisted data directory
+   (`~/.var/app/io.github.hikaps.couchplay/data/couchplay`), which is visible on your host
+   at the same path. The second command installs it system-wide from there.
+
+   > On **older Flatpak builds** (before this fix), `export` wrote to the sandbox home and
+   > the files never reached the host — the second command would find nothing. Update to the
+   > latest release, or use the tarball install method instead.
 
 > **Note**: The tarball installation method above is also available if you prefer it or your distribution doesn't support Flatpak.
 
