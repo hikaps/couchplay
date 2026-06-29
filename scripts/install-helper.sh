@@ -40,6 +40,7 @@ fi
 # On traditional distros, these can be changed to /usr paths
 PREFIX="${PREFIX:-/usr/local}"
 LIBEXEC_DIR="${LIBEXEC_DIR:-${PREFIX}/libexec}"
+LIB_DIR="${LIB_DIR:-${PREFIX}/lib/couchplay}"
 DBUS_SYSTEM_DIR="${DBUS_SYSTEM_DIR:-/etc/dbus-1/system.d}"
 DBUS_SERVICE_DIR="${DBUS_SERVICE_DIR:-${PREFIX}/share/dbus-1/system-services}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
@@ -223,6 +224,15 @@ install_helper() {
     print_info "Installing binary to ${LIBEXEC_DIR}/"
     install -Dm755 "${BINARY_PATH}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
 
+    # Install bundled runtime libraries, if the release ships them (the binary's
+    # RPATH is $ORIGIN/../lib/couchplay, so this lets the helper run without
+    # system Qt6/Polkit). Absent for Flatpak/build-dir installs.
+    if [[ -d "${SCRIPT_DIR}/lib/couchplay" ]]; then
+        print_info "Installing bundled runtime libraries to ${LIB_DIR}/"
+        mkdir -p "${LIB_DIR}"
+        install -m644 "${SCRIPT_DIR}/lib/couchplay"/*.so* "${LIB_DIR}/"
+    fi
+
     # Install D-Bus configuration
     print_info "Installing D-Bus configuration..."
     install -Dm644 "${DATA_DIR}/dbus/io.github.hikaps.CouchPlayHelper.conf" \
@@ -302,6 +312,7 @@ uninstall_helper() {
     rm -f "${SYSTEMD_DIR}/couchplay-helper.service"
     rm -f "${POLKIT_DIR}/io.github.hikaps.couchplay.policy"
     rm -f "${PREFIX}/share/pipewire/pipewire-pulse.conf.d/50-couchplay.conf"
+    rm -rf "${LIB_DIR}"
 
     # Reload systemd
     print_info "Reloading systemd..."
