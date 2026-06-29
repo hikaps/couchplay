@@ -77,7 +77,6 @@ install. Pick the one that fits your system:
 |---|---|
 | **Flatpak** | Most users — runs on any distro with Flatpak; no system Qt6/KF6 needed. |
 | **Tarball** (curl one-liner or manual) | Immutable/atomic distros (Bazzite, Silverblue), traditional distros, packagers. Installs into `/usr/local`. |
-| **AppImage** | Try it instantly / portable GUI (Qt6/KF6 bundled inside). |
 
 > The helper service is installed the same way regardless of method; only how the GUI
 > is delivered differs.
@@ -140,29 +139,6 @@ curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/insta
 ```bash
 sudo ./install-helper.sh uninstall
 ```
-
-### AppImage Installation
-
-A portable single file: the GUI is bundled with its Qt6/KF6 runtime libraries, so it runs
-on most current x86_64 desktops (Arch, Fedora, Ubuntu 24.04 LTS, Debian 13 and newer)
-without installing Qt6/KF6 system-wide.
-
-1. **Download** `CouchPlay-x86_64.AppImage` from the [Releases page](../../releases).
-2. **Make it executable** and **launch the GUI**:
-   ```bash
-   chmod +x CouchPlay-x86_64.AppImage
-   ./CouchPlay-x86_64.AppImage
-   ```
-3. **Install the helper service** (required for device management — it runs from system
-   paths, not the AppImage):
-   ```bash
-   ./CouchPlay-x86_64.AppImage install-helper
-   ```
-   This extracts the helper and runs `install-helper.sh install` with `sudo`.
-
-> **Portability note**: the AppImage's compatibility floor is the glibc it was built
-> against (currently glibc 2.39). It won't run on older LTS releases (Debian 12, Ubuntu
-> 22.04 LTS); use Flatpak or the tarball there.
 
 ## Development
 
