@@ -67,51 +67,21 @@ The **Settings** page offers additional configuration:
 - **Scaling and filter modes** — per-instance rendering options.
 - **Steam and Heroic shortcut sync** — keep launch shortcuts in sync across users.
 
-## Quick Install (Linux x86_64)
+## Installation
 
-Install the latest release with a single command:
+CouchPlay needs a small privileged helper (a root systemd/D-Bus service) to manage
+input devices, users, and audio — so every method below includes a one-time helper
+install. Pick the one that fits your system:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
-```
+| Method | Best for |
+|---|---|
+| **Flatpak** | Most users — runs on any distro with Flatpak; no system Qt6/KF6 needed. |
+| **Tarball** (curl one-liner or manual) | Immutable/atomic distros (Bazzite, Silverblue), traditional distros, packagers. Installs into `/usr/local`. |
 
-> **Requirements**: Linux x86_64, root privileges (sudo). This downloads and installs the latest release from GitHub, including the privileged helper service.
+> The helper service is installed the same way regardless of method; only how the GUI
+> is delivered differs.
 
-### Beta (from develop)
-
-Install the latest build from the `develop` branch:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
-```
-
-> **Warning**: Beta builds include unreleased features and may be unstable. For production use, install the stable release above.
-
-## Installation (Bazzite / Fedora Atomic)
-
-CouchPlay uses a privileged helper to manage devices and users.
-
-1. **Download** the latest release tarball from the [Releases page](../../releases).
-2. **Extract** the archive:
-   ```bash
-   tar -xJf couchplay-x86_64.tar.xz
-   cd couchplay-x86_64
-   ```
-3. **Install** the helper service (requires sudo):
-   ```bash
-   sudo ./install-helper.sh install
-   ```
-4. **Run** the application:
-   ```bash
-   ./bin/couchplay
-   ```
-
-### Uninstallation
-```bash
-sudo ./install-helper.sh uninstall
-```
-
-## Flatpak Installation
+### Flatpak Installation
 
 1. **Download** the `.flatpak` bundle from the [Releases page](../../releases).
 2. **Ensure the runtime is available** (Flathub provides org.kde.Platform 6.10):
@@ -125,10 +95,50 @@ sudo ./install-helper.sh uninstall
 4. **Install the helper service** (required for device management):
    ```bash
    flatpak run --command=bash io.github.hikaps.couchplay -c "/app/share/couchplay/install-helper.sh export"
-   sudo ~/.local/share/couchplay/install-helper.sh install
+   sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh install
+   ```
+   The `export` step stages the helper in the Flatpak's persisted data directory
+   (`~/.var/app/io.github.hikaps.couchplay/data/couchplay`), visible on your host at the
+   same path; the second command installs it system-wide from there.
+
+### Tarball Installation
+
+For immutable/atomic distros (Bazzite, Fedora Silverblue/Kinoite) and traditional
+distros. Installs into `/usr/local` and registers the helper service. The release
+bundles the helper's runtime libraries, so the helper starts without system Qt6.
+
+**One-liner (stable):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
+```
+> Requires Linux x86_64 and sudo.
+
+**Beta (from develop):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
+```
+> Beta builds include unreleased features and may be unstable.
+
+**Manual (download + extract):**
+1. **Download** the latest release tarball from the [Releases page](../../releases).
+2. **Extract**:
+   ```bash
+   tar -xJf couchplay-x86_64.tar.xz
+   cd couchplay-x86_64
+   ```
+3. **Install** the helper service (requires sudo):
+   ```bash
+   sudo ./install-helper.sh install
+   ```
+4. **Run**:
+   ```bash
+   ./bin/couchplay
    ```
 
-> **Note**: The tarball installation method above is also available if you prefer it or your distribution doesn't support Flatpak.
+**Uninstall:**
+```bash
+sudo ./install-helper.sh uninstall
+```
 
 ## Development
 

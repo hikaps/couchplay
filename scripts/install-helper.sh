@@ -40,6 +40,7 @@ fi
 # On traditional distros, these can be changed to /usr paths
 PREFIX="${PREFIX:-/usr/local}"
 LIBEXEC_DIR="${LIBEXEC_DIR:-${PREFIX}/libexec}"
+LIB_DIR="${LIB_DIR:-${PREFIX}/lib/couchplay}"
 DBUS_SYSTEM_DIR="${DBUS_SYSTEM_DIR:-/etc/dbus-1/system.d}"
 DBUS_SERVICE_DIR="${DBUS_SERVICE_DIR:-${PREFIX}/share/dbus-1/system-services}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
@@ -61,8 +62,17 @@ fi
 # Binary name
 HELPER_BINARY="couchplay-helper"
 
-# Export directory for Flatpak (user's local share)
-EXPORT_DIR="${EXPORT_DIR:-${HOME}/.local/share/couchplay}"
+# Export directory: where the helper files are staged for the host-side `sudo ... install`.
+# Inside a Flatpak the sandbox home ($HOME) is NOT persisted to the host, so writing to
+# $HOME/.local/share silently vanishes (export appears to succeed but no files reach the
+# host). Flatpak persists XDG_DATA_HOME to ~/.var/app/<id>/data on the host — the same
+# absolute path inside the sandbox — so stage files there. No extra filesystem permission
+# is required and the result is host-visible immediately.
+if [[ "$IN_FLATPAK" == "true" ]]; then
+    EXPORT_DIR="${EXPORT_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/couchplay}"
+else
+    EXPORT_DIR="${EXPORT_DIR:-${HOME}/.local/share/couchplay}"
+fi
 
 # Source paths (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -116,6 +126,28 @@ check_binary() {
         echo "    make"
         exit 1
     fi
+}
+
+reload_dbus() {
+    # Ask the D-Bus daemon to re-read its configuration so policy files dropped
+    # into /etc/dbus-1/system.d/ (e.g. the helper's ownership allow-rule) take
+    # effect. Without this the helper cannot register its service name and the
+    # Type=dbus systemd unit fails to start. Tries the systemd unit reload first,
+    # then falls back to signalling the daemon directly via its pid file.
+    if systemctl reload dbus 2>/dev/null; then
+        return 0
+    fi
+    local pidfile dbus_pid
+    for pidfile in /run/dbus/pid /var/run/dbus/pid; do
+        if [[ -r "$pidfile" ]]; then
+            dbus_pid="$(cat "$pidfile" 2>/dev/null || true)"
+            if [[ -n "$dbus_pid" ]] && kill -HUP "$dbus_pid" 2>/dev/null; then
+                print_warn "systemctl reload dbus unavailable; sent SIGHUP to dbus-daemon (pid ${dbus_pid})."
+                return 0
+            fi
+        fi
+    done
+    return 1
 }
 
 export_helper() {
@@ -192,6 +224,15 @@ install_helper() {
     print_info "Installing binary to ${LIBEXEC_DIR}/"
     install -Dm755 "${BINARY_PATH}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
 
+    # Install bundled runtime libraries, if the release ships them (the binary's
+    # RPATH is $ORIGIN/../lib/couchplay, so this lets the helper run without
+    # system Qt6/Polkit). Absent for Flatpak/build-dir installs.
+    if [[ -d "${SCRIPT_DIR}/lib/couchplay" ]] && compgen -G "${SCRIPT_DIR}/lib/couchplay/*.so*" >/dev/null; then
+        print_info "Installing bundled runtime libraries to ${LIB_DIR}/"
+        mkdir -p "${LIB_DIR}"
+        install -m644 "${SCRIPT_DIR}/lib/couchplay"/*.so* "${LIB_DIR}/"
+    fi
+
     # Install D-Bus configuration
     print_info "Installing D-Bus configuration..."
     install -Dm644 "${DATA_DIR}/dbus/io.github.hikaps.CouchPlayHelper.conf" \
@@ -222,14 +263,30 @@ install_helper() {
     print_info "Reloading systemd..."
     systemctl daemon-reload
 
-    # Reload D-Bus
+    # Reload D-Bus so the new ownership policy in /etc/dbus-1/system.d/ takes
+    # effect. Without this the helper cannot register its service name and the
+    # Type=dbus unit fails to start. Do not silently mask a reload failure.
     print_info "Reloading D-Bus configuration..."
-    systemctl reload dbus 2>/dev/null || true
+    if ! reload_dbus; then
+        print_warn "Could not reload D-Bus configuration automatically."
+        print_warn "If the service fails to start, run: sudo systemctl reload dbus  (or reboot)"
+    fi
 
     # Enable and restart service (restart ensures new binary is loaded)
     print_info "Enabling and restarting service..."
     systemctl enable couchplay-helper.service
-    systemctl restart couchplay-helper.service
+    if ! systemctl restart couchplay-helper.service; then
+        echo ""
+        print_error "Failed to start couchplay-helper.service"
+        echo ""
+        echo "---- journalctl (last 30 lines) ----"
+        journalctl -u couchplay-helper.service -n 30 --no-pager 2>&1 || true
+        echo "------------------------------------"
+        echo ""
+        echo "For full logs, run:"
+        echo "    journalctl -xeu couchplay-helper.service"
+        exit 1
+    fi
 
     print_info "Installation complete!"
     echo ""
@@ -255,14 +312,15 @@ uninstall_helper() {
     rm -f "${SYSTEMD_DIR}/couchplay-helper.service"
     rm -f "${POLKIT_DIR}/io.github.hikaps.couchplay.policy"
     rm -f "${PREFIX}/share/pipewire/pipewire-pulse.conf.d/50-couchplay.conf"
+    rm -rf "${LIB_DIR}"
 
     # Reload systemd
     print_info "Reloading systemd..."
     systemctl daemon-reload
 
-    # Reload D-Bus
+    # Reload D-Bus so the removed ownership policy takes effect.
     print_info "Reloading D-Bus configuration..."
-    systemctl reload dbus 2>/dev/null || true
+    reload_dbus || print_warn "Could not reload D-Bus; changes apply after a reboot."
 
     print_info "Uninstallation complete!"
 }
@@ -344,7 +402,7 @@ usage() {
     if [[ "$IN_FLATPAK" == "true" ]]; then
         echo "Running inside Flatpak detected."
         echo "To install the helper, first run: $0 export"
-        echo "Then on the host: sudo ~/.local/share/couchplay/install-helper.sh install"
+        echo "Then on the host: sudo ${EXPORT_DIR}/install-helper.sh install"
         echo ""
     fi
     echo "Environment variables:"
@@ -354,7 +412,7 @@ usage() {
     echo "  DBUS_SERVICE_DIR D-Bus service activation dir (default: \$PREFIX/share/dbus-1/system-services)"
     echo "  SYSTEMD_DIR     Systemd unit directory (default: /etc/systemd/system)"
     echo "  POLKIT_DIR      Polkit policy directory (default: /usr/share/polkit-1/actions)"
-    echo "  EXPORT_DIR      Export directory for Flatpak (default: ~/.local/share/couchplay)"
+    echo "  EXPORT_DIR      Where helper files are staged for host install (default: \$XDG_DATA_HOME/couchplay in Flatpak, else ~/.local/share/couchplay)"
 }
 
 # Check for Flatpak context and provide guidance
