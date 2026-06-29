@@ -117,13 +117,6 @@ class TestSessionLifecycle(BaseTest):
                 "LaunchInstance missing output geometry (-W/-H)"
             )
 
-    @pytest.mark.xfail(
-        reason="Needs a user pre-assigned to the streaming instance in the "
-               "harness; without one SessionRunner::setupStreamingInstance "
-               "aborts before any helper call. The streaming->helper logic is "
-               "covered by the test_streaming_session C++ unit test; this is "
-               "the e2e version."
-    )
     def test_streaming_session_calls_helper(self, driver, mock_helper, test_users):
         """A streaming instance provisions a virtual display + null sink via the
         helper before launch. Verified via the mock launch log (not the UI):
@@ -156,6 +149,9 @@ class TestSessionLifecycle(BaseTest):
         self.navigate_to_session_setup(driver)
         # Switch the first instance to streaming output.
         self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
+        # Assign a user to the streaming instance (required by
+        # SessionRunner::setupStreamingInstance, which aborts on empty username).
+        self.select_combo_option(driver, "comboUser", "player2")
         self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
 
         new_entries = []
