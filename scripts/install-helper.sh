@@ -227,7 +227,7 @@ install_helper() {
     # Install bundled runtime libraries, if the release ships them (the binary's
     # RPATH is $ORIGIN/../lib/couchplay, so this lets the helper run without
     # system Qt6/Polkit). Absent for Flatpak/build-dir installs.
-    if [[ -d "${SCRIPT_DIR}/lib/couchplay" ]]; then
+    if [[ -d "${SCRIPT_DIR}/lib/couchplay" ]] && compgen -G "${SCRIPT_DIR}/lib/couchplay/*.so*" >/dev/null; then
         print_info "Installing bundled runtime libraries to ${LIB_DIR}/"
         mkdir -p "${LIB_DIR}"
         install -m644 "${SCRIPT_DIR}/lib/couchplay"/*.so* "${LIB_DIR}/"
@@ -402,7 +402,7 @@ usage() {
     if [[ "$IN_FLATPAK" == "true" ]]; then
         echo "Running inside Flatpak detected."
         echo "To install the helper, first run: $0 export"
-        echo "Then on the host: sudo ~/.local/share/couchplay/install-helper.sh install"
+        echo "Then on the host: sudo ${EXPORT_DIR}/install-helper.sh install"
         echo ""
     fi
     echo "Environment variables:"
@@ -412,7 +412,7 @@ usage() {
     echo "  DBUS_SERVICE_DIR D-Bus service activation dir (default: \$PREFIX/share/dbus-1/system-services)"
     echo "  SYSTEMD_DIR     Systemd unit directory (default: /etc/systemd/system)"
     echo "  POLKIT_DIR      Polkit policy directory (default: /usr/share/polkit-1/actions)"
-    echo "  EXPORT_DIR      Export directory for Flatpak (default: ~/.local/share/couchplay)"
+    echo "  EXPORT_DIR      Where helper files are staged for host install (default: \$XDG_DATA_HOME/couchplay in Flatpak, else ~/.local/share/couchplay)"
 }
 
 # Check for Flatpak context and provide guidance

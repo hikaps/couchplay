@@ -41,8 +41,12 @@ ldd "$bin" 2>/dev/null | awk '/=> \// {print $3}' | sort -u | while IFS= read -r
     cp -L "$lib" "$libdir/"
 done
 
-# RPATH is relative to the binary's own location ($ORIGIN = its directory).
-patchelf --set-rpath "\$ORIGIN/../$librel" "$bin" >/dev/null
+# Use --force-rpath so the path is DT_RPATH, not DT_RUNPATH. DT_RPATH applies to the
+# whole dependency tree; DT_RUNPATH only resolves the binary's *direct* deps, so the
+# bundled transitive libs (e.g. Qt6Core's libpcre2/libdouble-conversion/libzstd) would
+# be unreachable on minimal systems and the helper would still fail to load (#28).
+# Path is relative to the binary's own location ($ORIGIN = its directory).
+patchelf --force-rpath --set-rpath "\$ORIGIN/../$librel" "$bin" >/dev/null
 
 count=$(find "$libdir" -maxdepth 1 -type f | wc -l)
 echo "Bundled ${count} library(ies) for $(basename "$bin") -> ${libdir} (RPATH \$ORIGIN/../${librel})"
