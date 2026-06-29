@@ -55,3 +55,20 @@ class TestStreaming(BaseTest):
         # Switch back to physical -> streaming field must disappear again.
         self.select_combo_option(driver, "comboOutputMode", OPTION_PHYSICAL)
         assert self.wait_for_absence(driver, AppiumBy.ACCESSIBILITY_ID, "comboStreamResolution")
+
+
+    def test_stream_resolution_selectable(self, driver):
+        # The resolution combo's onActivated writes back to InstanceConfig;
+        # selecting a different option must succeed without breaking the UI.
+        self.navigate_to_session_setup(driver)
+        self.select_combo_option(driver, "comboOutputMode", OPTION_STREAMING)
+        self.select_combo_option(driver, "comboStreamResolution", "1280x720")
+        combo = self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "comboStreamResolution")
+        assert combo.is_displayed()
+
+    def test_stream_frame_rate_selectable(self, driver):
+        self.navigate_to_session_setup(driver)
+        self.select_combo_option(driver, "comboOutputMode", OPTION_STREAMING)
+        self.select_combo_option(driver, "comboFrameRate", "30")
+        combo = self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "comboFrameRate")
+        assert combo.is_displayed()

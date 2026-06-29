@@ -151,20 +151,45 @@ class TestSessionLifecycle(BaseTest):
         self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
         self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
 
-        methods = set()
+        new_entries = []
         for _ in range(LONG_TIMEOUT):
-            for entry in read_calls()[before:]:
-                # LaunchInstance entries have no "method" key.
-                methods.add(entry.get("method") or "LaunchInstance")
-            if {"CreateVirtualOutput", "CreateNullSink"} <= methods:
+            new_entries = read_calls()[before:]
+            methods = {e.get("method") or "LaunchInstance" for e in new_entries}
+            setup_done = {"CreateVirtualOutput", "CreateNullSink"} <= methods
+            sunshine_launched = any(
+                e.get("method") is None
+                and "sunshine" in str(e.get("gameCommand", "")).lower()
+                for e in new_entries
+            )
+            if setup_done and sunshine_launched:
                 break
             time.sleep(1)
 
+        methods = {e.get("method") or "LaunchInstance" for e in new_entries}
         assert "CreateVirtualOutput" in methods, (
             "streaming session did not call CreateVirtualOutput on the helper"
         )
         assert "CreateNullSink" in methods, (
             "streaming session did not call CreateNullSink on the helper"
+        )
+        # The streaming path must also launch Sunshine itself: a LaunchInstance
+        # whose gameCommand is the sunshine binary + generated config path. This
+        # comes from StreamManager::startStream (run instead of window positioning
+        # for streaming instances, so it is not affected by the physical-session
+        # window-class xfail).
+        sunshine_launches = [
+            e
+            for e in new_entries
+            if e.get("method") is None
+            and "sunshine" in str(e.get("gameCommand", "")).lower()
+        ]
+        assert sunshine_launches, (
+            "streaming session did not issue a sunshine LaunchInstance"
+        )
+        # And the generated config path must be the per-instance sunshine.conf.
+        assert "/sunshine.conf" in sunshine_launches[0]["gameCommand"], (
+            "sunshine LaunchInstance did not reference a sunshine.conf config: "
+            + sunshine_launches[0]["gameCommand"]
         )
 
     def test_device_assignment_page_with_helper(self, driver, mock_helper):
