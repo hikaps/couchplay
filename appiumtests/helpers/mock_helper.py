@@ -31,6 +31,19 @@ TEST_USERS = ["player2", "player3"]
 LAUNCH_LOG = os.environ.get(
     "COUCHPLAY_MOCK_LAUNCH_LOG", "/tmp/couchplay-mock-launch.jsonl"
 )
+# When set, the mock returns plausible uids WITHOUT touching useradd/userdel --
+# required for rootless containers (no sudo) and avoids any user leak. The app
+# only uses the uid for downstream helper calls (SetupRuntimeAccess,
+# ChangeDeviceOwner, ...) which are all mocked to succeed, so a fake uid is fine.
+FAKE_USERS = os.environ.get("COUCHPLAY_MOCK_FAKE_USERS") == "1"
+_FAKE_UIDS = {"player2": 10011, "player3": 10012}
+
+
+def _fake_uid(username):
+    if username in _FAKE_UIDS:
+        return _FAKE_UIDS[username]
+    # deterministic, stable across calls for the same username
+    return 10000 + (sum(ord(c) for c in username) % 9000)
 
 
 class MockHelper(dbus.service.Object):
@@ -47,6 +60,10 @@ class MockHelper(dbus.service.Object):
 
     @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="u")
     def CreateUser(self, username, fullname):
+        if FAKE_USERS:
+            uid = _fake_uid(username)
+            self._created_users[username] = uid
+            return uid
         try:
             subprocess.run(
                 ["groupadd", "-f", "couchplay"], check=False, capture_output=True
@@ -69,6 +86,9 @@ class MockHelper(dbus.service.Object):
 
     @dbus.service.method(INTERFACE_NAME, in_signature="sb", out_signature="b")
     def DeleteUser(self, username, removeHome):
+        if FAKE_USERS:
+            self._created_users.pop(username, None)
+            return True
         try:
             subprocess.run(
                 ["userdel"] + (["-r"] if removeHome else []) + [username],
@@ -205,6 +225,9 @@ class MockHelper(dbus.service.Object):
         return True
 
     def cleanup(self):
+        if FAKE_USERS:
+            self._created_users.clear()
+            return
         for username in list(self._created_users.keys()):
             self.DeleteUser(username, True)
 

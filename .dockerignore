@@ -1,0 +1,10 @@
+build/
+build-*/
+.git/
+.github/
+*.o
+*.so
+assets/
+.omo/
+.cache/
+compile_commands.json
