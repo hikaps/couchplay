@@ -130,31 +130,6 @@ sudo ./install-helper.sh uninstall
 
 > **Note**: The tarball installation method above is also available if you prefer it or your distribution doesn't support Flatpak.
 
-## AppImage Installation
-
-An AppImage bundles the GUI with its Qt6/KDE Frameworks runtime libraries, so it runs on
-most current x86_64 Linux desktops (Arch, Fedora, Ubuntu 24.04 LTS, Debian 13 and newer)
-without installing Qt6/KF6 system-wide.
-
-1. **Download** `CouchPlay-x86_64.AppImage` from the [Releases page](../../releases).
-2. **Make it executable** and **launch the GUI**:
-   ```bash
-   chmod +x CouchPlay-x86_64.AppImage
-   ./CouchPlay-x86_64.AppImage
-   ```
-3. **Install the helper service** (required for device management — the helper runs from
-   system paths, not the AppImage):
-   ```bash
-   ./CouchPlay-x86_64.AppImage install-helper
-   ```
-   This extracts the privileged helper and runs `install-helper.sh install` with `sudo`.
-   The helper links against system Qt6/Polkit — if any are missing the installer reports
-   them with the packages to install (e.g. on Arch: `sudo pacman -S qt6-base polkit-qt6`).
-
-> **Portability note**: the AppImage's compatibility floor is the glibc it was built against
-> (currently glibc 2.39). It will not run on older LTS releases such as Debian 12 or
-> Ubuntu 22.04 LTS; use the Flatpak or tarball methods there.
-
 ## Development
 
 ### Prerequisites
