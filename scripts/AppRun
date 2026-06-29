@@ -1,0 +1,47 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2025 CouchPlay Contributors
+#
+# Custom AppRun for the CouchPlay AppImage.
+#
+#   ./CouchPlay-x86_64.AppImage                  -> launch the GUI
+#   ./CouchPlay-x86_64.AppImage install-helper   -> extract the privileged helper
+#                                                  + installer to a temp dir and run
+#                                                  `install-helper.sh install` with sudo
+#
+# The GUI runs against the Qt6/KF6 libraries bundled inside the AppImage. The
+# privileged helper cannot live in the (ephemeral, read-only) AppImage mount, so
+# it is carried inside and installed into system paths on demand — exactly like
+# the tarball install. Once installed, the helper uses the system Qt6/Polkit
+# libraries (see install-helper.sh dependency checks).
+set -e
+
+# The AppImage type-2 runtime exports APPDIR (the squashfs mount point).
+APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+
+# Point Qt/loader at the libraries, plugins and QML modules bundled by linuxdeploy.
+export LD_LIBRARY_PATH="${APPDIR}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export QT_PLUGIN_PATH="${APPDIR}/usr/plugins${QT_PLUGIN_PATH:+:${QT_PLUGIN_PATH}}"
+export QML2_IMPORT_PATH="${APPDIR}/usr/qml${QML2_IMPORT_PATH:+:${QML2_IMPORT_PATH}}"
+
+case "${1:-}" in
+    install-helper)
+        shift
+        TMPDIR="$(mktemp -d)"
+        trap 'rm -rf "$TMPDIR"' EXIT
+        # Lay out a release-tarball structure so install-helper.sh detects it:
+        #   $TMPDIR/bin/couchplay-helper
+        #   $TMPDIR/data/{dbus,polkit,pipewire}
+        #   $TMPDIR/install-helper.sh
+        mkdir -p "$TMPDIR/bin" "$TMPDIR/data"
+        cp "$APPDIR/usr/libexec/couchplay-helper" "$TMPDIR/bin/"
+        cp "$APPDIR/usr/share/couchplay/install-helper.sh" "$TMPDIR/"
+        cp -r "$APPDIR/usr/share/couchplay/data/." "$TMPDIR/data/"
+        echo "Extracted helper installer to $TMPDIR"
+        echo "Running installer as root..."
+        exec sudo "$TMPDIR/install-helper.sh" install
+        ;;
+    *)
+        exec "$APPDIR/usr/bin/couchplay" "$@"
+        ;;
+esac

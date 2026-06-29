@@ -1,0 +1,62 @@
+name: AppImage
+
+# Portable single-file build: GUI bundled with Qt6/KF6 runtime libs so it runs on
+# any glibc >= build-baseline desktop without system Qt6/KF6. The privileged
+# helper is carried inside and installed on demand via
+#   ./CouchPlay-x86_64.AppImage install-helper
+#
+# NOTE on portability: the glibc baseline is set by the container below
+# (fedora:40 = glibc 2.39). The resulting AppImage runs on Arch/Fedora/Ubuntu
+# 24.04 LTS/Debian 13 and newer. To support older LTS releases (Debian 12 /
+# Ubuntu 22.04, glibc 2.35/2.36) you must lower the base AND ensure KF6 is
+# available there (it is not in their default repos — would require building KF6
+# from source), so that is left as a follow-up rather than silently producing a
+# broken build.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y cmake gcc-c++ git make curl \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
+            kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel \
+            kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
+            kf6-kglobalaccel-devel extra-cmake-modules \
+            pipewire-devel polkit-devel polkit-qt6-1-devel
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build AppImage
+        run: |
+          chmod +x scripts/build-appimage.sh
+          ./scripts/build-appimage.sh
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: CouchPlay-x86_64.AppImage
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: CouchPlay-x86_64.AppImage
