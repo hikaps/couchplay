@@ -187,12 +187,21 @@ def click_by_object_name(driver, object_name, timeout=DEFAULT_TIMEOUT):
 
 
 def select_combo_option(driver, combo_object_name, option_name, timeout=DEFAULT_TIMEOUT):
-    # Open a ComboBox popup via its objectName, then click the option by its
-    # visible name. Qt ComboBox popup items are exposed by NAME, not objectName.
-    click_by_object_name(driver, combo_object_name, timeout)
-    time.sleep(0.3)  # let the popup populate the AT-SPI tree
-    click_by_name(driver, option_name, timeout)
-    time.sleep(0.2)  # let the onActivated binding settle
+    # Qt6 ComboBox popup list items are not exposed with accessible names (a
+    # ListModel `text` is not promoted to the AT-SPI name), so the option can't
+    # be clicked by NAME. Instead: focus/open the combo, then use the popup's
+    # type-ahead -- typing the option text matches and selects it.
+    from selenium.webdriver.common.keys import Keys
+
+    el = wait_for_element_clickable(
+        driver, AppiumBy.ACCESSIBILITY_ID, combo_object_name, timeout
+    )
+    el.click()  # focus the combo / open the popup
+    time.sleep(0.4)  # let the popup open
+    el.send_keys(option_name)
+    time.sleep(0.2)
+    el.send_keys(Keys.ENTER)
+    time.sleep(0.3)  # let the onActivated binding settle
 
 
 def wait_for_absence(driver, by, value, timeout=3):
