@@ -117,6 +117,84 @@ class TestSessionLifecycle(BaseTest):
                 "LaunchInstance missing output geometry (-W/-H)"
             )
 
+    def test_streaming_session_calls_helper(self, driver, mock_helper, test_users):
+        """A streaming instance provisions a virtual display + null sink via the
+        helper before launch. Verified via the mock launch log (not the UI):
+        setting an instance's output mode to 'Moonlight Stream' and starting the
+        session must produce CreateVirtualOutput + CreateNullSink D-Bus calls --
+        the part that proves the streaming orchestration actually reaches the
+        privileged helper.
+        """
+        log_path = os.environ.get(
+            "COUCHPLAY_MOCK_LAUNCH_LOG", "/tmp/couchplay-mock-launch.jsonl"
+        )
+
+        def read_calls():
+            try:
+                with open(log_path) as f:
+                    out = []
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            out.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+                    return out
+            except FileNotFoundError:
+                return []
+
+        before = len(read_calls())
+        self.navigate_to_session_setup(driver)
+        # Switch the first instance to streaming output.
+        self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
+        # Assign a user to the streaming instance (required by
+        # SessionRunner::setupStreamingInstance, which aborts on empty username).
+        self.select_combo_option(driver, "comboUser", "player2")
+        self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
+
+        new_entries = []
+        for _ in range(LONG_TIMEOUT):
+            new_entries = read_calls()[before:]
+            methods = {e.get("method") or "LaunchInstance" for e in new_entries}
+            setup_done = {"CreateVirtualOutput", "CreateNullSink"} <= methods
+            sunshine_launched = any(
+                e.get("method") is None
+                and "sunshine" in str(e.get("gameCommand", "")).lower()
+                for e in new_entries
+            )
+            if setup_done and sunshine_launched:
+                break
+            time.sleep(1)
+
+        methods = {e.get("method") or "LaunchInstance" for e in new_entries}
+        assert "CreateVirtualOutput" in methods, (
+            "streaming session did not call CreateVirtualOutput on the helper"
+        )
+        assert "CreateNullSink" in methods, (
+            "streaming session did not call CreateNullSink on the helper"
+        )
+        # The streaming path must also launch Sunshine itself: a LaunchInstance
+        # whose gameCommand is the sunshine binary + generated config path. This
+        # comes from StreamManager::startStream (run instead of window positioning
+        # for streaming instances, so it is not affected by the physical-session
+        # window-class xfail).
+        sunshine_launches = [
+            e
+            for e in new_entries
+            if e.get("method") is None
+            and "sunshine" in str(e.get("gameCommand", "")).lower()
+        ]
+        assert sunshine_launches, (
+            "streaming session did not issue a sunshine LaunchInstance"
+        )
+        # And the generated config path must be the per-instance sunshine.conf.
+        assert "/sunshine.conf" in sunshine_launches[0]["gameCommand"], (
+            "sunshine LaunchInstance did not reference a sunshine.conf config: "
+            + sunshine_launches[0]["gameCommand"]
+        )
+
     def test_device_assignment_page_with_helper(self, driver, mock_helper):
         self.navigate_to_device_assignment(driver)
         self.wait_for_element(driver, AppiumBy.NAME, "Assign Devices", LONG_TIMEOUT)

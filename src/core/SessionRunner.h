@@ -22,6 +22,7 @@ class GamescopeInstance;
 class DeviceManager;
 class SessionManager;
 class SettingsManager;
+class StreamManager;
 class WindowManager;
 class PresetManager;
 
@@ -210,6 +211,17 @@ private:
     void cleanupOverrideDirs(const QStringList &overridePaths);
     void inhibitScreenSaver();
     void uninhibitScreenSaver();
+    bool setupStreamingInstance(int instanceIndex, const QVariantMap &config);
+    void teardownStreamingInstances();
+    void cleanupStreamingInstance(int index);
+
+    struct StreamingInstanceInfo {
+        QString username;
+        QString waylandSocket;
+        QString sinkName;
+        bool virtualDisplayCreated = false;
+        bool nullSinkCreated = false;
+    };
 
     QMap<int, QStringList> m_instanceBindPaths;
     uint m_screenSaverCookie = 0;
@@ -219,6 +231,7 @@ private:
     bool hasUinputOpen(qint64 pid) const;
     bool hasFdOpen(qint64 pid, const QString &targetPath) const;
     QString attributeVirtualDevice(int eventNumber, const QString &devicePath) const;
+    QString attributeSunshineDevice(const QString &devicePath) const;
     QList<qint64> getGamescopePids() const;
 
     SessionManager *m_sessionManager = nullptr;
@@ -230,6 +243,7 @@ private:
     SettingsManager *m_settingsManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     VirtualDeviceWatcher *m_virtualDeviceWatcher = nullptr;
+    StreamManager *m_streamManager = nullptr;
     QList<GamescopeInstance *> m_instances;
     QAction *m_stopAction = nullptr;
     QString m_status;
@@ -240,4 +254,5 @@ private:
     int m_nextInstanceToStart = 0;
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
+    QMap<int, StreamingInstanceInfo> m_streamingInstances;
 };

@@ -43,7 +43,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 WORKDIR /src/couchplay
 COPY . .
 RUN cmake -B build -DBUILD_TESTING=ON \
- && cmake --build build -j"$(nproc)" -t couchplay
+ && cmake --build build -j"$(nproc)" -t couchplay -t sunshine_config_generator
 
 # --- KDE selenium driver (source-only; not on PyPI/in distros) ---
 # Pinned to a specific commit for reproducibility (it drives the whole suite;
@@ -78,6 +78,12 @@ RUN groupadd -f couchplay \
            "/home/$u/.config/pipewire/pipewire-pulse.conf.d/"; \
         chown -R "$u:$u" "/home/$u/.config"; \
     done
+
+# --- Sunshine (streaming server) from upstream GitHub release RPM ---
+# Pinned for reproducibility (this is the SUT StreamManager launches). Brings
+# libva/boost/ffmpeg runtime deps via dnf. Bump the version deliberately.
+ARG SUNSHINE_RPM=https://github.com/LizardByte/Sunshine/releases/download/v2026.516.143833/Sunshine-2026.516.143833-1.fc43.x86_64.rpm
+RUN dnf install -y "$SUNSHINE_RPM" && dnf clean all
 
 ENV QT_QPA_PLATFORM=wayland \
     PATH=/opt/e2e-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

@@ -97,6 +97,10 @@ target_sources(couchplay PRIVATE
      core/SteamConfigManager.h
     core/SettingsManager.cpp
     core/SettingsManager.h
+    core/SunshineConfig.cpp
+    core/SunshineConfig.h
+    core/StreamManager.cpp
+    core/StreamManager.h
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )

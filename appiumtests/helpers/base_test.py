@@ -9,6 +9,8 @@ from conftest import (
     click_by_object_name,
     navigate_to_page,
     open_global_drawer,
+    select_combo_option,
+    wait_for_absence,
     wait_for_element,
     wait_for_element_clickable,
 )
@@ -29,6 +31,12 @@ class BaseTest:
 
     def click_by_class_name(self, driver, class_name, timeout=DEFAULT_TIMEOUT):
         return click_by_class_name(driver, class_name, timeout)
+
+    def select_combo_option(self, driver, combo_object_name, option_name, timeout=DEFAULT_TIMEOUT):
+        return select_combo_option(driver, combo_object_name, option_name, timeout)
+
+    def wait_for_absence(self, driver, by, value, timeout=3):
+        return wait_for_absence(driver, by, value, timeout)
 
     def open_global_drawer(self, driver):
         open_global_drawer(driver)

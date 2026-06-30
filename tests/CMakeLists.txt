@@ -48,6 +48,10 @@ set(TEST_MANAGER_SOURCES
     ../src/core/CommandVerifier.h
     ../src/core/VirtualDeviceWatcher.cpp
     ../src/core/VirtualDeviceWatcher.h
+    ../src/core/SunshineConfig.cpp
+    ../src/core/SunshineConfig.h
+    ../src/core/StreamManager.cpp
+    ../src/core/StreamManager.h
     ../src/dbus/CouchPlayHelperClient.cpp
     ../src/dbus/CouchPlayHelperClient.h
 )
@@ -129,6 +133,21 @@ function(add_helper_test TEST_NAME)
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endfunction()
 
+# Sunshine config generator for the e2e integration test (not a unit test).
+# Built into the e2e image so the test can feed REAL SunshineConfig output to
+# real sunshine -- catches any drift between SunshineConfig and what Sunshine
+# accepts. Lives here (not src/) because it is a test-only helper.
+add_executable(sunshine_config_generator
+    sunshine_config_generator.cpp
+    ../src/core/SunshineConfig.cpp
+    ../src/core/SunshineConfig.h
+)
+target_link_libraries(sunshine_config_generator PRIVATE Qt6::Core Qt6::Qml)
+target_include_directories(sunshine_config_generator PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
+)
+set_target_properties(sunshine_config_generator PROPERTIES AUTOMOC ON)
+
 # Add test executables
 add_couchplay_test(test_audiomanager)
 add_couchplay_test(test_commandverifier)
@@ -141,6 +160,10 @@ add_couchplay_test(test_presetmanager_integration)
 add_couchplay_test(test_scanapplications)
 add_couchplay_test(test_sessionmanager)
 add_couchplay_test(test_sessionrunner)
+add_couchplay_test(test_streaming_config)
+add_couchplay_test(test_streaming_session)
+add_couchplay_test(test_streammanager)
+add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
 
 # Add helper tests

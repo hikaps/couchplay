@@ -162,6 +162,14 @@ public:
      */
     Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
+    Q_INVOKABLE QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
+
+    Q_INVOKABLE bool destroyVirtualOutput(const QString &username, const QString &waylandSocketName);
+
+    Q_INVOKABLE QString createNullSink(const QString &username, const QString &sinkName);
+
+    Q_INVOKABLE bool destroyNullSink(const QString &username, const QString &sinkName);
+
 Q_SIGNALS:
     void availabilityChanged();
     void errorOccurred(const QString &message);

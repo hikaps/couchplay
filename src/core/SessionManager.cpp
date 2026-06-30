@@ -112,6 +112,12 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
+        instGroup.writeEntry("outputMode", inst.outputMode);
+        instGroup.writeEntry("streamResolution", inst.streamResolution);
+        instGroup.writeEntry("streamFps", inst.streamFps);
+        instGroup.writeEntry("streamBitrate", inst.streamBitrate);
+        instGroup.writeEntry("streamCodec", inst.streamCodec);
+        instGroup.writeEntry("sunshinePort", inst.sunshinePort);
 
         // Convert devices to string list for backwards compatibility
         QStringList deviceStrings;
@@ -182,6 +188,13 @@ bool SessionManager::loadProfile(const QString &name)
             inst.overridePatterns = inst.overrideFiles;
             qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
         }
+
+        inst.outputMode = instGroup.readEntry("outputMode", QStringLiteral("physical"));
+        inst.streamResolution = instGroup.readEntry("streamResolution", QStringLiteral("1920x1080"));
+        inst.streamFps = instGroup.readEntry("streamFps", 60);
+        inst.streamBitrate = instGroup.readEntry("streamBitrate", 20000);
+        inst.streamCodec = instGroup.readEntry("streamCodec", QStringLiteral("h264"));
+        inst.sunshinePort = instGroup.readEntry("sunshinePort", 47989);
 
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
         inst.deviceStableIdNames = instGroup.readEntry("deviceStableIdNames", QStringList());
@@ -309,6 +322,12 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
     map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
+    map[QStringLiteral("outputMode")] = inst.outputMode;
+    map[QStringLiteral("streamResolution")] = inst.streamResolution;
+    map[QStringLiteral("streamFps")] = inst.streamFps;
+    map[QStringLiteral("streamBitrate")] = inst.streamBitrate;
+    map[QStringLiteral("streamCodec")] = inst.streamCodec;
+    map[QStringLiteral("sunshinePort")] = inst.sunshinePort;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -367,6 +386,18 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.overridePatterns = config[QStringLiteral("overridePatterns")].toStringList();
     if (config.contains(QStringLiteral("overrideGamePath")))
         inst.overrideGamePath = config[QStringLiteral("overrideGamePath")].toString();
+    if (config.contains(QStringLiteral("outputMode")))
+        inst.outputMode = config[QStringLiteral("outputMode")].toString();
+    if (config.contains(QStringLiteral("streamResolution")))
+        inst.streamResolution = config[QStringLiteral("streamResolution")].toString();
+    if (config.contains(QStringLiteral("streamFps")))
+        inst.streamFps = config[QStringLiteral("streamFps")].toInt();
+    if (config.contains(QStringLiteral("streamBitrate")))
+        inst.streamBitrate = config[QStringLiteral("streamBitrate")].toInt();
+    if (config.contains(QStringLiteral("streamCodec")))
+        inst.streamCodec = config[QStringLiteral("streamCodec")].toString();
+    if (config.contains(QStringLiteral("sunshinePort")))
+        inst.sunshinePort = config[QStringLiteral("sunshinePort")].toInt();
 
     Q_EMIT instancesChanged();
 

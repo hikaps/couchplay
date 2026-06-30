@@ -416,3 +416,89 @@ bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
 
     return result;
 }
+
+QString CouchPlayHelperClient::createVirtualOutput(const QString &username, int width, int height, int refreshRate)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return QString();
+    }
+
+    QDBusReply<QString> reply = m_interface->call(
+        QStringLiteral("CreateVirtualOutput"),
+        username,
+        width,
+        height,
+        refreshRate
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return QString();
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::destroyVirtualOutput(const QString &username, const QString &waylandSocketName)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("DestroyVirtualOutput"),
+        username,
+        waylandSocketName
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
+QString CouchPlayHelperClient::createNullSink(const QString &username, const QString &sinkName)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return QString();
+    }
+
+    QDBusReply<QString> reply = m_interface->call(
+        QStringLiteral("CreateNullSink"),
+        username,
+        sinkName
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return QString();
+    }
+
+    return reply.value();
+}
+
+bool CouchPlayHelperClient::destroyNullSink(const QString &username, const QString &sinkName)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(
+        QStringLiteral("DestroyNullSink"),
+        username,
+        sinkName
+    );
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}

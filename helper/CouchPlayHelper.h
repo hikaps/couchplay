@@ -299,6 +299,50 @@ public Q_SLOTS:
      */
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
+    /**
+     * Create a virtual Wayland output for streaming capture
+     *
+     * Launches Gamescope in headless mode as the specified user,
+     * creating a capturable virtual display for Sunshine to capture.
+     *
+     * @param username User to run the virtual display as
+     * @param width Output width in pixels
+     * @param height Output height in pixels
+     * @param refreshRate Refresh rate in Hz
+     * @return Wayland socket name (e.g., "wayland-5"), or empty on failure
+     */
+    QString CreateVirtualOutput(const QString &username, int width, int height, int refreshRate);
+
+    /**
+     * Destroy a virtual Wayland output created by CreateVirtualOutput
+     *
+     * @param username User who owns the virtual display
+     * @param waylandSocketName Wayland socket name returned by CreateVirtualOutput
+     * @return true if successful
+     */
+    bool DestroyVirtualOutput(const QString &username, const QString &waylandSocketName);
+
+    /**
+     * Create a PipeWire null-sink for audio isolation
+     *
+     * Creates an isolated audio sink that Sunshine can capture from,
+     * preventing audio from mixing between streaming instances.
+     *
+     * @param username User whose PipeWire instance to create the sink in
+     * @param sinkName Name for the null-sink (alphanumeric, hyphens, underscores)
+     * @return The sink name, or empty on failure
+     */
+    QString CreateNullSink(const QString &username, const QString &sinkName);
+
+    /**
+     * Destroy a PipeWire null-sink created by CreateNullSink
+     *
+     * @param username User whose PipeWire instance has the sink
+     * @param sinkName Name of the null-sink to remove
+     * @return true if successful
+     */
+    bool DestroyNullSink(const QString &username, const QString &sinkName);
+
 Q_SIGNALS:
     /**
      * Emitted when a transient unit stops unexpectedly (crash, failure)
@@ -338,8 +382,23 @@ private:
                                const QString &compositorHome);
     bool
     validateUserPath(const QString &path, const QString &username, const QString &callerName, QStringList &dirsToChown);
+    QString findGamescopePath();
+    bool unloadNullSinkModule(const QString &username, const QString &sinkName);
 
     QStringList m_modifiedDevices;
+
+    struct VirtualDisplayInfo {
+        qint64 pid;
+        QString waylandSocket;
+        QString serviceName;
+    };
+    QMap<QString, VirtualDisplayInfo> m_virtualDisplays;
+
+    struct NullSinkInfo {
+        int moduleIndex;
+        QString sinkName;
+    };
+    QMap<QString, QList<NullSinkInfo>> m_nullSinks;
 
     // Track active mounts per user for cleanup
     struct MountInfo {

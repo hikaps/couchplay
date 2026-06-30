@@ -224,6 +224,47 @@ class MockHelper(dbus.service.Object):
     def WriteFileToUser(self, content, targetPath, username):
         return True
 
+    # --- Streaming (PR #22): signatures mirror helper/CouchPlayHelper.h ---
+    @dbus.service.method(INTERFACE_NAME, in_signature="siii", out_signature="s")
+    def CreateVirtualOutput(self, username, width, height, refreshRate):
+        socket = "wayland-mock-%dx%d" % (int(width), int(height))
+        _record_launch(
+            method="CreateVirtualOutput",
+            username=str(username),
+            width=int(width),
+            height=int(height),
+            refreshRate=int(refreshRate),
+            socket=socket,
+        )
+        return socket
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="b")
+    def DestroyVirtualOutput(self, username, waylandSocketName):
+        _record_launch(
+            method="DestroyVirtualOutput",
+            username=str(username),
+            socket=str(waylandSocketName),
+        )
+        return True
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="s")
+    def CreateNullSink(self, username, sinkName):
+        _record_launch(
+            method="CreateNullSink",
+            username=str(username),
+            sinkName=str(sinkName),
+        )
+        return str(sinkName)
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="b")
+    def DestroyNullSink(self, username, sinkName):
+        _record_launch(
+            method="DestroyNullSink",
+            username=str(username),
+            sinkName=str(sinkName),
+        )
+        return True
+
     def cleanup(self):
         if FAKE_USERS:
             self._created_users.clear()

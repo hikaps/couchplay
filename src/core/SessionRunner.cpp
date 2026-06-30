@@ -10,6 +10,7 @@
 #include "SessionManager.h"
 #include "SettingsManager.h"
 #include "SteamConfigManager.h"
+#include "StreamManager.h"
 #include "WindowManager.h"
 
 #include <QAction>
@@ -72,10 +73,17 @@ SessionRunner::SessionRunner(QObject *parent)
 
     connect(m_windowManager, &WindowManager::gamescopeWindowPositioned, this, &SessionRunner::onWindowPositioned);
     connect(m_windowManager, &WindowManager::positioningTimedOut, this, &SessionRunner::onWindowPositioningTimeout);
+
+    m_streamManager = new StreamManager(this);
+    connect(m_streamManager, &StreamManager::streamError,
+            this, [this](int instanceIndex, const QString &error) {
+        Q_EMIT errorOccurred(QStringLiteral("Stream %1: %2").arg(instanceIndex).arg(error));
+    });
 }
 
 SessionRunner::~SessionRunner()
 {
+    m_streamManager->stopAll();
     stop();
 }
 
@@ -216,8 +224,44 @@ bool SessionRunner::start()
 
     inhibitScreenSaver();
 
+    QList<int> physicalIndices;
+    QList<int> streamingIndices;
+    for (int i = 0; i < instanceCount; ++i) {
+        if (profile.instances[i].outputMode == QStringLiteral("streaming")) {
+            streamingIndices.append(i);
+        } else {
+            physicalIndices.append(i);
+        }
+    }
+
+    m_streamingInstances.clear();
+    for (int idx : streamingIndices) {
+        const InstanceConfig &instConfig = profile.instances[idx];
+        QVariantMap streamConfig;
+        streamConfig[QStringLiteral("username")] = instConfig.username;
+        streamConfig[QStringLiteral("streamResolution")] = instConfig.streamResolution;
+        streamConfig[QStringLiteral("refreshRate")] = instConfig.refreshRate;
+        if (!setupStreamingInstance(idx, streamConfig)) {
+            teardownStreamingInstances();
+            uninhibitScreenSaver();
+            setStatus(QStringLiteral("Error"));
+            return false;
+        }
+    }
+
+    // Calculate layout for physical instances only
     QRect screenGeometry = getScreenGeometry();
-    m_layouts = calculateLayout(profile.layout, instanceCount, screenGeometry, profile.gridSubLayout);
+    int physicalCount = physicalIndices.size();
+    QMap<int, int> instanceToLayoutIndex;
+    int layoutIdx = 0;
+    for (int i = 0; i < instanceCount; ++i) {
+        if (!streamingIndices.contains(i)) {
+            instanceToLayoutIndex[i] = layoutIdx++;
+        }
+    }
+    m_layouts = physicalCount > 0
+        ? calculateLayout(profile.layout, physicalCount, screenGeometry, profile.gridSubLayout)
+        : QList<QRect>();
 
     if (!setupDeviceOwnership()) {
         qWarning() << "Failed to set up device ownership - continuing anyway";
@@ -237,17 +281,47 @@ bool SessionRunner::start()
     m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
         const InstanceConfig &instConfig = profile.instances[i];
+        bool isStreaming = streamingIndices.contains(i);
 
         QVariantMap config;
         config[QStringLiteral("username")] = instConfig.username;
         config[QStringLiteral("monitor")] = instConfig.monitor;
 
-        config[QStringLiteral("internalWidth")] = m_layouts[i].width();
-        config[QStringLiteral("internalHeight")] = m_layouts[i].height();
-        config[QStringLiteral("outputWidth")] = m_layouts[i].width();
-        config[QStringLiteral("outputHeight")] = m_layouts[i].height();
-        config[QStringLiteral("positionX")] = m_layouts[i].x();
-        config[QStringLiteral("positionY")] = m_layouts[i].y();
+        if (isStreaming) {
+            // Streaming: use stream resolution, no screen geometry
+            const QStringList resolution = instConfig.streamResolution.split(QLatin1Char('x'));
+            int width = resolution.size() >= 1 ? resolution[0].toInt() : 1920;
+            int height = resolution.size() >= 2 ? resolution[1].toInt() : 1080;
+            config[QStringLiteral("internalWidth")] = width;
+            config[QStringLiteral("internalHeight")] = height;
+            config[QStringLiteral("outputWidth")] = width;
+            config[QStringLiteral("outputHeight")] = height;
+            config[QStringLiteral("positionX")] = 0;
+            config[QStringLiteral("positionY")] = 0;
+            config[QStringLiteral("outputMode")] = QStringLiteral("streaming");
+            config[QStringLiteral("streamResolution")] = instConfig.streamResolution;
+            config[QStringLiteral("streamFps")] = instConfig.streamFps;
+            config[QStringLiteral("streamBitrate")] = instConfig.streamBitrate;
+            config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
+            config[QStringLiteral("sunshinePort")] = instConfig.sunshinePort;
+
+            if (m_streamingInstances.contains(i)) {
+                config[QStringLiteral("virtualDisplaySocket")] = m_streamingInstances[i].waylandSocket;
+                if (!m_streamingInstances[i].sinkName.isEmpty()) {
+                    config[QStringLiteral("sink")] = m_streamingInstances[i].sinkName;
+                }
+            }
+        } else {
+            // Physical: use layout geometry
+            int li = instanceToLayoutIndex.value(i, 0);
+            config[QStringLiteral("internalWidth")] = m_layouts[li].width();
+            config[QStringLiteral("internalHeight")] = m_layouts[li].height();
+            config[QStringLiteral("outputWidth")] = m_layouts[li].width();
+            config[QStringLiteral("outputHeight")] = m_layouts[li].height();
+            config[QStringLiteral("positionX")] = m_layouts[li].x();
+            config[QStringLiteral("positionY")] = m_layouts[li].y();
+        }
+
         config[QStringLiteral("refreshRate")] = instConfig.refreshRate;
         config[QStringLiteral("scalingMode")] = instConfig.scalingMode;
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
@@ -302,7 +376,7 @@ bool SessionRunner::start()
 
 void SessionRunner::stop()
 {
-    if (!isRunning()) {
+    if (!isRunning() && m_streamingInstances.isEmpty()) {
         return;
     }
 
@@ -311,6 +385,8 @@ void SessionRunner::stop()
     uninhibitScreenSaver();
 
     m_virtualDeviceWatcher->stopWatching();
+
+    m_streamManager->stopAll();
 
     QStringList overridePaths;
     if (m_sessionManager) {
@@ -343,6 +419,7 @@ void SessionRunner::stop()
 
     restoreDeviceOwnership();
     teardownSharedDirectories();
+    teardownStreamingInstances();
 
     if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_sessionManager) {
         const auto &profile = m_sessionManager->currentProfile();
@@ -366,7 +443,14 @@ void SessionRunner::stop()
 void SessionRunner::stopInstance(int index)
 {
     if (index >= 0 && index < m_instances.size()) {
+        bool isStreaming = m_streamingInstances.contains(index);
+        if (isStreaming) {
+            m_streamManager->stopStream(index);
+        }
         m_instances[index]->stop();
+        if (isStreaming) {
+            cleanupStreamingInstance(index);
+        }
     }
 }
 
@@ -437,8 +521,9 @@ void SessionRunner::startNextInstance()
         qWarning() << "Failed to start instance" << index;
     }
 
-    // If KWin is not available, start next instance immediately (no window positioning to wait for)
-    if (!m_windowManager || !m_windowManager->isAvailable()) {
+    bool isStreamingInstance = config.value(QStringLiteral("outputMode")).toString() == QStringLiteral("streaming");
+    // Streaming instances and absent window manager: start next immediately
+    if (isStreamingInstance || !m_windowManager || !m_windowManager->isAvailable()) {
         ++m_nextInstanceToStart;
         startNextInstance();
     }
@@ -459,6 +544,8 @@ void SessionRunner::cleanupInstances()
 
     m_pendingInstanceConfigs.clear();
     m_layouts.clear();
+    teardownStreamingInstances();
+    m_streamingInstances.clear();
     m_nextInstanceToStart = 0;
 }
 
@@ -973,9 +1060,17 @@ void SessionRunner::onInstanceStarted()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
     if (instance) {
-        positionInstanceWindow(instance);
+        int idx = instance->index();
 
-        Q_EMIT instanceStarted(instance->index());
+        if (m_streamingInstances.contains(idx)) {
+            if (idx < m_pendingInstanceConfigs.size()) {
+                m_streamManager->startStream(idx, m_pendingInstanceConfigs[idx]);
+            }
+        } else {
+            positionInstanceWindow(instance);
+        }
+
+        Q_EMIT instanceStarted(idx);
         Q_EMIT instancesChanged();
         Q_EMIT runningInstanceCountChanged();
     }
@@ -985,7 +1080,14 @@ void SessionRunner::onInstanceStopped()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
     if (instance) {
-        Q_EMIT instanceStopped(instance->index());
+        int idx = instance->index();
+
+        if (m_streamingInstances.contains(idx)) {
+            m_streamManager->stopStream(idx);
+            cleanupStreamingInstance(idx);
+        }
+
+        Q_EMIT instanceStopped(idx);
         Q_EMIT instancesChanged();
         Q_EMIT runningInstanceCountChanged();
 
@@ -1019,7 +1121,8 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 
     QRect targetGeometry = instance->windowGeometry();
     int instanceIndex = instance->index();
-    bool borderless = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
+
+    const bool borderless = m_settingsManager && m_settingsManager->borderlessWindows();
 
     m_windowManager->queuePositionRequest(instanceIndex, targetGeometry, m_positionedWindowIds, borderless, 60000);
 }
@@ -1203,6 +1306,32 @@ bool SessionRunner::hasFdOpen(qint64 pid, const QString &targetPath) const
     return false;
 }
 
+QString SessionRunner::attributeSunshineDevice(const QString &devicePath) const
+{
+    if (!m_streamManager) {
+        return QString();
+    }
+
+    QVariantList streams = m_streamManager->streams();
+    for (const QVariant &streamVar : streams) {
+        QVariantMap stream = streamVar.toMap();
+        qint64 pid = stream.value(QStringLiteral("pid")).toLongLong();
+        int instanceIndex = stream.value(QStringLiteral("instanceIndex")).toInt();
+
+        if (pid <= 0) {
+            continue;
+        }
+
+        if (hasFdOpen(pid, devicePath)) {
+            if (m_streamingInstances.contains(instanceIndex)) {
+                return m_streamingInstances[instanceIndex].username;
+            }
+        }
+    }
+
+    return QString();
+}
+
 QString SessionRunner::attributeVirtualDevice(int, const QString &devicePath) const
 {
     QList<qint64> gamescopePids = getGamescopePids();
@@ -1239,10 +1368,19 @@ void SessionRunner::onVirtualDeviceAppeared(int eventNumber, const QString &devi
         return;
     }
 
-    QString username = attributeVirtualDevice(eventNumber, devicePath);
+    QString username;
+    QString lowerName = deviceName.toLower();
+
+    if (lowerName.contains(QStringLiteral("sunshine")) || lowerName.contains(QStringLiteral("passthrough"))) {
+        username = attributeSunshineDevice(devicePath);
+    }
+
     if (username.isEmpty()) {
-        qWarning() << "SessionRunner: Could not attribute virtual device" << deviceName << devicePath
-                   << "- no Steam process with matching FD found";
+        username = attributeVirtualDevice(eventNumber, devicePath);
+    }
+
+    if (username.isEmpty()) {
+        qWarning() << "SessionRunner: Could not attribute virtual device" << deviceName << devicePath;
         return;
     }
 
@@ -1307,4 +1445,78 @@ void SessionRunner::uninhibitScreenSaver()
     }
 
     m_screenSaverCookie = 0;
+}
+
+bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap &config)
+{
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper service required for streaming instance %1").arg(instanceIndex));
+        return false;
+    }
+
+    const QString username = config.value(QStringLiteral("username")).toString();
+    if (username.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("Streaming instance %1 requires a username").arg(instanceIndex));
+        return false;
+    }
+
+    const QString streamResolution = config.value(QStringLiteral("streamResolution")).toString();
+    const QStringList resolution = streamResolution.split(QLatin1Char('x'));
+    int width = resolution.size() >= 1 ? resolution[0].toInt() : 1920;
+    int height = resolution.size() >= 2 ? resolution[1].toInt() : 1080;
+    int refreshRate = config.value(QStringLiteral("refreshRate")).toInt();
+
+    QString waylandSocket = m_helperClient->createVirtualOutput(username, width, height, refreshRate);
+    if (waylandSocket.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to create virtual output for streaming instance %1").arg(instanceIndex));
+        return false;
+    }
+
+    QString sinkName = QStringLiteral("couchplay-sunshine-%1").arg(instanceIndex);
+    QString createdSinkName = m_helperClient->createNullSink(username, sinkName);
+    if (createdSinkName.isEmpty()) {
+        qWarning() << "SessionRunner: Failed to create null sink for streaming instance" << instanceIndex;
+    }
+
+    StreamingInstanceInfo info;
+    info.username = username;
+    info.waylandSocket = waylandSocket;
+    info.sinkName = createdSinkName;
+    info.virtualDisplayCreated = true;
+    info.nullSinkCreated = !createdSinkName.isEmpty();
+    m_streamingInstances[instanceIndex] = info;
+
+    return true;
+}
+
+void SessionRunner::teardownStreamingInstances()
+{
+    const QList<int> indices = m_streamingInstances.keys();
+    for (int idx : indices) {
+        cleanupStreamingInstance(idx);
+    }
+}
+
+void SessionRunner::cleanupStreamingInstance(int index)
+{
+    if (!m_streamingInstances.contains(index)) {
+        return;
+    }
+
+    const StreamingInstanceInfo &info = m_streamingInstances[index];
+
+    if (m_helperClient && m_helperClient->isAvailable()) {
+        if (info.nullSinkCreated && !info.sinkName.isEmpty()) {
+            if (!m_helperClient->destroyNullSink(info.username, info.sinkName)) {
+                qWarning() << "SessionRunner: Failed to destroy null sink" << info.sinkName;
+            }
+        }
+        if (info.virtualDisplayCreated && !info.waylandSocket.isEmpty()) {
+            if (!m_helperClient->destroyVirtualOutput(info.username, info.waylandSocket)) {
+                qWarning() << "SessionRunner: Failed to destroy virtual output" << info.waylandSocket;
+            }
+        }
+    }
+
+    m_streamingInstances.remove(index);
 }
