@@ -10,15 +10,29 @@
 #include <QDBusReply>
 #include <QDebug>
 #include <QDir>
+#include <QSet>
 #include <QTimer>
 
 #include <unistd.h>
+#include <pwd.h>
 
 static const QString s_helperService = QStringLiteral("io.github.hikaps.CouchPlayHelper");
 static const QString s_helperPath = QStringLiteral("/io/github/hikaps/CouchPlayHelper");
 static const QString s_helperInterface = QStringLiteral("io.github.hikaps.CouchPlayHelper");
 static const QString s_sunshineBinary = QStringLiteral("sunshine");
 static constexpr int RESTART_DELAY_MS = 2000;
+
+// The compositor for a streaming instance is the per-instance virtual gamescope
+// output, which the helper runs as the streaming user -- so its Wayland socket
+// lives in /run/user/<streamingUserUid>, NOT the GUI user's runtime dir. Resolve
+// the streaming user's uid; fall back to the GUI uid only if the lookup fails.
+static uid_t resolveCompositorUid(const QString &username)
+{
+    if (const passwd *pwd = getpwnam(username.toLocal8Bit().constData())) {
+        return pwd->pw_uid;
+    }
+    return ::getuid();
+}
 
 StreamManager::StreamManager(QObject *parent)
     : QObject(parent)
@@ -130,7 +144,7 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     }
 
     const QString gameCommand = s_sunshineBinary + QLatin1Char(' ') + configPath;
-    const uid_t compositorUid = getuid();
+    const uid_t compositorUid = resolveCompositorUid(username);
     const QStringList gamescopeArgs;
     const QStringList envVars;
     const QStringList bindPaths;
@@ -292,10 +306,24 @@ void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid,
 
     if (m_autoRestart && m_streams[foundIndex].restartAttempts < StreamEntry::MAX_RESTART_ATTEMPTS) {
         if (crashedDuringStartup) {
+            // Retry on a port no sibling stream is using -- each Sunshine instance
+            // owns a PORT_SPACING-wide range, so reusing a sibling's base port would
+            // evict it. (Bumping by exactly PORT_SPACING would otherwise land on the
+            // next instance's default slot: calculatePort(n+1) == calculatePort(n)+30.)
             const int currentPort = m_streams[foundIndex].lastConfig.value(
                 QStringLiteral("sunshinePort"), SunshineConfig::calculatePort(foundIndex)).toInt();
-            m_streams[foundIndex].lastConfig[QStringLiteral("sunshinePort")] =
-                currentPort + SunshineConfig::PORT_SPACING;
+            QSet<int> usedPorts;
+            for (auto it = m_streams.constBegin(); it != m_streams.constEnd(); ++it) {
+                if (it.key() != foundIndex) {
+                    usedPorts.insert(it.value().lastConfig.value(
+                        QStringLiteral("sunshinePort"), SunshineConfig::calculatePort(it.key())).toInt());
+                }
+            }
+            int bumped = currentPort + SunshineConfig::PORT_SPACING;
+            while (usedPorts.contains(bumped) && bumped < static_cast<int>(SunshineConfig::MAX_PORT)) {
+                bumped += SunshineConfig::PORT_SPACING;
+            }
+            m_streams[foundIndex].lastConfig[QStringLiteral("sunshinePort")] = bumped;
         }
         Q_EMIT streamError(foundIndex, QStringLiteral("%1 (auto-restarting attempt %2/%3)")
             .arg(errorMsg)
@@ -408,7 +436,7 @@ void StreamManager::attemptRestart(int instanceIndex)
     }
 
     const QString gameCommand = s_sunshineBinary + QLatin1Char(' ') + configPath;
-    const uid_t compositorUid = getuid();
+    const uid_t compositorUid = resolveCompositorUid(entry.username);
     const QStringList gamescopeArgs;
     const QStringList envVars;
     const QStringList bindPaths;
@@ -443,9 +471,14 @@ void StreamManager::attemptRestart(int instanceIndex)
         Q_EMIT streamError(instanceIndex, QStringLiteral("Auto-restart attempt %1 failed: %2")
             .arg(entry.restartAttempts).arg(detail));
 
-        QTimer::singleShot(RESTART_DELAY_MS, this, [this, instanceIndex]() {
+        QTimer *restartTimer = new QTimer(this);
+        restartTimer->setSingleShot(true);
+        connect(restartTimer, &QTimer::timeout, this, [this, instanceIndex]() {
+            m_restartTimers.remove(instanceIndex);
             attemptRestart(instanceIndex);
         });
+        m_restartTimers[instanceIndex] = restartTimer;
+        restartTimer->start(RESTART_DELAY_MS);
         return;
     }
 

@@ -34,6 +34,7 @@ private Q_SLOTS:
     void testCustomCredentials();
     void testOutputNameIncluded();
     void testBitrateIncluded();
+    void testConfigValueInjectionStripped();
     void testEmptyConfigDirFails();
     void testNegativeIndexFails();
     void testDefaultConfigDir();
@@ -234,6 +235,11 @@ void TestSunshineConfig::testDefaultCredentials()
 
 void TestSunshineConfig::testCustomCredentials()
 {
+    // Self-consistency / regression guard ONLY: recomputes the hash with the
+    // SAME algorithm SunshineConfig uses. This catches accidental changes to
+    // the hash scheme, NOT whether Sunshine accepts it -- that requires a real
+    // pairing (test_sunshine_integration covers config-key acceptance; hash
+    // validation against real Sunshine is a deferred follow-up).
     QString configDir = m_tempDir->path() + QStringLiteral("/custom-creds");
     QVariantMap config;
     config.insert(QStringLiteral("username"), QStringLiteral("admin"));
@@ -288,6 +294,29 @@ void TestSunshineConfig::testBitrateIncluded()
     file.close();
 
     QVERIFY(content.contains(QStringLiteral("max_bitrate = 25000")));
+}
+
+void TestSunshineConfig::testConfigValueInjectionStripped()
+{
+    QString configDir = m_tempDir->path() + QStringLiteral("/inject");
+    QVariantMap config;
+    // CR/LF in a value must not inject an extra config line into sunshine.conf
+    // (it is read by Sunshine, which the helper launches).
+    config.insert(QStringLiteral("outputName"), QStringLiteral("0\nfake_injected_key = pwned\rsecond = bad"));
+
+    SunshineConfig::generateConfig(config, 0, configDir);
+
+    QFile file(configDir + QStringLiteral("/sunshine.conf"));
+    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString content = QString::fromUtf8(file.readAll());
+    file.close();
+
+    QVERIFY2(!content.contains(QLatin1String("\nfake_injected_key")),
+             "CR/LF injection survived into sunshine.conf");
+    QVERIFY2(!content.contains(QLatin1String("fake_injected_key = pwned\n")),
+             "injected key became its own config line");
+    // The legitimate key is still emitted, value kept to the pre-newline text.
+    QVERIFY(content.contains(QStringLiteral("output_name = 0")));
 }
 
 void TestSunshineConfig::testEmptyConfigDirFails()

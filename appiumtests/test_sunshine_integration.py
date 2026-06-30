@@ -45,18 +45,17 @@ class TestSunshineIntegration(BaseTest):
         )
         combined = run.stdout + run.stderr
 
-        # 3. Sunshine parsed every key (it logs each) -> config accepted.
-        for key in [
-            "port",
-            "encoder",
-            "credentials_file",
-            "file_apps",
-            "max_bitrate",
-            "sunshine_name",
-        ]:
-            assert f"config: '{key}'" in combined, (
-                f"Sunshine did not accept SunshineConfig key '{key}'"
-            )
+        # 3. Sunshine actually PARSED the generated config -- assert VALUES
+        #    unique to SunshineConfig's output, not just key names. Sunshine's
+        #    own built-in defaults contain the same keys, so a key-only check
+        #    could pass even if it ignored the positional config argument; only
+        #    a value unique to our generated config proves it was read.
+        assert "config: 'sunshine_name' = CouchPlay Player 0" in combined, (
+            "Sunshine did not read the generated sunshine_name"
+        )
+        assert "config: 'credentials_file' = /tmp/cp-sun-int/credentials.json" in combined, (
+            "Sunshine did not read the generated credentials_file path"
+        )
 
         # 4. No config-parse rejection. The authoritative check is #3 (each key
         #    logged as "config: 'key' = value" means Sunshine accepted it); a

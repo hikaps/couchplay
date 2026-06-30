@@ -383,6 +383,7 @@ private:
     bool
     validateUserPath(const QString &path, const QString &username, const QString &callerName, QStringList &dirsToChown);
     QString findGamescopePath();
+    bool unloadNullSinkModule(const QString &username, const QString &sinkName);
 
     QStringList m_modifiedDevices;
 

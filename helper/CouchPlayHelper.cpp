@@ -205,13 +205,7 @@ CouchPlayHelper::~CouchPlayHelper()
 
     for (const QString &username : m_nullSinks.keys()) {
         for (const NullSinkInfo &sink : m_nullSinks[username]) {
-            QProcess *proc = m_ops->createProcess();
-            m_ops->startProcess(proc, QStringLiteral("machinectl"),
-                {QStringLiteral("shell"), username + QStringLiteral("@"),
-                 QStringLiteral("/bin/bash"), QStringLiteral("-c"),
-                 QStringLiteral("pactl unload-module %1").arg(sink.moduleIndex)});
-            m_ops->waitForFinished(proc, 5000);
-            delete proc;
+            unloadNullSinkModule(username, sink.sinkName);
         }
     }
     m_nullSinks.clear();
@@ -1882,32 +1876,31 @@ QString CouchPlayHelper::CreateVirtualOutput(const QString &username, int width,
         return QString();
     }
 
-    QThread::msleep(1000);
-    QStringList newSockets = m_ops->entryList(userRuntimeDir,
-        {QStringLiteral("wayland-*")}, QDir::Files);
-
+    // Poll for a genuinely NEW Wayland socket (one not present before gamescope
+    // was launched). Do NOT fall back to a pre-existing socket: in a mixed
+    // session the streaming user already has wayland-0 (their own session), and
+    // returning that would make Sunshine capture the wrong compositor.
     QString socketName;
-    for (const QString &s : newSockets) {
-        if (!existingSockets.contains(s)) {
-            socketName = s;
-            break;
+    for (int attempt = 0; attempt < 6 && socketName.isEmpty(); ++attempt) {
+        if (attempt > 0) {
+            QThread::msleep(500);
+        }
+        const QStringList sockets = m_ops->entryList(userRuntimeDir,
+            {QStringLiteral("wayland-*")}, QDir::Files);
+        for (const QString &s : sockets) {
+            if (!existingSockets.contains(s)) {
+                socketName = s;
+                break;
+            }
         }
     }
 
     if (socketName.isEmpty()) {
-        if (newSockets.size() > existingSockets.size()) {
-            socketName = newSockets.last();
-        } else if (!newSockets.isEmpty()) {
-            socketName = newSockets.last();
-            qWarning() << "CreateVirtualOutput: Could not detect new socket, using last known:"
-                        << socketName;
-        } else {
-            qWarning() << "CreateVirtualOutput: No wayland sockets found in" << userRuntimeDir;
-            stopServiceInstance(serviceName);
-            sendErrorReply(QDBusError::Failed,
-                QStringLiteral("Virtual display started but no Wayland socket detected"));
-            return QString();
-        }
+        qWarning() << "CreateVirtualOutput: no new Wayland socket appeared for" << serviceName;
+        stopServiceInstance(serviceName);
+        sendErrorReply(QDBusError::Failed,
+            QStringLiteral("Virtual display started but no Wayland socket was created"));
+        return QString();
     }
 
     VirtualDisplayInfo info;
@@ -2017,6 +2010,43 @@ QString CouchPlayHelper::CreateNullSink(const QString &username, const QString &
     return sinkName;
 }
 
+// Re-resolve the CURRENT PipeWire module index for sinkName and unload it.
+// PipeWire reuses module indexes across session restarts, so a saved index can
+// point at an unrelated module -- unloading it would break that user's audio.
+// Returns true if unloaded or already absent; false only on an unload failure.
+bool CouchPlayHelper::unloadNullSinkModule(const QString &username, const QString &sinkName)
+{
+    QProcess *listProc = m_ops->createProcess();
+    m_ops->startProcess(listProc, QStringLiteral("machinectl"),
+        {QStringLiteral("shell"), username + QStringLiteral("@"),
+         QStringLiteral("/bin/bash"), QStringLiteral("-c"),
+         QStringLiteral("pactl list modules short | grep 'module-null-sink.*sink_name=%1' | awk '{print $1}'").arg(sinkName)});
+    m_ops->waitForFinished(listProc, 5000);
+    const QString out = QString::fromLocal8Bit(m_ops->readAllStandardOutput(listProc)).trimmed();
+    delete listProc;
+
+    bool ok = false;
+    const int moduleIndex = out.split(QLatin1Char('\n')).first().toInt(&ok);
+    if (!ok || moduleIndex <= 0) {
+        qInfo() << "unloadNullSinkModule: sink" << sinkName << "not active for" << username << "(already removed?)";
+        return true; // absent == success (idempotent destroy)
+    }
+
+    QProcess *proc = m_ops->createProcess();
+    m_ops->startProcess(proc, QStringLiteral("machinectl"),
+        {QStringLiteral("shell"), username + QStringLiteral("@"),
+         QStringLiteral("/bin/bash"), QStringLiteral("-c"),
+         QStringLiteral("pactl unload-module %1").arg(moduleIndex)});
+    m_ops->waitForFinished(proc, 10000);
+    const bool unloaded = (m_ops->processExitCode(proc) == 0);
+    delete proc;
+
+    if (!unloaded) {
+        qWarning() << "unloadNullSinkModule: failed to unload module" << moduleIndex << "for sink" << sinkName;
+    }
+    return unloaded;
+}
+
 bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &sinkName)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_AUDIO_SINK)) {
@@ -2029,11 +2059,10 @@ bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &si
         return false;
     }
 
-    int moduleIndex = -1;
+    // Drop our bookkeeping for this sink.
     if (m_nullSinks.contains(username)) {
         for (int i = 0; i < m_nullSinks[username].size(); ++i) {
             if (m_nullSinks[username][i].sinkName == sinkName) {
-                moduleIndex = m_nullSinks[username][i].moduleIndex;
                 m_nullSinks[username].removeAt(i);
                 saveState();
                 break;
@@ -2041,42 +2070,15 @@ bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &si
         }
     }
 
-    if (moduleIndex <= 0) {
-        QProcess *listProc = m_ops->createProcess();
-        m_ops->startProcess(listProc, QStringLiteral("machinectl"),
-            {QStringLiteral("shell"), username + QStringLiteral("@"),
-             QStringLiteral("/bin/bash"), QStringLiteral("-c"),
-             QStringLiteral("pactl list modules short | grep 'module-null-sink.*sink_name=%1' | awk '{print $1}'").arg(sinkName)});
-        m_ops->waitForFinished(listProc, 5000);
-        QString listOutput = QString::fromLocal8Bit(m_ops->readAllStandardOutput(listProc)).trimmed();
-        delete listProc;
-
-        bool ok = false;
-        moduleIndex = listOutput.split(QLatin1Char('\n')).first().toInt(&ok);
-        if (!ok || moduleIndex <= 0) {
-            sendErrorReply(QDBusError::Failed,
-                QStringLiteral("Could not find null-sink '%1' for user '%2'")
-                    .arg(sinkName, username));
-            return false;
-        }
-    }
-
-    QProcess *proc = m_ops->createProcess();
-    m_ops->startProcess(proc, QStringLiteral("machinectl"),
-        {QStringLiteral("shell"), username + QStringLiteral("@"),
-         QStringLiteral("/bin/bash"), QStringLiteral("-c"),
-         QStringLiteral("pactl unload-module %1").arg(moduleIndex)});
-    m_ops->waitForFinished(proc, 10000);
-    bool ok = (m_ops->processExitCode(proc) == 0);
-    delete proc;
-
-    if (!ok) {
+    // Re-resolve the current module by name and unload it (a saved index can go
+    // stale across a session restart and unload the wrong module).
+    if (!unloadNullSinkModule(username, sinkName)) {
         sendErrorReply(QDBusError::Failed,
-            QStringLiteral("Failed to unload null-sink module %1").arg(moduleIndex));
+            QStringLiteral("Failed to unload null-sink '%1'").arg(sinkName));
         return false;
     }
 
-    qInfo() << "Destroyed null-sink" << sinkName << "module #" << moduleIndex << "for" << username;
+    qInfo() << "Destroyed null-sink" << sinkName << "for" << username;
     return true;
 }
 

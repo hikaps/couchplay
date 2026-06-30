@@ -243,6 +243,7 @@ bool SessionRunner::start()
         streamConfig[QStringLiteral("refreshRate")] = instConfig.refreshRate;
         if (!setupStreamingInstance(idx, streamConfig)) {
             teardownStreamingInstances();
+            uninhibitScreenSaver();
             setStatus(QStringLiteral("Error"));
             return false;
         }

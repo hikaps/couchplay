@@ -156,7 +156,11 @@ bool SunshineConfig::writeCredentialsFile(const QString &configDir, const QStrin
         qWarning() << "SunshineConfig: Failed to open credentials file" << credsPath;
         return false;
     }
-    file.write(doc.toJson(QJsonDocument::Compact));
+    if (file.write(doc.toJson(QJsonDocument::Compact)) == -1) {
+        qWarning() << "SunshineConfig: failed to write credentials file" << credsPath;
+        file.close();
+        return false;
+    }
     file.close();
     return true;
 }

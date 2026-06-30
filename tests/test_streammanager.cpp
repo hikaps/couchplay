@@ -56,6 +56,12 @@ private Q_SLOTS:
     // Startup timeout transition (Waiting → Streaming)
     void testStartupTimeoutTransition();
 
+    // Auto-restart state machine (onHelperInstanceStopped / port-bump / restart)
+    void testCrashDuringStartupBumpsPortAndSchedulesRestart();
+    void testCrashAfterStreamingKeepsPort();
+    void testAutoRestartDisabledRemovesImmediately();
+    void testStopStreamCancelsPendingRestart();
+
 private:
     StreamManager *m_manager = nullptr;
     QTemporaryDir *m_tempDir = nullptr;
@@ -371,6 +377,106 @@ void TestStreamManager::testStartupTimeoutTransition()
 
     // Timer removed from map
     QVERIFY(!m_manager->m_startupTimers.contains(0));
+}
+
+// --- Auto-restart state machine ---
+
+void TestStreamManager::testCrashDuringStartupBumpsPortAndSchedulesRestart()
+{
+    m_manager->setAutoRestart(true);
+    StreamManager::StreamEntry entry;
+    entry.instanceIndex = 0;
+    entry.pid = 500001;
+    entry.state = StreamManager::Waiting;
+    entry.username = QStringLiteral("player1");
+    entry.restartAttempts = 0;
+    entry.lastConfig[QStringLiteral("sunshinePort")] = SunshineConfig::calculatePort(0);
+    m_manager->m_streams[0] = entry;
+    // A startup timer present => onHelperInstanceStopped treats it as a startup crash.
+    auto *timer = new QTimer(m_manager);
+    timer->setSingleShot(true);
+    m_manager->m_startupTimers[0] = timer;
+
+    const int originalPort = entry.lastConfig.value(QStringLiteral("sunshinePort")).toInt();
+    QSignalSpy errorSpy(m_manager, &StreamManager::streamError);
+
+    m_manager->onHelperInstanceStopped(QStringLiteral("player1"), 500001, QStringLiteral("crashed"));
+
+    // Port bumped off the crash port...
+    const int bumpedPort = m_manager->m_streams[0].lastConfig.value(QStringLiteral("sunshinePort")).toInt();
+    QVERIFY2(bumpedPort != originalPort, qPrintable(QStringLiteral("port not bumped: %1").arg(bumpedPort)));
+    // ...a tracked restart was scheduled (cancellable by stopStream)...
+    QVERIFY(m_manager->m_restartTimers.contains(0));
+    // ...and the startup timer was consumed.
+    QVERIFY(!m_manager->m_startupTimers.contains(0));
+    QCOMPARE(errorSpy.count(), 1);
+}
+
+void TestStreamManager::testCrashAfterStreamingKeepsPort()
+{
+    m_manager->setAutoRestart(true);
+    StreamManager::StreamEntry entry;
+    entry.instanceIndex = 1;
+    entry.pid = 500002;
+    entry.state = StreamManager::Streaming;
+    entry.username = QStringLiteral("player2");
+    entry.restartAttempts = 0;
+    const int port = SunshineConfig::calculatePort(1);
+    entry.lastConfig[QStringLiteral("sunshinePort")] = port;
+    m_manager->m_streams[1] = entry;
+    // No startup timer => not a startup crash => port must NOT be bumped.
+
+    m_manager->onHelperInstanceStopped(QStringLiteral("player2"), 500002, QStringLiteral("crashed"));
+
+    QCOMPARE(m_manager->m_streams[1].lastConfig.value(QStringLiteral("sunshinePort")).toInt(), port);
+    QVERIFY(m_manager->m_restartTimers.contains(1));
+}
+
+void TestStreamManager::testAutoRestartDisabledRemovesImmediately()
+{
+    m_manager->setAutoRestart(false);
+    StreamManager::StreamEntry entry;
+    entry.instanceIndex = 2;
+    entry.pid = 500003;
+    entry.state = StreamManager::Streaming;
+    entry.username = QStringLiteral("player3");
+    m_manager->m_streams[2] = entry;
+
+    QSignalSpy stoppedSpy(m_manager, &StreamManager::streamStopped);
+    QSignalSpy errorSpy(m_manager, &StreamManager::streamError);
+
+    m_manager->onHelperInstanceStopped(QStringLiteral("player3"), 500003, QStringLiteral("crashed"));
+
+    QVERIFY(!m_manager->m_streams.contains(2));
+    QVERIFY(!m_manager->m_restartTimers.contains(2));
+    QCOMPARE(stoppedSpy.count(), 1);
+    QCOMPARE(errorSpy.count(), 1);
+}
+
+void TestStreamManager::testStopStreamCancelsPendingRestart()
+{
+    m_manager->setAutoRestart(true);
+    StreamManager::StreamEntry entry;
+    entry.instanceIndex = 3;
+    entry.pid = 500004;
+    entry.state = StreamManager::Waiting;
+    entry.username = QStringLiteral("player4");
+    entry.restartAttempts = 0;
+    entry.configDir = QStringLiteral("/tmp/couchplay-test-stopcancel");
+    m_manager->m_streams[3] = entry;
+    auto *timer = new QTimer(m_manager);
+    timer->setSingleShot(true);
+    m_manager->m_startupTimers[3] = timer;
+
+    // Startup crash schedules a tracked restart timer...
+    m_manager->onHelperInstanceStopped(QStringLiteral("player4"), 500004, QStringLiteral("crashed"));
+    QVERIFY(m_manager->m_restartTimers.contains(3));
+
+    // ...which stopStream must cancel (the fix: the restart timer is tracked in
+    // m_restartTimers, not an anonymous singleShot that stopStream can't reach).
+    m_manager->stopStream(3);
+    QVERIFY(!m_manager->m_restartTimers.contains(3));
+    QVERIFY(!m_manager->m_streams.contains(3));
 }
 
 QTEST_MAIN(TestStreamManager)
