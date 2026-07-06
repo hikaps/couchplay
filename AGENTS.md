@@ -30,11 +30,13 @@ QML UI (Kirigami)  ←→  Core Managers (C++)  ←→  D-Bus Helper (root)
 | `src/core/` | 17 manager classes (~10K lines) — session orchestration, device management, streaming, window positioning |
 | `src/qml/` | Kirigami UI (pages, components, dialogs) — packaged as `io.github.hikaps.couchplay` QML module via `ecm_add_qml_module` |
 | `src/dbus/` | `CouchPlayHelperClient` — D-Bus proxy for the privileged helper |
-| `helper/` | Privileged D-Bus service (`couchplay-helper`, ~2K lines) — runs as root; user/device/process management |
+| `helper/` | Privileged D-Bus service (`couchplay-helper`, ~2.4K lines) — runs as root; user/device/process management |
 | `tests/` | 17 QtTest unit tests + `sunshine_config_generator` binary; tests `#include` sources directly |
 | `appiumtests/` | E2e tests (selenium-webdriver-at-spi) + rootless container harness (Dockerfile) |
-| `data/` | Polkit policy (10 actions), D-Bus configs/services, systemd unit, desktop/metainfo/icons, PipeWire config |
+| `data/` | Polkit policy (11 actions), D-Bus configs/services, systemd unit, desktop/metainfo/icons, PipeWire config |
 | `scripts/` | `install.sh` (one-liner), `install-helper.sh`, `bundle-libs.sh` ($ORIGIN RPATH), `run-debug.sh` |
+
+**Per-directory guides**: deeper detail lives in `src/core/AGENTS.md`, `src/qml/AGENTS.md`, `helper/AGENTS.md`, `tests/AGENTS.md`, and `appiumtests/AGENTS.md`.
 
 ## Development Commands
 
@@ -131,7 +133,7 @@ distrobox rm cp-test -f
 | `src/core/StreamManager.cpp` | Sunshine subprocess lifecycle; crash recovery (`MAX_RESTART_ATTEMPTS=3`), startup timeout, port-bump on crash |
 | `src/core/SunshineConfig.cpp` | Generates per-instance `sunshine.conf` / `apps.json` / `credentials.json`; port = `47989 + index×30` |
 | `helper/CouchPlayHelper.cpp` | Root D-Bus service (~2.4K lines); user/device/virtual-display/null-sink/process management |
-| `data/polkit/io.github.hikaps.couchplay.policy` | 10 Polkit actions (gates `CreateUser`, `DeleteUser`, `CreateVirtualOutput`, `CreateNullSink`, etc.) |
+| `data/polkit/io.github.hikaps.couchplay.policy` | 11 Polkit actions (gates `CreateUser`, `DeleteUser`, `CreateVirtualOutput`, `CreateNullSink`, etc.) |
 | `appiumtests/Dockerfile` | Fedora 43 image baking KDE/KWin/gamescope/pipewire/Sunshine/selenium-driver/couchplay |
 | `appiumtests/container/entrypoint.sh` | Rootless container entrypoint: user-owned system bus + mock helper + PipeWire + nested kwin |
 
@@ -150,7 +152,7 @@ distrobox rm cp-test -f
 - **Framework**: QtTest (`QTest::qExec`), 17 test binaries.
 - **Run**: `QT_QPA_PLATFORM=offscreen dbus-run-session -- ctest --test-dir build --output-on-failure`
 - **CI**: `.github/workflows/ci.yml` runs all 17 on push/PR to `develop` (Fedora 41 container, no exclusions).
-- **Coverage**: managers (DeviceManager, SessionManager, SessionRunner, GamescopeInstance, StreamManager, SunshineConfig, WindowManager, AudioManager, UserManager, PresetManager, etc.) + the full helper (test_couchplayhelper, 64 tests via MockSystemOps).
+- **Coverage**: managers (DeviceManager, SessionManager, SessionRunner, GamescopeInstance, StreamManager, SunshineConfig, WindowManager, AudioManager, UserManager, PresetManager, etc.) + the full helper (test_couchplayhelper, 62 tests via MockSystemOps).
 - **Test source inclusion**: tests `#include` the `.cpp` sources directly (not a linked library). Each test target compiles its own copy of the core sources. This is a deliberate trade-off (documented anti-pattern).
 
 ### E2E / Appium Tests (local-only, NOT in CI)
@@ -166,3 +168,9 @@ distrobox rm cp-test -f
 - **`main`**: stable releases only. Tag + release from `main`, never from `develop`.
 - **Branch prefixes**: `feature/`, `feat/`, `fix/`, `ci/`, `chore/`, `remove/`.
 - **CI workflows**: `ci.yml` (tests on develop), `beta.yml` (rolling pre-release from develop), `release.yml` (tagged release from main), `flatpak.yml` (Flatpak bundle from main tag).
+
+## Known Limitations & Anti-Patterns
+
+- **Blocking sleep**: `src/core/WindowManager.cpp` uses `QThread::msleep(100)` for window positioning (a short blocking wait) rather than an async signal.
+- **Missing i18n infrastructure**: `KF6::I18n` is linked and `i18nc(...)` is used in QML, but there is no `po/` directory or translation files — strings are not currently shipped translated.
+- **No CI linting**: `make format` / `make tidy` targets exist but are not enforced in CI.
