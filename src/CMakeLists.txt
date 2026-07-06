@@ -114,9 +114,3 @@ target_link_libraries(couchplay PRIVATE
 install(TARGETS couchplay
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-
-# Ensure Flatpak can resolve the command "couchplay".
-# Flatpak expects the primary command under /app/bin.
-install(TARGETS couchplay
-    DESTINATION bin
-)

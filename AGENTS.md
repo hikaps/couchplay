@@ -1,175 +1,176 @@
-# AGENTS.md - Agent Guidelines for CouchPlay
+# Repository Guidelines
 
-**C++20/QML KDE/Qt6 Kirigami application for split-screen gaming on Linux (GPL-3.0-or-later)**
+CouchPlay is a C++20/QML/Qt6/KF6/Kirigami application for **split-screen gaming on Linux** (Wayland/KDE). It launches multiple `gamescope` instances per monitor, assigns input devices per player, and optionally streams a session via **Sunshine**. A privileged D-Bus helper (`couchplay-helper`, root) handles user creation, device ownership, virtual displays, and process launching.
 
-## Build Environment
+## Architecture & Data Flow
 
-Developed on **Bazzite** (immutable Fedora with Wayland/KDE). Build directly on the host or in a development container.
+```
+QML UI (Kirigami)  ←→  Core Managers (C++)  ←→  D-Bus Helper (root)
+  SessionSetupPage       SessionManager           CouchPlayHelper
+  DeviceAssignment       SessionRunner             (LaunchInstance, CreateUser,
+  HomePage               GamescopeInstance          ChangeDeviceOwner,
+  SettingsPage           StreamManager              CreateVirtualOutput,
+                         SunshineConfig             CreateNullSink, ...)
+```
+
+**Session start flow:**
+1. `SessionManager` holds the `SessionProfile` (layout, `InstanceConfig` list).
+2. `SessionRunner::start()` splits instances into physical vs streaming.
+3. **Physical**: `setupDeviceOwnership` → `GamescopeInstance::start()` → helper `LaunchInstance(username, compositorUid, gamescopeArgs, gameCommand, ...)` → gamescope renders to a monitor region.
+4. **Streaming**: `setupStreamingInstance()` → helper `CreateVirtualOutput(username, W, H, RR)` (gamescope as virtual Wayland compositor) + `CreateNullSink(username, sinkName)` (PipeWire) → `StreamManager::startStream()` → `SunshineConfig::generateConfig()` writes `/tmp/couchplay-sunshine-<n>/{sunshine.conf,apps.json,credentials.json}` → helper `LaunchInstance(username, ..., "sunshine <configPath>")`.
+5. `WindowManager` positions physical gamescope windows via KWin D-Bus scripting.
+6. `VirtualDeviceWatcher` attributes new input devices (Steam Input, Sunshine virtual) to the correct user via FD inspection.
+
+**Key interface**: `CouchPlayHelperClient` (`src/dbus/`) is the GUI-side D-Bus proxy; `CouchPlayHelper` (`helper/`) is the root-side implementation. Every privileged operation goes through this pair.
+
+## Key Directories
+
+| Path | Purpose |
+|---|---|
+| `src/core/` | 17 manager classes (~10K lines) — session orchestration, device management, streaming, window positioning |
+| `src/qml/` | Kirigami UI (pages, components, dialogs) — packaged as `io.github.hikaps.couchplay` QML module via `ecm_add_qml_module` |
+| `src/dbus/` | `CouchPlayHelperClient` — D-Bus proxy for the privileged helper |
+| `helper/` | Privileged D-Bus service (`couchplay-helper`, ~2.4K lines) — runs as root; user/device/process management |
+| `tests/` | 17 QtTest unit tests + `sunshine_config_generator` binary; tests `#include` sources directly |
+| `appiumtests/` | E2e tests (selenium-webdriver-at-spi) + rootless container harness (Dockerfile) |
+| `data/` | Polkit policy (11 actions), D-Bus configs/services, systemd unit, desktop/metainfo/icons, PipeWire config |
+| `scripts/` | `install.sh` (one-liner), `install-helper.sh`, `bundle-libs.sh` ($ORIGIN RPATH), `run-debug.sh` |
+
+**Per-directory guides**: deeper detail lives in `src/core/AGENTS.md`, `src/qml/AGENTS.md`, `helper/AGENTS.md`, `tests/AGENTS.md`, and `appiumtests/AGENTS.md`.
+
+## Development Commands
 
 ```bash
-# Configure (run from project root)
+# Configure + build (host or dev container)
 cmake -B build
+cmake --build build -j$(nproc)
 
-# Build
-cmake --build build
-
-# Run (on HOST - gamescope requires host environment)
+# Run the app (must be on host — gamescope needs the real display)
 ./build/bin/couchplay
 
-# Unit tests
-ctest --test-dir build --output-on-failure
+# Unit tests (17 QtTest binaries; run under dbus-run-session for D-Bus tests)
+QT_QPA_PLATFORM=offscreen dbus-run-session -- ctest --test-dir build --output-on-failure
 
-# Single test: ctest --test-dir build -R DeviceManagerTest --output-on-failure
-# List tests: ctest --test-dir build -N
-# Direct run: ./build/bin/test_devicemanager
+# Single test
+QT_QPA_PLATFORM=offscreen dbus-run-session -- ./build/bin/test_streammanager
 
-# E2E tests (local-only; requires KDE Plasma Wayland + selenium-webdriver-at-spi)
-pip install -r appiumtests/requirements.txt
-QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 selenium-webdriver-at-spi-run pytest appiumtests/ -v
+# Lint (targets defined in root CMakeLists.txt; NOT enforced in CI)
+make format    # clang-format (WebKit, 120-char, C++20)
+make tidy      # clang-tidy (diagnostic/analyzer/performance/bugprone/modernize/...)
+
+# Debug launch with logging categories
+./run-debug.sh --all       # all Qt debug logs
+./run-debug.sh --helper    # D-Bus helper logs only
+
+# E2e tests (rootless container — see appiumtests/Dockerfile)
+podman build -f appiumtests/Dockerfile -t localhost/couchplay-e2e .
+distrobox create --image localhost/couchplay-e2e --name cp-test --yes
+distrobox enter cp-test -- /entrypoint.sh appiumtests/ -v
+distrobox rm cp-test -f
 ```
 
-## Structure
+## Code Conventions & Common Patterns
 
-```
-./
-├── src/core/       # 15 classes (30 files, ~9.3K lines) - SEE ./src/core/AGENTS.md
-├── src/qml/        # UI layer (17 files, ~4.3K lines) - SEE ./src/qml/AGENTS.md
-├── helper/         # Privileged D-Bus service (CouchPlayHelper.cpp 1960 lines) - SEE ./helper/AGENTS.md
-├── tests/          # QtTest unit tests (13 files, ~5.2K lines) - SEE ./tests/AGENTS.md
-├── appiumtests/    # E2E tests (selenium-webdriver-at-spi) - SEE ./appiumtests/AGENTS.md (local-only, NOT in CI)
-├── src/dbus/       # D-Bus client for helper service
-└── data/           # Icons, polkit policy, D-Bus service files
-```
-
-## WHERE TO LOOK
-
-| Task | Location | Notes |
-|------|----------|-------|
-| Manager architecture | `./src/core/AGENTS.md` | DeviceManager, SessionManager, etc. |
-| QML layer | `./src/qml/AGENTS.md` | Kirigami components, page patterns |
-| Test patterns | `./tests/AGENTS.md` | Test naming, fixtures, mocking |
-| Privileged helper | `./helper/AGENTS.md` | D-Bus service, user mgmt, device ownership |
-| Device detection | `src/core/DeviceManager.{cpp,h}` | Parses `/proc/bus/input/devices` |
-| Session orchestration | `src/core/SessionRunner.{cpp,h}` | Starts/stops multiple GamescopeInstance |
-| Gamescope wrapping | `src/core/GamescopeInstance.{cpp,h}` | Argument building + D-Bus launch |
-| D-Bus client | `src/dbus/CouchPlayHelperClient.{cpp,h}` | Communicates with helper service |
-| QML entry point | `src/qml/Main.qml` | Creates all manager instances |
-| Privileged actions | `data/polkit/io.github.hikaps.couchplay.policy` | Polkit action definitions |
-
-## CODE MAP (Core Managers)
-
-| Manager | Purpose | Key Signals |
-|---------|---------|-------------|
-| DeviceManager | Input device detection/assignment | `deviceAssigned`, `devicesChanged`, `deviceReconnected` |
-| SessionManager | Session profiles, instance config | `currentLayoutChanged`, `instancesChanged`, `profileLoaded` |
-| GamescopeInstance | Gamescope launch (args + D-Bus) | `started`, `stopped`, `configChanged`, `statusChanged` |
-| SessionRunner | Orchestrates multiple instances | `sessionStarted`, `sessionStopped`, `instanceStarted` |
-| UserManager | Linux user management | `usersChanged`, `userCreated` |
-| MonitorManager | Display detection | `monitorsChanged` |
-| AudioManager | PipeWire configuration | - |
-
-## CONVENTIONS (Deviations from Standard C++/Qt)
-
-### File Headers
+### C++ Headers
 ```cpp
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 ```
 
 ### Include Order
-1. Own header (.cpp files)
+1. Own header (`.cpp` files)
 2. Qt headers (alphabetical)
 3. KDE Frameworks headers
-4. System headers
+4. System headers (`<unistd.h>`, `<pwd.h>`)
 5. Project headers
 
 ### Naming
-- Classes: PascalCase (`DeviceManager`)
-- Member vars: `m_camelCase`
-- Methods: camelCase (`buildGamescopeArgs()`)
-- Qt signals: camelCase, past tense (`devicesChanged()`)
-- Qt slots: `on + Source + Event` (`onProcessStarted()`)
-- QML files: PascalCase (`HomePage.qml`)
+- **Classes**: PascalCase (`DeviceManager`, `StreamManager`)
+- **Methods**: camelCase (`buildGamescopeArgs()`, `setupStreamingInstance()`)
+- **Member vars**: `m_camelCase` (`m_sessionManager`, `m_streams`)
+- **Qt signals**: camelCase, past tense (`devicesChanged()`, `sessionStarted()`)
+- **Qt slots**: `on` + Source + Event (`onProcessStarted()`)
 
-### Qt/KDE Specific
-- Use `QStringLiteral()` for string literals (no runtime alloc)
-- Use `Q_EMIT` instead of `emit`
-- Use `Q_SIGNALS`/`Q_SLOTS` instead of `signals`/`slots`
-- Use `#pragma once` instead of include guards
-- Use `nullptr` instead of `NULL` or `0`
-- Use `override` for virtual methods
+### Qt/KDE Idioms
+- `QStringLiteral()` for all string literals (no runtime alloc)
+- `Q_EMIT` (not bare `emit`); `Q_SIGNALS`/`Q_SLOTS` (not `signals`/`slots`)
+- `#pragma once`; `nullptr` (not `NULL`); `override` on virtuals
+- `Q_PROPERTY(... MEMBER ...)` for QML-exposed fields
+- `Q_INVOKABLE` on methods called from QML
 
 ### QML/Kirigami
 - Import with aliases: `import org.kde.kirigami as Kirigami`
-- Use `i18nc()` for user-visible strings with context
-- Component IDs: camelCase (`id: deviceManager`)
-- Properties: `required property` for mandatory injections
-
-### Class Declaration Order
-1. Q_OBJECT macro
-2. QML_ELEMENT (if exposed to QML)
-3. Q_PROPERTY declarations
-4. public: constructors/destructor
-5. public: Q_INVOKABLE methods
-6. public: getters/setters
-7. Q_SIGNALS:
-8. public/private Q_SLOTS:
-9. private: helpers
-10. private: member variables
+- `i18nc("@context", "string")` for all user-visible text
+- `objectName: "controlName"` for AT-SPI/appium accessibility
+- PascalCase filenames (`SessionSetupPage.qml`)
+- Required properties for mandatory injections
 
 ### Error Handling
-- `qWarning()` for recoverable errors
-- `qDebug()` for development output only
-- Emit `errorOccurred(QString)` for user-facing errors
-- Clean up in destructors
+- `qWarning()` — recoverable errors (logged, continues)
+- `qDebug()` — development output only (not shown in release)
+- `Q_EMIT errorOccurred(QString)` — user-facing errors (shown in UI)
+- Helper: `sendErrorReply(QDBusError::Failed, ...)` for D-Bus errors
 
-### Extracted Helpers (helper/)
-- `validateUserAndAuth()` — shared 3-check pattern for D-Bus slots (username validity, user exists, Polkit auth)
-- `runCommand()` — shared QProcess spawn/await pattern (start, waitForFinished, return output)
+### Testing Patterns
+- **Unit tests** use `#define private public` to access internals (no mocking framework)
+- `MockSystemOps` (25 virtual overrides) injects into `CouchPlayHelper` for helper tests
+- `MockCouchPlayHelperClient` subclass for SessionRunner tests
+- Tests `#include` source `.cpp` files directly (not a linked library) — deliberate trade-off documented in AGENTS.md
+- Appium tests use **type-ahead** for ComboBox selection (Qt6 popup items lack accessible names)
 
-## ANTI-PATTERNS (Project-Specific)
+### Helper Privileged Patterns
+- `validateUserAndAuth(username, action)` — 3-check gate (username regex, user exists, Polkit auth) before every privileged op
+- `runCommand(program, args, timeout)` — shared QProcess spawn/await pattern
+- D-Bus args pass through `execve` (no shell) — no command injection
 
-- **Test source inclusion**: Tests include source files directly instead of linking targets (see `tests/CMakeLists.txt`)
-- **Gamescope host requirement**: App must run on host, not in container (gamescope needs host display)
-- **Partial Polkit**: Only `create-user` and `delete-user` actions require Polkit auth; other privileged ops (device ownership, launch, mounts, ACLs) rely on D-Bus bus ACL only (see `helper/SystemOps.cpp:137-179`)
-- **Missing i18n infrastructure**: `KF6::I18n` linked but no `po/` directory or translation files exist
-- **No CI linting**: `make format`/`make tidy` targets exist but are not run in CI
-- **Dual binary install**: `src/CMakeLists.txt` installs couchplay twice (system bindir + `bin/` for Flatpak)
-- **Blocking sleep**: `WindowManager.cpp` uses `QThread::msleep(100)` for window positioning
+## Important Files
 
-## UNIQUE PATTERNS
+| File | Role |
+|---|---|
+| `src/main.cpp` | App entry point; creates managers, loads QML module |
+| `src/qml/Main.qml` | QML entry; instantiates all managers, global drawer actions |
+| `src/core/SessionRunner.cpp` | Session lifecycle orchestrator (~1.5K lines); physical + streaming instance management |
+| `src/core/StreamManager.cpp` | Sunshine subprocess lifecycle; crash recovery (`MAX_RESTART_ATTEMPTS=3`), startup timeout, port-bump on crash |
+| `src/core/SunshineConfig.cpp` | Generates per-instance `sunshine.conf` / `apps.json` / `credentials.json`; port = `47989 + index×30` |
+| `helper/CouchPlayHelper.cpp` | Root D-Bus service (~2.4K lines); user/device/virtual-display/null-sink/process management |
+| `data/polkit/io.github.hikaps.couchplay.policy` | 11 Polkit actions (gates `CreateUser`, `DeleteUser`, `CreateVirtualOutput`, `CreateNullSink`, etc.) |
+| `appiumtests/Dockerfile` | Fedora 43 image baking KDE/KWin/gamescope/pipewire/Sunshine/selenium-driver/couchplay |
+| `appiumtests/container/entrypoint.sh` | Rootless container entrypoint: user-owned system bus + mock helper + PipeWire + nested kwin |
 
-### Modular QML Architecture
-- Uses `ecm_add_qml_module` to package QML as a module (`io.github.hikaps.couchplay 1.0`)
-- Loads QML with `engine.loadFromModule()` instead of `load("qrc:/Main.qml")`
+## Runtime/Tooling Preferences
 
-### D-Bus Helper Pattern
-- GUI (`couchplay`) communicates with privileged helper (`couchplay-helper`) via D-Bus
-- Helper uses Polkit for authorization (see `data/polkit/io.github.hikaps.couchplay.policy`)
-- Performs device ownership transfer, user creation, PipeWire configuration
+- **OS**: Developed on Bazzite (immutable Fedora, Wayland/KDE Plasma). The app **must run on the host** (gamescope requires the host display); don't run inside a container (except e2e tests which use a nested kwin).
+- **Build deps**: CMake ≥ 3.20, C++20, Qt6 ≥ 6.5 (Core/Quick/Qml/Gui/QuickControls2/Widgets/DBus), KF6 ≥ 6.0 (Kirigami/I18n/CoreAddons/Config/IconThemes/QQC2DesktopStyle/GlobalAccel), ECM ≥ 6.0, PolkitQt6-1, PipeWire-devel, dbus-daemon.
+- **E2e container**: Podman (rootless) + distrobox. On the dev box, `distrobox-host-exec` bridges to the host's podman. The container uses software rendering (`LIBGL_ALWAYS_SOFTWARE=1`, `QT_QUICK_BACKEND=software`) — no GPU needed for AT-SPI-driven tests.
+- **Package manager**: system `dnf` (Fedora); no npm/cargo/pip for the app itself (only `appiumtests/requirements.txt` for e2e Python deps).
+- **Formatting**: `.clang-format` (WebKit base, 120-char, C++20, Linux braces, right pointers). `.editorconfig` (4-space C++/QML/CMake/sh, 2-space JSON/YAML, tab Makefile).
+- **App ID**: `io.github.hikaps.couchplay` (D-Bus service name, QML module URI, desktop file, Flatpak ID).
 
-### Device Stable IDs
-- DeviceManager generates stable device IDs from physical path info (vendor/product IDs, phys path)
-- Enables device reconnection recognition after USB hotplug
-- See `DeviceManager::generateStableId()` implementation
+## Testing & QA
 
-## BRANCHING & RELEASE
+### Unit Tests (CI gate)
+- **Framework**: QtTest (`QTest::qExec`), 17 test binaries.
+- **Run**: `QT_QPA_PLATFORM=offscreen dbus-run-session -- ctest --test-dir build --output-on-failure`
+- **CI**: `.github/workflows/ci.yml` runs all 17 on push/PR to `develop` (Fedora 41 container, no exclusions).
+- **Coverage**: managers (DeviceManager, SessionManager, SessionRunner, GamescopeInstance, StreamManager, SunshineConfig, WindowManager, AudioManager, UserManager, PresetManager, etc.) + the full helper (test_couchplayhelper, 62 tests via MockSystemOps).
+- **Test source inclusion**: tests `#include` the `.cpp` sources directly (not a linked library). Each test target compiles its own copy of the core sources. This is a deliberate trade-off (documented anti-pattern).
 
-- **develop**: Main development branch, all PRs merge here
-- **main**: Stable releases only
-- **Branch prefixes**: `feature/`, `feat/`, `fix/`, `ci/`, `remove/` (e.g., `feature/steam-input`, `fix/ci-tests`)
-- **Releases**: Tag and release only from `main`, never from `develop`. Merge develop into main, tag, push.
+### E2E / Appium Tests (local-only, NOT in CI)
+- **Framework**: `selenium-webdriver-at-spi` (KDE driver, drives the app via AT-SPI accessibility).
+- **Container**: `appiumtests/Dockerfile` bakes Fedora 43 + KDE/KWin/gamescope/pipewire/Sunshine + the app + the selenium driver. Runs rootless via distrobox.
+- **Run**: `distrobox enter cp-test -- /entrypoint.sh appiumtests/ -v`
+- **Mock helper**: `appiumtests/helpers/mock_helper.py` owns `io.github.hikaps.CouchPlayHelper` on the system bus (29 methods matching `helper/CouchPlayHelper.h`), records LaunchInstance calls to a JSONL log.
+- **Selector strategy**: id-first hybrid — `objectName` (ACCESSIBILITY_ID) for QML Items, `Accessible.name` (NAME) for Kirigami Actions/dialogs. ComboBox selection via popup type-ahead (Qt6 popup items have no accessible names).
+- **Sunshine integration**: `test_sunshine_integration.py` feeds real `SunshineConfig` output (via `sunshine_config_generator` binary) to the real Sunshine binary and asserts it accepts every config key + value.
 
-## NOTES
+### Branching & Release
+- **`develop`**: integration branch; all PRs merge here.
+- **`main`**: stable releases only. Tag + release from `main`, never from `develop`.
+- **Branch prefixes**: `feature/`, `feat/`, `fix/`, `ci/`, `chore/`, `remove/`.
+- **CI workflows**: `ci.yml` (tests on develop), `beta.yml` (rolling pre-release from develop), `release.yml` (tagged release from main), `flatpak.yml` (Flatpak bundle from main tag).
 
-- **App ID**: `io.github.hikaps.couchplay` (D-Bus, QML module, desktop file)
-- **Local docs**: `PLAN.md` has architecture overview and feature roadmap
-- **Build artifacts**: Ignore `build/` directory
-- **Root test files**: `test_*.cpp` are temporary/experimental, not part of test suite
-- **CI tests**: CI runs all 13 unit tests under `dbus-run-session` (see `.github/workflows/ci.yml`); E2E (`appiumtests/`) is local-only — run manually during development and before release/beta.
-- **Linting**: `.clang-format` (WebKit-based, 120-char), `.clang-tidy` (pragmatic Qt6/C++20), `.editorconfig` present — run `make format` / `make tidy` locally
+## Known Limitations & Anti-Patterns
 
-## GIT META
-
-- **Commit**: `521059b`
-- **Branch**: `develop`
+- **Blocking sleep**: `src/core/WindowManager.cpp` uses `QThread::msleep(100)` for window positioning (a short blocking wait) rather than an async signal.
+- **Missing i18n infrastructure**: `KF6::I18n` is linked and `i18nc(...)` is used in QML, but there is no `po/` directory or translation files — strings are not currently shipped translated.
+- **No CI linting**: `make format` / `make tidy` targets exist but are not enforced in CI.
