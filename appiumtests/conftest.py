@@ -169,7 +169,7 @@ def go_home(driver):
     wait.until(EC.presence_of_element_located((AppiumBy.NAME, "Welcome to CouchPlay")))
 
 
-def stop_session_if_running(driver, timeout=2):
+def stop_session_if_running(driver):
     """Ensure no session is left running between session tests.
 
     sessionRunner is a global manager that persists across pages, so a test
@@ -180,14 +180,18 @@ def stop_session_if_running(driver, timeout=2):
     action lives) and stops if running; a no-op when nothing is. Scoped to
     session tests via an autouse fixture in TestSessionLifecycle so the other
     ~43 tests pay no per-test navigation overhead.
+
+    Uses DEFAULT_TIMEOUT for the navigation/detection waits: a tight timeout
+    here can swallow a slow-navigation TimeoutException and leak a running
+    session into the next test (the very failure this guards against).
     """
     from selenium.common.exceptions import TimeoutException
 
     try:
         go_home(driver)
-        click_by_object_name(driver, "cardNewSession", timeout)
-        wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "spinPlayerCount", timeout)
-        stop_btn = wait_for_element_clickable(driver, AppiumBy.NAME, "Stop Session", timeout)
+        click_by_object_name(driver, "cardNewSession")
+        wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "spinPlayerCount")
+        stop_btn = wait_for_element_clickable(driver, AppiumBy.NAME, "Stop Session")
         stop_btn.click()
         wait_for_element(driver, AppiumBy.NAME, "Start Session", timeout=5)
     except TimeoutException:
@@ -229,11 +233,24 @@ def select_combo_option(driver, combo_object_name, option_name, timeout=DEFAULT_
         driver, AppiumBy.ACCESSIBILITY_ID, combo_object_name, timeout
     )
     el.click()  # focus the combo / open the popup
-    time.sleep(0.4)  # let the popup open
+    time.sleep(0.5)  # let the popup open (0.4 was too tight under container load)
     el.send_keys(option_name)
     time.sleep(0.2)
     el.send_keys(Keys.ENTER)
     time.sleep(0.3)  # let the onActivated binding settle
+
+    # Verify the selection took. Qt ComboBox exposes the selected text as the
+    # AT-SPI *value* (Accessible.name is the label, not the value). Degrades to
+    # a no-op if the driver doesn't expose value -- never a false failure.
+    combo = wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, combo_object_name, timeout)
+    try:
+        current = combo.get_attribute("value")
+    except Exception:
+        current = None
+    if current and option_name not in current:
+        raise AssertionError(
+            f"combo {combo_object_name!r} did not select {option_name!r} (got {current!r})"
+        )
 
 
 def wait_for_absence(driver, by, value, timeout=3):
@@ -289,5 +306,5 @@ def pytest_runtest_makereport(item, call):
             filepath = os.path.join(SCREENSHOT_DIR, filename)
             try:
                 _driver.save_screenshot(filepath)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[conftest] screenshot capture failed for {filename}: {exc}", file=sys.stderr)

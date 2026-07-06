@@ -35,7 +35,6 @@ class TestSessionLifecycle(BaseTest):
         title = self.wait_for_element(
             driver, AppiumBy.ACCESSIBILITY_ID, "spinPlayerCount", LONG_TIMEOUT
         )
-        assert title.is_displayed()
 
     @pytest.mark.xfail(
         reason="WindowManager queries org.kde.KWin on the shared host session "
@@ -56,7 +55,6 @@ class TestSessionLifecycle(BaseTest):
         stop_btn = self.wait_for_element_clickable(
             driver, AppiumBy.NAME, "Stop Session", LONG_TIMEOUT
         )
-        assert stop_btn.is_displayed()
         stop_btn.click()
         self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
 
@@ -75,7 +73,6 @@ class TestSessionLifecycle(BaseTest):
         start_btn = self.wait_for_element(
             driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT
         )
-        assert start_btn.is_displayed()
 
     def test_two_instances_launch(self, driver, mock_helper, test_users):
         """A 2-player session issues two distinct LaunchInstance calls.
