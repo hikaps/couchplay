@@ -21,10 +21,19 @@
 # Re-run with sudo if not root (allows piped input to work with visible output)
 if [[ $EUID -ne 0 ]]; then
     echo "Requesting sudo access to install CouchPlay..."
+    # --beta means a develop build, so re-fetch the installer from develop; otherwise main.
+    # We re-download because piping leaves no script on disk. Forward "$@" so flags
+    # (e.g. --beta) survive the sudo escalation — previously they were silently dropped,
+    # which made the documented --beta one-liner always install stable instead of beta.
+    if [[ " $* " == *" --beta "* ]]; then
+        INSTALLER_BRANCH="develop"
+    else
+        INSTALLER_BRANCH="main"
+    fi
     TMP_SCRIPT=$(mktemp)
-    curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh > "$TMP_SCRIPT"
+    curl -fsSL "https://raw.githubusercontent.com/hikaps/couchplay/${INSTALLER_BRANCH}/scripts/install.sh" > "$TMP_SCRIPT"
     chmod +x "$TMP_SCRIPT"
-    exec sudo "$TMP_SCRIPT"
+    exec sudo "$TMP_SCRIPT" "$@"
 fi
 
 set -e
