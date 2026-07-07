@@ -61,14 +61,15 @@ void RotatingFileLogger::write(QtMsgType type, const QMessageLogContext &context
 
 void RotatingFileLogger::rotate()
 {
-    // Held under m_mutex. Shift .1->.2->...->maxBackups, dropping the oldest.
+    // Held under m_mutex. Vacate the oldest slot first, then shift .1->.2->...->maxBackups,
+    // and move the active file into the vacated .1 slot. Vacating before filling keeps
+    // QFile::rename reliable (it never overwrites) and the cap correct even for maxBackups==1
+    // (where the shift loop is a no-op and the single .1 backup is simply replaced each rotation).
     m_file.close();
+    QFile::remove(m_filePath + QLatin1Char('.') + QString::number(m_maxBackups)); // drop the oldest slot
     for (int i = m_maxBackups; i > 1; --i) {
         const QString older = m_filePath + QLatin1Char('.') + QString::number(i);
         const QString newer = m_filePath + QLatin1Char('.') + QString::number(i - 1);
-        if (i == m_maxBackups) {
-            QFile::remove(older); // drop the oldest slot beyond the cap
-        }
         QFile::rename(newer, older);
     }
     // Active file -> .1, then reopen fresh.

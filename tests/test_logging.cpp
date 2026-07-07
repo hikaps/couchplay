@@ -19,6 +19,7 @@ private Q_SLOTS:
     void testRotation();
     void testOpenFailureNoCrash();
     void testAppendToExisting();
+    void testMaxBackupsOne();
 };
 
 void TestLogging::testRotation()
@@ -36,10 +37,11 @@ void TestLogging::testRotation()
         logger.write(QtInfoMsg, {}, QStringLiteral("line %1 padding to fill the 200-byte bucket").arg(i));
     }
 
-    // Active file exists and at least one backup was produced.
+    // Active + the full backup cascade (.1/.2/.3) exist; the cap holds (no .4).
     QVERIFY(QFile::exists(path));
     QVERIFY(QFile::exists(path + QStringLiteral(".1")));
-    // Cap is enforced: a 4th backup must never appear.
+    QVERIFY(QFile::exists(path + QStringLiteral(".2")));
+    QVERIFY(QFile::exists(path + QStringLiteral(".3")));
     QVERIFY(!QFile::exists(path + QStringLiteral(".4")));
 }
 
@@ -57,9 +59,10 @@ void TestLogging::testOpenFailureNoCrash()
     RotatingFileLogger logger(dir.filePath(QStringLiteral("blocker")) + QStringLiteral("/couchplay.log"));
     QVERIFY(!logger.open());
 
-    // Writing to a logger that failed to open must be a safe no-op.
+    // Writing to a logger that failed to open must be a safe no-op: no crash, no file created.
     logger.write(QtInfoMsg, {}, QStringLiteral("this must not crash"));
-    QVERIFY(true);
+    QCOMPARE(logger.filePath(), dir.filePath(QStringLiteral("blocker")) + QStringLiteral("/couchplay.log"));
+    QVERIFY(!QFile::exists(logger.filePath()));
 }
 
 void TestLogging::testAppendToExisting()
@@ -85,6 +88,26 @@ void TestLogging::testAppendToExisting()
 
     QVERIFY(QFile::exists(path));
     QVERIFY(QFile::exists(path + QStringLiteral(".1")));
+}
+
+void TestLogging::testMaxBackupsOne()
+{
+    // The documented contract lower bound: exactly one backup. Many rotations must
+    // never produce a .2; each rotation replaces the single .1 in place.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.path() + QStringLiteral("/couchplay.log");
+
+    RotatingFileLogger logger(path, 200, 1);
+    QVERIFY(logger.open());
+
+    for (int i = 0; i < 50; ++i) {
+        logger.write(QtInfoMsg, {}, QStringLiteral("line %1 padding to force many rotations").arg(i));
+    }
+
+    QVERIFY(QFile::exists(path));
+    QVERIFY(QFile::exists(path + QStringLiteral(".1")));
+    QVERIFY(!QFile::exists(path + QStringLiteral(".2")));
 }
 
 QTEST_MAIN(TestLogging)
