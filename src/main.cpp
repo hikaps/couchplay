@@ -2,20 +2,26 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include <QApplication>
+#include <QDebug>
+#include <QDir>
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
+#include <QStandardPaths>
 #include <QtQml>
 
 #include <KIconTheme>
 #include <KLocalizedContext>
 #include <KLocalizedString>
 
+#include <memory>
+
 #include "couchplay-version.h"
 
 #include "core/AudioManager.h"
 #include "core/DeviceManager.h"
 #include "core/GamescopeInstance.h"
+#include "core/Logging.h"
 #include "core/MonitorManager.h"
 #include "core/PresetManager.h"
 #include "core/SessionManager.h"
@@ -23,13 +29,9 @@
 #include "core/UserManager.h"
 #include "dbus/CouchPlayHelperClient.h"
 
-#include <QFile>
-#include <QTextStream>
-#include <QDateTime>
-#include <QStandardPaths>
-
 // Custom message handler to filter noisy Qt warnings
 static QtMessageHandler s_originalHandler = nullptr;
+static std::unique_ptr<RotatingFileLogger> s_fileLogger;
 
 void couchplayMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
@@ -39,25 +41,10 @@ void couchplayMessageHandler(QtMsgType type, const QMessageLogContext &context, 
         return;
     }
 
-    // Optional file logging, opt-in via COUCHPLAY_LOG (debug aid; off by default).
-    static const bool s_logToFile = !qgetenv("COUCHPLAY_LOG").isEmpty();
-    if (s_logToFile) {
-        QFile logFile(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-                      + QStringLiteral("/couchplay/couchplay.log"));
-        if (logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-            QTextStream stream(&logFile);
-            QString typeStr = QStringLiteral("DEBUG");
-            switch (type) {
-            case QtDebugMsg: typeStr = QStringLiteral("DEBUG"); break;
-            case QtInfoMsg: typeStr = QStringLiteral("INFO"); break;
-            case QtWarningMsg: typeStr = QStringLiteral("WARN"); break;
-            case QtCriticalMsg: typeStr = QStringLiteral("CRIT"); break;
-            case QtFatalMsg: typeStr = QStringLiteral("FATAL"); break;
-            }
-            stream << "[" << QDateTime::currentDateTime().toString(Qt::ISODate) << "] [" << typeStr << "] " << msg << "\n";
-        }
+    // Beta channel: mirror every message to the rotating file sink (no-op when null).
+    if (s_fileLogger) {
+        s_fileLogger->write(type, context, msg);
     }
-
     if (s_originalHandler) {
         s_originalHandler(type, context, msg);
     }
@@ -81,6 +68,20 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(QStringLiteral(COUCHPLAY_VERSION_STRING));
     QApplication::setDesktopFileName(QStringLiteral("io.github.hikaps.couchplay"));
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.hikaps.couchplay")));
+
+#ifdef COUCHPLAY_BETA
+    // Beta channel: enable all couchplay.* debug categories and mirror to a rotating file.
+    // QT_LOGGING_RULES still overrides this (env var > setFilterRules).
+    QLoggingCategory::setFilterRules(QStringLiteral("couchplay.*=true"));
+    const QString logDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/logs");
+    QDir().mkpath(logDir);
+    s_fileLogger = std::make_unique<RotatingFileLogger>(logDir + QStringLiteral("/couchplay.log"));
+    if (!s_fileLogger->open()) {
+        s_fileLogger.reset(); // file logging unavailable; console (verbose) still works
+    }
+#else
+    // Prod channel: keep category defaults (warnings only). QT_LOGGING_RULES still works.
+#endif
 
     // Set Qt Quick style
     QApplication::setStyle(QStringLiteral("breeze"));

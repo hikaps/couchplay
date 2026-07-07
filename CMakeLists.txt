@@ -65,6 +65,9 @@ option(BUILD_TESTING "Build the testing tree." ON)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+# Build for the beta release channel: enables verbose + rotating-file logging.
+# Prod (default) builds stay quiet (warnings only). QT_LOGGING_RULES still overrides.
+option(COUCHPLAY_BETA "Build a beta release with verbose/file logging" OFF)
 
 # Install desktop file
 install(PROGRAMS data/io.github.hikaps.couchplay.desktop
