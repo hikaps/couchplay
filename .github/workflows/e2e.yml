@@ -66,12 +66,17 @@ jobs:
       - name: Run appium e2e suite (nested kwin + AT-SPI, software render)
         run: |
           mkdir -p out
-          # --userns=keep-id runs the entrypoint as the host UID (not root),
-          # which is what distrobox provided locally. The entrypoint owns its
-          # whole environment (user-owned system bus, mock helper, /tmp runtime,
-          # software rendering), so no host GPU/audio/device passthrough needed.
+          # Run the container AS the host user. --userns=keep-id maps the host
+          # UID into the namespace; --user makes the entrypoint actually run as
+          # it. keep-id alone still launches as the image's default root, which
+          # maps to a high host UID and CANNOT write the bind-mounted out/ dir
+          # (the exact EACCES that failed run #28906888526). This mirrors what
+          # distrobox does locally. The entrypoint brings its own system bus,
+          # mock helper, /tmp runtime, and software rendering -- no host
+          # GPU/audio/device passthrough needed.
           podman run --rm \
             --userns=keep-id \
+            --user "$(id -u):$(id -g)" \
             -v "$PWD/out:/tmp/cp-out" \
             couchplay-e2e:ci appiumtests/ -v
           #
