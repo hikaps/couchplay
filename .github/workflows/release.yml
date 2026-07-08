@@ -63,6 +63,10 @@ jobs:
           # Bundle the helper's runtime libraries so it runs without system Qt6/Polkit
           chmod +x scripts/bundle-libs.sh
           ./scripts/bundle-libs.sh release-appdir/bin/couchplay-helper lib/couchplay
+          # Regression guard (#28/#37): bundling must land, else the helper
+          # falls back to system Qt6Core on Arch/SteamOS (copy-relocation reject).
+          test -f release-appdir/lib/couchplay/libQt6Core.so.6 || { echo "::error::bundled libQt6Core.so.6 missing"; exit 1; }
+          patchelf --print-rpath release-appdir/bin/couchplay-helper | grep -q 'lib/couchplay' || { echo "::error::helper RPATH not set to bundled libs"; exit 1; }
 
           # Copy scripts
           cp scripts/install-helper.sh release-appdir/
