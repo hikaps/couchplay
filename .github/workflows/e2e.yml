@@ -5,11 +5,12 @@ name: E2E Tests
 # an isolated dbus-run-session with software rendering -- so it needs no host
 # GPU/audio/devices, only a Wayland-capable Linux host.
 #
-# This job runs on a SELF-HOSTED runner (the maintainer's Bazzite box, labeled
-# `self-hosted, linux`). Self-hosted runners execute workflow code on your
-# machine, so for this PUBLIC repo we MUST NOT run untrusted contributions:
-# the `if:` below blocks pull requests from forks. Same-repo branches and direct
-# pushes to develop/main are trusted.
+# BIFURCATION: unit tests (ci.yml) gate every PR. This e2e suite is slow and
+# runner-bound (self-hosted -- the maintainer's Bazzite box, labels `self-hosted,
+# linux`), so it does NOT run on pull requests at all: only on push to
+# develop/main (right before the beta/stable cuts) and on manual dispatch. No PR
+# trigger = no fork-PR vector: external contributors can never reach this runner.
+# (If you ever re-add `pull_request`, restore the fork `if:` gate below.)
 #
 # Runner registration (one-time, manual -- needs a repo token only you hold;
 # get it from repo Settings -> Actions -> Runners -> New self-hosted runner):
@@ -32,20 +33,17 @@ name: E2E Tests
 on:
   push:
     branches: [ develop, main ]
-  pull_request:
-    branches: [ develop ]
   workflow_dispatch:
+
+# Single self-hosted runner + long image build: cancel a superseded run when a
+# new push lands on the same ref, instead of queuing behind it on one runner.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   e2e:
     runs-on: [ self-hosted, linux ]
-
-    # SECURITY gate: never run for fork PRs (arbitrary code on your machine).
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
 
     # A persistent runner can stall or go offline; keep this advisory until the
     # box's uptime is trusted. Do not mark it a required status check blindly.
