@@ -8,8 +8,12 @@ name: E2E Tests
 # BIFURCATION: unit tests (ci.yml) gate every PR. This e2e suite is slow and
 # runner-bound (self-hosted -- the maintainer's Bazzite box, labels `self-hosted,
 # linux`), so it does NOT run on pull requests at all: only on push to
-# develop/main (right before the beta/stable cuts) and on manual dispatch. No PR
-# trigger = no fork-PR vector: external contributors can never reach this runner.
+# develop/main (right before the beta/stable cuts) and on manual dispatch. With
+# no pull_request trigger, an UNREVIEWED fork PR can't fire this job -- but
+# merging a fork PR produces a push event, so merged external code (Dockerfile,
+# entrypoint, tests) DOES execute on this host. Review appiumtests/ infra
+# changes before merging, and prefer a dedicated unprivileged runner user so
+# merged/compromised code can't read ~/.ssh or the runner token.
 # (If you ever re-add `pull_request`, restore the fork `if:` gate below.)
 #
 # Runner registration (one-time, manual -- needs a repo token only you hold;
@@ -34,6 +38,9 @@ on:
   push:
     branches: [ develop, main ]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 # Single self-hosted runner + long image build: cancel a superseded run when a
 # new push lands on the same ref, instead of queuing behind it on one runner.
@@ -70,17 +77,17 @@ jobs:
           # UID into the namespace; --user makes the entrypoint actually run as
           # it. keep-id alone still launches as the image's default root, which
           # maps to a high host UID and CANNOT write the bind-mounted out/ dir
-          # (the exact EACCES that failed run #28906888526). This mirrors what
+          # (the EACCES seen on first CI run). This mirrors what
           # distrobox does locally. The entrypoint brings its own system bus,
           # mock helper, /tmp runtime, and software rendering -- no host
           # GPU/audio/device passthrough needed.
           # :Z relabels the bind mount to container_file_t -- mandatory under
           # SELinux (Enforcing), or the container process can't write the
-          # host-owned out/ dir (EACCES, runs #28906888526 + #28907384272).
+          # host-owned out/ dir (EACCES).
           # --cap-add all: kwin_wayland, sunshine, gstreamer helpers, etc. carry
           # file capabilities (cap_sys_nice, cap_sys_admin, ...). execve of a
           # file-cap'd binary returns EPERM in a rootless user namespace unless
-          # the cap is in the bounding set, so kwin exec failed (run #28907614634).
+          # the cap is in the bounding set, so kwin exec failed.
           # Adding all caps mirrors what distrobox does; safe here because the
           # container is rootless, isolated, and software-rendered (no host devs).
           # -e COUCHPLAY_E2E_LONG_TIMEOUT=120: the streaming test's "Start Session"

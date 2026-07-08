@@ -15,7 +15,7 @@ pytestmark = pytest.mark.requires_helper
 
 # Env-overridable so CI (software-rendered, slower UI) can bump it without
 # touching test logic. Default is plenty for a local GPU-backed run.
-LONG_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_LONG_TIMEOUT", "20"))
+LONG_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_LONG_TIMEOUT") or "20")
 
 
 class TestSessionLifecycle(BaseTest):
