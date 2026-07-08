@@ -67,7 +67,7 @@ jobs:
               ldd smoke/bin/couchplay-helper | grep -i qt6core
               exit 1
             fi
-            out="$(timeout 3 smoke/bin/couchplay-helper 2>&1 || true)"
+            out="$(timeout -k 2 3 smoke/bin/couchplay-helper 2>&1 || true)"
             if printf "%s" "$out" | grep -qi "copy relocation\|INDIRECT_EXTERN_ACCESS"; then
               echo "::error::bundled helper hit the copy-relocation error"
               printf "%s\n" "$out"
@@ -79,9 +79,15 @@ jobs:
             mkdir -p /tmp/neg
             cp smoke/bin/couchplay-helper /tmp/neg/couchplay-helper
             patchelf --remove-rpath /tmp/neg/couchplay-helper
-            neg="$(timeout 3 /tmp/neg/couchplay-helper 2>&1 || true)"
+            neg="$(timeout -k 2 3 /tmp/neg/couchplay-helper 2>&1 || true)"
             if printf "%s" "$neg" | grep -qi "copy relocation\|INDIRECT_EXTERN_ACCESS"; then
               echo "PASS: negative control reproduced the expected copy-relocation error"
+            elif printf "%s" "$neg" | grep -qi "cannot open shared object file"; then
+              echo "::error::negative control failed with a MISSING dependency, not the copy-relocation error."
+              echo "The helper gained a runtime lib not in qt6-base/polkit-qt6 -- add it to the pacman"
+              echo "install above, or this control can no longer verify the regression."
+              printf "%s\n" "$neg"
+              exit 1
             else
               echo "::error::negative control did NOT reproduce the copy-relocation error."
               echo "Qt/glibc changed and this test is no longer meaningful -- revisit it."
