@@ -36,12 +36,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/src" -w /src fedora:41 bash -lc '
             set -euo pipefail
-            dnf install -y cmake gcc-c++ git make \
-              qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qt5compat-devel \
-              kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel \
-              kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
-              kf6-kglobalaccel-devel extra-cmake-modules \
-              pipewire-devel polkit-devel polkit-qt6-1-devel patchelf binutils
+            ./scripts/install-build-deps.sh patchelf binutils
             cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
             cmake --build build --parallel "$(nproc)" --target couchplay-helper
             rm -rf smoke && mkdir -p smoke/bin
