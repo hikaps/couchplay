@@ -1,0 +1,112 @@
+name: E2E Tests
+
+# Appium (selenium-webdriver-at-spi) suite. Runs the appiumtests/Dockerfile
+# image, which brings its own nested KWin + mock D-Bus helper + PipeWire under
+# an isolated dbus-run-session with software rendering -- so it needs no host
+# GPU/audio/devices, only a Wayland-capable Linux host.
+#
+# BIFURCATION: unit tests (ci.yml) gate every PR. This e2e suite is slow and
+# runner-bound (self-hosted -- the maintainer's Bazzite box, labels `self-hosted,
+# linux`), so it does NOT run on pull requests at all: only on push to
+# develop/main (right before the beta/stable cuts) and on manual dispatch. No PR
+# trigger = no fork-PR vector: external contributors can never reach this runner.
+# (If you ever re-add `pull_request`, restore the fork `if:` gate below.)
+#
+# Runner registration (one-time, manual -- needs a repo token only you hold;
+# get it from repo Settings -> Actions -> Runners -> New self-hosted runner):
+#   sudo mkdir -p /var/lib/actions-runner && sudo chown $USER:$USER /var/lib/actions-runner
+#   cd /var/lib/actions-runner && tar xzf ~/Downloads/actions-runner-linux-x64-*.tar.gz
+#   ./config.sh --url https://github.com/<owner>/couchplay --token <TOKEN> \
+#               --labels "self-hosted,linux" --unattended
+#   sudo ./svc.sh install <user> && sudo ./svc.sh start   # system service as <user>
+# Do NOT install under ~ (/var/home/...) on Bazzite: config.sh verifies every
+# parent dir up to / is traversable and fails at /var/home ("Access to the path
+# '/var/home' is denied"). /var/lib has a clean 0755 hierarchy, so it passes.
+# Install the runner to the HOST as a tarball (NOT dnf/rpm-ostree -- Bazzite's
+# /usr is ostree-readonly; the unit lands in /etc, which is writable). The
+# service runs as <user> and boots at startup, so no `loginctl enable-linger`
+# is needed. Jobs run `podman` as <user> against that user's rootless storage,
+# so DO NOT enable podman.socket -- the socket is only for cross-user/remote
+# access, which this setup never does. A dedicated `github-runner` user is the
+# hardened alternative (isolates job code from your SSH keys/creds).
+
+on:
+  push:
+    branches: [ develop, main ]
+  workflow_dispatch:
+
+# Single self-hosted runner + long image build: cancel a superseded run when a
+# new push lands on the same ref, instead of queuing behind it on one runner.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: [ self-hosted, linux ]
+
+    # A persistent runner can stall or go offline; keep this advisory until the
+    # box's uptime is trusted. Do not mark it a required status check blindly.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build e2e image (deps cached; rebuilds app from current source)
+        run: |
+          podman build \
+            -f appiumtests/Dockerfile \
+            -t couchplay-e2e:ci \
+            .
+          # The Dockerfile COPYs the whole repo and builds couchplay, so this
+          # bakes the CURRENT commit. podman's layer cache (persistent on a
+          # self-hosted runner) reuses the heavy Fedora/KDE/Sunshine layers and
+          # only re-runs from COPY onward on source changes.
+
+      - name: Run appium e2e suite (nested kwin + AT-SPI, software render)
+        run: |
+          mkdir -p out
+          # Run the container AS the host user. --userns=keep-id maps the host
+          # UID into the namespace; --user makes the entrypoint actually run as
+          # it. keep-id alone still launches as the image's default root, which
+          # maps to a high host UID and CANNOT write the bind-mounted out/ dir
+          # (the exact EACCES that failed run #28906888526). This mirrors what
+          # distrobox does locally. The entrypoint brings its own system bus,
+          # mock helper, /tmp runtime, and software rendering -- no host
+          # GPU/audio/device passthrough needed.
+          # :Z relabels the bind mount to container_file_t -- mandatory under
+          # SELinux (Enforcing), or the container process can't write the
+          # host-owned out/ dir (EACCES, runs #28906888526 + #28907384272).
+          # --cap-add all: kwin_wayland, sunshine, gstreamer helpers, etc. carry
+          # file capabilities (cap_sys_nice, cap_sys_admin, ...). execve of a
+          # file-cap'd binary returns EPERM in a rootless user namespace unless
+          # the cap is in the bounding set, so kwin exec failed (run #28907614634).
+          # Adding all caps mirrors what distrobox does; safe here because the
+          # container is rootless, isolated, and software-rendered (no host devs).
+          # -e COUCHPLAY_E2E_LONG_TIMEOUT=120: the streaming test's "Start Session"
+          #   wait (LONG_TIMEOUT=20) can expire under slow software rendering; bump it.
+          # -p no:cacheprovider: pytest's cache writes under root-owned
+          #   /src/couchplay (.pytest_cache EACCES warning) -- disable it (CI is
+          #   ephemeral anyway).
+          podman run --rm \
+            --userns=keep-id \
+            --user "$(id -u):$(id -g)" \
+            --cap-add all \
+            -e COUCHPLAY_E2E_LONG_TIMEOUT=120 \
+            -v "$PWD/out:/tmp/cp-out:Z" \
+            couchplay-e2e:ci appiumtests/ -v -p no:cacheprovider
+          #
+          # FALLBACK (if raw rootless podman run hits the "runs as root /
+          # kwin untested" caveat noted in appiumtests/Dockerfile): the proven
+          # local path on this box is distrobox. Swap the podman run above for:
+          #   distrobox create --image couchplay-e2e:ci --name cp-ci --yes
+          #   distrobox enter cp-ci -- /entrypoint.sh appiumtests/ -v
+          #   distrobox rm cp-ci -f
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: out/
+          if-no-files-found: ignore

@@ -155,10 +155,11 @@ distrobox rm cp-test -f
 - **Coverage**: managers (DeviceManager, SessionManager, SessionRunner, GamescopeInstance, StreamManager, SunshineConfig, WindowManager, AudioManager, UserManager, PresetManager, etc.) + the full helper (test_couchplayhelper, 62 tests via MockSystemOps).
 - **Test source inclusion**: tests `#include` the `.cpp` sources directly (not a linked library). Each test target compiles its own copy of the core sources. This is a deliberate trade-off (documented anti-pattern).
 
-### E2E / Appium Tests (local-only, NOT in CI)
+### E2E / Appium Tests
 - **Framework**: `selenium-webdriver-at-spi` (KDE driver, drives the app via AT-SPI accessibility).
-- **Container**: `appiumtests/Dockerfile` bakes Fedora 43 + KDE/KWin/gamescope/pipewire/Sunshine + the app + the selenium driver. Runs rootless via distrobox.
-- **Run**: `distrobox enter cp-test -- /entrypoint.sh appiumtests/ -v`
+- **Container**: `appiumtests/Dockerfile` bakes Fedora 43 + KDE/KWin/gamescope/pipewire/Sunshine + the app + the selenium driver. Self-contained: the entrypoint brings its own user-owned system bus, mock helper, PipeWire, and nested kwin under an isolated `dbus-run-session`, with software rendering — no host GPU/audio/devices needed.
+- **CI (push-only)**: `.github/workflows/e2e.yml` runs the suite on a self-hosted runner (the dev Bazzite box, labels `self-hosted,linux`) — **only on push to `develop`/`main`** (right before beta/stable cuts) + manual dispatch, **never on PRs**. It `podman build`s the image from the current commit (layer-cached) and `podman run --userns=keep-id`s it. Unit tests (`ci.yml`) are the per-PR gate; e2e is the slower integration/release check. No PR trigger ⇒ no fork-PR vector. `concurrency` cancels superseded runs on the same ref (single runner).
+- **Run locally**: `podman build -f appiumtests/Dockerfile -t localhost/couchplay-e2e .` then `distrobox create --image localhost/couchplay-e2e --name cp-test --yes && distrobox enter cp-test -- /entrypoint.sh appiumtests/ -v && distrobox rm cp-test -f` (CI drops distrobox in favor of `podman run --userns=keep-id`; distrobox remains the local convenience flow).
 - **Mock helper**: `appiumtests/helpers/mock_helper.py` owns `io.github.hikaps.CouchPlayHelper` on the system bus (29 methods matching `helper/CouchPlayHelper.h`), records LaunchInstance calls to a JSONL log.
 - **Selector strategy**: id-first hybrid — `objectName` (ACCESSIBILITY_ID) for QML Items, `Accessible.name` (NAME) for Kirigami Actions/dialogs. ComboBox selection via popup type-ahead (Qt6 popup items have no accessible names).
 - **Sunshine integration**: `test_sunshine_integration.py` feeds real `SunshineConfig` output (via `sunshine_config_generator` binary) to the real Sunshine binary and asserts it accepts every config key + value.
