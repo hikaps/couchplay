@@ -48,11 +48,7 @@ jobs:
             cmake --build build --parallel "$(nproc)" --target couchplay-helper
             rm -rf smoke && mkdir -p smoke/bin
             cp build/bin/couchplay-helper smoke/bin/
-            chmod +x scripts/bundle-libs.sh
-            ./scripts/bundle-libs.sh smoke/bin/couchplay-helper lib/couchplay
-            # Packaging assertion (#28/#37): bundling must land.
-            test -f smoke/lib/couchplay/libQt6Core.so.6
-            patchelf --print-rpath smoke/bin/couchplay-helper | grep -q "lib/couchplay"
+            ./scripts/package-helper.sh smoke/bin/couchplay-helper
           '
 
       - name: Load helper in Arch (positive + negative control)
