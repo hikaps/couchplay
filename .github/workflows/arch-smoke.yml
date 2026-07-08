@@ -1,0 +1,86 @@
+name: Packaging Smoke (Arch)
+
+# Regression guard for the helper's runtime-library bundling (#28, #37).
+#
+# The copy-relocation failure (exit 127, "error due to
+# GNU_PROPERTY_1_NEEDED_INDIRECT_EXTERN_ACCESS") only manifests when a
+# Fedora-built helper is loaded against Arch's Qt6Core (built with
+# -fno-semantic-interposition). The unit-test suite runs on Fedora, so it
+# CANNOT reproduce this -- a green unit run gives false confidence. This
+# workflow builds the helper on Fedora, bundles its libs (as beta/release do),
+# then loads it in an archlinux container and checks:
+#   1. POSITIVE -- the bundled helper resolves Qt6Core to the bundle and runs
+#      with no copy-relocation error.
+#   2. NEGATIVE CONTROL -- an un-bundled copy MUST still reproduce the error.
+#      The control is what makes the test trustworthy: if it ever stops
+#      erroring, the test is no longer meaningful (Qt/glibc changed) and must be
+#      revisited, not silently ignored.
+#
+# Runs on GitHub-hosted ubuntu (Docker available, no host GPU/Wayland needed --
+# this is pure ELF load behaviour). Plain archlinux is a faithful proxy for
+# CachyOS/SteamOS: both reporters (#28, #37) hit the byte-identical error.
+
+on:
+  push:
+    branches: [ develop ]
+  workflow_dispatch:
+
+jobs:
+  arch-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build + bundle the helper on Fedora (mirrors release.yml)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src fedora:41 bash -lc '
+            set -euo pipefail
+            ./scripts/install-build-deps.sh patchelf binutils
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+            cmake --build build --parallel "$(nproc)" --target couchplay-helper
+            rm -rf smoke && mkdir -p smoke/bin
+            cp build/bin/couchplay-helper smoke/bin/
+            ./scripts/package-helper.sh smoke/bin/couchplay-helper
+          '
+
+      - name: Load helper in Arch (positive + negative control)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src archlinux:latest bash -lc '
+            set -euo pipefail
+            pacman -Sy --noconfirm --needed qt6-base polkit-qt6 patchelf
+
+            echo "=== POSITIVE: bundled helper must load the bundled Fedora Qt6Core ==="
+            if ldd smoke/bin/couchplay-helper 2>&1 | grep -q "/usr/lib/libQt6Core"; then
+              echo "::error::bundled helper resolved Qt6Core to the SYSTEM lib, not the bundle"
+              ldd smoke/bin/couchplay-helper | grep -i qt6core
+              exit 1
+            fi
+            out="$(timeout -k 2 3 smoke/bin/couchplay-helper 2>&1 || true)"
+            if printf "%s" "$out" | grep -qi "copy relocation\|INDIRECT_EXTERN_ACCESS"; then
+              echo "::error::bundled helper hit the copy-relocation error"
+              printf "%s\n" "$out"
+              exit 1
+            fi
+            echo "PASS: bundled helper loads on Arch without the copy-relocation error"
+
+            echo "=== NEGATIVE CONTROL: un-bundled copy MUST reproduce the error ==="
+            mkdir -p /tmp/neg
+            cp smoke/bin/couchplay-helper /tmp/neg/couchplay-helper
+            patchelf --remove-rpath /tmp/neg/couchplay-helper
+            neg="$(timeout -k 2 3 /tmp/neg/couchplay-helper 2>&1 || true)"
+            if printf "%s" "$neg" | grep -qi "copy relocation\|INDIRECT_EXTERN_ACCESS"; then
+              echo "PASS: negative control reproduced the expected copy-relocation error"
+            elif printf "%s" "$neg" | grep -qi "cannot open shared object file"; then
+              echo "::error::negative control failed with a MISSING dependency, not the copy-relocation error."
+              echo "The helper gained a runtime lib not in qt6-base/polkit-qt6 -- add it to the pacman"
+              echo "install above, or this control can no longer verify the regression."
+              printf "%s\n" "$neg"
+              exit 1
+            else
+              echo "::error::negative control did NOT reproduce the copy-relocation error."
+              echo "Qt/glibc changed and this test is no longer meaningful -- revisit it."
+              printf "%s\n" "$neg"
+              exit 1
+            fi
+          '
