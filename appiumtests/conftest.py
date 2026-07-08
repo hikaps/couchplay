@@ -25,7 +25,14 @@ def pytest_configure(config):
     )
 
 
-SCREENSHOT_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
+# CI runs the suite from a root-owned /src/couchplay (the image-baked source),
+# so writing screenshots next to conftest.py EACCES-crashes pytest's makereport
+# hook and aborts the whole session on the first failure. Honor the selenium
+# runner's APPIUM_ARTIFACT_OUTPUT_PATH (=/tmp/cp-out in CI, writable + uploaded)
+# when set; fall back to the local dir for dev runs.
+SCREENSHOT_DIR = os.path.join(
+    os.environ.get("APPIUM_ARTIFACT_OUTPUT_PATH") or os.path.dirname(__file__), "screenshots"
+)
 DEFAULT_TIMEOUT = 10
 
 
