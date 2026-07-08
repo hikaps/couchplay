@@ -13,7 +13,9 @@ import time
 # the no-helper smoke tier.
 pytestmark = pytest.mark.requires_helper
 
-LONG_TIMEOUT = 20
+# Env-overridable so CI (software-rendered, slower UI) can bump it without
+# touching test logic. Default is plenty for a local GPU-backed run.
+LONG_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_LONG_TIMEOUT", "20"))
 
 
 class TestSessionLifecycle(BaseTest):

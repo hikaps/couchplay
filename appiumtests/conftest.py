@@ -33,7 +33,7 @@ def pytest_configure(config):
 SCREENSHOT_DIR = os.path.join(
     os.environ.get("APPIUM_ARTIFACT_OUTPUT_PATH") or os.path.dirname(__file__), "screenshots"
 )
-DEFAULT_TIMEOUT = 10
+DEFAULT_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_TIMEOUT", "10"))
 
 
 @pytest.fixture(scope="session")

@@ -83,12 +83,18 @@ jobs:
           # the cap is in the bounding set, so kwin exec failed (run #28907614634).
           # Adding all caps mirrors what distrobox does; safe here because the
           # container is rootless, isolated, and software-rendered (no host devs).
+          # -e COUCHPLAY_E2E_LONG_TIMEOUT=120: the streaming test's "Start Session"
+          #   wait (LONG_TIMEOUT=20) can expire under slow software rendering; bump it.
+          # -p no:cacheprovider: pytest's cache writes under root-owned
+          #   /src/couchplay (.pytest_cache EACCES warning) -- disable it (CI is
+          #   ephemeral anyway).
           podman run --rm \
             --userns=keep-id \
             --user "$(id -u):$(id -g)" \
             --cap-add all \
+            -e COUCHPLAY_E2E_LONG_TIMEOUT=120 \
             -v "$PWD/out:/tmp/cp-out:Z" \
-            couchplay-e2e:ci appiumtests/ -v
+            couchplay-e2e:ci appiumtests/ -v -p no:cacheprovider
           #
           # FALLBACK (if raw rootless podman run hits the "runs as root /
           # kwin untested" caveat noted in appiumtests/Dockerfile): the proven
