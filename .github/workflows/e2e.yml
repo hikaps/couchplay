@@ -77,9 +77,16 @@ jobs:
           # :Z relabels the bind mount to container_file_t -- mandatory under
           # SELinux (Enforcing), or the container process can't write the
           # host-owned out/ dir (EACCES, runs #28906888526 + #28907384272).
+          # --cap-add all: kwin_wayland, sunshine, gstreamer helpers, etc. carry
+          # file capabilities (cap_sys_nice, cap_sys_admin, ...). execve of a
+          # file-cap'd binary returns EPERM in a rootless user namespace unless
+          # the cap is in the bounding set, so kwin exec failed (run #28907614634).
+          # Adding all caps mirrors what distrobox does; safe here because the
+          # container is rootless, isolated, and software-rendered (no host devs).
           podman run --rm \
             --userns=keep-id \
             --user "$(id -u):$(id -g)" \
+            --cap-add all \
             -v "$PWD/out:/tmp/cp-out:Z" \
             couchplay-e2e:ci appiumtests/ -v
           #
