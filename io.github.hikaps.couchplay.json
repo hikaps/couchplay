@@ -29,6 +29,7 @@
             "name": "polkit",
             "buildsystem": "meson",
             "config-opts": [
+                "-Dlibdir=lib",
                 "-Dauthfw=shadow",
                 "-Dsession_tracking=libsystemd-login",
                 "-Djs_engine=duktape",
