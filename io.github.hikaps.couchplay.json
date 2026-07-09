@@ -18,16 +18,43 @@
     ],
     "modules": [
         {
+            "name": "systemd-pc-stub",
+            "buildsystem": "simple",
+            "build-commands": [
+                "mkdir -p ${FLATPAK_DEST}/lib/pkgconfig",
+                "printf 'Name: systemd\\nDescription: systemd stub for flatpak build\\nVersion: 257\\nsystemdsystemunitdir=/app/lib/systemd/system\\nsysusers_dir=/app/lib/sysusers.d\\n' > ${FLATPAK_DEST}/lib/pkgconfig/systemd.pc"
+            ]
+        },
+        {
+            "name": "polkit",
+            "buildsystem": "meson",
+            "config-opts": [
+                "-Dauthfw=shadow",
+                "-Dsession_tracking=libsystemd-login",
+                "-Djs_engine=duktape",
+                "-Dintrospection=false"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://gitlab.freedesktop.org/polkit/polkit.git",
+                    "tag": "124"
+                }
+            ],
+            "cleanup": ["/include", "/lib/pkgconfig", "*.a"]
+        },
+        {
             "name": "polkit-qt-1",
             "buildsystem": "cmake-ninja",
             "config-opts": [
-                "-DCMAKE_BUILD_TYPE=Release"
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
             ],
             "sources": [
                 {
                     "type": "git",
                     "url": "https://github.com/KDE/polkit-qt-1.git",
-                    "tag": "v0.201.1"
+                    "branch": "qt6"
                 }
             ],
             "cleanup": [
