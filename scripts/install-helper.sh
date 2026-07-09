@@ -202,6 +202,14 @@ export_helper() {
         fi
     fi
     
+    # Copy bundled runtime libraries (if the Flatpak ships them) so the exported
+    # helper runs without the Flatpak or host Qt6 (RPATH is $ORIGIN/../lib/couchplay).
+    BUNDLE_LIB_SRC="$(dirname "${BINARY_PATH}")/../lib/couchplay"
+    if [[ -d "${BUNDLE_LIB_SRC}" ]] && compgen -G "${BUNDLE_LIB_SRC}/*.so*" >/dev/null; then
+        print_info "Copying bundled runtime libraries..."
+        mkdir -p "${EXPORT_DIR}/lib/couchplay"
+        install -m644 "${BUNDLE_LIB_SRC}"/*.so* "${EXPORT_DIR}/lib/couchplay/"
+    fi
     print_info "Export complete!"
     echo ""
     echo "Files exported to: ${EXPORT_DIR}/"
@@ -226,7 +234,7 @@ install_helper() {
 
     # Install bundled runtime libraries, if the release ships them (the binary's
     # RPATH is $ORIGIN/../lib/couchplay, so this lets the helper run without
-    # system Qt6/Polkit). Absent for Flatpak/build-dir installs.
+    # system Qt6/Polkit). Shipped by the tarball and the Flatpak (bundled at build).
     if [[ -d "${SCRIPT_DIR}/lib/couchplay" ]] && compgen -G "${SCRIPT_DIR}/lib/couchplay/*.so*" >/dev/null; then
         print_info "Installing bundled runtime libraries to ${LIB_DIR}/"
         mkdir -p "${LIB_DIR}"
