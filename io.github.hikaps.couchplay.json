@@ -54,7 +54,7 @@
                 {
                     "type": "git",
                     "url": "https://github.com/KDE/polkit-qt-1.git",
-                    "branch": "qt6"
+                    "commit": "fbb50e964bcb260d3b716195ef80dd100b87951b"
                 }
             ],
             "cleanup": [
