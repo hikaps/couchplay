@@ -65,6 +65,18 @@
             ]
         },
         {
+            "name": "patchelf",
+            "buildsystem": "autotools",
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/NixOS/patchelf/releases/download/0.19.1/patchelf-0.19.1.tar.gz",
+                    "sha256": "491108728f120ce05b539934b41a750235031a6df8abc6b47e57aff7de15094d"
+                }
+            ],
+            "cleanup": ["*"]
+        },
+        {
             "name": "couchplay",
             "buildsystem": "cmake-ninja",
             "config-opts": [
@@ -87,7 +99,9 @@
                 "install -Dm644 data/polkit/io.github.hikaps.couchplay.policy ${FLATPAK_DEST}/share/couchplay/data/polkit/io.github.hikaps.couchplay.policy",
                 "install -Dm644 data/io.github.hikaps.couchplay.desktop ${FLATPAK_DEST}/share/applications/io.github.hikaps.couchplay.desktop",
                 "install -Dm644 data/io.github.hikaps.couchplay.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.hikaps.couchplay.metainfo.xml",
-                "install -Dm644 data/icons/io.github.hikaps.couchplay.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.hikaps.couchplay.png"
+                "install -Dm644 data/icons/io.github.hikaps.couchplay.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.hikaps.couchplay.png",
+                "chmod +x scripts/bundle-libs.sh",
+                "./scripts/bundle-libs.sh ${FLATPAK_DEST}/libexec/couchplay-helper lib/couchplay"
             ],
             "cleanup": [
                 "/lib/pkgconfig",
