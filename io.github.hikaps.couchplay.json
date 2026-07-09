@@ -13,6 +13,7 @@
         "--device=dri",
         "--talk-name=org.kde.StatusNotifierWatcher",
         "--system-talk-name=org.freedesktop.login1",
+        "--system-talk-name=io.github.hikaps.CouchPlayHelper",
         "--filesystem=/run/udev:ro"
     ],
     "modules": [
