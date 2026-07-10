@@ -69,22 +69,19 @@ The **Settings** page offers additional configuration:
 
 ## Installation
 
-CouchPlay needs a small privileged helper (a root systemd/D-Bus service) to manage
-input devices, users, and audio — so every method below includes a one-time helper
-install. Pick the one that fits your system:
+CouchPlay has two parts: a **Flatpak GUI** (the app you interact with) and a small
+**privileged helper** (a root systemd/D-Bus service that manages input devices, users,
+and audio). Install the Flatpak for the GUI, then install the helper.
 
-| Method | Best for |
-|---|---|
-| **Flatpak** | Most users — runs on any distro with Flatpak; no system Qt6/KF6 needed. |
-| **Tarball** (curl one-liner or manual) | Immutable/atomic distros (Bazzite, Silverblue), traditional distros, packagers. Installs into `/usr/local`. |
+> **Use the Flatpak for the GUI.** It bundles its own Qt6/KDE Frameworks, so it runs
+> identically on every Linux distro. The native `couchplay` binary only works on distros
+> whose Qt6 matches the build (Fedora-family) — on Arch or SteamOS it fails to start with
+> a copy-relocation error, which is why the Flatpak is the recommended GUI everywhere.
 
-> The helper service is installed the same way regardless of method; only how the GUI
-> is delivered differs.
-
-### Flatpak Installation
+### 1. Install the Flatpak (GUI)
 
 1. **Download** the `.flatpak` bundle from the [Releases page](../../releases).
-2. **Ensure the runtime is available** (Flathub provides org.kde.Platform 6.10):
+2. **Ensure the runtime is available** (Flathub provides `org.kde.Platform 6.10`):
    ```bash
    flatpak install flathub org.kde.Platform/x86_64/6.10
    ```
@@ -92,51 +89,40 @@ install. Pick the one that fits your system:
    ```bash
    flatpak install --user couchplay.flatpak
    ```
-4. **Install the helper service** (required for device management):
-   ```bash
-   flatpak run --command=bash io.github.hikaps.couchplay -c "/app/share/couchplay/install-helper.sh export"
-   sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh install
-   ```
-   The `export` step stages the helper in the Flatpak's persisted data directory
-   (`~/.var/app/io.github.hikaps.couchplay/data/couchplay`), visible on your host at the
-   same path; the second command installs it system-wide from there.
 
-### Tarball Installation
+### 2. Install the helper
 
-For immutable/atomic distros (Bazzite, Fedora Silverblue/Kinoite) and traditional
-distros. Installs into `/usr/local` and registers the helper service. The release
-bundles the helper's runtime libraries, so the helper starts without system Qt6.
+The helper is required. Its runtime libraries are bundled, so it starts without any
+system Qt6/KF6 — the same helper works on every distro. Install it from inside the
+Flatpak, or standalone with `install.sh`.
 
-**One-liner (stable):**
+**From the Flatpak** (the helper ships inside it):
+```bash
+flatpak run --command=bash io.github.hikaps.couchplay -c "/app/share/couchplay/install-helper.sh export"
+sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh install
+```
+The `export` step stages the helper in the Flatpak's persisted data directory
+(`~/.var/app/io.github.hikaps.couchplay/data/couchplay`), visible on your host at the
+same path; the second command installs it system-wide from there.
+
+**Standalone (curl one-liner):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
 ```
-> Requires Linux x86_64 and sudo.
-
-**Beta (from develop):**
+Beta (from `develop`):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
 ```
-> Beta builds include unreleased features and may be unstable.
+> Requires Linux x86_64 and sudo. Beta builds include unreleased features and may be unstable.
+> `install.sh` also installs a native `couchplay` GUI binary and desktop entry. The
+> helper works on every distro; the native GUI only runs on Fedora-family distros —
+> on Arch/SteamOS, keep using the Flatpak above for the GUI.
 
-**Manual (download + extract):**
-1. **Download** the latest release tarball from the [Releases page](../../releases).
-2. **Extract**:
-   ```bash
-   tar -xJf couchplay-x86_64.tar.xz
-   cd couchplay-x86_64
-   ```
-3. **Install** the helper service (requires sudo):
-   ```bash
-   sudo ./install-helper.sh install
-   ```
-4. **Run**:
-   ```bash
-   ./bin/couchplay
-   ```
-
-**Uninstall:**
+**Uninstall the helper:**
 ```bash
+# Installed via the Flatpak export:
+sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh uninstall
+# Installed standalone — re-download the tarball, then from the extracted directory:
 sudo ./install-helper.sh uninstall
 ```
 
@@ -154,6 +140,10 @@ sudo ./install-helper.sh uninstall
 ```bash
 cmake -B build
 cmake --build build
+```
+Run the app you just built (only on a distro with matching Qt6, e.g. Fedora — otherwise use the Flatpak):
+```bash
+./build/bin/couchplay
 ```
 
 ### Running Tests
