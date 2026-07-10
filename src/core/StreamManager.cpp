@@ -4,6 +4,7 @@
 #include "StreamManager.h"
 
 #include "SunshineConfig.h"
+#include "UserLookup.h"
 
 #include <QDBusConnection>
 #include <QDBusInterface>
@@ -26,12 +27,10 @@ static constexpr int RESTART_DELAY_MS = 2000;
 // output, which the helper runs as the streaming user -- so its Wayland socket
 // lives in /run/user/<streamingUserUid>, NOT the GUI user's runtime dir. Resolve
 // the streaming user's uid; fall back to the GUI uid only if the lookup fails.
-static uid_t resolveCompositorUid(const QString &username)
+uid_t StreamManager::resolveCompositorUid(const QString &username) const
 {
-    if (const passwd *pwd = getpwnam(username.toLocal8Bit().constData())) {
-        return pwd->pw_uid;
-    }
-    return ::getuid();
+    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
+    return id.valid ? static_cast<uid_t>(id.uid) : ::getuid();
 }
 
 StreamManager::StreamManager(QObject *parent)

@@ -22,6 +22,7 @@
 #define private public
 #include "CouchPlayHelperClient.h"
 #undef private
+#include "UserLookup.h"
 
 class MockCouchPlayHelperClient : public CouchPlayHelperClient
 {
@@ -43,6 +44,8 @@ public:
 
     QList<AclCall> aclCalls;
     QList<MountCall> mountCalls;
+    struct DeviceOwnerCall { QString path; int uid; };
+    QList<DeviceOwnerCall> deviceOwnerCalls;
 
     explicit MockCouchPlayHelperClient(QObject *parent = nullptr)
         : CouchPlayHelperClient(parent)
@@ -60,6 +63,27 @@ public:
     {
         mountCalls.append({username, compositorUid, directories});
         return directories.size();
+    }
+    bool setDeviceOwner(const QString &devicePath, int uid) override
+    {
+        deviceOwnerCalls.append({devicePath, uid});
+        return true;
+    }
+
+    QVariantMap getUserInfo(const QString &username) override
+    {
+        QVariantMap info;
+        if (username == QStringLiteral("player1")) {
+            info.insert(QStringLiteral("uid"), 1001u);
+            info.insert(QStringLiteral("gid"), 1001u);
+            info.insert(QStringLiteral("home"), QStringLiteral("/home/player1"));
+        }
+        return info;
+    }
+
+    bool isInCouchPlayGroup(const QString &username) override
+    {
+        return username == QStringLiteral("player1");
     }
 };
 
@@ -85,6 +109,8 @@ private Q_SLOTS:
     void testSetupSteamConfigSteamIntegrationDisabled();
     void testSetupSteamConfigAppliesHeroicAcls();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
+    void testResolveUserIdentityViaHelper();
+    void testResolveUserIdentityFallback();
 
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -322,6 +348,21 @@ void TestSessionRunner::testStartSessionHeroicPresetUsesAclsAndSharedConfig()
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, expectedPath);
     QCOMPARE(m_helperClient->aclCalls[0].username, sessionUser);
+}
+
+void TestSessionRunner::testResolveUserIdentityViaHelper()
+{
+    const UserIdentity id = resolveUserIdentity(QStringLiteral("player1"), m_helperClient);
+    QVERIFY(id.valid);
+    QCOMPARE(id.uid, 1001u);
+    QCOMPARE(id.gid, 1001u);
+    QCOMPARE(id.home, QStringLiteral("/home/player1"));
+}
+
+void TestSessionRunner::testResolveUserIdentityFallback()
+{
+    const UserIdentity id = resolveUserIdentity(QStringLiteral("root"), nullptr);
+    QVERIFY(id.valid);
 }
 
 QTEST_MAIN(TestSessionRunner)

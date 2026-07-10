@@ -68,6 +68,22 @@ public Q_SLOTS:
      * @return true if user is in couchplay group
      */
     bool IsInCouchPlayGroup(const QString &username);
+    /**
+     * List all CouchPlay-managed users (couchplay group members).
+     * Read-only — no polkit. Each entry is tab-delimited: username\tuid\tgid\thome\tshell.
+     *
+     * @return list of user entries (filtered: uid 1000-65533, valid shell, home exists)
+     */
+    QStringList ListCouchPlayUsers();
+
+    /**
+     * Get uid/gid/home for a named user.
+     * Read-only — no polkit.
+     *
+     * @param username Username to look up
+     * @return map with keys "uid","gid","home", or empty if not found/invalid
+     */
+    QVariantMap GetUserInfo(const QString &username);
 
     /**
      * Enable systemd linger for a user

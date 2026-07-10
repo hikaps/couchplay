@@ -11,6 +11,7 @@
 #include "SettingsManager.h"
 #include "SteamConfigManager.h"
 #include "StreamManager.h"
+#include "UserLookup.h"
 #include "WindowManager.h"
 
 #include <QAction>
@@ -75,6 +76,7 @@ SessionRunner::SessionRunner(QObject *parent)
     connect(m_windowManager, &WindowManager::positioningTimedOut, this, &SessionRunner::onWindowPositioningTimeout);
 
     m_streamManager = new StreamManager(this);
+    m_streamManager->setHelperClient(m_helperClient);
     connect(m_streamManager, &StreamManager::streamError,
             this, [this](int instanceIndex, const QString &error) {
         Q_EMIT errorOccurred(QStringLiteral("Stream %1: %2").arg(instanceIndex).arg(error));
@@ -124,6 +126,9 @@ void SessionRunner::setHelperClient(CouchPlayHelperClient *client)
 {
     if (m_helperClient != client) {
         m_helperClient = client;
+        if (m_streamManager) {
+            m_streamManager->setHelperClient(client);
+        }
         Q_EMIT helperClientChanged();
     }
 }
@@ -201,8 +206,11 @@ bool SessionRunner::start()
         }
     }
 
-    struct passwd *compositorPw = getpwuid(getuid());
-    QString compositorUser = compositorPw ? QString::fromLocal8Bit(compositorPw->pw_name) : QString();
+    QString compositorUser = qEnvironmentVariable("USER");
+    if (compositorUser.isEmpty()) {
+        struct passwd *compositorPw = getpwuid(getuid());
+        compositorUser = compositorPw ? QString::fromLocal8Bit(compositorPw->pw_name) : QString();
+    }
 
     for (int i = 0; i < instanceCount; ++i) {
         const QString &username = profile.instances[i].username;
@@ -213,7 +221,10 @@ bool SessionRunner::start()
         if (username == compositorUser) {
             continue;
         }
-        if (!isUserInCouchPlayGroup(username)) {
+        const bool inGroup = (m_helperClient && m_helperClient->isAvailable())
+                                 ? m_helperClient->isInCouchPlayGroup(username)
+                                 : isUserInCouchPlayGroup(username);
+        if (!inGroup) {
             Q_EMIT errorOccurred(QStringLiteral("User '%1' is not a CouchPlay managed user. Please create the user via "
                                                 "CouchPlay or add them to the 'couchplay' group.")
                                      .arg(username));
@@ -589,12 +600,12 @@ bool SessionRunner::setupDeviceOwnership()
             continue;
         }
 
-        struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
-        if (!pw) {
+        const UserIdentity id = resolveUserIdentity(username, m_helperClient);
+        if (!id.valid) {
             qWarning() << "SessionRunner: User" << username << "not found, skipping device ownership for instance" << i;
             continue;
         }
-        int uid = static_cast<int>(pw->pw_uid);
+        int uid = static_cast<int>(id.uid);
 
         QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
 
@@ -1194,12 +1205,12 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
         return;
     }
 
-    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
+    if (!id.valid) {
         qWarning() << "SessionRunner: User" << username << "not found";
         return;
     }
-    int uid = static_cast<int>(pw->pw_uid);
+    int uid = static_cast<int>(id.uid);
 
     QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
 
@@ -1384,13 +1395,13 @@ void SessionRunner::onVirtualDeviceAppeared(int eventNumber, const QString &devi
         return;
     }
 
-    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
+    if (!id.valid) {
         qWarning() << "SessionRunner: User" << username << "not found";
         return;
     }
 
-    if (m_helperClient->setDeviceOwner(devicePath, pw->pw_uid)) {
+    if (m_helperClient->setDeviceOwner(devicePath, id.uid)) {
         if (!m_ownedDevicePaths.contains(devicePath)) {
             m_ownedDevicePaths.append(devicePath);
         }

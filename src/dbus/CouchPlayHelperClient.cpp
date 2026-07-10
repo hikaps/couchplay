@@ -151,6 +151,38 @@ bool CouchPlayHelperClient::isInCouchPlayGroup(const QString &username)
     return reply.value();
 }
 
+QStringList CouchPlayHelperClient::listCouchPlayUsers()
+{
+    if (!m_available) {
+        return {};
+    }
+
+    QDBusReply<QStringList> reply = m_interface->call(QStringLiteral("ListCouchPlayUsers"));
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return {};
+    }
+
+    return reply.value();
+}
+
+QVariantMap CouchPlayHelperClient::getUserInfo(const QString &username)
+{
+    if (!m_available) {
+        return {};
+    }
+
+    QDBusReply<QVariantMap> reply = m_interface->call(QStringLiteral("GetUserInfo"), username);
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return {};
+    }
+
+    return reply.value();
+}
+
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              uint compositorUid,
                                              const QStringList &gamescopeArgs,

@@ -4,6 +4,7 @@
 #include "HeroicConfigManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
+#include "UserLookup.h"
 
 #include <QDebug>
 #include <QDir>
@@ -223,13 +224,13 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
         return true;
     }
 
-    struct passwd *pw = getpwnam(targetUsername.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(targetUsername, m_helperClient);
+    if (!id.valid) {
         qWarning() << "HeroicConfigManager: User not found:" << targetUsername;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("User not found"));
         return false;
     }
-    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    QString targetHome = id.home;
     QString targetDir = targetHome + QStringLiteral("/.local/share/applications");
 
     if (!targetDir.startsWith(targetHome + QLatin1Char('/'))) {
@@ -280,12 +281,12 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
         return false;
     }
 
-    struct passwd *pw = getpwnam(targetUsername.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(targetUsername, m_helperClient);
+    if (!id.valid) {
         qWarning() << "HeroicConfigManager: User not found:" << targetUsername;
         return false;
     }
-    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    QString targetHome = id.home;
 
     QString targetHeroicRoot;
     if (m_heroicPaths.isFlatpak) {

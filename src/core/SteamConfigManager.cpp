@@ -4,6 +4,7 @@
 #include "SteamConfigManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
+#include "UserLookup.h"
 
 #include <QDataStream>
 #include <QDebug>
@@ -158,13 +159,13 @@ QString SteamConfigManager::getTargetSteamUserId(const QString &username) const
     // Fallback: try to read directly (will only work for current user)
     qDebug() << "SteamConfigManager: Helper not available, trying direct access for" << username;
 
-    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
+    if (!id.valid) {
         qWarning() << "SteamConfigManager: User not found:" << username;
         return QString();
     }
 
-    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    QString targetHome = id.home;
 
     // Check for Steam userdata in common locations
     QStringList possibleRoots = {
@@ -331,13 +332,13 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
     qCDebug(couchplaySteam) << "Target Steam ID:" << targetSteamId;
 
     // Get target user's home
-    struct passwd *pw = getpwnam(targetUsername.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(targetUsername, m_helperClient);
+    if (!id.valid) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - User not found:" << targetUsername;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("User not found"));
         return false;
     }
-    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    QString targetHome = id.home;
     qCDebug(couchplaySteam) << "Target home:" << targetHome;
 
     // Target path uses TARGET user's Steam ID (not compositor's)
@@ -403,13 +404,13 @@ SteamPaths SteamConfigManager::getTargetSteamPaths(const QString &username) cons
     SteamPaths paths;
 
     // Get target user's home directory
-    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
+    if (!id.valid) {
         qWarning() << "SteamConfigManager: User not found:" << username;
         return paths;
     }
 
-    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    QString targetHome = id.home;
 
     // Check for Steam in common locations relative to target home
     QStringList possibleRoots = {
@@ -864,12 +865,12 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         return false;
     }
     
-    struct passwd *pw = getpwnam(targetUsername.toLocal8Bit().constData());
-    if (!pw) {
+    const UserIdentity id = resolveUserIdentity(targetUsername, m_helperClient);
+    if (!id.valid) {
         qCWarning(couchplaySteam) << "shareLibraryToUser failed - User not found:" << targetUsername;
         return false;
     }
-    QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
+    QString targetHome = id.home;
     
     QString targetSteamId = getTargetSteamUserId(targetUsername);
     if (targetSteamId.isEmpty()) {

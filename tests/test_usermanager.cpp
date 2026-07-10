@@ -6,6 +6,19 @@
 #include <unistd.h>
 
 #include "UserManager.h"
+#include "CouchPlayHelperClient.h"
+
+class MockCouchPlayHelperClient : public CouchPlayHelperClient
+{
+    Q_OBJECT
+public:
+    using CouchPlayHelperClient::CouchPlayHelperClient;
+    bool isAvailable() const override { return true; }
+    QStringList listCouchPlayUsers() override
+    {
+        return {QStringLiteral("player1\t1001\t1001\t/home/player1\t/bin/bash")};
+    }
+};
 
 class TestUserManager : public QObject
 {
@@ -60,6 +73,7 @@ private Q_SLOTS:
 
     // Refresh tests
     void testRefreshEmitsSignal();
+    void testParseUsersViaHelper();
 
 private:
     UserManager *m_manager = nullptr;
@@ -364,6 +378,29 @@ void TestUserManager::testRefreshEmitsSignal()
     m_manager->refresh();
 
     QCOMPARE(spy.count(), 1);
+}
+
+void TestUserManager::testParseUsersViaHelper()
+{
+    MockCouchPlayHelperClient *mock = new MockCouchPlayHelperClient();
+    m_manager->setHelperClient(mock);
+
+    QSignalSpy spy(m_manager, &UserManager::usersChanged);
+    m_manager->refresh();
+    QCOMPARE(spy.count(), 1);
+
+    const QVariantList users = m_manager->usersAsVariant();
+    bool found = false;
+    for (const QVariant &v : users) {
+        if (v.toMap().value(QStringLiteral("username")).toString() == QStringLiteral("player1")) {
+            found = true;
+            break;
+        }
+    }
+    QVERIFY2(found, "player1 should appear when the helper provides it");
+
+    m_manager->setHelperClient(nullptr);
+    delete mock;
 }
 
 QTEST_MAIN(TestUserManager)

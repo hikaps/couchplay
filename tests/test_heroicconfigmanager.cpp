@@ -40,6 +40,17 @@ public:
         return QFile::copy(sourcePath, targetPath);
     }
 
+    QVariantMap getUserInfo(const QString &username) override
+    {
+        QVariantMap info;
+        if (const struct passwd *pw = getpwnam(username.toLocal8Bit().constData())) {
+            info.insert(QStringLiteral("uid"), static_cast<uint>(pw->pw_uid));
+            info.insert(QStringLiteral("gid"), static_cast<uint>(pw->pw_gid));
+            info.insert(QStringLiteral("home"), QString::fromLocal8Bit(pw->pw_dir));
+        }
+        return info;
+    }
+
     QList<QPair<QString, QString>> createdDirs;
     QList<QPair<QString, QString>> copiedFiles;
 };

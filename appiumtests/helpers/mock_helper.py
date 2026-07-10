@@ -19,6 +19,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import grp
+import pwd
 
 import dbus
 import dbus.service
@@ -219,6 +221,55 @@ class MockHelper(dbus.service.Object):
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="s")
     def GetUserSteamId(self, username):
         return ""
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="", out_signature="as")
+    def ListCouchPlayUsers(self):
+        entries = []
+        for username in self._couchplayUsernames():
+            fields = self._userFields(username)
+            if fields is None:
+                continue
+            name, uid, gid, home, shell = fields
+            if uid < 1000 or uid >= 65534:
+                continue
+            if "nologin" in shell or "false" in shell:
+                continue
+            if not os.path.isdir(home):
+                continue
+            entries.append("%s\t%d\t%d\t%s\t%s" % (name, uid, gid, home, shell))
+        return dbus.Array(entries, signature="s")
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="a{sv}")
+    def GetUserInfo(self, username):
+        fields = self._userFields(username)
+        if fields is None:
+            return dbus.Dictionary({}, signature="sv")
+        name, uid, gid, home, shell = fields
+        return dbus.Dictionary({
+            "uid": dbus.UInt32(uid),
+            "gid": dbus.UInt32(gid),
+            "home": home,
+        }, signature="sv")
+
+    def _couchplayUsernames(self):
+        if FAKE_USERS:
+            return list(self._created_users.keys())
+        try:
+            return list(grp.getgrnam("couchplay").gr_mem)
+        except KeyError:
+            return []
+
+    def _userFields(self, username):
+        if FAKE_USERS:
+            uid = self._created_users.get(username)
+            if uid is None:
+                return None
+            return (username, uid, uid, "/home/%s" % username, "/bin/bash")
+        try:
+            p = pwd.getpwnam(username)
+        except KeyError:
+            return None
+        return (p.pw_name, p.pw_uid, p.pw_gid, p.pw_dir, p.pw_shell)
 
     @dbus.service.method(INTERFACE_NAME, in_signature="ayss", out_signature="b")
     def WriteFileToUser(self, content, targetPath, username):

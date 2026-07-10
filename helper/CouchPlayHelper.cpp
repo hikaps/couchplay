@@ -469,6 +469,68 @@ bool CouchPlayHelper::IsInCouchPlayGroup(const QString &username)
     return false;
 }
 
+QStringList CouchPlayHelper::ListCouchPlayUsers()
+{
+    QStringList result;
+
+    struct group *grp = m_ops->getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
+    if (!grp) {
+        return result; // Group doesn't exist yet
+    }
+
+    for (char **member = grp->gr_mem; *member != nullptr; ++member) {
+        const QString username = QString::fromLocal8Bit(*member);
+        struct passwd *pw = m_ops->getpwnam(username.toLocal8Bit().constData());
+        if (!pw) {
+            continue;
+        }
+
+        // Copy fields immediately: passwd* is only valid until the next getpwnam call.
+        const uint uid = pw->pw_uid;
+        const uint gid = pw->pw_gid;
+        const QString home = QString::fromLocal8Bit(pw->pw_dir);
+        const QString shell = QString::fromLocal8Bit(pw->pw_shell);
+
+        // Filters matching UserManager::parseUsers (src/core/UserManager.cpp)
+        if (uid < 1000 || uid >= 65534) {
+            continue;
+        }
+        if (shell.contains(QStringLiteral("nologin")) || shell.contains(QStringLiteral("false"))) {
+            continue;
+        }
+        if (!m_ops->fileExists(home)) {
+            continue;
+        }
+
+        result.append(QStringLiteral("%1\t%2\t%3\t%4\t%5")
+                          .arg(username)
+                          .arg(uid)
+                          .arg(gid)
+                          .arg(home, shell));
+    }
+
+    return result;
+}
+
+QVariantMap CouchPlayHelper::GetUserInfo(const QString &username)
+{
+    QVariantMap info;
+    if (!s_validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid username format"));
+        return info;
+    }
+
+    struct passwd *pw = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!pw) {
+        return info;
+    }
+
+    info.insert(QStringLiteral("uid"), static_cast<uint>(pw->pw_uid));
+    info.insert(QStringLiteral("gid"), static_cast<uint>(pw->pw_gid));
+    info.insert(QStringLiteral("home"), QString::fromLocal8Bit(pw->pw_dir));
+    return info;
+}
+
 bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
 {
     if (!validateUserAndAuth(username, ACTION_DELETE_USER)) {

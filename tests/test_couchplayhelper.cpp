@@ -370,6 +370,10 @@ private Q_SLOTS:
     void testEnableLingerProcessFailure();
     void testIsLingerEnabledTrue();
     void testIsLingerEnabledFalse();
+    void testListCouchPlayUsers();
+    void testListCouchPlayUsersFilters();
+    void testGetUserInfo();
+    void testGetUserInfoNotFound();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -1532,6 +1536,64 @@ void TestCouchPlayHelper::testLaunchInstance_staleUnitRecovery()
     QVERIFY2(foundResetFailed, "systemctl reset-failed should be called during stale unit recovery");
     QVERIFY2(systemdRunCount >= 2, "systemd-run should be called at least twice (initial + retry)");
     QVERIFY2(foundEnvEFlag, "-E flag should be used for environment variables");
+}
+
+void TestCouchPlayHelper::testListCouchPlayUsers()
+{
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001,
+                          {QStringLiteral("player1"), QStringLiteral("player2")});
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setUserExists(QStringLiteral("player2"), true, 1002, 1001, QStringLiteral("/home/player2"));
+    m_ops->setFileExists(QStringLiteral("/home/player1"), true);
+    m_ops->setFileExists(QStringLiteral("/home/player2"), true);
+
+    QDBusReply<QStringList> reply = m_dbusInterface->call(QStringLiteral("ListCouchPlayUsers"));
+
+    QVERIFY(reply.isValid());
+    const QStringList users = reply.value();
+    QCOMPARE(users.size(), 2);
+    QVERIFY(users.contains(QStringLiteral("player1\t1001\t1001\t/home/player1\t/bin/bash")));
+    QVERIFY(users.contains(QStringLiteral("player2\t1002\t1001\t/home/player2\t/bin/bash")));
+}
+
+void TestCouchPlayHelper::testListCouchPlayUsersFilters()
+{
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001,
+                          {QStringLiteral("lowuid"), QStringLiteral("nohome")});
+    m_ops->setUserExists(QStringLiteral("lowuid"), true, 999, 1001, QStringLiteral("/home/lowuid"));
+    m_ops->setFileExists(QStringLiteral("/home/lowuid"), true);
+    m_ops->setUserExists(QStringLiteral("nohome"), true, 1003, 1001, QStringLiteral("/home/nohome"));
+
+    QDBusReply<QStringList> reply = m_dbusInterface->call(QStringLiteral("ListCouchPlayUsers"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value().isEmpty());
+}
+
+void TestCouchPlayHelper::testGetUserInfo()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+
+    QDBusReply<QVariantMap> reply = m_dbusInterface->call(QStringLiteral("GetUserInfo"), QStringLiteral("player1"));
+
+    QVERIFY(reply.isValid());
+    const QVariantMap info = reply.value();
+    QCOMPARE(info.value(QStringLiteral("uid")).toUInt(), 1001u);
+    QCOMPARE(info.value(QStringLiteral("gid")).toUInt(), 1001u);
+    QCOMPARE(info.value(QStringLiteral("home")).toString(), QStringLiteral("/home/player1"));
+}
+
+void TestCouchPlayHelper::testGetUserInfoNotFound()
+{
+    m_ops->clear();
+
+    QDBusReply<QVariantMap> reply = m_dbusInterface->call(QStringLiteral("GetUserInfo"), QStringLiteral("ghost"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value().isEmpty());
 }
 
 QTEST_MAIN(TestCouchPlayHelper)
