@@ -143,6 +143,15 @@ bool VirtualDeviceWatcher::isVirtualDevice(int eventNumber, const QString &name)
     if (physFile.open(QIODevice::ReadOnly)) {
         QString phys = QString::fromLocal8Bit(physFile.readAll().trimmed()).toLower();
         if (phys.isEmpty() || phys.contains(QStringLiteral("virtual"))) {
+            // Check bus type
+            QString busPath = QStringLiteral("/sys/class/input/event%1/device/id/bustype").arg(eventNumber);
+            QFile busFile(busPath);
+            if (busFile.open(QIODevice::ReadOnly)) {
+                QString bus = QString::fromLocal8Bit(busFile.readAll().trimmed()).toLower();
+                if (bus == QStringLiteral("0005") || bus == QStringLiteral("0003")) {
+                    return false;
+                }
+            }
             return true;
         }
     }
