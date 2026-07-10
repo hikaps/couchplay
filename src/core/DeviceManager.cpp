@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QTextStream>
+#include <QThread>
 
 // For device identification (rumble)
 #include <cerrno>
@@ -16,6 +17,15 @@
 #include <linux/input.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+
+static QString getBasePhysPath(const QString &physPath)
+{
+    int idx = physPath.lastIndexOf(QStringLiteral("/input"));
+    if (idx != -1) {
+        return physPath.left(idx);
+    }
+    return physPath;
+}
 
 DeviceManager::DeviceManager(QObject *parent)
     : QObject(parent)
@@ -186,10 +196,14 @@ void DeviceManager::refresh()
 
 void DeviceManager::parseDevices()
 {
-    QFile file(QStringLiteral("/proc/bus/input/devices"));
+    QString devicesPath = qEnvironmentVariable("COUCHPLAY_MOCK_DEVICES_FILE");
+    if (devicesPath.isEmpty()) {
+        devicesPath = QStringLiteral("/proc/bus/input/devices");
+    }
+    QFile file(devicesPath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qWarning() << "DeviceManager: Failed to open /proc/bus/input/devices";
-        Q_EMIT errorOccurred(QStringLiteral("Failed to open /proc/bus/input/devices"));
+        qWarning() << "DeviceManager: Failed to open" << devicesPath;
+        Q_EMIT errorOccurred(QStringLiteral("Failed to open %1").arg(devicesPath));
         return;
     }
 
@@ -233,6 +247,26 @@ void DeviceManager::parseDevices()
         }
     };
 
+    auto formatSteamControllerName = [](InputDevice &device) {
+        if (device.type == QStringLiteral("controller") && device.name.toLower().contains(QStringLiteral("steam controller"))) {
+            int slotIndex = -1;
+            QRegularExpression inputRegex(QStringLiteral("input(\\d+)"));
+            QRegularExpressionMatch match = inputRegex.match(device.physPath);
+            if (match.hasMatch()) {
+                int inputNum = match.captured(1).toInt();
+                if (inputNum >= 2 && inputNum <= 5) {
+                    slotIndex = inputNum - 1;
+                }
+            }
+
+            if (slotIndex >= 1 && slotIndex <= 4) {
+                device.name = QStringLiteral("Steam Controller (Slot %1)").arg(slotIndex);
+            } else {
+                device.name = QStringLiteral("Steam Controller");
+            }
+        }
+    };
+
     while (!stream.atEnd()) {
         QString line = stream.readLine();
         lineCount++;
@@ -264,6 +298,7 @@ void DeviceManager::parseDevices()
                 device.isInternal = isInternalDevice(currentName);
 
                 resolveHidraw(device);
+                formatSteamControllerName(device);
 
                 if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
                     qDebug() << "DeviceManager: Ignoring device" << device.name << "stableId:" << device.stableId;
@@ -354,6 +389,7 @@ void DeviceManager::parseDevices()
         device.isInternal = isInternalDevice(currentName);
 
         resolveHidraw(device);
+        formatSteamControllerName(device);
 
         if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
             qDebug() << "DeviceManager: Ignoring device" << device.name << "stableId:" << device.stableId;
@@ -380,18 +416,35 @@ QString DeviceManager::detectDeviceType(const QString &name, const QString &hand
         || (lowerHandlers.contains(QStringLiteral("js")) && !lowerName.contains(QStringLiteral("mouse"))
             && !lowerName.contains(QStringLiteral("keyboard")))) {
         // Extra check: If it claims to be a controller but has no buttons, it's likely a wireless receiver with no
-        // controller connected We can check this by trying to open the device and querying capabilities However, we
+        // controller connected. We can check this by trying to open the device and querying capabilities. However, we
         // need to be careful about permissions. If we can't open it, we assume it's valid to avoid blocking valid
         // devices due to permission issues. But for "ghost" devices that are readable (like event8 in the user report),
         // this check will filter them out.
+        // Steam Controllers without Steam running do not report gamepad buttons because they start in Lizard Mode,
+        // so we bypass this check for Steam Controllers.
+        const bool isSteamController = lowerName.contains(QStringLiteral("steam controller"));
+        if (isSteamController) {
+            // For Steam Controllers, we only treat the mouse or the main gamepad interface as the controller device.
+            // We ignore the keyboard interface (treating it as "other") to avoid duplicate entries in the UI.
+            // Sibling propagation will ensure the keyboard interface is assigned alongside the mouse/main device.
+            if (lowerName.contains(QStringLiteral("keyboard"))) {
+                return QStringLiteral("other");
+            }
 
-        QString path = QStringLiteral("/dev/input/event%1")
-                           .arg(handlers.section(QStringLiteral("event"), 1, 1).section(QLatin1Char(' '), 0, 0));
-        if (!path.isEmpty()) {
-            int fd = open(path.toLocal8Bit().constData(), O_RDONLY);
+            QString eventPart = handlers.section(QStringLiteral("event"), 1, 1).section(QLatin1Char(' '), 0, 0);
+            if (!eventPart.isEmpty()) {
+                if (!isSlotConnected(eventPart.toInt())) {
+                    qDebug() << "DeviceManager: Steam Controller slot event" << eventPart << "is disconnected, hiding it.";
+                    return QStringLiteral("other");
+                }
+            }
+        } else {
+            QString path = QStringLiteral("/dev/input/event%1")
+                               .arg(handlers.section(QStringLiteral("event"), 1, 1).section(QLatin1Char(' '), 0, 0));
+            int fd = openDevice(path, O_RDONLY);
             if (fd >= 0) {
                 unsigned char keyBitmask[KEY_MAX / 8 + 1] = {0};
-                if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBitmask)), keyBitmask) >= 0) {
+                if (ioctlDevice(fd, EVIOCGBIT(EV_KEY, sizeof(keyBitmask)), keyBitmask) >= 0) {
                     bool hasGamepadBtns = false;
                     // BTN_GAMEPAD is 0x130 (304)
                     for (int i = 0x130; i < 0x140; i++) {
@@ -401,13 +454,13 @@ QString DeviceManager::detectDeviceType(const QString &name, const QString &hand
                         }
                     }
 
-                    close(fd);
+                    closeDevice(fd);
                     if (!hasGamepadBtns) {
                         qDebug() << "DeviceManager: Device" << name << "ignored (no gamepad buttons)";
                         return QStringLiteral("other");
                     }
                 } else {
-                    close(fd);
+                    closeDevice(fd);
                 }
             }
         }
@@ -475,15 +528,43 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
     for (int i = 0; i < m_devices.size(); ++i) {
         if (m_devices[i].eventNumber == eventNumber) {
             int previousInstance = m_devices[i].assignedInstance;
-            m_devices[i].assigned = (instanceIndex >= 0);
-            m_devices[i].assignedInstance = instanceIndex;
+            bool assigned = (instanceIndex >= 0);
 
-            // Update persistent assignment cache
-            if (!m_devices[i].stableId.isEmpty()) {
-                if (instanceIndex >= 0) {
-                    m_assignmentCache[m_devices[i].stableId] = qMakePair(instanceIndex, m_devices[i].name);
-                } else {
-                    m_assignmentCache.remove(m_devices[i].stableId);
+            // Assign this device and all siblings on the same physical path if it is a Steam Controller or PlayStation controller
+            QString basePhys = getBasePhysPath(m_devices[i].physPath);
+            bool isGroupedDevice = false;
+            QString lowerName = m_devices[i].name.toLower();
+            if (lowerName.contains(QStringLiteral("steam controller")) ||
+                lowerName.contains(QStringLiteral("wireless controller")) ||
+                lowerName.contains(QStringLiteral("dualshock")) ||
+                lowerName.contains(QStringLiteral("dualsense")) ||
+                lowerName.contains(QStringLiteral("sony"))) {
+                isGroupedDevice = true;
+            }
+
+            if (!basePhys.isEmpty() && isGroupedDevice) {
+                for (auto &device : m_devices) {
+                    if (getBasePhysPath(device.physPath) == basePhys) {
+                        device.assigned = assigned;
+                        device.assignedInstance = instanceIndex;
+                        if (!device.stableId.isEmpty()) {
+                            if (assigned) {
+                                m_assignmentCache[device.stableId] = qMakePair(instanceIndex, device.name);
+                            } else {
+                                m_assignmentCache.remove(device.stableId);
+                            }
+                        }
+                    }
+                }
+            } else {
+                m_devices[i].assigned = assigned;
+                m_devices[i].assignedInstance = instanceIndex;
+                if (!m_devices[i].stableId.isEmpty()) {
+                    if (assigned) {
+                        m_assignmentCache[m_devices[i].stableId] = qMakePair(instanceIndex, m_devices[i].name);
+                    } else {
+                        m_assignmentCache.remove(m_devices[i].stableId);
+                    }
                 }
             }
 
@@ -551,7 +632,7 @@ QStringList DeviceManager::getHidrawPathsForInstance(int instanceIndex) const
 int DeviceManager::autoAssignControllers()
 {
     for (auto &device : m_devices) {
-        if (device.type == QStringLiteral("controller")) {
+        if (device.type == QStringLiteral("controller") || device.name.toLower().contains(QStringLiteral("steam controller"))) {
             device.assigned = false;
             device.assignedInstance = -1;
             if (!device.stableId.isEmpty()) {
@@ -571,11 +652,37 @@ int DeviceManager::autoAssignControllers()
     for (int instance = 0; instance < m_instanceCount && assignedCount < controllerIndices.size(); ++instance) {
         int deviceIndex = controllerIndices[assignedCount];
         int previousInstance = m_devices[deviceIndex].assignedInstance;
-        m_devices[deviceIndex].assigned = true;
-        m_devices[deviceIndex].assignedInstance = instance;
-        if (!m_devices[deviceIndex].stableId.isEmpty()) {
-            m_assignmentCache[m_devices[deviceIndex].stableId] = qMakePair(instance, m_devices[deviceIndex].name);
+
+        bool assigned = true;
+        QString basePhys = getBasePhysPath(m_devices[deviceIndex].physPath);
+        bool isGroupedDevice = false;
+        QString lowerName = m_devices[deviceIndex].name.toLower();
+        if (lowerName.contains(QStringLiteral("steam controller")) ||
+            lowerName.contains(QStringLiteral("wireless controller")) ||
+            lowerName.contains(QStringLiteral("dualshock")) ||
+            lowerName.contains(QStringLiteral("dualsense")) ||
+            lowerName.contains(QStringLiteral("sony"))) {
+            isGroupedDevice = true;
         }
+
+        if (!basePhys.isEmpty() && isGroupedDevice) {
+            for (auto &device : m_devices) {
+                if (getBasePhysPath(device.physPath) == basePhys) {
+                    device.assigned = assigned;
+                    device.assignedInstance = instance;
+                    if (!device.stableId.isEmpty()) {
+                        m_assignmentCache[device.stableId] = qMakePair(instance, device.name);
+                    }
+                }
+            }
+        } else {
+            m_devices[deviceIndex].assigned = assigned;
+            m_devices[deviceIndex].assignedInstance = instance;
+            if (!m_devices[deviceIndex].stableId.isEmpty()) {
+                m_assignmentCache[m_devices[deviceIndex].stableId] = qMakePair(instance, m_devices[deviceIndex].name);
+            }
+        }
+
         Q_EMIT deviceAssigned(m_devices[deviceIndex].eventNumber, instance, previousInstance);
         assignedCount++;
     }
@@ -719,6 +826,25 @@ QVariantList DeviceManager::visibleDevicesAsVariant() const
             continue;
         }
 
+        // For Steam Controllers, if there are multiple devices on the same base physical path,
+        // we only show the one that has a slot index (the formatted puck mouse node)
+        // to prevent duplicate UI entries.
+        if (device.type == QStringLiteral("controller") && device.name.toLower().contains(QStringLiteral("steam controller"))) {
+            if (!device.name.contains(QStringLiteral("Slot"))) {
+                QString basePhys = getBasePhysPath(device.physPath);
+                bool hasSlotDevice = false;
+                for (const auto &other : m_devices) {
+                    if (other.name.contains(QStringLiteral("Slot")) && getBasePhysPath(other.physPath) == basePhys) {
+                        hasSlotDevice = true;
+                        break;
+                    }
+                }
+                if (hasSlotDevice) {
+                    continue; // Skip/hide this duplicate gamepad node
+                }
+            }
+        }
+
         list.append(deviceToVariantMap(device));
     }
     return list;
@@ -732,6 +858,26 @@ QVariantList DeviceManager::controllersAsVariant() const
             if (!m_showVirtualDevices && device.isVirtual) {
                 continue;
             }
+
+            // For Steam Controllers, if there are multiple devices on the same base physical path,
+            // we only show the one that has a slot index (the formatted puck mouse node)
+            // to prevent duplicate UI entries.
+            if (device.name.toLower().contains(QStringLiteral("steam controller"))) {
+                if (!device.name.contains(QStringLiteral("Slot"))) {
+                    QString basePhys = getBasePhysPath(device.physPath);
+                    bool hasSlotDevice = false;
+                    for (const auto &other : m_devices) {
+                        if (other.name.contains(QStringLiteral("Slot")) && getBasePhysPath(other.physPath) == basePhys) {
+                            hasSlotDevice = true;
+                            break;
+                        }
+                    }
+                    if (hasSlotDevice) {
+                        continue; // Skip/hide this duplicate gamepad node
+                    }
+                }
+            }
+
             list.append(deviceToVariantMap(device));
         }
     }
@@ -1015,3 +1161,65 @@ QString DeviceManager::findHidrawForEvent(int eventNumber) const
 
     return QString();
 }
+
+int DeviceManager::openDevice(const QString &path, int flags) const
+{
+    return open(path.toLocal8Bit().constData(), flags);
+}
+
+int DeviceManager::ioctlDevice(int fd, unsigned long request, void *arg) const
+{
+    return ioctl(fd, request, arg);
+}
+
+void DeviceManager::closeDevice(int fd) const
+{
+    close(fd);
+}
+
+bool DeviceManager::isSlotConnected(int eventNumber) const
+{
+    // Find the hidraw path for this event device
+    QString hidrawPath = findHidrawForEvent(eventNumber);
+    if (!hidrawPath.isEmpty()) {
+        int fd = ::open(hidrawPath.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd >= 0) {
+            // Wait 10 milliseconds for any pending packets
+            QThread::msleep(10);
+
+            unsigned char buf[64];
+            int bytes = ::read(fd, buf, sizeof(buf));
+            ::close(fd);
+
+            if (bytes > 0) {
+                qDebug() << "DeviceManager: Steam Controller on" << hidrawPath << "is CONNECTED (read" << bytes << "bytes)";
+                return true;
+            } else if (bytes < 0 && (errno == EAGAIN
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+                                    || errno == EWOULDBLOCK
+#endif
+                                    )) {
+                qDebug() << "DeviceManager: Steam Controller on" << hidrawPath << "is DISCONNECTED (EAGAIN)";
+                return false;
+            }
+        } else {
+            qDebug() << "DeviceManager: Failed to open" << hidrawPath << "for status check:" << strerror(errno);
+        }
+    }
+
+    // Fallback 1: Check power_supply if driver is hid-steam
+    QString basePath = QStringLiteral("/sys/class/input/event%1/device").arg(eventNumber);
+    QString driverPath = QFile::symLinkTarget(basePath + QStringLiteral("/device/driver"));
+    bool isHidSteam = driverPath.endsWith(QStringLiteral("hid-steam"));
+
+    if (isHidSteam) {
+        bool hasBattery = QDir(basePath + QStringLiteral("/device/power_supply")).exists();
+        if (!hasBattery) {
+            return false;
+        }
+    }
+
+    // Fallback 2: Default to true (assume connected) if we can't determine
+    return true;
+}
+
