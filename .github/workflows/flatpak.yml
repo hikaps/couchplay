@@ -55,6 +55,19 @@ jobs:
         run: |
           flatpak-builder --user --install-deps-from=flathub --force-clean --repo=repo --default-branch=stable build-dir io.github.hikaps.couchplay.json
 
+      - name: Assert sandbox permissions
+        run: |
+          grep -q 'io.github.hikaps.CouchPlayHelper=talk' build-dir/metadata \
+            || { echo "::error::helper system-talk-name missing"; exit 1; }
+          grep -qE '^devices=.*all' build-dir/metadata \
+            || { echo "::error::--device=all missing"; exit 1; }
+
+      - name: Launch smoke (offscreen)
+        continue-on-error: true
+        run: |
+          QT_QPA_PLATFORM=offscreen flatpak-builder --run build-dir io.github.hikaps.couchplay.json \
+            bash -c 'dbus-run-session -- timeout 15 couchplay; c=$?; [ $c -eq 0 -o $c -eq 124 ]'
+
       - name: Create Flatpak bundle
         run: |
           flatpak build-bundle repo couchplay.flatpak io.github.hikaps.couchplay stable

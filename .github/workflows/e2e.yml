@@ -8,7 +8,7 @@ name: E2E Tests
 # BIFURCATION: unit tests (ci.yml) gate every PR. This e2e suite is slow and
 # runner-bound (self-hosted -- the maintainer's Bazzite box, labels `self-hosted,
 # linux`), so it does NOT run on pull requests at all: only on push to
-# develop/main (right before the beta/stable cuts) and on manual dispatch. With
+# main (right before the stable cut) and on manual dispatch. With
 # no pull_request trigger, an UNREVIEWED fork PR can't fire this job -- but
 # merging a fork PR produces a push event, so merged external code (Dockerfile,
 # entrypoint, tests) DOES execute on this host. Review appiumtests/ infra
@@ -36,7 +36,7 @@ name: E2E Tests
 
 on:
   push:
-    branches: [ develop, main ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
