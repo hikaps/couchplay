@@ -303,6 +303,12 @@ Q_SIGNALS:
     void instanceCountChanged();
     void settingsManagerChanged();
 
+protected:
+    virtual int openDevice(const QString &path, int flags) const;
+    virtual int ioctlDevice(int fd, unsigned long request, void *arg) const;
+    virtual void closeDevice(int fd) const;
+    virtual bool isSlotConnected(int eventNumber) const;
+
 private Q_SLOTS:
     void onInputDirectoryChanged();
     void onDebounceTimeout();
