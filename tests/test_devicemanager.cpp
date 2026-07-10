@@ -789,7 +789,7 @@ void TestDeviceManager::testSteamControllerDetection()
     // Actual Gamepad Device (event10)
     out << "I: Bus=0003 Vendor=28de Product=1102 Version=0011\n";
     out << "N: Name=\"Valve Software Steam Controller\"\n";
-    out << "P: Phys=usb-0000:12:00.4-1/input0\n";
+    out << "P: Phys=usb-0000:12:00.4-1/input2/input0\n";
     out << "H: Handlers=event10 js0\n\n";
 
     // Slot 2
@@ -900,6 +900,31 @@ void TestDeviceManager::testSteamControllerDetection()
     // Verify event10 (Actual Gamepad) was automatically assigned to 0 as well!
     QVariantMap padDev = mockManager.getDevice(10);
     QCOMPARE(padDev.value(KEY("assigned")).toBool(), true);
+    QCOMPARE(padDev.value(KEY("assignedInstance")).toInt(), 0);
+
+    // Verify Slot 2 devices (event4, event5) remain unassigned!
+    QVariantMap mouse2Dev = mockManager.getDevice(4);
+    QCOMPARE(mouse2Dev.value(KEY("assigned")).toBool(), false);
+    QVariantMap kbd2Dev = mockManager.getDevice(5);
+    QCOMPARE(kbd2Dev.value(KEY("assigned")).toBool(), false);
+
+    // Now assign Slot 2 Mouse (event4) to instance 1
+    QVERIFY(mockManager.assignDevice(4, 1));
+
+    // Verify Slot 2 devices are assigned to 1
+    mouse2Dev = mockManager.getDevice(4);
+    QCOMPARE(mouse2Dev.value(KEY("assigned")).toBool(), true);
+    QCOMPARE(mouse2Dev.value(KEY("assignedInstance")).toInt(), 1);
+    kbd2Dev = mockManager.getDevice(5);
+    QCOMPARE(kbd2Dev.value(KEY("assigned")).toBool(), true);
+    QCOMPARE(kbd2Dev.value(KEY("assignedInstance")).toInt(), 1);
+
+    // Verify Slot 1 devices still assigned to 0
+    mouseDev = mockManager.getDevice(2);
+    QCOMPARE(mouseDev.value(KEY("assignedInstance")).toInt(), 0);
+    kbdDev = mockManager.getDevice(3);
+    QCOMPARE(kbdDev.value(KEY("assignedInstance")).toInt(), 0);
+    padDev = mockManager.getDevice(10);
     QCOMPARE(padDev.value(KEY("assignedInstance")).toInt(), 0);
 
     // Unassign Puck Slot 1 Mouse (event2)

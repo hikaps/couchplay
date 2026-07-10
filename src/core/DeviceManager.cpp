@@ -18,13 +18,29 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-static QString getBasePhysPath(const QString &physPath)
+static QString getGroupingPath(const QString &physPath, const QString &name)
 {
-    int idx = physPath.lastIndexOf(QStringLiteral("/input"));
-    if (idx != -1) {
-        return physPath.left(idx);
+    if (physPath.isEmpty()) {
+        return physPath;
     }
-    return physPath;
+
+    bool isSteam = name.toLower().contains(QStringLiteral("steam controller"));
+    if (isSteam) {
+        // Group by Steam Controller Slot (keeps input2, input3, etc. separate)
+        int firstIdx = physPath.indexOf(QStringLiteral("/input"));
+        int lastIdx = physPath.lastIndexOf(QStringLiteral("/input"));
+        if (firstIdx != -1 && lastIdx != -1 && firstIdx != lastIdx) {
+            return physPath.left(lastIdx);
+        }
+        return physPath;
+    } else {
+        // Group by Base USB path for PlayStation and other controllers
+        int idx = physPath.lastIndexOf(QStringLiteral("/input"));
+        if (idx != -1) {
+            return physPath.left(idx);
+        }
+        return physPath;
+    }
 }
 
 DeviceManager::DeviceManager(QObject *parent)
@@ -531,7 +547,7 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
             bool assigned = (instanceIndex >= 0);
 
             // Assign this device and all siblings on the same physical path if it is a Steam Controller or PlayStation controller
-            QString basePhys = getBasePhysPath(m_devices[i].physPath);
+            QString basePhys = getGroupingPath(m_devices[i].physPath, m_devices[i].name);
             bool isGroupedDevice = false;
             QString lowerName = m_devices[i].name.toLower();
             if (lowerName.contains(QStringLiteral("steam controller")) ||
@@ -544,7 +560,7 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
 
             if (!basePhys.isEmpty() && isGroupedDevice) {
                 for (auto &device : m_devices) {
-                    if (getBasePhysPath(device.physPath) == basePhys) {
+                    if (getGroupingPath(device.physPath, device.name) == basePhys) {
                         device.assigned = assigned;
                         device.assignedInstance = instanceIndex;
                         if (!device.stableId.isEmpty()) {
@@ -654,7 +670,7 @@ int DeviceManager::autoAssignControllers()
         int previousInstance = m_devices[deviceIndex].assignedInstance;
 
         bool assigned = true;
-        QString basePhys = getBasePhysPath(m_devices[deviceIndex].physPath);
+        QString basePhys = getGroupingPath(m_devices[deviceIndex].physPath, m_devices[deviceIndex].name);
         bool isGroupedDevice = false;
         QString lowerName = m_devices[deviceIndex].name.toLower();
         if (lowerName.contains(QStringLiteral("steam controller")) ||
@@ -667,7 +683,7 @@ int DeviceManager::autoAssignControllers()
 
         if (!basePhys.isEmpty() && isGroupedDevice) {
             for (auto &device : m_devices) {
-                if (getBasePhysPath(device.physPath) == basePhys) {
+                if (getGroupingPath(device.physPath, device.name) == basePhys) {
                     device.assigned = assigned;
                     device.assignedInstance = instance;
                     if (!device.stableId.isEmpty()) {
@@ -826,22 +842,13 @@ QVariantList DeviceManager::visibleDevicesAsVariant() const
             continue;
         }
 
-        // For Steam Controllers, if there are multiple devices on the same base physical path,
-        // we only show the one that has a slot index (the formatted puck mouse node)
-        // to prevent duplicate UI entries.
+        // For Steam Controllers, we only show the primary slot mouse device in the UI.
+        // Child devices (like the dynamically registered gamepad node) have multiple /input segments.
         if (device.type == QStringLiteral("controller") && device.name.toLower().contains(QStringLiteral("steam controller"))) {
-            if (!device.name.contains(QStringLiteral("Slot"))) {
-                QString basePhys = getBasePhysPath(device.physPath);
-                bool hasSlotDevice = false;
-                for (const auto &other : m_devices) {
-                    if (other.name.contains(QStringLiteral("Slot")) && getBasePhysPath(other.physPath) == basePhys) {
-                        hasSlotDevice = true;
-                        break;
-                    }
-                }
-                if (hasSlotDevice) {
-                    continue; // Skip/hide this duplicate gamepad node
-                }
+            int firstIdx = device.physPath.indexOf(QStringLiteral("/input"));
+            int lastIdx = device.physPath.lastIndexOf(QStringLiteral("/input"));
+            if (firstIdx != -1 && lastIdx != -1 && firstIdx != lastIdx) {
+                continue; // Skip/hide this duplicate gamepad node
             }
         }
 
@@ -859,22 +866,13 @@ QVariantList DeviceManager::controllersAsVariant() const
                 continue;
             }
 
-            // For Steam Controllers, if there are multiple devices on the same base physical path,
-            // we only show the one that has a slot index (the formatted puck mouse node)
-            // to prevent duplicate UI entries.
+            // For Steam Controllers, we only show the primary slot mouse device in the UI.
+            // Child devices (like the dynamically registered gamepad node) have multiple /input segments.
             if (device.name.toLower().contains(QStringLiteral("steam controller"))) {
-                if (!device.name.contains(QStringLiteral("Slot"))) {
-                    QString basePhys = getBasePhysPath(device.physPath);
-                    bool hasSlotDevice = false;
-                    for (const auto &other : m_devices) {
-                        if (other.name.contains(QStringLiteral("Slot")) && getBasePhysPath(other.physPath) == basePhys) {
-                            hasSlotDevice = true;
-                            break;
-                        }
-                    }
-                    if (hasSlotDevice) {
-                        continue; // Skip/hide this duplicate gamepad node
-                    }
+                int firstIdx = device.physPath.indexOf(QStringLiteral("/input"));
+                int lastIdx = device.physPath.lastIndexOf(QStringLiteral("/input"));
+                if (firstIdx != -1 && lastIdx != -1 && firstIdx != lastIdx) {
+                    continue; // Skip/hide this duplicate gamepad node
                 }
             }
 
