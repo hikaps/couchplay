@@ -85,7 +85,6 @@ private Q_SLOTS:
 
 private:
     void setStatus(const QString &status);
-    static qint64 resolveGamescopePid(qint64 launchedPid);
 
     int m_index = -1;
     QString m_status;

@@ -96,11 +96,8 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         return false;
     }
 
-    m_gamescopePid = resolveGamescopePid(m_helperPid);
-    if (m_gamescopePid == 0) {
-        qWarning() << "Instance" << m_index << "could not resolve gamescope PID from helper PID" << m_helperPid;
-        m_gamescopePid = m_helperPid;
-    }
+    // The helper's LaunchInstance returns the gamescope MainPID directly.
+    m_gamescopePid = m_helperPid;
     Q_EMIT gamescopePidChanged();
     setStatus(QStringLiteral("Running as %1").arg(m_username));
 
@@ -306,39 +303,6 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     }
 
     return envVars;
-}
-
-qint64 GamescopeInstance::resolveGamescopePid(qint64 launchedPid)
-{
-    if (launchedPid <= 0) {
-        return 0;
-    }
-
-    QString childrenPath = QStringLiteral("/proc/%1/task/%1/children").arg(launchedPid);
-    QFile childrenFile(childrenPath);
-    if (!childrenFile.open(QIODevice::ReadOnly)) {
-        return 0;
-    }
-
-    QStringList childPids = QString::fromLocal8Bit(childrenFile.readAll()).split(QLatin1Char(' '), Qt::SkipEmptyParts);
-
-    for (const QString &childPidStr : childPids) {
-        qint64 childPid = childPidStr.toLongLong();
-        if (childPid <= 0) {
-            continue;
-        }
-
-        QString commPath = QStringLiteral("/proc/%1/comm").arg(childPid);
-        QFile commFile(commPath);
-        if (commFile.open(QIODevice::ReadOnly)) {
-            QString comm = QString::fromLocal8Bit(commFile.readAll()).trimmed();
-            if (comm == QLatin1String("gamescope")) {
-                return childPid;
-            }
-        }
-    }
-
-    return 0;
 }
 
 void GamescopeInstance::onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason)
