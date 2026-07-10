@@ -6,7 +6,9 @@
 #include <QTemporaryFile>
 #include <QTest>
 
+#define private public
 #include "DeviceManager.h"
+#undef private
 #include "SettingsManager.h"
 
 // Helper macro for QVariantMap key access with proper QString conversion
@@ -59,6 +61,7 @@ private Q_SLOTS:
 
     // Blacklist tests
     void testIgnoredDevices();
+    void testIsVirtualDevice();
 
 private:
     DeviceManager *m_deviceManager = nullptr;
@@ -457,6 +460,13 @@ void TestDeviceManager::testGenerateStableId()
     QString partialId = DeviceManager::generateStableId(QStringLiteral("045e"), QString(), QString());
     QVERIFY(!partialId.isEmpty());
     QVERIFY(partialId.startsWith(QStringLiteral("045e:")));
+
+    // Test with uniq component
+    QString withUniq = DeviceManager::generateStableId(QStringLiteral("054c"),
+                                                       QStringLiteral("0ce6"),
+                                                       QString(),
+                                                       QStringLiteral("14:3a:9a:86:02:df"));
+    QCOMPARE(withUniq, QStringLiteral("054c:0ce6::14:3a:9a:86:02:df"));
 }
 
 void TestDeviceManager::testFindDeviceByStableId()
@@ -668,6 +678,22 @@ void TestDeviceManager::testIgnoredDevices()
     }
 
     m_deviceManager->setSettingsManager(nullptr);
+}
+
+void TestDeviceManager::testIsVirtualDevice()
+{
+    // Test standard cases
+    QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Virtual Controller"), QString()));
+    QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Standard Joystick"), QStringLiteral("/virtual/input0")));
+    QVERIFY(!m_deviceManager->isVirtualDevice(QStringLiteral("Standard Controller"), QStringLiteral("/dev/input0")));
+
+    // Test Bluetooth/USB devices with empty physical path (should NOT be virtual)
+    QVERIFY(!m_deviceManager->isVirtualDevice(QStringLiteral("DualSense Wireless Controller"), QString(), QStringLiteral("0005")));
+    QVERIFY(!m_deviceManager->isVirtualDevice(QStringLiteral("USB Controller"), QString(), QStringLiteral("0003")));
+
+    // Test other devices with empty physical path (should be virtual)
+    QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Keyboard"), QString(), QStringLiteral("0006")));
+    QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Keyboard"), QString(), QString()));
 }
 
 QTEST_MAIN(TestDeviceManager)

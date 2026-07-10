@@ -177,7 +177,7 @@ public:
      * @param physPath Physical path (e.g., "usb-0000:00:14.0-2.4/input0")
      * @return Stable ID in format "vendorId:productId:physPath"
      */
-    static QString generateStableId(const QString &vendorId, const QString &productId, const QString &physPath);
+    static QString generateStableId(const QString &vendorId, const QString &productId, const QString &physPath, const QString &uniq = QString());
 
     /**
      * @brief Find a device by its stable ID
@@ -312,7 +312,7 @@ private Q_SLOTS:
 private:
     void parseDevices();
     QString detectDeviceType(const QString &name, const QString &handlers) const;
-    bool isVirtualDevice(const QString &name, const QString &physPath) const;
+    bool isVirtualDevice(const QString &name, const QString &physPath, const QString &busType = QString()) const;
     bool isInternalDevice(const QString &name) const;
     QVariantMap deviceToVariantMap(const InputDevice &device) const;
     void setupHotplugWatcher();

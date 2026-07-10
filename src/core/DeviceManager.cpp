@@ -208,6 +208,8 @@ void DeviceManager::parseDevices()
     QString currentPhys;
     QString currentVendor;
     QString currentProduct;
+    QString currentBus;
+    QString currentUniq;
     int currentEventNumber = -1;
     int lineCount = 0;
 
@@ -216,7 +218,8 @@ void DeviceManager::parseDevices()
     static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
     static const QRegularExpression joyRegex(QStringLiteral("js(\\d+)"));
     static const QRegularExpression physRegex(QStringLiteral("^P: Phys=(.*)$"));
-    static const QRegularExpression idRegex(QStringLiteral("^I: Bus=\\w+ Vendor=(\\w+) Product=(\\w+)"));
+    static const QRegularExpression idRegex(QStringLiteral("^I: Bus=(\\w+) Vendor=(\\w+) Product=(\\w+)"));
+    static const QRegularExpression uniqRegex(QStringLiteral("^U: Uniq=(.*)$"));
     static const QRegularExpression hidrawNumRegex(QStringLiteral("/dev/hidraw(\\d+)"));
 
     auto resolveHidraw = [this](InputDevice &device) {
@@ -254,10 +257,10 @@ void DeviceManager::parseDevices()
                 device.vendorId = currentVendor;
                 device.productId = currentProduct;
                 device.physPath = currentPhys;
-                device.stableId = generateStableId(currentVendor, currentProduct, currentPhys);
+                device.stableId = generateStableId(currentVendor, currentProduct, currentPhys, currentUniq);
                 device.assigned = false;
                 device.assignedInstance = -1;
-                device.isVirtual = isVirtualDevice(currentName, currentPhys);
+                device.isVirtual = isVirtualDevice(currentName, currentPhys, currentBus);
                 device.isInternal = isInternalDevice(currentName);
 
                 resolveHidraw(device);
@@ -275,6 +278,8 @@ void DeviceManager::parseDevices()
             currentPhys.clear();
             currentVendor.clear();
             currentProduct.clear();
+            currentBus.clear();
+            currentUniq.clear();
             currentEventNumber = -1;
             continue;
         }
@@ -309,8 +314,16 @@ void DeviceManager::parseDevices()
         // Parse vendor/product ID
         QRegularExpressionMatch idMatch = idRegex.match(line);
         if (idMatch.hasMatch()) {
-            currentVendor = idMatch.captured(1);
-            currentProduct = idMatch.captured(2);
+            currentBus = idMatch.captured(1);
+            currentVendor = idMatch.captured(2);
+            currentProduct = idMatch.captured(3);
+            continue;
+        }
+
+        // Parse Uniq
+        QRegularExpressionMatch uniqMatch = uniqRegex.match(line);
+        if (uniqMatch.hasMatch()) {
+            currentUniq = uniqMatch.captured(1);
             continue;
         }
     }
@@ -334,10 +347,10 @@ void DeviceManager::parseDevices()
         device.vendorId = currentVendor;
         device.productId = currentProduct;
         device.physPath = currentPhys;
-        device.stableId = generateStableId(currentVendor, currentProduct, currentPhys);
+        device.stableId = generateStableId(currentVendor, currentProduct, currentPhys, currentUniq);
         device.assigned = false;
         device.assignedInstance = -1;
-        device.isVirtual = isVirtualDevice(currentName, currentPhys);
+        device.isVirtual = isVirtualDevice(currentName, currentPhys, currentBus);
         device.isInternal = isInternalDevice(currentName);
 
         resolveHidraw(device);
@@ -419,13 +432,16 @@ QString DeviceManager::detectDeviceType(const QString &name, const QString &hand
     return QStringLiteral("other");
 }
 
-bool DeviceManager::isVirtualDevice(const QString &name, const QString &physPath) const
+bool DeviceManager::isVirtualDevice(const QString &name, const QString &physPath, const QString &busType) const
 {
     QString lowerName = name.toLower();
     QString lowerPhys = physPath.toLower();
 
     // Virtual devices typically have no physical path or specific patterns
     if (physPath.isEmpty()) {
+        if (busType.toLower() == QStringLiteral("0005") || busType.toLower() == QStringLiteral("0003")) {
+            return false;
+        }
         return true;
     }
 
@@ -825,15 +841,18 @@ void DeviceManager::unignoreDevice(const QString &stableId)
     }
 }
 
-QString DeviceManager::generateStableId(const QString &vendorId, const QString &productId, const QString &physPath)
+QString DeviceManager::generateStableId(const QString &vendorId, const QString &productId, const QString &physPath, const QString &uniq)
 {
     // Create a stable identifier from hardware properties
-    // Format: "vendorId:productId:physPath"
-    // This survives hotplug events and reboots (as long as device is plugged into same port)
-    if (vendorId.isEmpty() && productId.isEmpty() && physPath.isEmpty()) {
+    // Format: "vendorId:productId:physPath[:uniq]"
+    // This survives hotplug events and reboots (as long as device is plugged into same port/Bluetooth MAC)
+    if (vendorId.isEmpty() && productId.isEmpty() && physPath.isEmpty() && uniq.isEmpty()) {
         return QString();
     }
-    return QStringLiteral("%1:%2:%3").arg(vendorId, productId, physPath);
+    if (uniq.isEmpty()) {
+        return QStringLiteral("%1:%2:%3").arg(vendorId, productId, physPath);
+    }
+    return QStringLiteral("%1:%2:%3:%4").arg(vendorId, productId, physPath, uniq);
 }
 
 int DeviceManager::findDeviceByStableId(const QString &stableId) const
