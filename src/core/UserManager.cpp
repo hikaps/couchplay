@@ -20,10 +20,12 @@ static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 UserManager::UserManager(QObject *parent)
     : QObject(parent)
 {
-    // Get current user
-    struct passwd *pw = getpwuid(getuid());
-    if (pw) {
-        m_currentUser = QString::fromLocal8Bit(pw->pw_name);
+    m_currentUser = qEnvironmentVariable("USER");
+    if (m_currentUser.isEmpty()) {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw) {
+            m_currentUser = QString::fromLocal8Bit(pw->pw_name);
+        }
     }
 
     refresh();
@@ -84,6 +86,18 @@ QSet<QString> UserManager::getCouchPlayGroupMembers() const
 
 void UserManager::parseUsers()
 {
+    if (m_helperClient && m_helperClient->isAvailable()) {
+        const QStringList entries = m_helperClient->listCouchPlayUsers();
+        for (const QString &entry : entries) {
+            const QStringList fields = entry.split(QLatin1Char('\t'));
+            // Format: username\tuid\tgid\thome\tshell
+            if (fields.size() < 5 || fields[0] == m_currentUser) {
+                continue;
+            }
+            m_users.append({fields[0], fields[1].toInt(), fields[3], fields[4]});
+        }
+        return;
+    }
     // Get couchplay group members
     QSet<QString> couchplayMembers = getCouchPlayGroupMembers();
 
@@ -239,7 +253,9 @@ bool UserManager::isValidUsername(const QString &username) const
 
 bool UserManager::userExists(const QString &username) const
 {
-    // Check getpwnam for any user
+    if (m_helperClient && m_helperClient->isAvailable()) {
+        return !m_helperClient->getUserInfo(username).isEmpty();
+    }
     struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
     return pw != nullptr;
 }

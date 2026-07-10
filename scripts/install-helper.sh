@@ -86,6 +86,10 @@ if [[ -f "/app/libexec/${HELPER_BINARY}" ]]; then
     FLATPAK_LIBEXEC="/app/libexec"
     BINARY_PATH="${FLATPAK_LIBEXEC}/${HELPER_BINARY}"
     DATA_DIR="/app/share/couchplay/data"
+elif [[ -f "${SCRIPT_DIR}/${HELPER_BINARY}" ]]; then
+    # Flatpak-export layout: helper exported to a host dir (binary at root)
+    BINARY_PATH="${SCRIPT_DIR}/${HELPER_BINARY}"
+    DATA_DIR="${SCRIPT_DIR}/data"
 elif [[ -f "${SCRIPT_DIR}/bin/${HELPER_BINARY}" ]]; then
     # Release tarball structure
     RELEASE_DIR="${SCRIPT_DIR}"
@@ -260,12 +264,15 @@ install_helper() {
     install -Dm644 "${DATA_DIR}/polkit/io.github.hikaps.couchplay.policy" \
         "${POLKIT_DIR}/io.github.hikaps.couchplay.policy"
 
-    # Install PipeWire PulseAudio TCP listener config
-    print_info "Installing PipeWire PulseAudio TCP listener..."
     SYSTEM_PIPEWIRE_PULSE_CONF_DIR="${PREFIX}/share/pipewire/pipewire-pulse.conf.d"
-    mkdir -p "$SYSTEM_PIPEWIRE_PULSE_CONF_DIR"
-    install -Dm644 "${DATA_DIR}/pipewire/50-couchplay.conf" \
-        "${SYSTEM_PIPEWIRE_PULSE_CONF_DIR}/50-couchplay.conf"
+    if [[ -f "${DATA_DIR}/pipewire/50-couchplay.conf" ]]; then
+        print_info "Installing PipeWire PulseAudio TCP listener..."
+        mkdir -p "$SYSTEM_PIPEWIRE_PULSE_CONF_DIR"
+        install -Dm644 "${DATA_DIR}/pipewire/50-couchplay.conf" \
+            "${SYSTEM_PIPEWIRE_PULSE_CONF_DIR}/50-couchplay.conf"
+    else
+        print_warn "PipeWire config not in export — skipping (optional; affects streaming audio only)."
+    fi
 
     # Reload systemd
     print_info "Reloading systemd..."

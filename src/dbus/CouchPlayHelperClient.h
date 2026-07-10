@@ -8,6 +8,7 @@
 #include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 
 /**
  * @brief D-Bus client for the privileged CouchPlay helper
@@ -27,7 +28,7 @@ public:
         return m_available;
     }
 
-    Q_INVOKABLE bool setDeviceOwner(const QString &devicePath, int uid);
+    Q_INVOKABLE virtual bool setDeviceOwner(const QString &devicePath, int uid);
 
     /**
      * @brief Restore device ownership to root:input
@@ -48,7 +49,18 @@ public:
      */
     Q_INVOKABLE bool deleteUser(const QString &username, bool removeHome);
 
-    Q_INVOKABLE bool isInCouchPlayGroup(const QString &username);
+    Q_INVOKABLE virtual bool isInCouchPlayGroup(const QString &username);
+
+    /**
+     * @brief List CouchPlay-managed users (tab-delimited: username\tuid\tgid\thome\tshell)
+     */
+    Q_INVOKABLE virtual QStringList listCouchPlayUsers();
+
+    /**
+     * @brief Resolve uid/gid/home for a named user via the helper
+     * @return map with keys "uid","gid","home", or empty if unavailable/not found
+     */
+    Q_INVOKABLE virtual QVariantMap getUserInfo(const QString &username);
 
     /**
      * @brief Launch a gamescope instance as a specified user

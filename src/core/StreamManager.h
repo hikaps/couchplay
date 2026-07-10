@@ -11,8 +11,11 @@
 #include <QTimer>
 #include <QPointer>
 #include <qqmlintegration.h>
+#include <sys/types.h>
 
 struct InstanceConfig;
+
+class CouchPlayHelperClient;
 
 /**
  * @brief Manages Sunshine streaming subprocesses per player instance
@@ -55,6 +58,7 @@ public:
 
     StreamState streamState(int instanceIndex) const;
     bool isStreaming(int instanceIndex) const;
+    void setHelperClient(CouchPlayHelperClient *helper) { m_helperClient = helper; }
 
 Q_SIGNALS:
     void streamStarted(int instanceIndex);
@@ -72,6 +76,9 @@ private:
     void setStreamState(int instanceIndex, StreamState state);
     void cleanupConfigDir(int instanceIndex);
     void attemptRestart(int instanceIndex);
+    uid_t resolveCompositorUid(const QString &username) const;
+
+    CouchPlayHelperClient *m_helperClient = nullptr;
 
     struct StreamEntry {
         StreamState state = NotStarted;
