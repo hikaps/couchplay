@@ -1808,6 +1808,32 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
     return QString();
 }
 
+bool CouchPlayHelper::IsSteamBootstrapped(const QString &username)
+{
+    if (!userExists(username)) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        return false;
+    }
+
+    // Bootstrap complete when steam.sh or the ubuntu12_32 binary exists (userdata alone is insufficient).
+    const QStringList roots = {
+        userHome + QStringLiteral("/.local/share/Steam"),
+        userHome + QStringLiteral("/.steam/steam"),
+    };
+    for (const QString &root : roots) {
+        if (m_ops->fileExists(root + QStringLiteral("/steam.sh"))
+            || m_ops->fileExists(root + QStringLiteral("/ubuntu12_32/steam"))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString CouchPlayHelper::findGamescopePath()
 {
     QString gamescopePath = QStringLiteral("/usr/bin/gamescope");
@@ -2351,7 +2377,23 @@ void CouchPlayHelper::loadAndReconcileState()
                 isMounted = mountsData.contains(target.toUtf8());
             }
 
-            if (isMounted) {
+            if (!activeUsernames.contains(username)) {
+                // Session gone: umount the orphan instead of re-tracking it.
+                if (isMounted) {
+                    qDebug() << "loadAndReconcileState: Umounting orphaned mount" << target << "for gone session" << username;
+                    QProcess *umountProc = m_ops->createProcess();
+                    m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {target});
+                    m_ops->waitForFinished(umountProc, 5000);
+                    if (m_ops->processExitCode(umountProc) != 0) {
+                        QProcess *lazyProc = m_ops->createProcess();
+                        m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), target});
+                        m_ops->waitForFinished(lazyProc, 5000);
+                        delete lazyProc;
+                    }
+                    delete umountProc;
+                }
+                changed = true;
+            } else if (isMounted) {
                 MountInfo info;
                 info.source = mountObj.value(QStringLiteral("source")).toString();
                 info.target = target;

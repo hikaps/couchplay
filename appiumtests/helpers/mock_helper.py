@@ -222,6 +222,10 @@ class MockHelper(dbus.service.Object):
     def GetUserSteamId(self, username):
         return ""
 
+    @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="b")
+    def IsSteamBootstrapped(self, username):
+        return True
+
     @dbus.service.method(INTERFACE_NAME, in_signature="", out_signature="as")
     def ListCouchPlayUsers(self):
         entries = []
