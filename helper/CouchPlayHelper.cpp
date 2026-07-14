@@ -21,11 +21,12 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QThread>
-#include <QFileSystemWatcher>
+
+#include <linux/input.h>
+#include <fcntl.h>
 #include <QSocketNotifier>
 #include <QTimer>
-#include <fcntl.h>
-#include <linux/input.h>
+#include <QFileSystemWatcher>
 
 #include <grp.h>
 #include <pwd.h>
@@ -166,7 +167,6 @@ CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     , m_stateFilePath(QStringLiteral("/run/couchplay/state.json"))
 {
     loadAndReconcileState();
-
     setupUinputAccess();
 
     // Populate initial known event numbers
@@ -206,8 +206,6 @@ CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
 
 CouchPlayHelper::~CouchPlayHelper()
 {
-    stopWatchingAllDevices();
-
     for (uint uid : m_runtimeAccessSetForUid) {
         QString runtimeDir = QStringLiteral("/run/user/%1").arg(uid);
         removeRuntimeAcls(runtimeDir);
@@ -263,10 +261,11 @@ CouchPlayHelper::~CouchPlayHelper()
     qDeleteAll(m_monitors);
     m_monitors.clear();
 
-    if (!m_modifiedDevices.isEmpty()) {
+    stopWatchingAllDevices();
+
+    if (!m_modifiedDevices.isEmpty() || !m_modifiedHidDevices.isEmpty()) {
         ResetAllDevices();
     }
-
     removeUinputAccess();
 }
 
@@ -288,30 +287,125 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
         return false;
     }
 
-    if (m_ops->chown(devicePath, uid, pw->pw_gid) != 0) {
-        sendErrorReply(QDBusError::Failed,
-                       QStringLiteral("Failed to change ownership of %1: %2")
-                           .arg(devicePath, QString::fromLocal8Bit(strerror(errno))));
-        return false;
+    // Try to resolve the device to a physical HID device
+    HidDeviceInfo hid = findHidDevice(devicePath);
+    bool isPhysical = !hid.deviceId.isEmpty();
+
+    if (isPhysical) {
+        QString devId = hid.deviceId;
+        QString trackingPrefix = QStringLiteral("hid|%1|%2|").arg(hid.deviceId, hid.driverPath);
+        QString trackingId = trackingPrefix + QString::fromLocal8Bit(pw->pw_name);
+
+        // Check if this device is already modified for the same user
+        bool alreadyAssigned = false;
+        for (const QString &existing : m_modifiedHidDevices) {
+            if (existing.startsWith(trackingPrefix)) {
+                if (existing == trackingId) {
+                    alreadyAssigned = true;
+                } else {
+                    // Different user: remove old tracking ID first
+                    m_modifiedHidDevices.removeAll(existing);
+                }
+                break;
+            }
+        }
+
+        if (alreadyAssigned) {
+            QString rulePath = getTempUdevRulePath(devId);
+            if (QFileInfo::exists(rulePath)) {
+                if (!m_modifiedDevices.contains(devicePath)) {
+                    m_modifiedDevices.append(devicePath);
+                }
+                // Clear ACLs on this node to ensure it remains clean
+                runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), devicePath});
+                startWatchingDevice(devicePath);
+                saveState();
+                return true;
+            } else {
+                // Rule was cleared (e.g. helper restarted), we need to rewrite it and rebind
+                alreadyAssigned = false;
+            }
+        }
+
+        // 1. Write the temporary udev rule assigning this device/subsystem to the target user
+        if (writeTempUdevRule(hid, QString::fromLocal8Bit(pw->pw_name))) {
+            // 2. Reload udev rules so the rule takes effect on rebinding
+            runCommand(QStringLiteral("udevadm"), {QStringLiteral("control"), QStringLiteral("--reload-rules")});
+
+            // 3. Unbind the driver to force active openers (like Steam) to close their FDs
+            QString driverPath = hid.driverPath;
+            QString unbindPath = driverPath + QStringLiteral("/unbind");
+            qDebug() << "CouchPlayHelper: Unbinding device" << devId << "from driver" << driverPath;
+            if (!m_ops->writeFile(unbindPath, devId.toLocal8Bit())) {
+                qWarning() << "CouchPlayHelper: Failed to write to driver unbind:" << unbindPath;
+            }
+
+            // 4. Rebind the driver so the device is recreated with our udev rules applied
+            QString bindPath = driverPath + QStringLiteral("/bind");
+            qDebug() << "CouchPlayHelper: Rebinding device" << devId << "to driver" << driverPath;
+            if (!m_ops->writeFile(bindPath, devId.toLocal8Bit())) {
+                qWarning() << "CouchPlayHelper: Failed to write to driver bind:" << bindPath;
+            }
+
+            // Wait for udev to finish processing the device creation and logind to apply ACLs
+            runCommand(QStringLiteral("udevadm"), {QStringLiteral("settle")});
+
+            // After rebind, the hidraw node may have received a new /dev/hidrawN number.
+            // Re-resolve the actual current path from sysfs using the stable device ID.
+            QString resolvedDevicePath = findHidrawPathForDeviceId(devId);
+            if (resolvedDevicePath.isEmpty()) {
+                qWarning() << "CouchPlayHelper: Could not resolve post-rebind hidraw path for" << devId
+                           << "-- falling back to original path" << devicePath;
+                resolvedDevicePath = devicePath;
+            } else if (resolvedDevicePath != devicePath) {
+                qDebug() << "CouchPlayHelper: Post-rebind hidraw path changed from" << devicePath
+                         << "to" << resolvedDevicePath;
+                // Update tracking so cleanup removes the right node
+                m_modifiedDevices.removeAll(devicePath);
+            }
+
+            // Clear any systemd-logind ACLs (which grant read/write access to the host seat user 'deck')
+            runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), resolvedDevicePath});
+
+            // Track the modified device for cleanup on exit
+            if (!m_modifiedHidDevices.contains(trackingId)) {
+                m_modifiedHidDevices.append(trackingId);
+            }
+
+            // Watch the resolved (current) hidraw path for the exit chord
+            if (!m_modifiedDevices.contains(resolvedDevicePath)) {
+                m_modifiedDevices.append(resolvedDevicePath);
+            }
+            startWatchingDevice(resolvedDevicePath);
+            saveState();
+            return true;
+        }
+    } else {
+        // Fallback for virtual/software devices: change owner directly on the existing device node
+        if (m_ops->chown(devicePath, uid, pw->pw_gid) != 0) {
+            sendErrorReply(QDBusError::Failed,
+                           QStringLiteral("Failed to change ownership of %1: %2")
+                               .arg(devicePath, QString::fromLocal8Bit(strerror(errno))));
+            return false;
+        }
+
+        // Only the assigned user can read the device, not the group
+        if (m_ops->chmod(devicePath, 0600) != 0) {
+            sendErrorReply(QDBusError::Failed,
+                           QStringLiteral("Failed to set permissions on %1: %2")
+                               .arg(devicePath, QString::fromLocal8Bit(strerror(errno))));
+            return false;
+        }
+
+        // Clear any systemd-logind ACLs on the virtual device node
+        runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), devicePath});
     }
-
-    // Only the assigned user can read the device, not the group
-    if (m_ops->chmod(devicePath, 0600) != 0) {
-        sendErrorReply(QDBusError::Failed,
-                       QStringLiteral("Failed to set permissions on %1: %2")
-                           .arg(devicePath, QString::fromLocal8Bit(strerror(errno))));
-        return false;
-    }
-
-    // Clear any systemd-logind ACLs on the device node
-    runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), devicePath});
-
-    startWatchingDevice(devicePath);
 
     if (!m_modifiedDevices.contains(devicePath)) {
         m_modifiedDevices.append(devicePath);
     }
 
+    startWatchingDevice(devicePath);
     saveState();
 
     return true;
@@ -340,7 +434,43 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
         return false;
     }
 
-    stopWatchingDevice(devicePath);
+    // Clean up any associated temporary udev rule for this physical device
+    HidDeviceInfo hid = findHidDevice(devicePath);
+    if (!hid.deviceId.isEmpty()) {
+        QString devId = hid.deviceId;
+        QString trackingPrefix = QStringLiteral("hid|%1|").arg(hid.deviceId);
+
+        QString matchedTracking;
+        for (const QString &existing : m_modifiedHidDevices) {
+            if (existing.startsWith(trackingPrefix)) {
+                matchedTracking = existing;
+                break;
+            }
+        }
+
+        if (!matchedTracking.isEmpty()) {
+            m_modifiedHidDevices.removeAll(matchedTracking);
+            removeTempUdevRule(devId);
+
+            QStringList parts = matchedTracking.split(QLatin1Char('|'));
+            if (parts.size() >= 3) {
+                QString driverPath = parts.at(2);
+                QString unbindPath = driverPath + QStringLiteral("/unbind");
+                m_ops->writeFile(unbindPath, devId.toLocal8Bit());
+
+                QString bindPath = driverPath + QStringLiteral("/bind");
+                m_ops->writeFile(bindPath, devId.toLocal8Bit());
+            }
+
+            runCommand(QStringLiteral("udevadm"), {QStringLiteral("control"), QStringLiteral("--reload-rules")});
+            runCommand(QStringLiteral("udevadm"),
+                       {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=input"),
+                        QStringLiteral("--action=change")});
+            runCommand(QStringLiteral("udevadm"),
+                       {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=hidraw"),
+                        QStringLiteral("--action=change")});
+        }
+    }
 
     struct group *inputGroup = m_ops->getgrnam("input");
     gid_t inputGid = inputGroup ? inputGroup->gr_gid : 0;
@@ -356,22 +486,80 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
         return false;
     }
 
-    // Clear any systemd-logind ACLs on the device node
-    runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), devicePath});
-
+    stopWatchingDevice(devicePath);
     m_modifiedDevices.removeAll(devicePath);
     saveState();
     return true;
 }
 
+bool CouchPlayHelper::WatchDevice(const QString &devicePath)
+{
+    if (!isValidDevicePath(devicePath)) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(devicePath));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_DEVICE_OWNER)) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to watch device"));
+        return false;
+    }
+
+    startWatchingDevice(devicePath);
+    return true;
+}
+
+
+
 int CouchPlayHelper::ResetAllDevices()
 {
+    stopWatchingAllDevices();
+
     int successCount = 0;
     QStringList devices = m_modifiedDevices;
 
     struct group *inputGroup = m_ops->getgrnam("input");
     gid_t inputGid = inputGroup ? inputGroup->gr_gid : 0;
 
+    // Clean up temporary udev rules for physical HID devices and rebind to restore default ownership
+    QStringList hidDevices = m_modifiedHidDevices;
+    m_modifiedHidDevices.clear();
+
+    bool needUdevReload = false;
+
+    for (const QString &trackingId : hidDevices) {
+        QStringList parts = trackingId.split(QLatin1Char('|'));
+        if (parts.size() < 3) continue;
+
+        QString devId = parts.at(1);
+        QString driverPath = parts.at(2);
+
+        if (removeTempUdevRule(devId)) {
+            needUdevReload = true;
+        }
+
+        QString unbindPath = driverPath + QStringLiteral("/unbind");
+        qDebug() << "CouchPlayHelper: Reset - Unbinding device" << devId << "from driver" << driverPath;
+        m_ops->writeFile(unbindPath, devId.toLocal8Bit());
+
+        QString bindPath = driverPath + QStringLiteral("/bind");
+        qDebug() << "CouchPlayHelper: Reset - Rebinding device" << devId << "to driver" << driverPath;
+        m_ops->writeFile(bindPath, devId.toLocal8Bit());
+    }
+
+    if (needUdevReload) {
+        // Reload udev rules after removing all temporary rules
+        runCommand(QStringLiteral("udevadm"), {QStringLiteral("control"), QStringLiteral("--reload-rules")});
+
+        // Trigger udev to re-apply default rules to input and hidraw subsystems
+        runCommand(QStringLiteral("udevadm"),
+                   {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=input"),
+                    QStringLiteral("--action=change")});
+        runCommand(QStringLiteral("udevadm"),
+                   {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=hidraw"),
+                    QStringLiteral("--action=change")});
+    }
+
+    // Reset virtual/software devices via direct chown/chmod
     for (const QString &path : devices) {
         if (m_ops->chown(path, 0, inputGid) == 0 && m_ops->chmod(path, 0660) == 0) {
             successCount++;
@@ -2210,6 +2398,12 @@ void CouchPlayHelper::saveState()
     }
     root[QStringLiteral("modifiedDevices")] = devicesArray;
 
+    QJsonArray hidDevicesArray;
+    for (const QString &hidDevice : m_modifiedHidDevices) {
+        hidDevicesArray.append(hidDevice);
+    }
+    root[QStringLiteral("modifiedHidDevices")] = hidDevicesArray;
+
     QJsonObject mountsObject;
     for (auto it = m_activeMounts.constBegin(); it != m_activeMounts.constEnd(); ++it) {
         QJsonArray mountsArray;
@@ -2284,6 +2478,112 @@ void CouchPlayHelper::saveState()
     if (!file.commit()) {
         qWarning() << "saveState: Failed to commit" << m_stateFilePath << ":" << file.errorString();
     }
+}
+
+CouchPlayHelper::HidDeviceInfo CouchPlayHelper::findHidDevice(const QString &devicePath) const
+{
+    QFileInfo info(devicePath);
+    QString name = info.fileName(); // e.g. event12 or hidraw2
+    QString sysfsPath;
+
+    if (name.startsWith(QStringLiteral("event"))) {
+        sysfsPath = QStringLiteral("/sys/class/input/%1/device").arg(name);
+        sysfsPath = QFileInfo(sysfsPath).canonicalFilePath();
+        if (!sysfsPath.isEmpty()) {
+            sysfsPath = QFileInfo(sysfsPath + QStringLiteral("/..")).canonicalFilePath();
+        }
+    } else if (name.startsWith(QStringLiteral("hidraw"))) {
+        sysfsPath = QStringLiteral("/sys/class/hidraw/%1/device").arg(name);
+        sysfsPath = QFileInfo(sysfsPath).canonicalFilePath();
+    }
+
+    if (sysfsPath.isEmpty()) {
+        return {};
+    }
+
+    HidDeviceInfo dev;
+
+    // Check if it has a driver symlink
+    QString driverLink = sysfsPath + QStringLiteral("/driver");
+    QFileInfo driverInfo(driverLink);
+    if (driverInfo.exists() && driverInfo.isSymLink()) {
+        dev.driverPath = driverInfo.canonicalFilePath();
+        dev.deviceId = QFileInfo(sysfsPath).fileName();
+    } else {
+        return {};
+    }
+
+    return dev;
+}
+
+/**
+ * Scan /sys/class/hidraw/ to find the current /dev/hidrawN node for a known HID device ID.
+ * Used after driver rebind, when the kernel may assign a different hidraw number.
+ *
+ * @param deviceId  The stable HID device ID (e.g. "0003:28DE:1304.0001")
+ * @return  "/dev/hidrawN" on success, or empty string if not found
+ */
+QString CouchPlayHelper::findHidrawPathForDeviceId(const QString &deviceId) const
+{
+    QDir hidrawClass(QStringLiteral("/sys/class/hidraw"));
+    const QStringList entries = hidrawClass.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &entry : entries) {
+        // /sys/class/hidraw/hidrawN/device is a symlink -> .../hid/DEVID
+        QString sysfsDevice = QStringLiteral("/sys/class/hidraw/%1/device").arg(entry);
+        QString resolved = QFileInfo(sysfsDevice).canonicalFilePath();
+        if (resolved.isEmpty()) {
+            continue;
+        }
+        // The last path component of the resolved sysfs path is the device ID
+        QString foundId = QFileInfo(resolved).fileName();
+        if (foundId == deviceId) {
+            return QStringLiteral("/dev/%1").arg(entry);
+        }
+    }
+    return {};
+}
+
+QString CouchPlayHelper::getTempUdevRulePath(const QString &deviceId) const
+{
+    QString safeDeviceId = deviceId;
+    safeDeviceId.replace(QLatin1Char(':'), QLatin1Char('-'))
+                .replace(QLatin1Char('.'), QLatin1Char('-'))
+                .replace(QLatin1Char('/'), QLatin1Char('-'));
+    return QStringLiteral("/etc/udev/rules.d/99-couchplay-temp-%1.rules").arg(safeDeviceId);
+}
+
+bool CouchPlayHelper::writeTempUdevRule(const HidDeviceInfo &hid, const QString &username)
+{
+    QString devId = hid.deviceId;
+    QString rulePath = getTempUdevRulePath(devId);
+
+    // Construct udev rules to assign matching input and hidraw devices to the target user.
+    // Also strip the seat/uaccess tags to prevent systemd-logind from adding active seat user ACLs.
+    QByteArray content;
+    content.append(QStringLiteral("SUBSYSTEM==\"input\", KERNELS==\"%1\", OWNER=\"%2\", MODE=\"0600\", TAG-=\"uaccess\", TAG-=\"seat\", ENV{ID_SEAT}=\"seat-couchplay\", ENV{ID_FOR_SEAT}=\"seat-couchplay\", ENV{ID_AUTOSEAT}=\"0\"\n").arg(devId, username).toLocal8Bit());
+    content.append(QStringLiteral("SUBSYSTEM==\"hidraw\", KERNELS==\"%1\", OWNER=\"%2\", MODE=\"0600\", TAG-=\"uaccess\", TAG-=\"seat\", ENV{ID_SEAT}=\"seat-couchplay\", ENV{ID_FOR_SEAT}=\"seat-couchplay\", ENV{ID_AUTOSEAT}=\"0\"\n").arg(devId, username).toLocal8Bit());
+
+    qDebug() << "CouchPlayHelper: Writing temporary udev rule for device" << devId << "at" << rulePath;
+
+    if (!m_ops->writeFile(rulePath, content)) {
+        qWarning() << "CouchPlayHelper: Failed to write temporary udev rule to" << rulePath;
+        return false;
+    }
+
+    return true;
+}
+
+bool CouchPlayHelper::removeTempUdevRule(const QString &deviceId)
+{
+    QString rulePath = getTempUdevRulePath(deviceId);
+    if (m_ops->fileExists(rulePath)) {
+        qDebug() << "CouchPlayHelper: Removing temporary udev rule at" << rulePath;
+        if (!m_ops->removeFile(rulePath)) {
+            qWarning() << "CouchPlayHelper: Failed to remove temporary udev rule at" << rulePath;
+            return false;
+        }
+    }
+    return true;
 }
 
 void CouchPlayHelper::loadAndReconcileState()
@@ -2387,6 +2687,16 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
     m_modifiedDevices = loadedDevices;
+    for (const QString &device : m_modifiedDevices) {
+        startWatchingDevice(device);
+    }
+
+    QJsonArray hidDevicesArray = root.value(QStringLiteral("modifiedHidDevices")).toArray();
+    QStringList loadedHidDevices;
+    for (const QJsonValue &val : hidDevicesArray) {
+        loadedHidDevices.append(val.toString());
+    }
+    m_modifiedHidDevices = loadedHidDevices;
 
     QJsonObject mountsObject = root.value(QStringLiteral("activeMounts")).toObject();
     QMap<QString, QList<MountInfo>> loadedMounts;
@@ -2496,42 +2806,6 @@ void CouchPlayHelper::loadAndReconcileState()
              << "runtime UIDs";
 }
 
-bool CouchPlayHelper::WatchDevice(const QString &devicePath)
-{
-    if (!isValidDevicePath(devicePath)) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(devicePath));
-        return false;
-    }
-
-    if (!checkAuthorization(ACTION_DEVICE_OWNER)) {
-        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to watch device"));
-        return false;
-    }
-
-    startWatchingDevice(devicePath);
-    return true;
-}
-
-void CouchPlayHelper::setupUinputAccess()
-{
-    struct group *cpGroup = m_ops->getgrnam(COUCHPLAY_GROUP.toUtf8().constData());
-    if (!cpGroup) {
-        qWarning() << "CouchPlayHelper: couchplay group does not exist, cannot setup /dev/uinput access";
-        return;
-    }
-
-    // Set group ownership to couchplay and grant read/write permissions
-    m_ops->chown(QStringLiteral("/dev/uinput"), 0, cpGroup->gr_gid);
-    m_ops->chmod(QStringLiteral("/dev/uinput"), 0660);
-}
-
-void CouchPlayHelper::removeUinputAccess()
-{
-    // Revert ownership to root:root and restore default permissions
-    m_ops->chown(QStringLiteral("/dev/uinput"), 0, 0);
-    m_ops->chmod(QStringLiteral("/dev/uinput"), 0660);
-}
-
 void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
 {
     const bool isHidraw = devicePath.startsWith(QLatin1String("/dev/hidraw"));
@@ -2615,20 +2889,23 @@ void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
 void CouchPlayHelper::stopWatchingDevice(const QString &devicePath)
 {
     auto *watcher = m_watchedDevices.take(devicePath);
-    if (watcher) {
-        watcher->notifier->setEnabled(false);
-        watcher->chordTimer->stop();
-        delete watcher->notifier;
-        delete watcher->chordTimer;
-        ::close(watcher->fd);
-        delete watcher;
-        qDebug() << "CouchPlayHelper: Stopped monitoring exit chord on device:" << devicePath;
+    if (!watcher) {
+        return;
     }
+
+    watcher->notifier->setEnabled(false);
+    delete watcher->notifier;
+    watcher->chordTimer->stop();
+    delete watcher->chordTimer;
+    ::close(watcher->fd);
+    delete watcher;
+
+    qDebug() << "CouchPlayHelper: Stopped monitoring input device:" << devicePath;
 }
 
 void CouchPlayHelper::stopWatchingAllDevices()
 {
-    const QStringList paths = m_watchedDevices.keys();
+    QStringList paths = m_watchedDevices.keys();
     for (const QString &path : paths) {
         stopWatchingDevice(path);
     }
@@ -2905,6 +3182,35 @@ QString CouchPlayHelper::getDeviceName(int eventNumber) const
         return QString::fromUtf8(file.readAll()).trimmed();
     }
     return QString();
+}
+
+void CouchPlayHelper::setupUinputAccess()
+{
+    struct group *cpGroup = m_ops->getgrnam(COUCHPLAY_GROUP.toUtf8().constData());
+    if (!cpGroup) {
+        qWarning() << "CouchPlayHelper: couchplay group does not exist, cannot setup /dev/uinput access";
+        return;
+    }
+
+    QProcess *setfacl = m_ops->createProcess();
+    m_ops->startProcess(setfacl, QStringLiteral("/usr/bin/setfacl"),
+                        {QStringLiteral("-m"), QStringLiteral("g:couchplay:rw"), QStringLiteral("/dev/uinput")});
+    m_ops->waitForFinished(setfacl, 5000);
+    if (m_ops->processExitCode(setfacl) != 0) {
+        qWarning() << "CouchPlayHelper: Failed to set ACL on /dev/uinput for couchplay group";
+    } else {
+        qDebug() << "CouchPlayHelper: Successfully granted /dev/uinput access to couchplay group";
+    }
+    delete setfacl;
+}
+
+void CouchPlayHelper::removeUinputAccess()
+{
+    QProcess *setfacl = m_ops->createProcess();
+    m_ops->startProcess(setfacl, QStringLiteral("/usr/bin/setfacl"),
+                        {QStringLiteral("-x"), QStringLiteral("g:couchplay"), QStringLiteral("/dev/uinput")});
+    m_ops->waitForFinished(setfacl, 5000);
+    delete setfacl;
 }
 
 #include "CouchPlayHelper.moc"

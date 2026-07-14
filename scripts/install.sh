@@ -348,7 +348,7 @@ extract_tarball() {
 }
 
 install_binary() {
-    # Installs the main couchplay binary to BIN_DIR
+    # Installs the main couchplay binary and gamemode launcher to BIN_DIR
     # Uses 'install' command for proper permissions
     local extract_dir="$1"
     local binary_name
@@ -373,6 +373,14 @@ install_binary() {
     if ! install -Dm755 "${bin_dir}/couchplay" "${BIN_DIR}/couchplay"; then
         print_error "Failed to install couchplay binary"
         return 1
+    fi
+    
+    # Install the Game Mode launcher script if present
+    local scripts_dir
+    scripts_dir=$(find "$extract_dir" -type d -name "scripts" | head -1)
+    if [[ -n "$scripts_dir" ]] && [[ -f "${scripts_dir}/couchplay-gamemode.sh" ]]; then
+        print_info "Installing Game Mode launcher to ${BIN_DIR}"
+        install -Dm755 "${scripts_dir}/couchplay-gamemode.sh" "${BIN_DIR}/couchplay-gamemode"
     fi
     
     print_info "Binary installed successfully"

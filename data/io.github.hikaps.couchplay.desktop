@@ -11,3 +11,9 @@ Keywords=split-screen;multiplayer;gamescope;steam;gaming;couch;
 StartupNotify=true
 StartupWMClass=couchplay
 X-GNOME-UsesNotifications=true
+Actions=GameMode;
+
+[Desktop Action GameMode]
+Name=CouchPlay (Game Mode)
+Exec=couchplay-gamemode
+Icon=io.github.hikaps.couchplay

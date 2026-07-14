@@ -390,6 +390,16 @@ Q_SIGNALS:
     void exitChordTriggered();
 
 private:
+    struct HidDeviceInfo {
+        QString driverPath; // e.g. /sys/bus/hid/drivers/microsoft
+        QString deviceId;   // e.g. 0003:045E:028E.0001
+    };
+    HidDeviceInfo findHidDevice(const QString &devicePath) const;
+    QString findHidrawPathForDeviceId(const QString &deviceId) const;
+    QString getTempUdevRulePath(const QString &deviceId) const;
+    bool writeTempUdevRule(const HidDeviceInfo &hid, const QString &username);
+    bool removeTempUdevRule(const QString &deviceId);
+
     bool checkAuthorization(const QString &action);
     bool isValidDevicePath(const QString &path);
     bool validateUserAndAuth(const QString &username, const QString &action);
@@ -422,6 +432,7 @@ private:
     bool unloadNullSinkModule(const QString &username, const QString &sinkName);
 
     QStringList m_modifiedDevices;
+    QStringList m_modifiedHidDevices;
 
     struct VirtualDisplayInfo {
         qint64 pid;
