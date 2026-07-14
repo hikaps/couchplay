@@ -474,6 +474,11 @@ private:
         bool startPressed = false;
         bool selectPressed = false;
         QTimer *chordTimer = nullptr;
+        bool isHidrawDevice = false; // true for /dev/hidrawN; uses raw HID packet parsing
+        bool isSteamController = false; // true if it is a Valve Steam Controller / Puck device
+        uint8_t lastB8 = 0;
+        uint8_t lastB9 = 0;
+        QSet<int> seenSizes;
     };
 
     QMap<QString, WatchedDevice *> m_watchedDevices;

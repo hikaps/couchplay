@@ -2534,9 +2534,10 @@ void CouchPlayHelper::removeUinputAccess()
 
 void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
 {
+    const bool isHidraw = devicePath.startsWith(QLatin1String("/dev/hidraw"));
     const bool isEvent = devicePath.startsWith(QLatin1String("/dev/input/event"));
 
-    if (!isEvent) {
+    if (!isHidraw && !isEvent) {
         return;
     }
 
@@ -2552,6 +2553,48 @@ void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
 
     auto *watcher = new WatchedDevice();
     watcher->fd = fd;
+    watcher->isHidrawDevice = isHidraw;
+    if (isHidraw) {
+        QFileInfo info(devicePath);
+        QString name = info.fileName();
+        QString sysfsPath = QStringLiteral("/sys/class/hidraw/%1/device").arg(name);
+        QString resolved = QFileInfo(sysfsPath).canonicalFilePath();
+        if (resolved.contains(QStringLiteral("28de"), Qt::CaseInsensitive)) {
+            watcher->isSteamController = true;
+
+            // Find parent USB directory containing "idVendor"
+            QString usbParent = resolved;
+            while (!usbParent.isEmpty() && usbParent != QStringLiteral("/")) {
+                if (QFileInfo(usbParent + QStringLiteral("/idVendor")).exists()) {
+                    break;
+                }
+                usbParent = QFileInfo(usbParent).dir().absolutePath();
+            }
+
+            if (!usbParent.isEmpty() && usbParent != QStringLiteral("/")) {
+                qWarning() << "CouchPlayHelper: Identified Steam Controller parent device on" << devicePath
+                           << "(USB Parent:" << usbParent << ")";
+                // Find all sibling hidraw devices under the same USB parent
+                QDir hidrawDir(QStringLiteral("/sys/class/hidraw"));
+                QStringList entries = hidrawDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+                for (const QString &entry : entries) {
+                    QString siblingDevicePath = QStringLiteral("/dev/") + entry;
+                    if (!m_watchedDevices.contains(siblingDevicePath) && siblingDevicePath != devicePath) {
+                        QString siblingSysfs = QStringLiteral("/sys/class/hidraw/%1/device").arg(entry);
+                        QString siblingResolved = QFileInfo(siblingSysfs).canonicalFilePath();
+                        if (siblingResolved.startsWith(usbParent)) {
+                            qWarning() << "CouchPlayHelper: Discovered Steam Controller sibling node:" << siblingDevicePath
+                                       << "from root node" << devicePath;
+                            // Watch this sibling recursively next event loop tick
+                            QMetaObject::invokeMethod(this, [this, siblingDevicePath]() {
+                                startWatchingDevice(siblingDevicePath);
+                            }, Qt::QueuedConnection);
+                        }
+                    }
+                }
+            }
+        }
+    }
     watcher->notifier = new QSocketNotifier(fd, QSocketNotifier::Read, this);
     watcher->chordTimer = new QTimer(this);
     watcher->chordTimer->setSingleShot(true);
@@ -2566,7 +2609,7 @@ void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
     });
 
     m_watchedDevices.insert(devicePath, watcher);
-    qDebug() << "CouchPlayHelper: Started monitoring evdev device for exit chord:" << devicePath;
+    qDebug() << "CouchPlayHelper: Started monitoring" << (isHidraw ? "hidraw" : "evdev") << "device for exit chord:" << devicePath;
 }
 
 void CouchPlayHelper::stopWatchingDevice(const QString &devicePath)
@@ -2600,61 +2643,181 @@ void CouchPlayHelper::onDeviceDataAvailable(const QString &devicePath)
 
     bool deviceError = false;
 
-    // evdev path: read struct input_event records
-    struct input_event ev;
-    int bytesRead;
+    if (watcher->isHidrawDevice) {
+        // Raw HID packet path — Steam Controller puck sends 54-byte reports.
+        // Kernel hid-steam.c byte layout (0-indexed from the hidraw read buffer):
+        //   byte 9, bit 4 (0x10) = BTN_SELECT (menu left)
+        //   byte 9, bit 6 (0x40) = BTN_START  (menu right)
+        // Bytes 0–3 are the packet counter; bytes 4–8 are ABXY / shoulder / trigger;
+        // bytes 10+ are trackpad, triggers (analog), and IMU data.
+        static constexpr uint8_t STEAM_SELECT_MASK = 0x10; // bit 4 of byte 9
+        static constexpr uint8_t STEAM_START_MASK  = 0x40; // bit 6 of byte 9
 
-    while (true) {
-        bytesRead = ::read(watcher->fd, &ev, sizeof(ev));
-        if (bytesRead > 0) {
-            if (ev.type == EV_KEY) {
-                qWarning() << "CouchPlayHelper: EV_KEY on" << devicePath << "code:" << ev.code << "value:" << ev.value;
-                bool stateChanged = false;
-                bool value = (ev.value != 0);
+        uint8_t buf[64];
+        int bytesRead;
 
-                if (ev.code == BTN_START) {
-                    qWarning() << "CouchPlayHelper: BTN_START change on" << devicePath << "to" << value;
-                    if (watcher->startPressed != value) {
-                        watcher->startPressed = value;
-                        stateChanged = true;
+        while (true) {
+            bytesRead = ::read(watcher->fd, buf, sizeof(buf));
+            if (bytesRead > 0) {
+                // If it is a Steam Controller, we only parse specific valid state report sizes and headers
+                // to filter out status, battery, or gyro/sensor updates that might contain garbage in buf[9].
+                bool isValidSCReport = false;
+                uint8_t b9 = 0;
+
+                if (watcher->isSteamController) {
+                    // Log the first time we see any packet size on a Steam Controller device,
+                    // and output the first 16 bytes.
+                    if (!watcher->seenSizes.contains(bytesRead)) {
+                        watcher->seenSizes.insert(bytesRead);
+                        QString hexDump;
+                        for (int i = 0; i < qMin(bytesRead, 16); ++i) {
+                            hexDump += QStringLiteral("%1 ").arg(buf[i], 2, 16, QLatin1Char('0'));
+                        }
+                        qWarning() << "CouchPlayHelper: First time seeing packet size" << bytesRead
+                                   << "on" << devicePath << "header:" << hexDump.trimmed();
                     }
-                } else if (ev.code == BTN_SELECT) {
-                    qWarning() << "CouchPlayHelper: BTN_SELECT change on" << devicePath << "to" << value;
-                    if (watcher->selectPressed != value) {
-                        watcher->selectPressed = value;
-                        stateChanged = true;
-                    }
-                }
 
-                if (stateChanged) {
-                    bool chordPressed = watcher->startPressed && watcher->selectPressed;
-                    if (chordPressed) {
-                        if (!watcher->chordTimer->isActive()) {
-                            qDebug() << "CouchPlayHelper: Exit chord detected on" << devicePath << ", starting timer...";
-                            watcher->chordTimer->start();
+                    // Debug logging for ALL Steam Controller reports to help diagnose
+                    // report length and structure variations under active Steam sessions.
+                    if (bytesRead >= 10) {
+                        if (buf[8] != watcher->lastB8 || buf[9] != watcher->lastB9) {
+                            watcher->lastB8 = buf[8];
+                            watcher->lastB9 = buf[9];
+                            qWarning() << "CouchPlayHelper: SC raw buttons changed on" << devicePath
+                                       << "len:" << bytesRead
+                                       << "buf[0..2]:"
+                                       << QString::number(buf[0], 16)
+                                       << QString::number(buf[1], 16)
+                                       << QString::number(buf[2], 16)
+                                       << "b8:" << QString::number(buf[8], 16)
+                                       << "b9:" << QString::number(buf[9], 16);
                         }
                     } else {
-                        if (watcher->chordTimer->isActive()) {
-                            qDebug() << "CouchPlayHelper: Exit chord released on" << devicePath << ", stopping timer.";
-                            watcher->chordTimer->stop();
+                        qWarning() << "CouchPlayHelper: SC short packet on" << devicePath << "len:" << bytesRead;
+                    }
+
+                    // Wireless puck state report (len=54, ID=0x42)
+                    if (bytesRead == 54 && buf[0] == 0x42) {
+                        b9 = buf[9];
+                        isValidSCReport = true;
+                    }
+                    // Wired state report (len=64, ID=0x01, type=0x01)
+                    else if (bytesRead == 64 && buf[0] == 0x01 && buf[1] == 0x00 && buf[2] == 0x01) {
+                        b9 = buf[9];
+                        isValidSCReport = true;
+                    }
+                    // Wired Steam Deck state report (len=64, ID=0x01, type=0x09)
+                    else if (bytesRead == 64 && buf[0] == 0x01 && buf[1] == 0x00 && buf[2] == 0x09) {
+                        b9 = buf[9];
+                        isValidSCReport = true;
+                    }
+                }
+
+                if (isValidSCReport) {
+                    const bool newStart  = (b9 & STEAM_START_MASK)  != 0;
+                    const bool newSelect = (b9 & STEAM_SELECT_MASK) != 0;
+
+                    bool stateChanged = false;
+                    if (newStart != watcher->startPressed) {
+                        watcher->startPressed = newStart;
+                        stateChanged = true;
+                        qWarning() << "CouchPlayHelper: hidraw BTN_START" << (newStart ? "pressed" : "released") << "on" << devicePath;
+                    }
+                    if (newSelect != watcher->selectPressed) {
+                        watcher->selectPressed = newSelect;
+                        stateChanged = true;
+                        qWarning() << "CouchPlayHelper: hidraw BTN_SELECT" << (newSelect ? "pressed" : "released") << "on" << devicePath;
+                    }
+
+                    if (stateChanged) {
+                        const bool chordPressed = watcher->startPressed && watcher->selectPressed;
+                        if (chordPressed) {
+                            if (!watcher->chordTimer->isActive()) {
+                                qDebug() << "CouchPlayHelper: Exit chord detected on" << devicePath << ", starting timer...";
+                                watcher->chordTimer->start();
+                            }
+                        } else {
+                            if (watcher->chordTimer->isActive()) {
+                                qDebug() << "CouchPlayHelper: Exit chord released on" << devicePath << ", stopping timer.";
+                                watcher->chordTimer->stop();
+                            }
                         }
                     }
                 }
-            }
-        } else if (bytesRead < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            } else if (errno == EINTR) {
-                continue;
+            } else if (bytesRead < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                } else if (errno == EINTR) {
+                    continue;
+                } else {
+                    qWarning() << "CouchPlayHelper: Read error on hidraw device" << devicePath << ":" << strerror(errno);
+                    deviceError = true;
+                    break;
+                }
             } else {
-                qWarning() << "CouchPlayHelper: Read error on watched device" << devicePath << ":" << strerror(errno);
+                // bytesRead == 0: EOF / device disconnected
+                qWarning() << "CouchPlayHelper: EOF on hidraw device" << devicePath;
                 deviceError = true;
                 break;
             }
-        } else {
-            qWarning() << "CouchPlayHelper: EOF on watched device" << devicePath;
-            deviceError = true;
-            break;
+        }
+    } else {
+        // evdev path: read struct input_event records
+        struct input_event ev;
+        int bytesRead;
+
+        while (true) {
+            bytesRead = ::read(watcher->fd, &ev, sizeof(ev));
+            if (bytesRead > 0) {
+                if (ev.type == EV_KEY) {
+                    qWarning() << "CouchPlayHelper: EV_KEY on" << devicePath << "code:" << ev.code << "value:" << ev.value;
+                    bool stateChanged = false;
+                    bool value = (ev.value != 0);
+
+                    if (ev.code == BTN_START) {
+                        qWarning() << "CouchPlayHelper: BTN_START change on" << devicePath << "to" << value;
+                        if (watcher->startPressed != value) {
+                            watcher->startPressed = value;
+                            stateChanged = true;
+                        }
+                    } else if (ev.code == BTN_SELECT) {
+                        qWarning() << "CouchPlayHelper: BTN_SELECT change on" << devicePath << "to" << value;
+                        if (watcher->selectPressed != value) {
+                            watcher->selectPressed = value;
+                            stateChanged = true;
+                        }
+                    }
+
+                    if (stateChanged) {
+                        bool chordPressed = watcher->startPressed && watcher->selectPressed;
+                        if (chordPressed) {
+                            if (!watcher->chordTimer->isActive()) {
+                                qDebug() << "CouchPlayHelper: Exit chord detected on" << devicePath << ", starting timer...";
+                                watcher->chordTimer->start();
+                            }
+                        } else {
+                            if (watcher->chordTimer->isActive()) {
+                                qDebug() << "CouchPlayHelper: Exit chord released on" << devicePath << ", stopping timer.";
+                                watcher->chordTimer->stop();
+                            }
+                        }
+                    }
+                }
+            } else if (bytesRead < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                } else if (errno == EINTR) {
+                    continue;
+                } else {
+                    qWarning() << "CouchPlayHelper: Read error on watched device" << devicePath << ":" << strerror(errno);
+                    deviceError = true;
+                    break;
+                }
+            } else {
+                qWarning() << "CouchPlayHelper: EOF on watched device" << devicePath;
+                deviceError = true;
+                break;
+            }
         }
     }
 
