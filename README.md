@@ -34,6 +34,7 @@
 - ⚡ **Sequential launching** — instances start one at a time to avoid GPU contention.
 - 🖼️ **Borderless windows** — optional borderless mode for cleaner multi-window setups.
 - 🐧 **Atomic-ready** — designed for immutable distributions like Bazzite and Fedora Silverblue. Available as a Flatpak.
+- ⏹️ **Controller exit chord** — hold **Start + Select** on any assigned gamepad for 2 seconds to stop the entire split-screen session without touching a keyboard.
 
 ## Usage
 
@@ -51,6 +52,16 @@
 ### Assigning Controllers
 
 Connect your gamepads, then use the **Auto-Assign Controllers** button to let CouchPlay distribute them across player instances. You can also drag and drop devices for manual assignment. Each controller gets locked to its assigned instance so inputs don't leak between players.
+
+### Exiting a Session
+
+While a session is running you can stop it directly from the couch — no keyboard needed:
+
+- **Hold Start + Select for 2 seconds** on any assigned gamepad to stop the entire split-screen session.
+
+This works with standard gamepads (Xbox, PlayStation, generic HID) and with the **Valve Steam Controller** — even when Steam is active and holding the evdev node, since CouchPlay reads Steam Controller input directly from the raw HID (`/dev/hidrawN`) endpoint.
+
+Alternatively, use the **Stop Session** button in the CouchPlay UI.
 
 ### Profiles
 
