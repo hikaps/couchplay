@@ -489,9 +489,10 @@ install_sysext() {
     print_info "Installing via SteamOS System Extension (sysext)..."
     
     # Get asset URLs
-    local raw_url checksum_url
+    local raw_url checksum_url flatpak_url
     raw_url=$(get_asset_url "$release_json" "couchplay\.steamos\.raw")
     checksum_url=$(get_asset_url "$release_json" "couchplay\.steamos\.sha256")
+    flatpak_url=$(get_asset_url "$release_json" "couchplay\.flatpak")
     
     if [[ -z "$raw_url" ]]; then
         print_error "Could not find couchplay.steamos.raw asset in release"
@@ -501,6 +502,10 @@ install_sysext() {
         print_error "Could not find couchplay.steamos.sha256 asset in release"
         exit 1
     fi
+    if [[ -z "$flatpak_url" ]]; then
+        print_error "Could not find couchplay.flatpak asset in release"
+        exit 1
+    fi
     
     # Setup temporary directory and cleanup trap
     TEMP_DIR=$(mktemp -d)
@@ -508,6 +513,7 @@ install_sysext() {
     
     local raw_file="${TEMP_DIR}/couchplay.steamos.raw"
     local checksum_file="${TEMP_DIR}/couchplay.steamos.sha256"
+    local flatpak_file="${TEMP_DIR}/couchplay.flatpak"
     
     # Download files
     if ! download_file "$raw_url" "$raw_file"; then
@@ -516,9 +522,22 @@ install_sysext() {
     if ! download_file "$checksum_url" "$checksum_file"; then
         exit 1
     fi
+    if ! download_file "$flatpak_url" "$flatpak_file"; then
+        exit 1
+    fi
     
     # Verify checksum
     verify_checksum "$raw_file" "$checksum_file"
+    
+    # 1. Install Flatpak
+    print_info "Installing Flatpak bundle..."
+    if ! command -v flatpak &>/dev/null; then
+        print_error "flatpak command not found. Please install flatpak first."
+        exit 1
+    fi
+    print_info "Ensuring org.kde.Platform 6.10 is installed..."
+    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y flathub org.kde.Platform/x86_64/6.10
+    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y "$flatpak_file"
     
     # Stop existing CouchPlay helper service and systemd-sysext before upgrading
     print_info "Stopping active CouchPlay services..."

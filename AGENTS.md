@@ -175,3 +175,9 @@ distrobox rm cp-test -f
 - **Blocking sleep**: `src/core/WindowManager.cpp` uses `QThread::msleep(100)` for window positioning (a short blocking wait) rather than an async signal.
 - **Missing i18n infrastructure**: `KF6::I18n` is linked and `i18nc(...)` is used in QML, but there is no `po/` directory or translation files — strings are not currently shipped translated.
 - **No CI linting**: `make format` / `make tidy` targets exist but are not enforced in CI.
+
+## SteamOS / Deck Rules
+
+- **Platform Check**: Determine if running on SteamOS by checking:
+  `grep -q "ID=steamos" /etc/os-release`
+- **Rebuilding & Updating**: When running on SteamOS, run the local user-space updater script `scripts/update-nonroot.sh` every time you build a new version of the application.
