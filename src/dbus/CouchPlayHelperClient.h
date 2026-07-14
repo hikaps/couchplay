@@ -35,6 +35,8 @@ public:
      */
     Q_INVOKABLE bool restoreDeviceOwner(const QString &devicePath);
 
+    Q_INVOKABLE virtual bool watchDevice(const QString &devicePath);
+
     Q_INVOKABLE void restoreAllDevices();
 
     Q_INVOKABLE bool createUser(const QString &username);
@@ -186,6 +188,7 @@ Q_SIGNALS:
     void availabilityChanged();
     void errorOccurred(const QString &message);
     void instanceStopped(const QString &username, qint64 pid, const QString &reason);
+    void exitChordTriggered();
 
 private Q_SLOTS:
     void onInstanceStopped(const QString &username, qint64 pid, const QString &reason);

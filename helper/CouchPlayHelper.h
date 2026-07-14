@@ -15,6 +15,9 @@
 #include "SystemOps.h"
 
 class UnitMonitor;
+class QSocketNotifier;
+class QTimer;
+class QFileSystemWatcher;
 
 /**
  * CouchPlayHelper - Privileged D-Bus service for split-screen gaming
@@ -159,6 +162,17 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool ResetDeviceOwner(const QString &devicePath);
+
+    /**
+     * Watch a device for the exit chord without changing its ownership
+     * Used for input monitoring in single-user/host sessions
+     *
+     * @param devicePath Path to the device (e.g., /dev/input/event5)
+     * @return true if successful
+     */
+    bool WatchDevice(const QString &devicePath);
+
+
 
     /**
      * Reset ownership of all managed devices to root
@@ -369,6 +383,12 @@ Q_SIGNALS:
      */
     void instanceStopped(const QString &username, qint64 pid, const QString &reason);
 
+    /**
+     * Emitted when a gamepad exit chord (Guide/Steam/PS + Start + Select)
+     * is held for 2 seconds on any monitored controller.
+     */
+    void exitChordTriggered();
+
 private:
     bool checkAuthorization(const QString &action);
     bool isValidDevicePath(const QString &path);
@@ -445,4 +465,32 @@ private:
     void loadAndReconcileState();
     void removeRuntimeAcls(const QString &runtimeDir);
     void cleanupTcpListenerIfLast(const QString &username);
+    void setupUinputAccess();
+    void removeUinputAccess();
+
+    struct WatchedDevice {
+        int fd;
+        QSocketNotifier *notifier = nullptr;
+        bool startPressed = false;
+        bool selectPressed = false;
+        QTimer *chordTimer = nullptr;
+    };
+
+    QMap<QString, WatchedDevice *> m_watchedDevices;
+
+    void startWatchingDevice(const QString &devicePath);
+    void stopWatchingDevice(const QString &devicePath);
+    void stopWatchingAllDevices();
+    void onDeviceDataAvailable(const QString &devicePath);
+    void onExitChordTimeout(const QString &devicePath);
+
+    QFileSystemWatcher *m_inputWatcher = nullptr;
+    QTimer *m_inputDebounceTimer = nullptr;
+    QSet<int> m_knownEventNumbers;
+
+    void onInputDirectoryChanged();
+    void onInputDebounceTimeout();
+    void checkForNewVirtualDevices();
+    bool isVirtualDevice(int eventNumber);
+    QString getDeviceName(int eventNumber) const;
 };

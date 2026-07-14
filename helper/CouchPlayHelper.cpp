@@ -21,6 +21,11 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QThread>
+#include <QFileSystemWatcher>
+#include <QSocketNotifier>
+#include <QTimer>
+#include <fcntl.h>
+#include <linux/input.h>
 
 #include <grp.h>
 #include <pwd.h>
@@ -161,10 +166,48 @@ CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     , m_stateFilePath(QStringLiteral("/run/couchplay/state.json"))
 {
     loadAndReconcileState();
+
+    setupUinputAccess();
+
+    // Populate initial known event numbers
+    QDir dir(QStringLiteral("/dev/input"));
+    QStringList eventFiles = dir.entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
+    static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
+    for (const QString &eventFile : eventFiles) {
+        QRegularExpressionMatch match = eventRegex.match(eventFile);
+        if (match.hasMatch()) {
+            m_knownEventNumbers.insert(match.captured(1).toInt());
+        }
+    }
+
+    // Set up directory watcher on /dev/input
+    m_inputWatcher = new QFileSystemWatcher(this);
+    m_inputWatcher->addPath(QStringLiteral("/dev/input"));
+    connect(m_inputWatcher, &QFileSystemWatcher::directoryChanged, this, &CouchPlayHelper::onInputDirectoryChanged);
+
+    m_inputDebounceTimer = new QTimer(this);
+    m_inputDebounceTimer->setInterval(500);
+    m_inputDebounceTimer->setSingleShot(true);
+    connect(m_inputDebounceTimer, &QTimer::timeout, this, &CouchPlayHelper::onInputDebounceTimeout);
+
+    // Watch any virtual controllers already present at startup
+    for (const QString &eventFile : eventFiles) {
+        QRegularExpressionMatch match = eventRegex.match(eventFile);
+        if (match.hasMatch()) {
+            int eventNumber = match.captured(1).toInt();
+            if (isVirtualDevice(eventNumber)) {
+                QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
+                qDebug() << "CouchPlayHelper: Pre-existing virtual device found at startup, watching:" << devicePath;
+                startWatchingDevice(devicePath);
+            }
+        }
+    }
 }
 
 CouchPlayHelper::~CouchPlayHelper()
 {
+    stopWatchingAllDevices();
+
     for (uint uid : m_runtimeAccessSetForUid) {
         QString runtimeDir = QStringLiteral("/run/user/%1").arg(uid);
         removeRuntimeAcls(runtimeDir);
@@ -223,6 +266,8 @@ CouchPlayHelper::~CouchPlayHelper()
     if (!m_modifiedDevices.isEmpty()) {
         ResetAllDevices();
     }
+
+    removeUinputAccess();
 }
 
 bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
@@ -258,6 +303,11 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
         return false;
     }
 
+    // Clear any systemd-logind ACLs on the device node
+    runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), devicePath});
+
+    startWatchingDevice(devicePath);
+
     if (!m_modifiedDevices.contains(devicePath)) {
         m_modifiedDevices.append(devicePath);
     }
@@ -290,6 +340,8 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
         return false;
     }
 
+    stopWatchingDevice(devicePath);
+
     struct group *inputGroup = m_ops->getgrnam("input");
     gid_t inputGid = inputGroup ? inputGroup->gr_gid : 0;
 
@@ -303,6 +355,9 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to reset permissions on %1").arg(devicePath));
         return false;
     }
+
+    // Clear any systemd-logind ACLs on the device node
+    runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), devicePath});
 
     m_modifiedDevices.removeAll(devicePath);
     saveState();
@@ -2439,6 +2494,254 @@ void CouchPlayHelper::loadAndReconcileState()
     qDebug() << "loadAndReconcileState: Restored" << m_usernameToUnitName.size() << "units," << m_modifiedDevices.size()
              << "devices," << m_activeMounts.size() << "mount users," << m_runtimeAccessSetForUid.size()
              << "runtime UIDs";
+}
+
+bool CouchPlayHelper::WatchDevice(const QString &devicePath)
+{
+    if (!isValidDevicePath(devicePath)) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(devicePath));
+        return false;
+    }
+
+    if (!checkAuthorization(ACTION_DEVICE_OWNER)) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to watch device"));
+        return false;
+    }
+
+    startWatchingDevice(devicePath);
+    return true;
+}
+
+void CouchPlayHelper::setupUinputAccess()
+{
+    struct group *cpGroup = m_ops->getgrnam(COUCHPLAY_GROUP.toUtf8().constData());
+    if (!cpGroup) {
+        qWarning() << "CouchPlayHelper: couchplay group does not exist, cannot setup /dev/uinput access";
+        return;
+    }
+
+    // Set group ownership to couchplay and grant read/write permissions
+    m_ops->chown(QStringLiteral("/dev/uinput"), 0, cpGroup->gr_gid);
+    m_ops->chmod(QStringLiteral("/dev/uinput"), 0660);
+}
+
+void CouchPlayHelper::removeUinputAccess()
+{
+    // Revert ownership to root:root and restore default permissions
+    m_ops->chown(QStringLiteral("/dev/uinput"), 0, 0);
+    m_ops->chmod(QStringLiteral("/dev/uinput"), 0660);
+}
+
+void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
+{
+    const bool isEvent = devicePath.startsWith(QLatin1String("/dev/input/event"));
+
+    if (!isEvent) {
+        return;
+    }
+
+    if (m_watchedDevices.contains(devicePath)) {
+        return;
+    }
+
+    int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        qWarning() << "CouchPlayHelper: Failed to open device for chord monitoring:" << devicePath << strerror(errno);
+        return;
+    }
+
+    auto *watcher = new WatchedDevice();
+    watcher->fd = fd;
+    watcher->notifier = new QSocketNotifier(fd, QSocketNotifier::Read, this);
+    watcher->chordTimer = new QTimer(this);
+    watcher->chordTimer->setSingleShot(true);
+    watcher->chordTimer->setInterval(3000); // 3.0 seconds hold duration
+
+    connect(watcher->notifier, &QSocketNotifier::activated, this, [this, devicePath]() {
+        onDeviceDataAvailable(devicePath);
+    });
+
+    connect(watcher->chordTimer, &QTimer::timeout, this, [this, devicePath]() {
+        onExitChordTimeout(devicePath);
+    });
+
+    m_watchedDevices.insert(devicePath, watcher);
+    qDebug() << "CouchPlayHelper: Started monitoring evdev device for exit chord:" << devicePath;
+}
+
+void CouchPlayHelper::stopWatchingDevice(const QString &devicePath)
+{
+    auto *watcher = m_watchedDevices.take(devicePath);
+    if (watcher) {
+        watcher->notifier->setEnabled(false);
+        watcher->chordTimer->stop();
+        delete watcher->notifier;
+        delete watcher->chordTimer;
+        ::close(watcher->fd);
+        delete watcher;
+        qDebug() << "CouchPlayHelper: Stopped monitoring exit chord on device:" << devicePath;
+    }
+}
+
+void CouchPlayHelper::stopWatchingAllDevices()
+{
+    const QStringList paths = m_watchedDevices.keys();
+    for (const QString &path : paths) {
+        stopWatchingDevice(path);
+    }
+}
+
+void CouchPlayHelper::onDeviceDataAvailable(const QString &devicePath)
+{
+    auto *watcher = m_watchedDevices.value(devicePath, nullptr);
+    if (!watcher) {
+        return;
+    }
+
+    bool deviceError = false;
+
+    // evdev path: read struct input_event records
+    struct input_event ev;
+    int bytesRead;
+
+    while (true) {
+        bytesRead = ::read(watcher->fd, &ev, sizeof(ev));
+        if (bytesRead > 0) {
+            if (ev.type == EV_KEY) {
+                qWarning() << "CouchPlayHelper: EV_KEY on" << devicePath << "code:" << ev.code << "value:" << ev.value;
+                bool stateChanged = false;
+                bool value = (ev.value != 0);
+
+                if (ev.code == BTN_START) {
+                    qWarning() << "CouchPlayHelper: BTN_START change on" << devicePath << "to" << value;
+                    if (watcher->startPressed != value) {
+                        watcher->startPressed = value;
+                        stateChanged = true;
+                    }
+                } else if (ev.code == BTN_SELECT) {
+                    qWarning() << "CouchPlayHelper: BTN_SELECT change on" << devicePath << "to" << value;
+                    if (watcher->selectPressed != value) {
+                        watcher->selectPressed = value;
+                        stateChanged = true;
+                    }
+                }
+
+                if (stateChanged) {
+                    bool chordPressed = watcher->startPressed && watcher->selectPressed;
+                    if (chordPressed) {
+                        if (!watcher->chordTimer->isActive()) {
+                            qDebug() << "CouchPlayHelper: Exit chord detected on" << devicePath << ", starting timer...";
+                            watcher->chordTimer->start();
+                        }
+                    } else {
+                        if (watcher->chordTimer->isActive()) {
+                            qDebug() << "CouchPlayHelper: Exit chord released on" << devicePath << ", stopping timer.";
+                            watcher->chordTimer->stop();
+                        }
+                    }
+                }
+            }
+        } else if (bytesRead < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            } else if (errno == EINTR) {
+                continue;
+            } else {
+                qWarning() << "CouchPlayHelper: Read error on watched device" << devicePath << ":" << strerror(errno);
+                deviceError = true;
+                break;
+            }
+        } else {
+            qWarning() << "CouchPlayHelper: EOF on watched device" << devicePath;
+            deviceError = true;
+            break;
+        }
+    }
+
+    if (deviceError) {
+        stopWatchingDevice(devicePath);
+    }
+}
+
+void CouchPlayHelper::onExitChordTimeout(const QString &devicePath)
+{
+    qWarning() << "CouchPlayHelper: Exit chord held for 3s on" << devicePath << "! Emitting exitChordTriggered.";
+    Q_EMIT exitChordTriggered();
+}
+
+void CouchPlayHelper::onInputDirectoryChanged()
+{
+    m_inputDebounceTimer->start();
+}
+
+void CouchPlayHelper::onInputDebounceTimeout()
+{
+    checkForNewVirtualDevices();
+}
+
+void CouchPlayHelper::checkForNewVirtualDevices()
+{
+    QDir dir(QStringLiteral("/dev/input"));
+    QStringList eventFiles = dir.entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
+    static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
+
+    QSet<int> activeEventNumbers;
+    for (const QString &eventFile : eventFiles) {
+        QRegularExpressionMatch match = eventRegex.match(eventFile);
+        if (match.hasMatch()) {
+            activeEventNumbers.insert(match.captured(1).toInt());
+        }
+    }
+    m_knownEventNumbers.intersect(activeEventNumbers);
+
+    for (const QString &eventFile : eventFiles) {
+        QRegularExpressionMatch match = eventRegex.match(eventFile);
+        if (match.hasMatch()) {
+            int eventNumber = match.captured(1).toInt();
+            if (!m_knownEventNumbers.contains(eventNumber)) {
+                m_knownEventNumbers.insert(eventNumber);
+
+                if (isVirtualDevice(eventNumber)) {
+                    QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
+                    qDebug() << "CouchPlayHelper: New virtual device detected, monitoring:" << devicePath;
+                    startWatchingDevice(devicePath);
+                }
+            }
+        }
+    }
+}
+
+bool CouchPlayHelper::isVirtualDevice(int eventNumber)
+{
+    QString sysfsPath = QStringLiteral("/sys/class/input/event%1/device").arg(eventNumber);
+    QFileInfo deviceSymlink(sysfsPath);
+    if (!deviceSymlink.exists() || !deviceSymlink.isSymLink()) {
+        return false;
+    }
+
+    QString target = deviceSymlink.symLinkTarget();
+    if (target.contains(QLatin1String("/devices/virtual/"))) {
+        return true;
+    }
+
+    QString name = getDeviceName(eventNumber);
+    if (name.contains(QLatin1String("Microsoft X-Box 360 pad"), Qt::CaseInsensitive) ||
+        name.contains(QLatin1String("Steam Virtual Gamepad"), Qt::CaseInsensitive) ||
+        name.contains(QLatin1String("Xbox 360 Controller"), Qt::CaseInsensitive)) {
+        return true;
+    }
+
+    return false;
+}
+
+QString CouchPlayHelper::getDeviceName(int eventNumber) const
+{
+    QString namePath = QStringLiteral("/sys/class/input/event%1/device/name").arg(eventNumber);
+    QFile file(namePath);
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return QString::fromUtf8(file.readAll()).trimmed();
+    }
+    return QString();
 }
 
 #include "CouchPlayHelper.moc"

@@ -46,8 +46,7 @@ set(TEST_MANAGER_SOURCES
     ../src/core/Logging.h
     ../src/core/CommandVerifier.cpp
     ../src/core/CommandVerifier.h
-    ../src/core/VirtualDeviceWatcher.cpp
-    ../src/core/VirtualDeviceWatcher.h
+
     ../src/core/SunshineConfig.cpp
     ../src/core/SunshineConfig.h
     ../src/core/StreamManager.cpp

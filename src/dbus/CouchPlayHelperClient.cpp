@@ -34,6 +34,13 @@ CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
                                          QStringLiteral("instanceStopped"),
                                          this,
                                          SLOT(onInstanceStopped(QString, qint64, QString)));
+
+    QDBusConnection::systemBus().connect(SERVICE_NAME,
+                                         OBJECT_PATH,
+                                         INTERFACE_NAME,
+                                         QStringLiteral("exitChordTriggered"),
+                                         this,
+                                         SIGNAL(exitChordTriggered()));
 }
 
 CouchPlayHelperClient::~CouchPlayHelperClient()
@@ -90,6 +97,23 @@ bool CouchPlayHelperClient::restoreDeviceOwner(const QString &devicePath)
 
     return reply.value();
 }
+
+bool CouchPlayHelperClient::watchDevice(const QString &devicePath)
+{
+    if (!m_available) {
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("WatchDevice"), devicePath);
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
 
 void CouchPlayHelperClient::restoreAllDevices()
 {

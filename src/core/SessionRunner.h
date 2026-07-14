@@ -14,7 +14,6 @@
 #include "../dbus/CouchPlayHelperClient.h"
 #include "HeroicConfigManager.h"
 #include "SteamConfigManager.h"
-#include "VirtualDeviceWatcher.h"
 
 class QAction;
 
@@ -193,7 +192,6 @@ private Q_SLOTS:
     void onWindowPositioned(int requestId, const QString &windowId);
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
-    void onVirtualDeviceAppeared(int eventNumber, const QString &devicePath, const QString &deviceName);
     void startNextInstance();
 
 private:
@@ -226,12 +224,7 @@ private:
     QMap<int, QStringList> m_instanceBindPaths;
     uint m_screenSaverCookie = 0;
 
-    // Steam process discovery helpers
-    qint64 findSteamProcess(qint64 gamescopePid, int maxDepth = 6) const;
-    bool hasUinputOpen(qint64 pid) const;
-    bool hasFdOpen(qint64 pid, const QString &targetPath) const;
-    QString attributeVirtualDevice(int eventNumber, const QString &devicePath) const;
-    QString attributeSunshineDevice(const QString &devicePath) const;
+
     QList<qint64> getGamescopePids() const;
 
     SessionManager *m_sessionManager = nullptr;
@@ -242,7 +235,6 @@ private:
     HeroicConfigManager *m_heroicConfigManager = nullptr;
     SettingsManager *m_settingsManager = nullptr;
     WindowManager *m_windowManager = nullptr;
-    VirtualDeviceWatcher *m_virtualDeviceWatcher = nullptr;
     StreamManager *m_streamManager = nullptr;
     QList<GamescopeInstance *> m_instances;
     QAction *m_stopAction = nullptr;
