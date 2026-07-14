@@ -66,6 +66,7 @@ private Q_SLOTS:
     void testIsVirtualDevice();
     void testSteamControllerDetection();
     void testPlayStationControllerGrouping();
+    void testPlayStationBluetoothControllerGrouping();
 
 private:
     DeviceManager *m_deviceManager = nullptr;
@@ -695,6 +696,10 @@ void TestDeviceManager::testIsVirtualDevice()
     QVERIFY(!m_deviceManager->isVirtualDevice(QStringLiteral("DualSense Wireless Controller"), QString(), QStringLiteral("0005")));
     QVERIFY(!m_deviceManager->isVirtualDevice(QStringLiteral("USB Controller"), QString(), QStringLiteral("0003")));
 
+    // Test Steam-created virtual controllers emulating Xbox or PlayStation controllers (empty physical path, bus 0003)
+    QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Microsoft X-Box 360 pad 0"), QString(), QStringLiteral("0003")));
+    QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Sony Interactive Entertainment Wireless Controller"), QString(), QStringLiteral("0003")));
+
     // Test other devices with empty physical path (should be virtual)
     QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Keyboard"), QString(), QStringLiteral("0006")));
     QVERIFY(m_deviceManager->isVirtualDevice(QStringLiteral("Keyboard"), QString(), QString()));
@@ -1017,6 +1022,90 @@ void TestDeviceManager::testPlayStationControllerGrouping()
     QCOMPARE(padDev.value(KEY("assignedInstance")).toInt(), 1);
 
     // Verify event21 (Touchpad) was automatically assigned to 1 as well!
+    QVariantMap touchDev = mockManager.getDevice(21);
+    QCOMPARE(touchDev.value(KEY("assigned")).toBool(), true);
+    QCOMPARE(touchDev.value(KEY("assignedInstance")).toInt(), 1);
+
+    // Verify event22 (Motion Sensors) was automatically assigned to 1 as well!
+    QVariantMap motionDev = mockManager.getDevice(22);
+    QCOMPARE(motionDev.value(KEY("assigned")).toBool(), true);
+    QCOMPARE(motionDev.value(KEY("assignedInstance")).toInt(), 1);
+
+    // Unassign Gamepad (event20)
+    QVERIFY(mockManager.assignDevice(20, -1));
+
+    // Verify all are now unassigned
+    padDev = mockManager.getDevice(20);
+    touchDev = mockManager.getDevice(21);
+    motionDev = mockManager.getDevice(22);
+    QCOMPARE(padDev.value(KEY("assigned")).toBool(), false);
+    QCOMPARE(touchDev.value(KEY("assigned")).toBool(), false);
+    QCOMPARE(motionDev.value(KEY("assigned")).toBool(), false);
+
+    // Clean up env
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testPlayStationBluetoothControllerGrouping()
+{
+    // Create a temporary file to mock /proc/bus/input/devices
+    QTemporaryFile mockDevicesFile;
+    QVERIFY(mockDevicesFile.open());
+
+    QTextStream out(&mockDevicesFile);
+
+    // DualSense Controller Sibling 1 (Gamepad) - Bluetooth (empty Phys path, MAC address in Uniq)
+    out << "I: Bus=0005 Vendor=054c Product=0ce6 Version=0111\n";
+    out << "N: Name=\"DualSense Wireless Controller\"\n";
+    out << "P: Phys=\n";
+    out << "U: Uniq=0c:27:56:57:e7:98\n";
+    out << "H: Handlers=event20 js0\n\n";
+
+    // DualSense Controller Sibling 2 (Touchpad) - Bluetooth
+    out << "I: Bus=0005 Vendor=054c Product=0ce6 Version=0111\n";
+    out << "N: Name=\"DualSense Wireless Controller Touchpad\"\n";
+    out << "P: Phys=\n";
+    out << "U: Uniq=0c:27:56:57:e7:98\n";
+    out << "H: Handlers=event21 mouse1\n\n";
+
+    // DualSense Controller Sibling 3 (Motion Sensors) - Bluetooth
+    out << "I: Bus=0005 Vendor=054c Product=0ce6 Version=0111\n";
+    out << "N: Name=\"DualSense Wireless Controller Motion Sensors\"\n";
+    out << "P: Phys=\n";
+    out << "U: Uniq=0c:27:56:57:e7:98\n";
+    out << "H: Handlers=event22 mouse2\n\n";
+
+    out.flush();
+    mockDevicesFile.close();
+
+    qputenv("COUCHPLAY_MOCK_DEVICES_FILE", mockDevicesFile.fileName().toLocal8Bit());
+
+    MockDeviceManager mockManager;
+    
+    // Mock ioctl success for event20 to return gamepad buttons
+    mockManager.expectedOpenedPath = QStringLiteral("/dev/input/event20");
+    mockManager.mockIoctlSuccess = true;
+    QByteArray dsBitmask(KEY_MAX / 8 + 1, 0);
+    dsBitmask[38] = 0x01; // BTN_GAMEPAD (BTN_A)
+    mockManager.mockKeyBitmask = dsBitmask;
+
+    mockManager.refresh();
+
+    // Verify gamepad is detected as controller, touchpad & motion sensors as "other"
+    QVariantList controllers = mockManager.controllersAsVariant();
+    QCOMPARE(controllers.size(), 1);
+    QCOMPARE(controllers.first().toMap().value(KEY("name")).toString(), QStringLiteral("DualSense Wireless Controller"));
+
+    // Verify Sibling Assignment Propagation for PlayStation controller
+    // Assign Sibling 1 (Gamepad, event20) to instance 1
+    QVERIFY(mockManager.assignDevice(20, 1));
+
+    // Verify event20 is assigned to 1
+    QVariantMap padDev = mockManager.getDevice(20);
+    QCOMPARE(padDev.value(KEY("assigned")).toBool(), true);
+    QCOMPARE(padDev.value(KEY("assignedInstance")).toInt(), 1);
+
+    // Verify event21 (Touchpad) was automatically assigned to 1 as well via Uniq/MAC!
     QVariantMap touchDev = mockManager.getDevice(21);
     QCOMPARE(touchDev.value(KEY("assigned")).toBool(), true);
     QCOMPARE(touchDev.value(KEY("assignedInstance")).toInt(), 1);

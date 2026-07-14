@@ -18,13 +18,21 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-static QString getGroupingPath(const QString &physPath, const QString &name)
+static QString getGroupingPath(const InputDevice &device)
 {
+    const QString &name = device.name;
+    bool isSteam = name.toLower().contains(QStringLiteral("steam controller"));
+
+    if (!isSteam && !device.uniq.isEmpty()) {
+        return device.uniq;
+    }
+
+    const QString &physPath = device.physPath;
+
     if (physPath.isEmpty()) {
         return physPath;
     }
 
-    bool isSteam = name.toLower().contains(QStringLiteral("steam controller"));
     if (isSteam) {
         // Group by Steam Controller Slot (keeps input2, input3, etc. separate)
         int firstIdx = physPath.indexOf(QStringLiteral("/input"));
@@ -101,11 +109,13 @@ void DeviceManager::onDebounceTimeout()
     QList<int> oldEventNumbers;
     QMap<int, QString> oldDeviceNames;
     QSet<QString> oldStableIds;
+    QMap<QString, int> oldStableIdEventNumbers;
     for (const auto &device : m_devices) {
         oldEventNumbers.append(device.eventNumber);
         oldDeviceNames[device.eventNumber] = device.name;
         if (!device.stableId.isEmpty()) {
             oldStableIds.insert(device.stableId);
+            oldStableIdEventNumbers[device.stableId] = device.eventNumber;
         }
     }
 
@@ -154,11 +164,12 @@ void DeviceManager::onDebounceTimeout()
             device.assigned = true;
             device.assignedInstance = instanceIndex;
 
-            // Check if this is a reconnected device (wasn't present before)
+            // Check if this is a reconnected device (wasn't present before or event number changed)
             bool wasPresent = oldStableIds.contains(device.stableId);
+            bool eventNumberChanged = wasPresent && (oldStableIdEventNumbers.value(device.stableId) != device.eventNumber);
 
-            if (!wasPresent) {
-                qDebug() << "DeviceManager: Device reconnected:" << device.name << "stableId:" << device.stableId
+            if (!wasPresent || eventNumberChanged) {
+                qDebug() << "DeviceManager: Device reconnected (or path changed):" << device.name << "stableId:" << device.stableId
                          << "eventNumber:" << device.eventNumber;
                 Q_EMIT deviceReconnected(device.stableId, device.eventNumber, instanceIndex);
 
@@ -307,6 +318,7 @@ void DeviceManager::parseDevices()
                 device.vendorId = currentVendor;
                 device.productId = currentProduct;
                 device.physPath = currentPhys;
+                device.uniq = currentUniq;
                 device.stableId = generateStableId(currentVendor, currentProduct, currentPhys, currentUniq);
                 device.assigned = false;
                 device.assignedInstance = -1;
@@ -398,6 +410,7 @@ void DeviceManager::parseDevices()
         device.vendorId = currentVendor;
         device.productId = currentProduct;
         device.physPath = currentPhys;
+        device.uniq = currentUniq;
         device.stableId = generateStableId(currentVendor, currentProduct, currentPhys, currentUniq);
         device.assigned = false;
         device.assignedInstance = -1;
@@ -421,6 +434,12 @@ QString DeviceManager::detectDeviceType(const QString &name, const QString &hand
 {
     QString lowerName = name.toLower();
     QString lowerHandlers = handlers.toLower();
+
+    // Motion sensors and touchpads are siblings, not standalone controller devices
+    if (lowerName.contains(QStringLiteral("motion sensors")) || lowerName.contains(QStringLiteral("motion-sensors"))
+        || lowerName.contains(QStringLiteral("touchpad"))) {
+        return QStringLiteral("other");
+    }
 
     // Check for controllers/gamepads
     if (lowerName.contains(QStringLiteral("xbox")) || lowerName.contains(QStringLiteral("controller"))
@@ -508,7 +527,17 @@ bool DeviceManager::isVirtualDevice(const QString &name, const QString &physPath
 
     // Virtual devices typically have no physical path or specific patterns
     if (physPath.isEmpty()) {
-        if (busType.toLower() == QStringLiteral("0005") || busType.toLower() == QStringLiteral("0003")) {
+        if (busType.toLower() == QStringLiteral("0005")) {
+            return false;
+        }
+        if (busType.toLower() == QStringLiteral("0003")) {
+            // Steam virtual controllers (Xbox 360 / DualShock emulations) have an empty physPath and bus 0003
+            if (lowerName.contains(QStringLiteral("xbox")) || lowerName.contains(QStringLiteral("x-box"))
+                || lowerName.contains(QStringLiteral("playstation")) || lowerName.contains(QStringLiteral("dualshock"))
+                || lowerName.contains(QStringLiteral("dualsense")) || lowerName.contains(QStringLiteral("steam"))
+                || lowerName.contains(QStringLiteral("wireless controller"))) {
+                return true;
+            }
             return false;
         }
         return true;
@@ -547,7 +576,7 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
             bool assigned = (instanceIndex >= 0);
 
             // Assign this device and all siblings on the same physical path if it is a Steam Controller or PlayStation controller
-            QString basePhys = getGroupingPath(m_devices[i].physPath, m_devices[i].name);
+            QString basePhys = getGroupingPath(m_devices[i]);
             bool isGroupedDevice = false;
             QString lowerName = m_devices[i].name.toLower();
             if (lowerName.contains(QStringLiteral("steam controller")) ||
@@ -560,7 +589,7 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
 
             if (!basePhys.isEmpty() && isGroupedDevice) {
                 for (auto &device : m_devices) {
-                    if (getGroupingPath(device.physPath, device.name) == basePhys) {
+                    if (getGroupingPath(device) == basePhys) {
                         device.assigned = assigned;
                         device.assignedInstance = instanceIndex;
                         if (!device.stableId.isEmpty()) {
@@ -670,7 +699,7 @@ int DeviceManager::autoAssignControllers()
         int previousInstance = m_devices[deviceIndex].assignedInstance;
 
         bool assigned = true;
-        QString basePhys = getGroupingPath(m_devices[deviceIndex].physPath, m_devices[deviceIndex].name);
+        QString basePhys = getGroupingPath(m_devices[deviceIndex]);
         bool isGroupedDevice = false;
         QString lowerName = m_devices[deviceIndex].name.toLower();
         if (lowerName.contains(QStringLiteral("steam controller")) ||
@@ -683,7 +712,7 @@ int DeviceManager::autoAssignControllers()
 
         if (!basePhys.isEmpty() && isGroupedDevice) {
             for (auto &device : m_devices) {
-                if (getGroupingPath(device.physPath, device.name) == basePhys) {
+                if (getGroupingPath(device) == basePhys) {
                     device.assigned = assigned;
                     device.assignedInstance = instance;
                     if (!device.stableId.isEmpty()) {
