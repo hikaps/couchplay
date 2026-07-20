@@ -410,6 +410,23 @@ QString CouchPlayHelperClient::getUserSteamId(const QString &username)
     return reply.value();
 }
 
+bool CouchPlayHelperClient::isSteamBootstrapped(const QString &username)
+{
+    if (!m_available) {
+        qWarning() << "CouchPlayHelperClient: Helper not available";
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("IsSteamBootstrapped"), username);
+
+    if (!reply.isValid()) {
+        qWarning() << "CouchPlayHelperClient: IsSteamBootstrapped failed:" << reply.error().message();
+        return false;
+    }
+
+    return reply.value();
+}
+
 bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
                                             const QString &targetPath,
                                             const QString &username)

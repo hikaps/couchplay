@@ -374,6 +374,8 @@ private Q_SLOTS:
     void testListCouchPlayUsersFilters();
     void testGetUserInfo();
     void testGetUserInfoNotFound();
+    void testIsSteamBootstrappedTrue();
+    void testIsSteamBootstrappedFalse();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -816,6 +818,30 @@ void TestCouchPlayHelper::testIsLingerEnabledFalse()
     m_ops->setFileExists(QStringLiteral("/var/lib/systemd/linger/testuser"), false);
 
     QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("IsLingerEnabled"), QStringLiteral("testuser"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(!reply.value());
+}
+
+void TestCouchPlayHelper::testIsSteamBootstrappedTrue()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/player1/.local/share/Steam/steam.sh"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("IsSteamBootstrapped"), QStringLiteral("player1"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+}
+
+void TestCouchPlayHelper::testIsSteamBootstrappedFalse()
+{
+    // Home present but no steam.sh (e.g. failed bootstrap left only userdata) — must report not bootstrapped.
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("IsSteamBootstrapped"), QStringLiteral("player1"));
 
     QVERIFY(reply.isValid());
     QVERIFY(!reply.value());

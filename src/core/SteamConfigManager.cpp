@@ -322,6 +322,12 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
 
     qCDebug(couchplaySteam) << "Source file:" << sourceFile;
 
+    if (m_helperClient && m_helperClient->isAvailable()
+        && !m_helperClient->isSteamBootstrapped(targetUsername)) {
+        qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not set up for user" << targetUsername;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Steam not set up for user (run Steam once first)"));
+        return false;
+    }
     // Get target user's Steam ID
     QString targetSteamId = getTargetSteamUserId(targetUsername);
     if (targetSteamId.isEmpty()) {
@@ -872,6 +878,13 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
     }
     QString targetHome = id.home;
     
+    if (m_helperClient && m_helperClient->isAvailable()
+        && !m_helperClient->isSteamBootstrapped(targetUsername)) {
+        qCWarning(couchplaySteam) << "shareLibraryToUser failed - Target user" << targetUsername
+                                   << "has not completed Steam setup. Launch Steam once first.";
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Target user has not set up Steam"));
+        return false;
+    }
     QString targetSteamId = getTargetSteamUserId(targetUsername);
     if (targetSteamId.isEmpty()) {
         qCWarning(couchplaySteam) << "shareLibraryToUser failed - Target user" << targetUsername

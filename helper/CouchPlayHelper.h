@@ -303,6 +303,16 @@ public Q_SLOTS:
     QString GetUserSteamId(const QString &username);
 
     /**
+     * Check whether Steam's first-run setup has completed for a user.
+     * Looks for Steam's launch script/binary (steam.sh or ubuntu12_32/steam),
+     * not just userdata — a partial or failed bootstrap can leave userdata behind.
+     *
+     * @param username User to check
+     * @return true if Steam's bootstrap content is present
+     */
+    bool IsSteamBootstrapped(const QString &username);
+
+    /**
      * Write content directly to a file in a user's directory
      *
      * Used for writing generated config files (e.g., shortcuts.vdf) directly

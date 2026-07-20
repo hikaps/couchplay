@@ -166,6 +166,13 @@ public:
     Q_INVOKABLE QString getUserSteamId(const QString &username);
 
     /**
+     * @brief Check whether Steam's first-run setup completed for a user
+     * @param username User to check
+     * @return true if Steam's bootstrap content (steam.sh/ubuntu12_32) is present
+     */
+    Q_INVOKABLE virtual bool isSteamBootstrapped(const QString &username);
+
+    /**
      * @brief Write content directly to a file in a user's directory
      * @param content File content as bytes
      * @param targetPath Target file path (will be created/overwritten)
