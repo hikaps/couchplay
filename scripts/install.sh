@@ -722,9 +722,11 @@ install_flatpak() {
     # Verify checksum when the release ships one.
     if [[ -n "$flatpak_sha_url" ]]; then
         local sha_file="${TEMP_DIR}/couchplay.flatpak.sha256"
-        if download_file "$flatpak_sha_url" "$sha_file"; then
-            verify_checksum "$flatpak_file" "$sha_file"
+        if ! download_file "$flatpak_sha_url" "$sha_file"; then
+            print_error "Could not download checksum. Refusing to install without checksum verification"
+            exit 1
         fi
+        verify_checksum "$flatpak_file" "$sha_file"
     fi
 
     # Flatpak runs as the invoking user (never root); --user scopes installs to REAL_USER.

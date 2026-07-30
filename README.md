@@ -103,8 +103,8 @@ Beta build (from `develop`):
 curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
 ```
 
-> Requires Linux x86_64 and sudo. On SteamOS the installer deploys a system extension
-> instead of the Flatpak. Pass `--tarball` for the native GUI binary (Fedora-family only).
+> Requires Linux x86_64 and sudo. On SteamOS the installer also deploys a system extension
+> for the privileged helper. Pass `--tarball` for the native GUI binary (Fedora-family only).
 > Beta builds include unreleased features and may be unstable.
 
 ### 1. Install the Flatpak (GUI)
