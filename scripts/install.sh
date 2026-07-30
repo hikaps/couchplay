@@ -685,6 +685,89 @@ install_tarball() {
     echo ""
 }
 
+install_flatpak() {
+    local BETA="$1"
+    local release_json="$2"
+    local tag_name="$3"
+
+    print_info "Installing via Flatpak (recommended - runs on every distro)..."
+
+    if ! command -v flatpak &>/dev/null; then
+        print_error "flatpak not found. Install it, then re-run:"
+        echo "  Fedora/RHEL:    sudo dnf install flatpak"
+        echo "  Arch/CachyOS:   sudo pacman -S flatpak"
+        echo "  Debian/Ubuntu:  sudo apt install flatpak"
+        echo "  Or install the native build instead: re-run with --tarball"
+        exit 1
+    fi
+
+    local flatpak_url flatpak_sha_url
+    flatpak_url=$(get_asset_url "$release_json" "couchplay\.flatpak")
+    flatpak_sha_url=$(get_asset_url "$release_json" "couchplay\.flatpak\.sha256")
+    if [[ -z "$flatpak_url" ]]; then
+        print_error "Could not find couchplay.flatpak asset in release $tag_name"
+        exit 1
+    fi
+
+    TEMP_DIR=$(mktemp -d)
+    trap cleanup EXIT
+
+    local flatpak_file="${TEMP_DIR}/couchplay.flatpak"
+
+    print_info "Flatpak bundle: $flatpak_url"
+    if ! download_file "$flatpak_url" "$flatpak_file"; then
+        exit 1
+    fi
+
+    # Verify checksum when the release ships one.
+    if [[ -n "$flatpak_sha_url" ]]; then
+        local sha_file="${TEMP_DIR}/couchplay.flatpak.sha256"
+        if download_file "$flatpak_sha_url" "$sha_file"; then
+            verify_checksum "$flatpak_file" "$sha_file"
+        fi
+    fi
+
+    # Flatpak runs as the invoking user (never root); --user scopes installs to REAL_USER.
+    print_info "Ensuring Flathub remote + org.kde.Platform 6.10 runtime..."
+    sudo -u "$REAL_USER" flatpak remote-add --user --if-not-exists flathub \
+        https://flathub.org/repo/flathub.flatpakrepo || true
+    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y \
+        flathub org.kde.Platform/x86_64/6.10
+
+    print_info "Installing CouchPlay Flatpak bundle..."
+    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y "$flatpak_file"
+
+    # Export the privileged helper from the Flatpak, then install it system-wide.
+    print_info "Exporting privileged helper from the Flatpak..."
+    local fp_data="$REAL_HOME/.var/app/io.github.hikaps.couchplay/data/couchplay"
+    local real_uid
+    real_uid=$(id -u "$REAL_USER")
+    sudo -u "$REAL_USER" env "XDG_RUNTIME_DIR=/run/user/$real_uid" \
+        flatpak run --command=bash io.github.hikaps.couchplay \
+        -c "/app/share/couchplay/install-helper.sh export"
+    if [[ ! -f "$fp_data/install-helper.sh" ]]; then
+        print_error "Helper export failed: $fp_data/install-helper.sh not found"
+        echo "Retry manually:"
+        echo "  flatpak run --command=bash io.github.hikaps.couchplay -c '/app/share/couchplay/install-helper.sh export'"
+        echo "  sudo $fp_data/install-helper.sh install"
+        exit 1
+    fi
+
+    print_info "Installing privileged helper..."
+    "$fp_data/install-helper.sh" install
+
+    echo ""
+    print_info "=========================================="
+    print_info "CouchPlay $tag_name installed successfully!"
+    print_info "=========================================="
+    echo ""
+    echo "Launch CouchPlay from your application menu, or run:"
+    echo "  flatpak run io.github.hikaps.couchplay"
+    echo ""
+    echo "Prefer the native binary (Fedora-family only)? Re-run with --tarball."
+    echo ""
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -693,12 +776,14 @@ main() {
     local BETA=false
     local FORCE_SYSEXT=false
     local FORCE_TARBALL=false
+    local FORCE_FLATPAK=false
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --beta) BETA=true; shift ;;
             --sysext) FORCE_SYSEXT=true; shift ;;
             --tarball) FORCE_TARBALL=true; shift ;;
+            --flatpak) FORCE_FLATPAK=true; shift ;;
             *) shift ;;
         esac
     done
@@ -726,23 +811,15 @@ main() {
     tag_name=$(get_release_tag "$release_json")
     print_info "Latest release: $tag_name"
     
-    # Determine installation pathway
-    local USE_SYSEXT=false
+    # SteamOS uses a sysext; every other distro defaults to the Flatpak. --tarball forces native.
     if $FORCE_SYSEXT; then
-        USE_SYSEXT=true
-    elif $FORCE_TARBALL; then
-        USE_SYSEXT=false
-    else
-        # Auto-detect SteamOS
-        if [[ -f /etc/os-release ]] && grep -q "ID=steamos" /etc/os-release; then
-            USE_SYSEXT=true
-        fi
-    fi
-    
-    if $USE_SYSEXT; then
         install_sysext "$BETA" "$release_json" "$tag_name"
-    else
+    elif $FORCE_TARBALL; then
         install_tarball "$BETA" "$release_json" "$tag_name"
+    elif $FORCE_FLATPAK || ! { [[ -f /etc/os-release ]] && grep -q "ID=steamos" /etc/os-release; }; then
+        install_flatpak "$BETA" "$release_json" "$tag_name"
+    else
+        install_sysext "$BETA" "$release_json" "$tag_name"
     fi
 }
 

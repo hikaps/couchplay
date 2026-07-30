@@ -89,6 +89,24 @@ and audio). Install the Flatpak for the GUI, then install the helper.
 > whose Qt6 matches the build (Fedora-family) — on Arch or SteamOS it fails to start with
 > a copy-relocation error, which is why the Flatpak is the recommended GUI everywhere.
 
+### Quick install (recommended)
+
+One command installs the Flatpak GUI and the privileged helper:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
+```
+
+Beta build (from `develop`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
+```
+
+> Requires Linux x86_64 and sudo. On SteamOS the installer deploys a system extension
+> instead of the Flatpak. Pass `--tarball` for the native GUI binary (Fedora-family only).
+> Beta builds include unreleased features and may be unstable.
+
 ### 1. Install the Flatpak (GUI)
 
 1. **Download** the `.flatpak` bundle from the [Releases page](../../releases).
@@ -116,18 +134,7 @@ The `export` step stages the helper in the Flatpak's persisted data directory
 (`~/.var/app/io.github.hikaps.couchplay/data/couchplay`), visible on your host at the
 same path; the second command installs it system-wide from there.
 
-**Standalone (curl one-liner):**
-```bash
-curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
-```
-Beta (from `develop`):
-```bash
-curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
-```
-> Requires Linux x86_64 and sudo. Beta builds include unreleased features and may be unstable.
-> `install.sh` also installs a native `couchplay` GUI binary and desktop entry. The
-> helper works on every distro; the native GUI only runs on Fedora-family distros —
-> on Arch/SteamOS, keep using the Flatpak above for the GUI.
+**One-liner:** see **Quick install** at the top of this section - it installs the Flatpak GUI and the helper together.
 
 **Uninstall the helper:**
 ```bash
