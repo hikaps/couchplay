@@ -36,6 +36,7 @@ struct InputDevice {
     Q_PROPERTY(QString stableId MEMBER stableId)
     Q_PROPERTY(QString hidrawPath MEMBER hidrawPath)
     Q_PROPERTY(int hidrawNumber MEMBER hidrawNumber)
+    Q_PROPERTY(QString uniq MEMBER uniq)
 
 public:
     int eventNumber = -1;
@@ -47,6 +48,7 @@ public:
     QString productId;
     QString physPath; // Physical device path (for grouping)
     QString stableId; // Stable identifier: "vendorId:productId:physPath" - survives hotplug/reboot
+    QString uniq; // Unique identifier (e.g. MAC address)
     bool assigned = false;
     int assignedInstance = -1;
     bool isVirtual = false; // Virtual/software device

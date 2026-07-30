@@ -15,6 +15,9 @@
 #include "SystemOps.h"
 
 class UnitMonitor;
+class QSocketNotifier;
+class QTimer;
+class QFileSystemWatcher;
 
 /**
  * CouchPlayHelper - Privileged D-Bus service for split-screen gaming
@@ -159,6 +162,17 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool ResetDeviceOwner(const QString &devicePath);
+
+    /**
+     * Watch a device for the exit chord without changing its ownership
+     * Used for input monitoring in single-user/host sessions
+     *
+     * @param devicePath Path to the device (e.g., /dev/input/event5)
+     * @return true if successful
+     */
+    bool WatchDevice(const QString &devicePath);
+
+
 
     /**
      * Reset ownership of all managed devices to root
@@ -379,7 +393,23 @@ Q_SIGNALS:
      */
     void instanceStopped(const QString &username, qint64 pid, const QString &reason);
 
+    /**
+     * Emitted when a gamepad exit chord (Guide/Steam/PS + Start + Select)
+     * is held for 2 seconds on any monitored controller.
+     */
+    void exitChordTriggered();
+
 private:
+    struct HidDeviceInfo {
+        QString driverPath; // e.g. /sys/bus/hid/drivers/microsoft
+        QString deviceId;   // e.g. 0003:045E:028E.0001
+    };
+    HidDeviceInfo findHidDevice(const QString &devicePath) const;
+    QString findHidrawPathForDeviceId(const QString &deviceId) const;
+    QString getTempUdevRulePath(const QString &deviceId) const;
+    bool writeTempUdevRule(const HidDeviceInfo &hid, const QString &username);
+    bool removeTempUdevRule(const QString &deviceId);
+
     bool checkAuthorization(const QString &action);
     bool isValidDevicePath(const QString &path);
     bool validateUserAndAuth(const QString &username, const QString &action);
@@ -412,6 +442,7 @@ private:
     bool unloadNullSinkModule(const QString &username, const QString &sinkName);
 
     QStringList m_modifiedDevices;
+    QStringList m_modifiedHidDevices;
 
     struct VirtualDisplayInfo {
         qint64 pid;
@@ -455,4 +486,37 @@ private:
     void loadAndReconcileState();
     void removeRuntimeAcls(const QString &runtimeDir);
     void cleanupTcpListenerIfLast(const QString &username);
+    void setupUinputAccess();
+    void removeUinputAccess();
+
+    struct WatchedDevice {
+        int fd;
+        QSocketNotifier *notifier = nullptr;
+        bool startPressed = false;
+        bool selectPressed = false;
+        QTimer *chordTimer = nullptr;
+        bool isHidrawDevice = false; // true for /dev/hidrawN; uses raw HID packet parsing
+        bool isSteamController = false; // true if it is a Valve Steam Controller / Puck device
+        uint8_t lastB8 = 0;
+        uint8_t lastB9 = 0;
+        QSet<int> seenSizes;
+    };
+
+    QMap<QString, WatchedDevice *> m_watchedDevices;
+
+    void startWatchingDevice(const QString &devicePath);
+    void stopWatchingDevice(const QString &devicePath);
+    void stopWatchingAllDevices();
+    void onDeviceDataAvailable(const QString &devicePath);
+    void onExitChordTimeout(const QString &devicePath);
+
+    QFileSystemWatcher *m_inputWatcher = nullptr;
+    QTimer *m_inputDebounceTimer = nullptr;
+    QSet<int> m_knownEventNumbers;
+
+    void onInputDirectoryChanged();
+    void onInputDebounceTimeout();
+    void checkForNewVirtualDevices();
+    bool isVirtualDevice(int eventNumber);
+    QString getDeviceName(int eventNumber) const;
 };

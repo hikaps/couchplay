@@ -87,8 +87,7 @@ target_sources(couchplay PRIVATE
     core/AudioManager.h
     core/WindowManager.cpp
     core/WindowManager.h
-    core/VirtualDeviceWatcher.cpp
-    core/VirtualDeviceWatcher.h
+
      core/PresetManager.cpp
      core/PresetManager.h
      core/HeroicConfigManager.cpp

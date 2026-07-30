@@ -66,11 +66,7 @@ SessionRunner::SessionRunner(QObject *parent)
     setStatus(QStringLiteral("Ready"));
     setupGlobalShortcut();
 
-    m_virtualDeviceWatcher = new VirtualDeviceWatcher(this);
-    connect(m_virtualDeviceWatcher,
-            &VirtualDeviceWatcher::virtualDeviceAppeared,
-            this,
-            &SessionRunner::onVirtualDeviceAppeared);
+
 
     connect(m_windowManager, &WindowManager::gamescopeWindowPositioned, this, &SessionRunner::onWindowPositioned);
     connect(m_windowManager, &WindowManager::positioningTimedOut, this, &SessionRunner::onWindowPositioningTimeout);
@@ -125,7 +121,13 @@ void SessionRunner::setDeviceManager(DeviceManager *manager)
 void SessionRunner::setHelperClient(CouchPlayHelperClient *client)
 {
     if (m_helperClient != client) {
+        if (m_helperClient) {
+            disconnect(m_helperClient, &CouchPlayHelperClient::exitChordTriggered, this, &SessionRunner::stop);
+        }
         m_helperClient = client;
+        if (m_helperClient) {
+            connect(m_helperClient, &CouchPlayHelperClient::exitChordTriggered, this, &SessionRunner::stop);
+        }
         if (m_streamManager) {
             m_streamManager->setHelperClient(client);
         }
@@ -374,13 +376,7 @@ bool SessionRunner::start()
     m_nextInstanceToStart = 0;
     startNextInstance();
 
-    QSet<int> knownEventNumbers;
-    if (m_deviceManager) {
-        for (const auto &device : m_deviceManager->devices()) {
-            knownEventNumbers.insert(device.eventNumber);
-        }
-    }
-    m_virtualDeviceWatcher->startWatching(knownEventNumbers);
+
 
     return true;
 }
@@ -395,7 +391,7 @@ void SessionRunner::stop()
 
     uninhibitScreenSaver();
 
-    m_virtualDeviceWatcher->stopWatching();
+
 
     m_streamManager->stopAll();
 
@@ -595,8 +591,17 @@ bool SessionRunner::setupDeviceOwnership()
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
+        QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
 
         if (username.isEmpty()) {
+            for (const QString &path : devicePaths) {
+                if (path.startsWith(QLatin1String("/dev/input/event"))) {
+                    m_helperClient->watchDevice(path);
+                    if (!m_ownedDevicePaths.contains(path)) {
+                        m_ownedDevicePaths.append(path);
+                    }
+                }
+            }
             continue;
         }
 
@@ -607,7 +612,7 @@ bool SessionRunner::setupDeviceOwnership()
         }
         int uid = static_cast<int>(id.uid);
 
-        QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
+
 
         for (const QString &path : devicePaths) {
             if (m_helperClient->setDeviceOwner(path, uid)) {
@@ -1200,8 +1205,15 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
     }
 
     const QString &username = profile.instances[instanceIndex].username;
+    QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
+
     if (username.isEmpty()) {
-        qWarning() << "SessionRunner: No username for instance" << instanceIndex;
+        qDebug() << "SessionRunner: Device reconnected in host session, watching:" << devicePath << "(stableId:" << stableId << ")";
+        if (m_helperClient->watchDevice(devicePath)) {
+            if (!m_ownedDevicePaths.contains(devicePath)) {
+                m_ownedDevicePaths.append(devicePath);
+            }
+        }
         return;
     }
 
@@ -1212,7 +1224,16 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
     }
     int uid = static_cast<int>(id.uid);
 
-    QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
+    // Prevent infinite loop: if the device node is already owned by the target user, udev has already
+    // applied the custom rule and we do not need to trigger another unbind/rebind.
+    QFileInfo fileInfo(devicePath);
+    if (fileInfo.exists() && fileInfo.ownerId() == id.uid) {
+        qDebug() << "SessionRunner: Reconnected device" << devicePath << "is already owned by" << username << "(UID:" << uid << "), skipping ownership update";
+        if (devicePath.startsWith(QLatin1String("/dev/input/event"))) {
+            m_helperClient->watchDevice(devicePath);
+        }
+        return;
+    }
 
     qDebug() << "SessionRunner: Device reconnected, restoring ownership:" << devicePath << "(stableId:" << stableId
              << ") to user" << username;
@@ -1228,11 +1249,18 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
     }
 
     QString hidrawPath = m_deviceManager->findHidrawForEvent(eventNumber);
-    if (!hidrawPath.isEmpty() && m_helperClient->setDeviceOwner(hidrawPath, uid)) {
-        if (!m_ownedDevicePaths.contains(hidrawPath)) {
-            m_ownedDevicePaths.append(hidrawPath);
+    if (!hidrawPath.isEmpty()) {
+        QFileInfo hidrawInfo(hidrawPath);
+        if (hidrawInfo.exists() && hidrawInfo.ownerId() != id.uid) {
+            if (m_helperClient->setDeviceOwner(hidrawPath, uid)) {
+                if (!m_ownedDevicePaths.contains(hidrawPath)) {
+                    m_ownedDevicePaths.append(hidrawPath);
+                }
+                qDebug() << "SessionRunner: Restored hidraw ownership on reconnection:" << hidrawPath;
+            }
+        } else {
+            qDebug() << "SessionRunner: Reconnected hidraw" << hidrawPath << "is already owned by" << username << ", skipping ownership update";
         }
-        qDebug() << "SessionRunner: Restored hidraw ownership on reconnection:" << hidrawPath;
     }
 }
 
@@ -1247,169 +1275,6 @@ QList<qint64> SessionRunner::getGamescopePids() const
     return pids;
 }
 
-qint64 SessionRunner::findSteamProcess(qint64 gamescopePid, int maxDepth) const
-{
-    if (maxDepth <= 0 || gamescopePid <= 0) {
-        return 0;
-    }
-
-    QString childrenPath = QStringLiteral("/proc/%1/task/%1/children").arg(gamescopePid);
-    QFile childrenFile(childrenPath);
-    if (!childrenFile.open(QIODevice::ReadOnly)) {
-        return 0;
-    }
-
-    QString childrenData = QString::fromLocal8Bit(childrenFile.readAll());
-    QStringList childPids = childrenData.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-
-    for (const QString &childPidStr : childPids) {
-        qint64 childPid = childPidStr.toLongLong();
-        if (childPid <= 0) {
-            continue;
-        }
-
-        QString commPath = QStringLiteral("/proc/%1/comm").arg(childPid);
-        QFile commFile(commPath);
-        if (commFile.open(QIODevice::ReadOnly)) {
-            QString comm = QString::fromLocal8Bit(commFile.readAll()).trimmed().toLower();
-            if (comm.contains(QStringLiteral("steam"))) {
-                return childPid;
-            }
-        }
-
-        qint64 grandchildSteam = findSteamProcess(childPid, maxDepth - 1);
-        if (grandchildSteam > 0) {
-            return grandchildSteam;
-        }
-    }
-
-    return 0;
-}
-
-// Synchronous /proc/<pid>/fd/ traversal (see AGENTS.md anti-patterns).
-// Steam has bounded FDs and VirtualDeviceWatcher debounces, so impact is minimal.
-bool SessionRunner::hasUinputOpen(qint64 pid) const
-{
-    QString fdDir = QStringLiteral("/proc/%1/fd").arg(pid);
-    QDir dir(fdDir);
-
-    for (const QString &fdLink : dir.entryList(QDir::Files)) {
-        QString linkTarget = QFile::symLinkTarget(fdDir + QStringLiteral("/") + fdLink);
-        if (linkTarget == QStringLiteral("/dev/uinput")) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool SessionRunner::hasFdOpen(qint64 pid, const QString &targetPath) const
-{
-    QString fdDir = QStringLiteral("/proc/%1/fd").arg(pid);
-    QDir dir(fdDir);
-
-    for (const QString &fdLink : dir.entryList(QDir::Files)) {
-        if (QFile::symLinkTarget(fdDir + QStringLiteral("/") + fdLink) == targetPath) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-QString SessionRunner::attributeSunshineDevice(const QString &devicePath) const
-{
-    if (!m_streamManager) {
-        return QString();
-    }
-
-    QVariantList streams = m_streamManager->streams();
-    for (const QVariant &streamVar : streams) {
-        QVariantMap stream = streamVar.toMap();
-        qint64 pid = stream.value(QStringLiteral("pid")).toLongLong();
-        int instanceIndex = stream.value(QStringLiteral("instanceIndex")).toInt();
-
-        if (pid <= 0) {
-            continue;
-        }
-
-        if (hasFdOpen(pid, devicePath)) {
-            if (m_streamingInstances.contains(instanceIndex)) {
-                return m_streamingInstances[instanceIndex].username;
-            }
-        }
-    }
-
-    return QString();
-}
-
-QString SessionRunner::attributeVirtualDevice(int, const QString &devicePath) const
-{
-    QList<qint64> gamescopePids = getGamescopePids();
-
-    for (qint64 gamescopePid : gamescopePids) {
-        qint64 steamPid = findSteamProcess(gamescopePid);
-        if (steamPid == 0) {
-            continue;
-        }
-
-        if (hasUinputOpen(steamPid) && hasFdOpen(steamPid, devicePath)) {
-            for (int i = 0; i < m_instances.size(); ++i) {
-                if (m_instances[i]->gamescopePid() == gamescopePid) {
-                    if (m_sessionManager) {
-                        const auto &profile = m_sessionManager->currentProfile();
-                        if (i < profile.instances.size()) {
-                            return profile.instances[i].username;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return QString();
-}
-
-void SessionRunner::onVirtualDeviceAppeared(int eventNumber, const QString &devicePath, const QString &deviceName)
-{
-    qDebug() << "SessionRunner: Virtual device appeared:" << devicePath << deviceName;
-
-    if (!m_helperClient || !m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, cannot set virtual device ownership";
-        return;
-    }
-
-    QString username;
-    QString lowerName = deviceName.toLower();
-
-    if (lowerName.contains(QStringLiteral("sunshine")) || lowerName.contains(QStringLiteral("passthrough"))) {
-        username = attributeSunshineDevice(devicePath);
-    }
-
-    if (username.isEmpty()) {
-        username = attributeVirtualDevice(eventNumber, devicePath);
-    }
-
-    if (username.isEmpty()) {
-        qWarning() << "SessionRunner: Could not attribute virtual device" << deviceName << devicePath;
-        return;
-    }
-
-    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
-    if (!id.valid) {
-        qWarning() << "SessionRunner: User" << username << "not found";
-        return;
-    }
-
-    if (m_helperClient->setDeviceOwner(devicePath, id.uid)) {
-        if (!m_ownedDevicePaths.contains(devicePath)) {
-            m_ownedDevicePaths.append(devicePath);
-        }
-        qDebug() << "SessionRunner: Set virtual device ownership" << devicePath << "for user" << username;
-    } else {
-        qWarning() << "SessionRunner: Failed to set virtual device ownership" << devicePath;
-    }
-}
 
 void SessionRunner::inhibitScreenSaver()
 {

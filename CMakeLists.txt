@@ -100,6 +100,12 @@ install(FILES data/pipewire/50-couchplay.conf
     DESTINATION ${CMAKE_INSTALL_PREFIX}/share/pipewire/pipewire-pulse.conf.d
 )
 
+# Install Game Mode launcher script
+install(PROGRAMS scripts/couchplay-gamemode.sh
+    DESTINATION ${KDE_INSTALL_BINDIR}
+    RENAME couchplay-gamemode
+)
+
 # Summary
 feature_summary(WHAT ALL INCLUDE_QUIET_PACKAGES FATAL_ON_MISSING_REQUIRED_PACKAGES)
 
