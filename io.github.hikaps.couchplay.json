@@ -14,8 +14,7 @@
         "--talk-name=org.kde.StatusNotifierWatcher",
         "--talk-name=org.freedesktop.Flatpak",
         "--system-talk-name=org.freedesktop.login1",
-        "--system-talk-name=io.github.hikaps.CouchPlayHelper",
-        "--filesystem=xdg-run"
+        "--system-talk-name=io.github.hikaps.CouchPlayHelper"
     ],
     "modules": [
         {
