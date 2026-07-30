@@ -1185,7 +1185,7 @@ void SessionRunner::setupGlobalShortcut()
 
 void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex)
 {
-    if (m_status != QStringLiteral("Starting session...") && m_status != QStringLiteral("Session running")) {
+    if (!isRunning()) {
         return;
     }
 

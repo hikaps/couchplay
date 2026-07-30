@@ -26,6 +26,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QStandardPaths>
 
 // Custom message handler to filter noisy Qt warnings
 static QtMessageHandler s_originalHandler = nullptr;
@@ -38,18 +39,23 @@ void couchplayMessageHandler(QtMsgType type, const QMessageLogContext &context, 
         return;
     }
 
-    QFile logFile(QStringLiteral("/home/deck/couchplay.log"));
-    if (logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        QTextStream stream(&logFile);
-        QString typeStr = QStringLiteral("DEBUG");
-        switch (type) {
-        case QtDebugMsg: typeStr = QStringLiteral("DEBUG"); break;
-        case QtInfoMsg: typeStr = QStringLiteral("INFO"); break;
-        case QtWarningMsg: typeStr = QStringLiteral("WARN"); break;
-        case QtCriticalMsg: typeStr = QStringLiteral("CRIT"); break;
-        case QtFatalMsg: typeStr = QStringLiteral("FATAL"); break;
+    // Optional file logging, opt-in via COUCHPLAY_LOG (debug aid; off by default).
+    static const bool s_logToFile = !qgetenv("COUCHPLAY_LOG").isEmpty();
+    if (s_logToFile) {
+        QFile logFile(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+                      + QStringLiteral("/couchplay/couchplay.log"));
+        if (logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            QTextStream stream(&logFile);
+            QString typeStr = QStringLiteral("DEBUG");
+            switch (type) {
+            case QtDebugMsg: typeStr = QStringLiteral("DEBUG"); break;
+            case QtInfoMsg: typeStr = QStringLiteral("INFO"); break;
+            case QtWarningMsg: typeStr = QStringLiteral("WARN"); break;
+            case QtCriticalMsg: typeStr = QStringLiteral("CRIT"); break;
+            case QtFatalMsg: typeStr = QStringLiteral("FATAL"); break;
+            }
+            stream << "[" << QDateTime::currentDateTime().toString(Qt::ISODate) << "] [" << typeStr << "] " << msg << "\n";
         }
-        stream << "[" << QDateTime::currentDateTime().toString(Qt::ISODate) << "] [" << typeStr << "] " << msg << "\n";
     }
 
     if (s_originalHandler) {

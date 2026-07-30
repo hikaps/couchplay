@@ -2554,6 +2554,10 @@ QString CouchPlayHelper::getTempUdevRulePath(const QString &deviceId) const
 
 bool CouchPlayHelper::writeTempUdevRule(const HidDeviceInfo &hid, const QString &username)
 {
+    if (!s_validUsername.match(username).hasMatch()) {
+        qWarning() << "CouchPlayHelper: Refusing udev rule for invalid username" << username;
+        return false;
+    }
     QString devId = hid.deviceId;
     QString rulePath = getTempUdevRulePath(devId);
 
@@ -2872,7 +2876,7 @@ void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
     watcher->notifier = new QSocketNotifier(fd, QSocketNotifier::Read, this);
     watcher->chordTimer = new QTimer(this);
     watcher->chordTimer->setSingleShot(true);
-    watcher->chordTimer->setInterval(3000); // 3.0 seconds hold duration
+    watcher->chordTimer->setInterval(2000); // 2.0 seconds hold duration (matches README)
 
     connect(watcher->notifier, &QSocketNotifier::activated, this, [this, devicePath]() {
         onDeviceDataAvailable(devicePath);
@@ -3105,7 +3109,7 @@ void CouchPlayHelper::onDeviceDataAvailable(const QString &devicePath)
 
 void CouchPlayHelper::onExitChordTimeout(const QString &devicePath)
 {
-    qWarning() << "CouchPlayHelper: Exit chord held for 3s on" << devicePath << "! Emitting exitChordTriggered.";
+    qWarning() << "CouchPlayHelper: Exit chord held for 2s on" << devicePath << "! Emitting exitChordTriggered.";
     Q_EMIT exitChordTriggered();
 }
 

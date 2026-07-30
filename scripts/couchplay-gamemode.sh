@@ -95,14 +95,13 @@ fi
 
 echo "Starting nested KWin Wayland compositor..."
 
-# Start kwin_wayland as a nested compositor inside gamescope.
-# --no-lockscreen: disable the lock screen (we're inside Game Mode)
-# --no-global-shortcuts: avoid conflicting with Steam's shortcuts
-# --width/--height: match the gamescope output resolution
-# kwin_wayland will render as a Wayland window inside gamescope.
+CP_WAYLAND_DISPLAY="couchplay-$$"
+
+# Start kwin as a nested compositor on a known socket so CouchPlay connects to it.
 "$KWIN_BIN" \
     --no-lockscreen \
     --no-global-shortcuts \
+    --wayland-display "$CP_WAYLAND_DISPLAY" \
     --width "${GAMESCOPE_WIDTH:-1920}" \
     --height "${GAMESCOPE_HEIGHT:-1080}" \
     &
@@ -127,11 +126,17 @@ if [ "$KWIN_READY" = false ]; then
     exit 1
 fi
 
+# Wait for kwin's Wayland socket to appear.
+for i in $(seq 1 20); do
+    [ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${CP_WAYLAND_DISPLAY}" ] && break
+    sleep 0.5
+done
+
 echo "KWin is ready (PID: $KWIN_PID)"
 echo "Launching CouchPlay..."
 
-# Set environment so CouchPlay connects to the nested KWin's Wayland display
-# WAYLAND_DISPLAY is inherited from kwin_wayland's nested output
+# Point CouchPlay at kwin's nested socket (not the parent gamescope display).
+export WAYLAND_DISPLAY="$CP_WAYLAND_DISPLAY"
 export QT_QPA_PLATFORM=wayland
 
 # Enable CouchPlay debug logging for troubleshooting

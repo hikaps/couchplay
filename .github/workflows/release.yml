@@ -63,6 +63,8 @@ jobs:
           # Copy scripts
           cp scripts/install-helper.sh release-appdir/
           chmod +x release-appdir/install-helper.sh
+          cp scripts/couchplay-gamemode.sh release-appdir/
+          chmod +x release-appdir/couchplay-gamemode.sh
 
           # Copy data
           cp -r data/* release-appdir/data/
