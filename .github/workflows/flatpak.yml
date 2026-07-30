@@ -71,12 +71,15 @@ jobs:
       - name: Create Flatpak bundle
         run: |
           flatpak build-bundle repo couchplay.flatpak io.github.hikaps.couchplay stable
+          sha256sum couchplay.flatpak > couchplay.flatpak.sha256
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: flatpak-bundle
-          path: couchplay.flatpak
+          path: |
+            couchplay.flatpak
+            couchplay.flatpak.sha256
 
       - name: Publish Flatpak to beta release
         if: github.ref == 'refs/heads/develop'
@@ -84,10 +87,14 @@ jobs:
         with:
           tag_name: beta
           prerelease: true
-          files: couchplay.flatpak
+          files: |
+            couchplay.flatpak
+            couchplay.flatpak.sha256
 
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: couchplay.flatpak
+          files: |
+            couchplay.flatpak
+            couchplay.flatpak.sha256
