@@ -104,8 +104,19 @@ curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/insta
 ```
 
 > Requires Linux x86_64 and sudo. On SteamOS the installer also deploys a system extension
-> for the privileged helper. Pass `--tarball` for the native GUI binary (Fedora-family only).
-> Beta builds include unreleased features and may be unstable.
+> for the privileged helper. Beta builds include unreleased features and may be unstable.
+
+### Native binary (tarball, Fedora-family only)
+
+The one-liner defaults to the Flatpak. To install the native `couchplay` GUI binary +
+desktop entry and the privileged helper from the release tarball instead, pass `--tarball`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --tarball
+```
+
+The native GUI only runs on Fedora-family distros (where the system Qt6 matches the
+build); on Arch/SteamOS it fails to start with a copy-relocation error — use the Flatpak.
 
 ### 1. Install the Flatpak (GUI)
 
