@@ -71,6 +71,10 @@ check_dependencies() {
         missing_deps+=("mksquashfs")
     fi
     
+    if ! command -v jq &>/dev/null; then
+        missing_deps+=("jq")
+    fi
+    
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         print_error "Missing required dependencies for local update: ${missing_deps[*]}"
         exit 1
@@ -115,14 +119,10 @@ main() {
     flatpak install --user --noninteractive -y flathub org.kde.Sdk/x86_64/6.10 org.kde.Platform/x86_64/6.10
     
     print_info "Rebuilding Flatpak application locally from source..."
-    # Create a temporary copy of the manifest with local directory source override
+    # Rewrite the couchplay git source to a local dir (jq targets it by URL, leaving polkit/polkit-qt untouched).
     local manifest_copy="${TEMP_DIR}/io.github.hikaps.couchplay.json"
-    cp io.github.hikaps.couchplay.json "$manifest_copy"
-    # Replace the git source block with a local directory source block
-    sed -i 's|"type": "git"|"type": "dir"|' "$manifest_copy"
-    sed -i 's|"url": "https://github.com/hikaps/couchplay.git",||' "$manifest_copy"
-    sed -i 's|"branch": "main"|"path": "."|' "$manifest_copy"
-    sed -i 's|"branch": "develop"|"path": "."|' "$manifest_copy"
+    jq '(.. | objects | select(.type? == "git" and ((.url? // "") | test("hikaps/couchplay")))) |= {"type": "dir", "path": "."}' \
+        io.github.hikaps.couchplay.json > "$manifest_copy"
     
     flatpak-builder --user --install --force-clean --install-deps-from=flathub "${TEMP_DIR}/build-dir" "$manifest_copy"
     
