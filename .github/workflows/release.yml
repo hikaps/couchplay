@@ -26,7 +26,7 @@ jobs:
         run: git config --global --add safe.directory /__w/couchplay/couchplay
 
       - name: Install build dependencies
-        run: ./scripts/install-build-deps.sh tar patchelf
+        run: ./scripts/install-build-deps.sh tar patchelf squashfs-tools
 
       - name: Verify tag is on main branch
         if: startsWith(github.ref, 'refs/tags/')
@@ -70,8 +70,14 @@ jobs:
           # Create tarball
           tar -cJf couchplay-x86_64.tar.xz -C release-appdir .
 
+          # Build systemd-sysext raw image
+          chmod +x scripts/build-sysext.sh
+          ./scripts/build-sysext.sh couchplay.steamos.raw build/bin/couchplay-helper
+
       - name: Generate checksum
-        run: sha256sum couchplay-x86_64.tar.xz > couchplay-x86_64.sha256
+        run: |
+          sha256sum couchplay-x86_64.tar.xz > couchplay-x86_64.sha256
+          sha256sum couchplay.steamos.raw > couchplay.steamos.sha256
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -80,6 +86,8 @@ jobs:
           path: |
             couchplay-x86_64.tar.xz
             couchplay-x86_64.sha256
+            couchplay.steamos.raw
+            couchplay.steamos.sha256
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -88,3 +96,5 @@ jobs:
           files: |
             couchplay-x86_64.tar.xz
             couchplay-x86_64.sha256
+            couchplay.steamos.raw
+            couchplay.steamos.sha256

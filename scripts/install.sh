@@ -472,42 +472,129 @@ cleanup() {
     fi
 }
 
+# Determine the real user calling the script (for SteamOS home directory persistence)
+REAL_USER="${SUDO_USER:-deck}"
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+REAL_HOME="${REAL_HOME:-/home/deck}"
+
 # =============================================================================
-# Main
+# Installation Pathways
 # =============================================================================
 
-main() {
-    local BETA=false
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --beta) BETA=true; shift ;;
-            *) shift ;;
-        esac
-    done
-
-    print_info "CouchPlay Installer"
-    echo ""
+install_sysext() {
+    local BETA="$1"
+    local release_json="$2"
+    local tag_name="$3"
     
-    # Pre-flight checks
-    check_root
-    check_dependencies
-    check_architecture
+    print_info "Installing via SteamOS System Extension (sysext)..."
     
-    echo ""
+    # Get asset URLs
+    local raw_url checksum_url flatpak_url
+    raw_url=$(get_asset_url "$release_json" "couchplay\.steamos\.raw")
+    checksum_url=$(get_asset_url "$release_json" "couchplay\.steamos\.sha256")
+    flatpak_url=$(get_asset_url "$release_json" "couchplay\.flatpak")
     
-    # Get release info (beta or stable)
-    local release_json
-    if $BETA; then
-        release_json=$(get_beta_release)
-        print_warn "Installing BETA build from develop — not a stable release!"
-    else
-        release_json=$(get_latest_release)
+    if [[ -z "$raw_url" ]]; then
+        print_error "Could not find couchplay.steamos.raw asset in release"
+        exit 1
+    fi
+    if [[ -z "$checksum_url" ]]; then
+        print_error "Could not find couchplay.steamos.sha256 asset in release"
+        exit 1
+    fi
+    if [[ -z "$flatpak_url" ]]; then
+        print_error "Could not find couchplay.flatpak asset in release"
+        exit 1
     fi
     
-    local tag_name
-    tag_name=$(get_release_tag "$release_json")
+    # Setup temporary directory and cleanup trap
+    TEMP_DIR=$(mktemp -d)
+    trap cleanup EXIT
     
-    print_info "Latest release: $tag_name"
+    local raw_file="${TEMP_DIR}/couchplay.steamos.raw"
+    local checksum_file="${TEMP_DIR}/couchplay.steamos.sha256"
+    local flatpak_file="${TEMP_DIR}/couchplay.flatpak"
+    
+    # Download files
+    if ! download_file "$raw_url" "$raw_file"; then
+        exit 1
+    fi
+    if ! download_file "$checksum_url" "$checksum_file"; then
+        exit 1
+    fi
+    if ! download_file "$flatpak_url" "$flatpak_file"; then
+        exit 1
+    fi
+    
+    # Verify checksum
+    verify_checksum "$raw_file" "$checksum_file"
+    
+    # 1. Install Flatpak
+    print_info "Installing Flatpak bundle..."
+    if ! command -v flatpak &>/dev/null; then
+        print_error "flatpak command not found. Please install flatpak first."
+        exit 1
+    fi
+    print_info "Ensuring org.kde.Platform 6.10 is installed..."
+    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y flathub org.kde.Platform/x86_64/6.10
+    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y "$flatpak_file"
+    
+    # Stop existing CouchPlay helper service and systemd-sysext before upgrading
+    print_info "Stopping active CouchPlay services..."
+    systemctl stop couchplay-helper.service || true
+    systemctl stop systemd-sysext || true
+    
+    # Clear out any legacy layout folders or old raw files
+    rm -rf "$REAL_HOME/.couchplay-extension"
+    rm -f "$REAL_HOME/.couchplay.raw"
+    rm -f "$REAL_HOME/.couchplay.steamos.raw"
+    rm -f /var/lib/extensions/couchplay.raw
+    rm -f /var/lib/extensions/couchplay.steamos.raw
+    
+    # Deploy the new pre-built extension
+    print_info "Deploying system extension..."
+    mv "$raw_file" "$REAL_HOME/.couchplay.steamos.raw"
+    chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.couchplay.steamos.raw"
+    
+    mkdir -p /var/lib/extensions
+    ln -s "$REAL_HOME/.couchplay.steamos.raw" /var/lib/extensions/couchplay.steamos.raw
+    
+    # Load and enable the system extension
+    print_info "Merging system extension..."
+    systemctl enable systemd-sysext
+    systemctl restart systemd-sysext
+    
+    # Reload D-Bus configuration to discover the new system service policy
+    print_info "Reloading D-Bus daemon..."
+    systemctl reload dbus
+    
+    # Start the helper daemon
+    print_info "Starting couchplay-helper service..."
+    systemctl daemon-reload
+    systemctl restart couchplay-helper.service
+    
+    # Configure controller hidraw udev rules
+    print_info "Configuring udev rules..."
+    echo 'KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", TAG+="uaccess", TAG+="seat"' | tee /etc/udev/rules.d/99-couchplay-hidraw.rules
+    udevadm control --reload-rules
+    udevadm trigger
+    
+    echo ""
+    print_info "=========================================="
+    print_info "CouchPlay $tag_name installed successfully!"
+    print_info "=========================================="
+    echo ""
+    echo "You can now run CouchPlay from your application launcher or terminal:"
+    echo "  couchplay"
+    echo ""
+}
+
+install_tarball() {
+    local BETA="$1"
+    local release_json="$2"
+    local tag_name="$3"
+    
+    print_info "Installing via traditional release tarball..."
     
     # Get asset URLs
     local tarball_url checksum_url
@@ -588,6 +675,67 @@ main() {
     echo "You can now run CouchPlay with:"
     echo "  couchplay"
     echo ""
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+main() {
+    local BETA=false
+    local FORCE_SYSEXT=false
+    local FORCE_TARBALL=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --beta) BETA=true; shift ;;
+            --sysext) FORCE_SYSEXT=true; shift ;;
+            --tarball) FORCE_TARBALL=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    print_info "CouchPlay Installer"
+    echo ""
+    
+    # Pre-flight checks
+    check_root
+    check_dependencies
+    check_architecture
+    
+    echo ""
+    
+    # Get release info (beta or stable)
+    local release_json
+    if $BETA; then
+        release_json=$(get_beta_release)
+        print_warn "Installing BETA build from develop — not a stable release!"
+    else
+        release_json=$(get_latest_release)
+    fi
+    
+    local tag_name
+    tag_name=$(get_release_tag "$release_json")
+    print_info "Latest release: $tag_name"
+    
+    # Determine installation pathway
+    local USE_SYSEXT=false
+    if $FORCE_SYSEXT; then
+        USE_SYSEXT=true
+    elif $FORCE_TARBALL; then
+        USE_SYSEXT=false
+    else
+        # Auto-detect SteamOS
+        if [[ -f /etc/os-release ]] && grep -q "ID=steamos" /etc/os-release; then
+            USE_SYSEXT=true
+        fi
+    fi
+    
+    if $USE_SYSEXT; then
+        install_sysext "$BETA" "$release_json" "$tag_name"
+    else
+        install_tarball "$BETA" "$release_json" "$tag_name"
+    fi
 }
 
 # Run main if script is executed (not sourced)

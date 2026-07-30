@@ -12,9 +12,10 @@
         "--socket=pulseaudio",
         "--device=all",
         "--talk-name=org.kde.StatusNotifierWatcher",
+        "--talk-name=org.freedesktop.Flatpak",
         "--system-talk-name=org.freedesktop.login1",
         "--system-talk-name=io.github.hikaps.CouchPlayHelper",
-        "--filesystem=/run/udev:ro"
+        "--filesystem=xdg-run"
     ],
     "modules": [
         {
