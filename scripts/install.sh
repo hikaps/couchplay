@@ -375,12 +375,12 @@ install_binary() {
         return 1
     fi
     
-    # Install the Game Mode launcher script if present
-    local scripts_dir
-    scripts_dir=$(find "$extract_dir" -type d -name "scripts" | head -1)
-    if [[ -n "$scripts_dir" ]] && [[ -f "${scripts_dir}/couchplay-gamemode.sh" ]]; then
+    # Install the Game Mode launcher script if present (ships at the tarball root).
+    local tarball_root
+    tarball_root="$(dirname "$bin_dir")"
+    if [[ -f "${tarball_root}/couchplay-gamemode.sh" ]]; then
         print_info "Installing Game Mode launcher to ${BIN_DIR}"
-        install -Dm755 "${scripts_dir}/couchplay-gamemode.sh" "${BIN_DIR}/couchplay-gamemode"
+        install -Dm755 "${tarball_root}/couchplay-gamemode.sh" "${BIN_DIR}/couchplay-gamemode"
     fi
     
     print_info "Binary installed successfully"

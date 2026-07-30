@@ -111,7 +111,7 @@ KWIN_PID=$!
 # Wait for KWin to register on D-Bus (up to 10 seconds)
 echo "Waiting for KWin D-Bus interface..."
 KWIN_READY=false
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
     if dbus-send --session --dest=org.kde.KWin --print-reply \
         /KWin org.kde.KWin.currentDesktop &>/dev/null 2>&1; then
         KWIN_READY=true
@@ -127,10 +127,18 @@ if [ "$KWIN_READY" = false ]; then
 fi
 
 # Wait for kwin's Wayland socket to appear.
-for i in $(seq 1 20); do
-    [ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${CP_WAYLAND_DISPLAY}" ] && break
+SOCKET_READY=false
+for _ in $(seq 1 20); do
+    if [ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${CP_WAYLAND_DISPLAY}" ]; then
+        SOCKET_READY=true
+        break
+    fi
     sleep 0.5
 done
+if [ "$SOCKET_READY" = false ]; then
+    echo "Error: kwin Wayland socket ${CP_WAYLAND_DISPLAY} did not appear."
+    exit 1
+fi
 
 echo "KWin is ready (PID: $KWIN_PID)"
 echo "Launching CouchPlay..."
