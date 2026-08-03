@@ -132,13 +132,18 @@ check_binary() {
     fi
 }
 
+# Whether systemd is PID 1 (the helper is Type=dbus, so D-Bus activates it without systemd).
+has_systemd() {
+    [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null
+}
+
 reload_dbus() {
     # Ask the D-Bus daemon to re-read its configuration so policy files dropped
     # into /etc/dbus-1/system.d/ (e.g. the helper's ownership allow-rule) take
     # effect. Without this the helper cannot register its service name and the
     # Type=dbus systemd unit fails to start. Tries the systemd unit reload first,
     # then falls back to signalling the daemon directly via its pid file.
-    if systemctl reload dbus 2>/dev/null; then
+    if has_systemd && systemctl reload dbus 2>/dev/null; then
         return 0
     fi
     local pidfile dbus_pid
@@ -253,11 +258,17 @@ install_helper() {
     # Install D-Bus service file
     install -Dm644 "${DATA_DIR}/dbus/io.github.hikaps.CouchPlayHelper.service" \
         "${DBUS_SERVICE_DIR}/io.github.hikaps.CouchPlayHelper.service"
+    # Non-systemd: drop SystemdService= so D-Bus activates the helper via Exec= directly.
+    if ! has_systemd; then
+        sed -i '/^SystemdService=/d' "${DBUS_SERVICE_DIR}/io.github.hikaps.CouchPlayHelper.service"
+    fi
 
-    # Install systemd service
-    print_info "Installing systemd service..."
-    install -Dm644 "${DATA_DIR}/dbus/couchplay-helper.service" \
-        "${SYSTEMD_DIR}/couchplay-helper.service"
+    # Install systemd unit (systemd only; without it D-Bus activates the helper on demand).
+    if has_systemd; then
+        print_info "Installing systemd service..."
+        install -Dm644 "${DATA_DIR}/dbus/couchplay-helper.service" \
+            "${SYSTEMD_DIR}/couchplay-helper.service"
+    fi
 
     # Install PolicyKit policy
     print_info "Installing PolicyKit policy..."
@@ -274,39 +285,43 @@ install_helper() {
         print_warn "PipeWire config not in export — skipping (optional; affects streaming audio only)."
     fi
 
-    # Reload systemd
-    print_info "Reloading systemd..."
-    systemctl daemon-reload
-
-    # Reload D-Bus so the new ownership policy in /etc/dbus-1/system.d/ takes
-    # effect. Without this the helper cannot register its service name and the
-    # Type=dbus unit fails to start. Do not silently mask a reload failure.
+    # Reload D-Bus so the new ownership policy takes effect (SIGHUP fallback covers non-systemd).
     print_info "Reloading D-Bus configuration..."
     if ! reload_dbus; then
         print_warn "Could not reload D-Bus configuration automatically."
-        print_warn "If the service fails to start, run: sudo systemctl reload dbus  (or reboot)"
+        if has_systemd; then
+            print_warn "If the service fails to start, run: sudo systemctl reload dbus  (or reboot)"
+        else
+            print_warn "Reboot or restart dbus to apply (e.g. 'rc-service dbus restart')."
+        fi
     fi
 
-    # Enable and restart service (restart ensures new binary is loaded)
-    print_info "Enabling and restarting service..."
-    systemctl enable couchplay-helper.service
-    if ! systemctl restart couchplay-helper.service; then
+    if has_systemd; then
+        print_info "Reloading systemd..."
+        systemctl daemon-reload
+        print_info "Enabling and restarting service..."
+        systemctl enable couchplay-helper.service
+        if ! systemctl restart couchplay-helper.service; then
+            echo ""
+            print_error "Failed to start couchplay-helper.service"
+            echo ""
+            echo "---- journalctl (last 30 lines) ----"
+            journalctl -u couchplay-helper.service -n 30 --no-pager 2>&1 || true
+            echo "------------------------------------"
+            echo ""
+            echo "For full logs, run:"
+            echo "    journalctl -xeu couchplay-helper.service"
+            exit 1
+        fi
+        print_info "Installation complete!"
         echo ""
-        print_error "Failed to start couchplay-helper.service"
-        echo ""
-        echo "---- journalctl (last 30 lines) ----"
-        journalctl -u couchplay-helper.service -n 30 --no-pager 2>&1 || true
-        echo "------------------------------------"
-        echo ""
-        echo "For full logs, run:"
-        echo "    journalctl -xeu couchplay-helper.service"
-        exit 1
+        print_info "Helper service status:"
+        systemctl status couchplay-helper.service --no-pager || true
+    else
+        print_warn "No systemd detected - the helper is D-Bus-activated on first use."
+        print_warn "Ensure polkitd is running (OpenRC: 'rc-service polkitd start'; runit: 'sv start polkitd')."
+        print_info "Installation complete! Launch the GUI to activate the helper."
     fi
-
-    print_info "Installation complete!"
-    echo ""
-    print_info "Helper service status:"
-    systemctl status couchplay-helper.service --no-pager || true
 }
 
 uninstall_helper() {
@@ -329,9 +344,11 @@ uninstall_helper() {
     rm -f "${PREFIX}/share/pipewire/pipewire-pulse.conf.d/50-couchplay.conf"
     rm -rf "${LIB_DIR}"
 
-    # Reload systemd
-    print_info "Reloading systemd..."
-    systemctl daemon-reload
+    # Reload systemd (no-op without systemd)
+    if has_systemd; then
+        print_info "Reloading systemd..."
+        systemctl daemon-reload
+    fi
 
     # Reload D-Bus so the removed ownership policy takes effect.
     print_info "Reloading D-Bus configuration..."
@@ -383,12 +400,16 @@ status_helper() {
     echo ""
 
     # Check service status
-    if systemctl is-active --quiet couchplay-helper.service 2>/dev/null; then
-        echo -e "Service status:  ${GREEN}Running${NC}"
-    elif systemctl is-enabled --quiet couchplay-helper.service 2>/dev/null; then
-        echo -e "Service status:  ${YELLOW}Enabled but not running${NC}"
+    if has_systemd; then
+        if systemctl is-active --quiet couchplay-helper.service 2>/dev/null; then
+            echo -e "Service status:  ${GREEN}Running${NC}"
+        elif systemctl is-enabled --quiet couchplay-helper.service 2>/dev/null; then
+            echo -e "Service status:  ${YELLOW}Enabled but not running${NC}"
+        else
+            echo -e "Service status:  ${RED}Not enabled${NC}"
+        fi
     else
-        echo -e "Service status:  ${RED}Not enabled${NC}"
+        echo -e "Service status:  ${YELLOW}D-Bus activated on demand (no systemd)${NC}"
     fi
 
     # Test D-Bus connection
