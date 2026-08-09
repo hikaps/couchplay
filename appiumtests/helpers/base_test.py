@@ -59,4 +59,4 @@ class BaseTest:
     def navigate_to_device_assignment(self, driver):
         self.navigate_to_session_setup(driver)
         self.click_by_name(driver, "Assign Devices")
-        self.wait_for_element(driver, AppiumBy.NAME, "Assign Devices")
+        self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "spinInstanceCount")

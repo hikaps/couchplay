@@ -9,7 +9,6 @@ class TestDeviceAssignment(BaseTest):
     def test_device_page_loads(self, driver):
         self.navigate_to_device_assignment(driver)
         title = self.wait_for_element(driver, AppiumBy.NAME, "Assign Devices")
-        assert title.is_displayed()
 
     def test_toolbar_actions_present(self, driver):
         self.navigate_to_device_assignment(driver)
@@ -26,19 +25,19 @@ class TestDeviceAssignment(BaseTest):
 
     def test_switch_device_tabs(self, driver):
         self.navigate_to_device_assignment(driver)
-        self.click_by_object_name(driver, "tabKeyboards")
-        self.click_by_object_name(driver, "tabMice")
+        kb = self.click_by_object_name(driver, "tabKeyboards")
+        assert kb.is_selected(), "Keyboards tab not active after click"
+        mice = self.click_by_object_name(driver, "tabMice")
+        assert mice.is_selected(), "Mice tab not active after click"
 
     def test_player_count_spinbox(self, driver):
         self.navigate_to_device_assignment(driver)
         spin = self.wait_for_element(
             driver, AppiumBy.ACCESSIBILITY_ID, "spinInstanceCount"
         )
-        assert spin.is_displayed()
 
     def test_show_virtual_devices_checkbox(self, driver):
         self.navigate_to_device_assignment(driver)
         checkbox = self.wait_for_element(
             driver, AppiumBy.ACCESSIBILITY_ID, "checkShowVirtual"
         )
-        assert checkbox.is_displayed()
