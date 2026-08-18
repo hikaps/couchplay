@@ -164,6 +164,7 @@ add_couchplay_test(test_streaming_session)
 add_couchplay_test(test_streammanager)
 add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
+add_couchplay_test(test_logging)
 
 # Add helper tests
 add_helper_test(test_couchplayhelper)

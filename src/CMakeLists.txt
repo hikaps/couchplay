@@ -44,6 +44,10 @@ set_target_properties(couchplay_core PROPERTIES
 # Create the executable
 add_executable(couchplay)
 
+if(COUCHPLAY_BETA)
+    target_compile_definitions(couchplay PRIVATE COUCHPLAY_BETA)
+endif()
+
 # Create QML module
 ecm_add_qml_module(couchplay
     URI io.github.hikaps.couchplay

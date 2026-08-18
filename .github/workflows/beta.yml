@@ -28,7 +28,7 @@ jobs:
         run: ./scripts/install-build-deps.sh tar patchelf squashfs-tools
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCOUCHPLAY_BETA=ON
 
       - name: Build
         run: cmake --build build --parallel 2
