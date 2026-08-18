@@ -64,6 +64,43 @@
   </screenshots>
   
   <releases>
+    <release version="0.4.0" date="2026-08-18">
+      <description>
+        <p>Feature release: SteamOS support, Flatpak-first install, and cross-distro hardening</p>
+        <ul>
+          <li>Flatpak is now the default GUI install (works on every distro); the one-liner installs the Flatpak GUI + helper</li>
+          <li>SteamOS support: systemd-sysext helper images + Game Mode launcher</li>
+          <li>Steam Controller support + multi-device controller grouping (DualSense, Steam Controller)</li>
+          <li>Input-device watching moved into the root helper for reliable device attribution</li>
+          <li>Non-systemd init support (OpenRC/Artix, runit); the helper D-Bus-activates without a systemd unit</li>
+          <li>Fix copy-relocation startup failure on Arch/SteamOS (helper libs bundled)</li>
+          <li>Fix Flatpak /etc isolation; host user/device identity routed through the helper</li>
+          <li>Fix user creation on Bazzite (missing input group)</li>
+          <li>Fix PlayStation controller detection + vendor/product parsing</li>
+          <li>Sunshine-based streaming for split-screen sessions</li>
+          <li>Controller exit chord (Start+Select) to stop a session</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.3.4" date="2026-05-07">
+      <description>
+        <p>Bug fix release</p>
+        <ul>
+          <li>Make PolkitQt6-1 a required CMake dependency to prevent silent build failures</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.3.3" date="2026-04-23">
+      <description>
+        <p>Bug fix and feature release</p>
+        <ul>
+          <li>Implement Polkit authorization for CreateUser/DeleteUser</li>
+          <li>Fix device assignment cache in autoAssignControllers and unassignAll</li>
+          <li>Fix audio runtime access tracking on TCP listener teardown</li>
+          <li>Fix borderlessWindows setting persistence and default to true</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-04-20">
       <description>
         <p>Bug fix release</p>
