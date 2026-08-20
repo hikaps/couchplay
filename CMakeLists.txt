@@ -36,6 +36,7 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS
     QuickControls2
     Widgets
     DBus
+    Network
 )
 
 # Find KDE Frameworks 6
