@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -28,6 +29,7 @@ private Q_SLOTS:
 
     void testBuiltinPresetsExist();
     void testGetCommand();
+    void testStaleFlatpakCacheIgnored();
     void testGetWorkingDirectory();
     void testGetLauncherId();
     void testGetSteamIntegration();
@@ -120,13 +122,34 @@ void TestPresetManager::testGetCommand()
     PresetManager manager;
 
     QString steamCommand = manager.getCommand(QStringLiteral("steam"));
-    QCOMPARE(steamCommand, QStringLiteral("steam -tenfoot -steamdeck"));
+    QCOMPARE(steamCommand, QStringLiteral("steam -bigpicture"));
 
     QString heroicCommand = manager.getCommand(QStringLiteral("heroic"));
     QVERIFY(!heroicCommand.isEmpty());
 
     QString lutrisCommand = manager.getCommand(QStringLiteral("lutris"));
     QCOMPARE(lutrisCommand, QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testStaleFlatpakCacheIgnored()
+{
+    // Pre-seed a stale v1 cache; a fresh timestamp keeps it inside the TTL so
+    // only the version gate can prevent it from overriding the builtin.
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup cacheGroup = config->group(QStringLiteral("FlatpakCache"));
+    cacheGroup.writeEntry(QStringLiteral("version"), 1);
+    cacheGroup.writeEntry(QStringLiteral("steam/command"), QStringLiteral("steam -tenfoot -steamdeck"));
+    cacheGroup.writeEntry(QStringLiteral("steam/timestamp"),
+                          QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddTHHmmss")));
+    cacheGroup.sync();
+
+    PresetManager manager;
+    QCOMPARE(manager.getCommand(QStringLiteral("steam")), QStringLiteral("steam -bigpicture"));
+
+    // Constructor rewrote the cache at the current version.
+    cacheGroup = config->group(QStringLiteral("FlatpakCache"));
+    QCOMPARE(cacheGroup.readEntry(QStringLiteral("version"), 0), 2);
+    QCOMPARE(cacheGroup.readEntry(QStringLiteral("steam/command")), QStringLiteral("steam -bigpicture"));
 }
 
 void TestPresetManager::testGetWorkingDirectory()

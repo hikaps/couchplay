@@ -1294,7 +1294,7 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
                                                      QStringLiteral("player1"),
                                                      1000u,
                                                      QStringList{QStringLiteral("-W"), QStringLiteral("960")},
-                                                     QStringLiteral("steam -tenfoot"),
+                                                     QStringLiteral("steam -bigpicture"),
                                                      QStringList{QStringLiteral("ENABLE_GAMESCOPE_WSI=1")},
                                                      QStringList());
 
@@ -1314,7 +1314,7 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
             QVERIFY(inv.args.contains(QStringLiteral("/usr/bin/gamescope")));
             QVERIFY(inv.args.contains(QStringLiteral("-W")));
             QVERIFY(inv.args.contains(QStringLiteral("960")));
-            QVERIFY(inv.args.contains(QStringLiteral("steam -tenfoot")));
+            QVERIFY(inv.args.contains(QStringLiteral("steam -bigpicture")));
             QVERIFY(inv.args.contains(QStringLiteral("-c")));
             QVERIFY(inv.args.contains(QStringLiteral("/bin/bash")));
             break;

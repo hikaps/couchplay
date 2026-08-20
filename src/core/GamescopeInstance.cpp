@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "GamescopeInstance.h"
+#include "PresetManager.h"
 
 #include <QDBusConnection>
 #include <QDBusInterface>
@@ -54,7 +55,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     // Fallback to Steam Big Picture if no preset configured
     QString gameCommand = config.value(QStringLiteral("presetCommand")).toString();
     if (gameCommand.isEmpty()) {
-        gameCommand = QStringLiteral("steam -tenfoot -steamdeck");
+        gameCommand = PresetManager::defaultSteamCommand();
     }
 
     // Launch via D-Bus helper for uniform handling across all users (including compositor user)
