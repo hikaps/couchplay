@@ -14,6 +14,7 @@ set(TEST_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/dbus
     ${CMAKE_CURRENT_BINARY_DIR}
+    ${PROJECT_BINARY_DIR}
 )
 
 # Common manager sources (for tests)
@@ -51,6 +52,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SunshineConfig.h
     ../src/core/StreamManager.cpp
     ../src/core/StreamManager.h
+    ../src/core/UpdateChecker.cpp
+    ../src/core/UpdateChecker.h
     ../src/dbus/CouchPlayHelperClient.cpp
     ../src/dbus/CouchPlayHelperClient.h
 )
@@ -78,6 +81,7 @@ function(add_couchplay_test TEST_NAME)
         Qt6::QuickControls2
         Qt6::Widgets
         Qt6::DBus
+        Qt6::Network
         Qt6::Test
         KF6::I18n
         KF6::CoreAddons
@@ -163,6 +167,7 @@ add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
 add_couchplay_test(test_streammanager)
 add_couchplay_test(test_sunshine_config)
+add_couchplay_test(test_updatechecker)
 add_couchplay_test(test_usermanager)
 
 # Add helper tests
