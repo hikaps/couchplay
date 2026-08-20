@@ -69,7 +69,7 @@ public:
     LauncherInfo launcherInfo;      // Populated by detection for launcher presets
     QStringList sharedDirectories;  // Per-preset shared directories for ACL/mount setup
     QString flatpakAppId;           // e.g., "com.valvesoftware.Steam" (empty = no Flatpak alternative)
-    QString flatpakArgs;            // Extra args for Flatpak launch (e.g., "-tenfoot -steamdeck")
+    QString flatpakArgs;            // Extra args for Flatpak launch (e.g., "-bigpicture")
 
     bool operator==(const LaunchPreset &other) const { return id == other.id; }
 };
@@ -111,6 +111,7 @@ public:
 
     Q_INVOKABLE LaunchPreset getPreset(const QString &id) const;
     Q_INVOKABLE QString getCommand(const QString &id) const;
+    static QString defaultSteamCommand();
     Q_INVOKABLE QString getWorkingDirectory(const QString &id) const;
     Q_INVOKABLE bool getSteamIntegration(const QString &id) const;
     Q_INVOKABLE QString getLauncherId(const QString &id) const;

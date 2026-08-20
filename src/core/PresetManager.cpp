@@ -21,6 +21,7 @@
 #include <KConfigGroup>
 
 static constexpr int CACHE_TTL_HOURS = 24;
+static constexpr int FLATPAK_CACHE_VERSION = 2;  // bump when builtin preset commands change
 
 PresetManager::PresetManager(QObject *parent)
     : QObject(parent)
@@ -113,6 +114,9 @@ void PresetManager::loadFlatpakCache()
 {
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup cacheGroup = config->group(QStringLiteral("FlatpakCache"));
+    if (cacheGroup.readEntry(QStringLiteral("version"), 0) != FLATPAK_CACHE_VERSION) {
+        return;  // stale cache (builtin commands changed) - saveFlatpakCache rewrites it
+    }
 
     const QStringList keys = cacheGroup.keyList();
     QSet<QString> presetIds;
@@ -149,6 +153,7 @@ void PresetManager::saveFlatpakCache()
 {
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup cacheGroup = config->group(QStringLiteral("FlatpakCache"));
+    cacheGroup.writeEntry(QStringLiteral("version"), FLATPAK_CACHE_VERSION);
 
     QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddTHHmmss"));
     for (const auto &preset : m_builtinPresets) {
@@ -160,6 +165,10 @@ void PresetManager::saveFlatpakCache()
     cacheGroup.sync();
 }
 
+QString PresetManager::defaultSteamCommand()
+{
+    return QStringLiteral("steam -bigpicture");
+}
 void PresetManager::initBuiltinPresets()
 {
     m_builtinPresets.clear();
@@ -168,9 +177,9 @@ void PresetManager::initBuiltinPresets()
     steam.id = QStringLiteral("steam");
     steam.name = QStringLiteral("Steam Big Picture");
     steam.flatpakAppId = QStringLiteral("com.valvesoftware.Steam");
-    steam.flatpakArgs = QStringLiteral("-tenfoot -steamdeck");
+    steam.flatpakArgs = QStringLiteral("-bigpicture");
     steam.command = resolveLaunchCommand(
-        QStringLiteral("steam -tenfoot -steamdeck"),
+        defaultSteamCommand(),
         steam.flatpakAppId,
         steam.flatpakArgs);
     steam.iconName = QStringLiteral("steam");

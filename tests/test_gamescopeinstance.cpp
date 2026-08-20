@@ -360,7 +360,7 @@ void TestGamescopeInstance::testSteamLaunchMode()
 
     QVariantMap config;
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
-    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
+    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -bigpicture");
     config[QStringLiteral("steamIntegration")] = true;
     config[QStringLiteral("steamAppId")] = QStringLiteral("1426210"); // It Takes Two
     config[QStringLiteral("internalWidth")] = 1920;
@@ -390,7 +390,7 @@ void TestGamescopeInstance::testSteamLaunchModeNoAppId()
 
     QVariantMap config;
     config[QStringLiteral("presetId")] = QStringLiteral("steam");
-    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
+    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -bigpicture");
     config[QStringLiteral("steamIntegration")] = true;
     // No steamAppId set - this is valid, launches Steam Big Picture
     config[QStringLiteral("internalWidth")] = 1920;
@@ -419,7 +419,7 @@ void TestGamescopeInstance::testSteamModeIsDefault()
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
 
     QVariantMap config;
-    // No presetCommand set - should default to "steam -tenfoot -steamdeck"
+    // No presetCommand set - should default to "steam -bigpicture"
     config[QStringLiteral("internalWidth")] = 1920;
     config[QStringLiteral("internalHeight")] = 1080;
 

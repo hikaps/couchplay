@@ -353,7 +353,7 @@ bool SessionRunner::start()
             config[QStringLiteral("steamIntegration")] = m_presetManager->getSteamIntegration(presetId);
         } else {
             config[QStringLiteral("presetId")] = QStringLiteral("steam");
-            config[QStringLiteral("presetCommand")] = QStringLiteral("steam -tenfoot -steamdeck");
+            config[QStringLiteral("presetCommand")] = PresetManager::defaultSteamCommand();
             config[QStringLiteral("steamIntegration")] = true;
         }
 

@@ -193,7 +193,7 @@ public Q_SLOTS:
      * @param username User to run as
      * @param compositorUid UID of compositor user (for runtime access setup)
      * @param gamescopeArgs Gamescope command-line arguments
-     * @param gameCommand Command to run inside gamescope (e.g., "steam -tenfoot")
+     * @param gameCommand Command to run inside gamescope (e.g., "steam -bigpicture")
      * @param environment Additional environment variables (VAR=value format)
      * @param bindPaths Paths to bind-mount into the unit via --property=BindPaths=
      * @return MainPID of launched process, or 0 on failure
