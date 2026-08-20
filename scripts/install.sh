@@ -517,6 +517,7 @@ install_sysext() {
     
     # Setup temporary directory and cleanup trap
     TEMP_DIR=$(mktemp -d)
+    chmod 755 "$TEMP_DIR"  # real-user flatpak install needs traversal
     trap cleanup EXIT
     
     local raw_file="${TEMP_DIR}/couchplay.steamos.raw"
@@ -710,6 +711,7 @@ install_flatpak() {
     fi
 
     TEMP_DIR=$(mktemp -d)
+    chmod 755 "$TEMP_DIR"  # real-user flatpak install needs traversal
     trap cleanup EXIT
 
     local flatpak_file="${TEMP_DIR}/couchplay.flatpak"

@@ -204,11 +204,6 @@ export_helper() {
             install -m644 "${DATA_DIR}/polkit/io.github.hikaps.couchplay.policy" \
                 "${EXPORT_DIR}/data/polkit/"
         fi
-        if [[ -d "${DATA_DIR}/pipewire" ]]; then
-            mkdir -p "${EXPORT_DIR}/data/pipewire"
-            install -m644 "${DATA_DIR}/pipewire/50-couchplay.conf" \
-                "${EXPORT_DIR}/data/pipewire/"
-        fi
     fi
     
     # Copy bundled runtime libraries (if the Flatpak ships them) so the exported
@@ -275,15 +270,8 @@ install_helper() {
     install -Dm644 "${DATA_DIR}/polkit/io.github.hikaps.couchplay.policy" \
         "${POLKIT_DIR}/io.github.hikaps.couchplay.policy"
 
-    SYSTEM_PIPEWIRE_PULSE_CONF_DIR="${PREFIX}/share/pipewire/pipewire-pulse.conf.d"
-    if [[ -f "${DATA_DIR}/pipewire/50-couchplay.conf" ]]; then
-        print_info "Installing PipeWire PulseAudio TCP listener..."
-        mkdir -p "$SYSTEM_PIPEWIRE_PULSE_CONF_DIR"
-        install -Dm644 "${DATA_DIR}/pipewire/50-couchplay.conf" \
-            "${SYSTEM_PIPEWIRE_PULSE_CONF_DIR}/50-couchplay.conf"
-    else
-        print_warn "PipeWire config not in export — skipping (optional; affects streaming audio only)."
-    fi
+    # PipeWire TCP listener is deployed per-user at runtime (SetupRuntimeAccess),
+    # so no install-time config is needed.
 
     # Reload D-Bus so the new ownership policy takes effect (SIGHUP fallback covers non-systemd).
     print_info "Reloading D-Bus configuration..."
