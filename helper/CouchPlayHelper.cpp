@@ -2005,6 +2005,12 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         return false;
     }
 
+    if (!isPathWithinAllowedPrefix(sourceDir)) {
+        qWarning() << "CopyDirectoryToUser: Source path is outside allowed prefixes:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
     QString userHome = getUserHome(username);
     if (userHome.isEmpty()) {
         sendErrorReply(QDBusError::Failed,
@@ -2022,6 +2028,11 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         return false;
     }
 
+    QStringList dirsToChown;
+    if (!validateUserPath(targetPath, username, QStringLiteral("CopyDirectoryToUser"), dirsToChown)) {
+        return false;
+    }
+
     QString parentDir = targetPath.left(targetPath.lastIndexOf(QLatin1Char('/')));
     if (!parentDir.isEmpty() && !m_ops->fileExists(parentDir)) {
         if (!m_ops->mkpath(parentDir)) {
@@ -2029,18 +2040,38 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
             sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create parent directory: %1").arg(parentDir));
             return false;
         }
-        m_ops->chown(parentDir, userUid, pw->pw_gid);
+    }
+    for (const QString &dir : dirsToChown) {
+        m_ops->chown(dir, userUid, pw->pw_gid);
     }
 
-    if (!runCommand(QStringLiteral("/usr/bin/cp"), {QStringLiteral("-a"), sourceDir, targetPath})) {
+    // Defined replacement semantics: remove an existing target first, so the
+    // copy can never nest the source inside a stale destination
+    if (m_ops->fileExists(targetPath)) {
+        if (!runCommand(QStringLiteral("/usr/bin/rm"), {QStringLiteral("-rf"), QStringLiteral("--"), targetPath}, 120000)) {
+            qWarning() << "CopyDirectoryToUser: Failed to remove existing target:" << targetPath;
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to remove existing target: %1").arg(targetPath));
+            return false;
+        }
+    }
+
+    if (!runCommand(QStringLiteral("/usr/bin/cp"),
+                    {QStringLiteral("-a"), QStringLiteral("--"), sourceDir, targetPath},
+                    120000)) {
         qWarning() << "CopyDirectoryToUser: Failed to copy directory" << sourceDir << "to" << targetPath;
         sendErrorReply(QDBusError::Failed,
                        QStringLiteral("Failed to copy directory from %1 to %2").arg(sourceDir, targetPath));
         return false;
     }
 
-    if (m_ops->chown(targetPath, userUid, pw->pw_gid) != 0) {
+    // cp -a preserves source ownership; hand the whole tree to the target user
+    QString ownerSpec = QString::number(userUid) + QLatin1Char(':') + QString::number(static_cast<uint>(pw->pw_gid));
+    if (!runCommand(QStringLiteral("/usr/bin/chown"),
+                    {QStringLiteral("-R"), QStringLiteral("--"), ownerSpec, targetPath},
+                    120000)) {
         qWarning() << "CopyDirectoryToUser: Failed to set ownership on" << targetPath;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to set ownership on: %1").arg(targetPath));
+        return false;
     }
 
     qDebug() << "CopyDirectoryToUser: Copied" << sourceDir << "to" << targetPath << "for user" << username;

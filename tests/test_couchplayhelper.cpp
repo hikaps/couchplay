@@ -377,6 +377,13 @@ private Q_SLOTS:
     void testIsSteamBootstrappedTrue();
     void testIsSteamBootstrappedFalse();
 
+    // Copy directory tests
+    void testCopyDirectoryToUserAbsoluteTarget();
+    void testCopyDirectoryToUserTraversalTarget();
+    void testCopyDirectoryToUserSourceOutsideAllowedPrefixes();
+    void testCopyDirectoryToUserSourceNotExists();
+    void testCopyDirectoryToUserSuccessReplacesAndChowns();
+
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
     void testChangeDeviceOwnerInvalidPathTraversal();
@@ -845,6 +852,101 @@ void TestCouchPlayHelper::testIsSteamBootstrappedFalse()
 
     QVERIFY(reply.isValid());
     QVERIFY(!reply.value());
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserAbsoluteTarget()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/games"),
+                                                   QStringLiteral("/etc/passwd")); // absolute target
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserTraversalTarget()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/games"),
+                                                   QStringLiteral("../escape")); // traversal
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserSourceOutsideAllowedPrefixes()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/etc"), true); // exists and is a directory, but out of prefixes
+    m_ops->setDirectoryExists(QStringLiteral("/etc"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/etc"),
+                                                   QStringLiteral("games"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0); // nothing ran
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserSourceNotExists()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/games"), // not mocked
+                                                   QStringLiteral("games"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/compositor/games"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/games"), true);
+    // Stale target from a previous session: must be removed, not nested into
+    m_ops->setFileExists(QStringLiteral("/home/player1/games"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/player1/games"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/games"),
+                                                   QStringLiteral("games"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+
+    // rm (replace) -> cp -a -> chown -R uid:gid
+    QCOMPARE(m_ops->m_processInvocations.size(), 3);
+    QCOMPARE(m_ops->m_processInvocations[0].command, QStringLiteral("/usr/bin/rm"));
+    QCOMPARE(m_ops->m_processInvocations[0].args,
+             QStringList{QStringLiteral("-rf"), QStringLiteral("--"), QStringLiteral("/home/player1/games")});
+    QCOMPARE(m_ops->m_processInvocations[1].command, QStringLiteral("/usr/bin/cp"));
+    QCOMPARE(m_ops->m_processInvocations[1].args,
+             QStringList{QStringLiteral("-a"),
+                         QStringLiteral("--"),
+                         QStringLiteral("/home/compositor/games"),
+                         QStringLiteral("/home/player1/games")});
+    QCOMPARE(m_ops->m_processInvocations[2].command, QStringLiteral("/usr/bin/chown"));
+    QCOMPARE(m_ops->m_processInvocations[2].args,
+             QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
+                         QStringLiteral("/home/player1/games")});
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerInvalidPathNotUnderDevInput()
