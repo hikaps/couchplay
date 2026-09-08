@@ -735,9 +735,10 @@ void PresetManager::loadCustomPresets()
         preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
         preset.launcherId = group.readEntry(QStringLiteral("launcherId"), QString());
 
-        // Load dataDirectories from "path|mode" entries, newline-separated
-        QString dataDirsRaw = group.readEntry(QStringLiteral("dataDirectories"), QString());
-        if (!dataDirsRaw.isEmpty()) {
+        // Load dataDirectories from "path|mode" entries, newline-separated;
+        // migrate legacy sharedDirectories (plain path list) to acl-mode entries
+        if (group.hasKey(QStringLiteral("dataDirectories"))) {
+            QString dataDirsRaw = group.readEntry(QStringLiteral("dataDirectories"), QString());
             const QStringList entries = dataDirsRaw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
             for (const QString &entry : entries) {
                 int pipePos = entry.indexOf(QLatin1Char('|'));
@@ -750,6 +751,14 @@ void PresetManager::loadCustomPresets()
                     }
                     preset.dataDirectories.append(dir);
                 }
+            }
+        } else if (group.hasKey(QStringLiteral("sharedDirectories"))) {
+            const QStringList legacyDirs = group.readEntry(QStringLiteral("sharedDirectories"), QStringList());
+            for (const QString &path : legacyDirs) {
+                preset.dataDirectories.append({path, QStringLiteral("acl")});
+            }
+            if (!legacyDirs.isEmpty()) {
+                qCDebug(couchplayCore) << "Migrated legacy sharedDirectories for preset" << preset.id;
             }
         }
 

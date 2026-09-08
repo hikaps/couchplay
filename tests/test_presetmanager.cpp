@@ -42,6 +42,7 @@ private Q_SLOTS:
 
     void testLauncherIdPersistence();
     void testKConfigMigration();
+    void testKConfigMigrationLegacySharedDirectories();
 
     void testDetectLauncherId_NativeSteam();
     void testDetectLauncherId_NativeHeroic();
@@ -372,6 +373,28 @@ void TestPresetManager::testKConfigMigration()
     PresetManager manager;
     LaunchPreset preset = manager.getPreset(QStringLiteral("custom-migrate-test"));
     QCOMPARE(preset.launcherId, QStringLiteral("steam"));
+}
+
+void TestPresetManager::testKConfigMigrationLegacySharedDirectories()
+{
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Preset: custom-legacy-dirs"));
+    group.writeEntry(QStringLiteral("id"), QStringLiteral("custom-legacy-dirs"));
+    group.writeEntry(QStringLiteral("name"), QStringLiteral("Legacy Dirs Test"));
+    group.writeEntry(QStringLiteral("command"), QStringLiteral("/usr/bin/game"));
+    // Legacy format: sharedDirectories as a plain QStringList, no dataDirectories key
+    group.writeEntry(QStringLiteral("sharedDirectories"),
+                     QStringList{QStringLiteral("/home/compositor/Games"),
+                                 QStringLiteral("/home/compositor/Saves")});
+    config->sync();
+
+    PresetManager manager;
+    QVariantList dirs = manager.getDataDirectories(QStringLiteral("custom-legacy-dirs"));
+    QCOMPARE(dirs.size(), 2);
+    QCOMPARE(dirs[0].value<DataDirectory>().path, QStringLiteral("/home/compositor/Games"));
+    QCOMPARE(dirs[0].value<DataDirectory>().mode, QStringLiteral("acl"));
+    QCOMPARE(dirs[1].value<DataDirectory>().path, QStringLiteral("/home/compositor/Saves"));
+    QCOMPARE(dirs[1].value<DataDirectory>().mode, QStringLiteral("acl"));
 }
 
 void TestPresetManager::testDetectLauncherId_NativeSteam()
