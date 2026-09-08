@@ -128,6 +128,7 @@ private Q_SLOTS:
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
+    void testSetupDataDirectoriesLibrarySharingGate();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
 
@@ -342,6 +343,49 @@ void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/preset/dir"));
     QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    // Mock a detected Steam installation
+    QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QDir().mkpath(steamRoot + QStringLiteral("/config"));
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n{\n}\n");
+    libraryVdf.close();
+
+    auto *steamManager = new SteamConfigManager(this);
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    QCOMPARE(steamManager->steamPaths().steamRoot, steamRoot);
+    QVERIFY(!steamManager->shareLibraryEnabled()); // default off
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = steamRoot;
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantList dirs;
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    // Library sharing disabled: the steamRoot overlay must NOT be mounted
+    QVERIFY(m_runner->setupDataDirectories());
+    QCOMPARE(m_helperClient->overlayCalls.size(), 0);
+
+    // Library sharing enabled: the steamRoot overlay is mounted
+    steamManager->setShareLibraryEnabled(true);
+    QVERIFY(m_runner->setupDataDirectories());
+    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
+    QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, steamRoot);
+    QCOMPARE(m_helperClient->overlayCalls[0].username, QStringLiteral("player1"));
 }
 
 void TestSessionRunner::testResolveUserIdentityViaHelper()

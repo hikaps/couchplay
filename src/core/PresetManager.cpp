@@ -79,21 +79,13 @@ QList<DataDirectory> PresetManager::getDefaultDataDirectories(const QString &id)
                 return dirs;
             }
 
+            // Only the library-sharing overlay comes from the preset; shortcut
+            // directories are computed and ACLed live at session start by
+            // SessionRunner (gated on syncShortcutsEnabled, which may change
+            // after this snapshot is taken)
             QString steamRoot = self->m_steamConfigManager->steamPaths().steamRoot;
             if (!steamRoot.isEmpty()) {
                 dirs.append({steamRoot, QStringLiteral("overlay")});
-            }
-
-            if (self->m_steamConfigManager->syncShortcutsEnabled()) {
-                if (self->m_steamConfigManager->shortcutCount() == 0) {
-                    self->m_steamConfigManager->loadShortcuts();
-                }
-                QStringList shortcutDirs = self->m_steamConfigManager->extractShortcutDirectories();
-                for (const QString &dir : shortcutDirs) {
-                    if (QDir(dir).exists()) {
-                        dirs.append({dir, QStringLiteral("acl")});
-                    }
-                }
             }
 
             return dirs;

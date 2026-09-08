@@ -1034,16 +1034,6 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
         return !anyFailure;
     }
 
-    // Shortcuts sync: copy mode on shortcuts config directory
-    if (dir.mode == QStringLiteral("copy") && !m_steamPaths.shortcutsVdf.isEmpty()) {
-        QString shortcutsDir = QFileInfo(m_steamPaths.shortcutsVdf).absolutePath();
-        if (dir.path == shortcutsDir || dir.path == m_steamPaths.shortcutsVdf) {
-            loadShortcuts();
-            extractShortcutDirectories();
-            return true;
-        }
-    }
-
     return true;
 }
 
@@ -1131,14 +1121,6 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
             qCDebug(couchplaySteam) << "finalizeDataDir: Shared" << m_libraries.size() << "libraries to" << username;
         }
         return !anyFailure;
-    }
-
-    // Shortcuts sync: copy mode on shortcuts config directory
-    if (dir.mode == QStringLiteral("copy") && !m_steamPaths.shortcutsVdf.isEmpty()) {
-        QString shortcutsDir = QFileInfo(m_steamPaths.shortcutsVdf).absolutePath();
-        if (dir.path == shortcutsDir || dir.path == m_steamPaths.shortcutsVdf) {
-            return syncShortcutsToUser(username);
-        }
     }
 
     return true;

@@ -689,6 +689,24 @@ bool SessionRunner::setupDataDirectories()
             configManager = m_heroicConfigManager;
         }
 
+        // Steam shortcut sync: dispatched live at session start (not part of the
+        // preset snapshot, so toggling the setting applies to the next session)
+        if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager
+            && m_steamConfigManager->isSteamDetected() && m_steamConfigManager->syncShortcutsEnabled()) {
+            qCDebug(couchplaySteam) << "Syncing Steam shortcuts for user" << username;
+            m_steamConfigManager->loadShortcuts();
+            const QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
+            for (const QString &dir : shortcutDirs) {
+                if (QDir(dir).exists() && !m_helperClient->setPathAclWithParents(dir, username)) {
+                    qCWarning(couchplaySteam) << "Failed to set ACL on shortcut directory" << dir;
+                }
+            }
+            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
+                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
+                allSucceeded = false;
+            }
+        }
+
         // Prefer the instance's persisted directories (snapshotted at preset
         // selection and saved in the profile); fall back to the preset's
         // current defaults for instances configured before snapshotting existed.
@@ -704,6 +722,15 @@ bool SessionRunner::setupDataDirectories()
         qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
 
         for (const DataDirectory &dir : dataDirs) {
+            // Library sharing is opt-in: skip the steamRoot overlay when the
+            // setting is off, matching the stop-side cleanup gating
+            if (dir.mode == QStringLiteral("overlay") && preset.launcherId == QStringLiteral("steam")
+                && m_steamConfigManager && !m_steamConfigManager->shareLibraryEnabled()
+                && dir.path == m_steamConfigManager->steamPaths().steamRoot) {
+                qDebug() << "SessionRunner: Library sharing disabled, skipping overlay for" << dir.path;
+                continue;
+            }
+
             if (configManager) {
                 if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager) {
                     m_steamConfigManager->prepareDataDir(dir, username);
