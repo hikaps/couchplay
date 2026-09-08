@@ -96,11 +96,8 @@ QList<DataDirectory> PresetManager::getDefaultDataDirectories(const QString &id)
                 return dirs;
             }
 
-            QString configPath = self->m_heroicConfigManager->configPath();
-            if (!configPath.isEmpty()) {
-                dirs.append({configPath, QStringLiteral("copy")});
-            }
-
+            // Config sync (syncConfigToUser) is dispatched at session start by
+            // SessionRunner; only game data comes from the preset snapshot
             QString installPath = self->m_heroicConfigManager->defaultInstallPath();
             if (!installPath.isEmpty()) {
                 dirs.append({installPath, QStringLiteral("overlay")});

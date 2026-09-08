@@ -129,6 +129,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testSetupDataDirectoriesLibrarySharingGate();
+    void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
 
@@ -276,6 +277,8 @@ void TestSessionRunner::testSetupSteamConfigAppliesHeroicAcls()
     }
     QVERIFY2(foundAclGameDir, "Heroic preset should contain acl-mode DataDirectory for game path");
 
+    // Config sync is dispatched via syncConfigToUser at session start, not via
+    // a copy-mode DataDirectory that would bulk-copy the whole config root
     bool foundCopyConfigDir = false;
     for (const DataDirectory &dir : dataDirs) {
         if (dir.mode == QStringLiteral("copy") && dir.path.contains(QStringLiteral("heroic"))) {
@@ -283,7 +286,7 @@ void TestSessionRunner::testSetupSteamConfigAppliesHeroicAcls()
             break;
         }
     }
-    QVERIFY2(foundCopyConfigDir, "Heroic preset should contain copy-mode DataDirectory for config path");
+    QVERIFY2(!foundCopyConfigDir, "Heroic preset must not carry copy-mode DataDirectory for the config path");
 }
 
 void TestSessionRunner::testStartSessionHeroicPresetUsesAclsAndSharedConfig()
@@ -386,6 +389,40 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
     QCOMPARE(m_helperClient->overlayCalls.size(), 1);
     QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, steamRoot);
     QCOMPARE(m_helperClient->overlayCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    createMockHeroicConfig(homeDir.path());
+    createMockLegendaryConfig(homeDir.path());
+
+    HeroicConfigManager heroicManager;
+    m_presetManager->setHeroicConfigManager(&heroicManager);
+    m_runner->setHeroicConfigManager(&heroicManager);
+    QVERIFY(heroicManager.isHeroicDetected());
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("ghostuser")); // unresolvable: sync bails early
+    m_sessionManager->setInstancePreset(0, QStringLiteral("heroic"));
+    // No instance dirs — falls back to the preset's resolver defaults
+
+    // False is expected: config sync fails for a nonexistent user. What
+    // matters here is the effect on the generic data-directory path.
+    QVERIFY(!m_runner->setupDataDirectories());
+
+    // The config root must NOT be bulk-copied (selective sync replaces it)
+    QCOMPARE(m_helperClient->copyDirCalls.size(), 0);
+
+    // Resolver defaults still apply: install-path overlay + game-dir ACL
+    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
+    QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, heroicManager.defaultInstallPath());
+    QCOMPARE(m_helperClient->overlayCalls[0].username, QStringLiteral("ghostuser"));
+    QCOMPARE(m_helperClient->aclCalls.size(), 1);
+    QCOMPARE(m_helperClient->aclCalls[0].path, homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame"));
 }
 
 void TestSessionRunner::testResolveUserIdentityViaHelper()

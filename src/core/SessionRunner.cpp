@@ -681,18 +681,13 @@ bool SessionRunner::setupDataDirectories()
         }
 
         LaunchPreset preset = m_presetManager->getPreset(presetId.isEmpty() ? QStringLiteral("steam") : presetId);
-
-        QObject *configManager = nullptr;
-        if (preset.launcherId == QStringLiteral("steam")) {
-            configManager = m_steamConfigManager;
-        } else if (preset.launcherId == QStringLiteral("heroic")) {
-            configManager = m_heroicConfigManager;
-        }
+        const bool isSteamLauncher = preset.launcherId == QStringLiteral("steam");
+        const bool isHeroicLauncher = preset.launcherId == QStringLiteral("heroic");
 
         // Steam shortcut sync: dispatched live at session start (not part of the
         // preset snapshot, so toggling the setting applies to the next session)
-        if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager
-            && m_steamConfigManager->isSteamDetected() && m_steamConfigManager->syncShortcutsEnabled()) {
+        if (isSteamLauncher && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
+            && m_steamConfigManager->syncShortcutsEnabled()) {
             qCDebug(couchplaySteam) << "Syncing Steam shortcuts for user" << username;
             m_steamConfigManager->loadShortcuts();
             const QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
@@ -704,6 +699,24 @@ bool SessionRunner::setupDataDirectories()
             if (!m_steamConfigManager->syncShortcutsToUser(username)) {
                 qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
                 allSucceeded = false;
+            }
+        }
+
+        // Heroic: selective config sync (Flatpak-vs-native aware) plus optional
+        // shortcut sync — replaces the generic whole-directory copy of the
+        // config root, mirroring the pre-refactor setupLauncherAccess behavior
+        if (isHeroicLauncher && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
+            if (!m_heroicConfigManager->syncConfigToUser(username)) {
+                qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
+                allSucceeded = false;
+            }
+            if (m_heroicConfigManager->syncShortcutsEnabled()) {
+                qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
+                if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
+                    qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
+                    allSucceeded = false;
+                }
             }
         }
 
@@ -724,19 +737,23 @@ bool SessionRunner::setupDataDirectories()
         for (const DataDirectory &dir : dataDirs) {
             // Library sharing is opt-in: skip the steamRoot overlay when the
             // setting is off, matching the stop-side cleanup gating
-            if (dir.mode == QStringLiteral("overlay") && preset.launcherId == QStringLiteral("steam")
-                && m_steamConfigManager && !m_steamConfigManager->shareLibraryEnabled()
+            if (dir.mode == QStringLiteral("overlay") && isSteamLauncher && m_steamConfigManager
+                && !m_steamConfigManager->shareLibraryEnabled()
                 && dir.path == m_steamConfigManager->steamPaths().steamRoot) {
                 qDebug() << "SessionRunner: Library sharing disabled, skipping overlay for" << dir.path;
                 continue;
             }
 
-            if (configManager) {
-                if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager) {
-                    m_steamConfigManager->prepareDataDir(dir, username);
-                } else if (preset.launcherId == QStringLiteral("heroic") && m_heroicConfigManager) {
-                    m_heroicConfigManager->prepareDataDir(dir, username);
-                }
+            // Stale snapshots may carry the heroic config root as a copy dir;
+            // config sync above replaces the generic whole-directory copy
+            if (dir.mode == QStringLiteral("copy") && isHeroicLauncher && m_heroicConfigManager
+                && dir.path == m_heroicConfigManager->configPath()) {
+                qDebug() << "SessionRunner: Heroic config handled by config sync, skipping copy of" << dir.path;
+                continue;
+            }
+
+            if (isSteamLauncher && m_steamConfigManager) {
+                m_steamConfigManager->prepareDataDir(dir, username);
             }
 
             if (dir.mode == QStringLiteral("copy")) {
@@ -762,12 +779,8 @@ bool SessionRunner::setupDataDirectories()
                 }
             }
 
-            if (configManager) {
-                if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager) {
-                    m_steamConfigManager->finalizeDataDir(dir, username);
-                } else if (preset.launcherId == QStringLiteral("heroic") && m_heroicConfigManager) {
-                    m_heroicConfigManager->finalizeDataDir(dir, username);
-                }
+            if (isSteamLauncher && m_steamConfigManager) {
+                m_steamConfigManager->finalizeDataDir(dir, username);
             }
         }
     }
