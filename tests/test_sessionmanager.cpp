@@ -42,6 +42,8 @@ private Q_SLOTS:
     // Profile management tests
     void testSaveProfile();
     void testLoadProfile();
+    void testLoadProfileLegacySharedDirectories();
+    void testLoadSaveDataDirectoriesRoundtrip();
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
@@ -245,6 +247,73 @@ void TestSessionManager::testLoadProfile()
 
     result = m_sessionManager->loadProfile(QStringLiteral("NonExistentProfile"));
     QCOMPARE(result, false);
+}
+
+void TestSessionManager::testLoadProfileLegacySharedDirectories()
+{
+    // Hand-write a profile in the legacy format: sharedDirectories as a plain
+    // QStringList (paths only), no dataDirectories key
+    QString profilesDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles");
+    QDir().mkpath(profilesDir);
+    QString path = profilesDir + QStringLiteral("/LegacySharedDirsProfile.conf");
+
+    {
+        KConfig config(path, KConfig::SimpleConfig);
+        KConfigGroup general = config.group(QStringLiteral("General"));
+        general.writeEntry("instanceCount", 1);
+        KConfigGroup inst = config.group(QStringLiteral("Instance0"));
+        inst.writeEntry("username", QStringLiteral("player1"));
+        inst.writeEntry("presetId", QStringLiteral("steam"));
+        inst.writeEntry("sharedDirectories",
+                        QStringList{QStringLiteral("/home/compositor/Games"),
+                                    QStringLiteral("/home/compositor/Saves")});
+        config.sync();
+    }
+
+    bool result = m_sessionManager->loadProfile(QStringLiteral("LegacySharedDirsProfile"));
+    QVERIFY(result);
+
+    QVariantMap configMap = m_sessionManager->getInstanceConfig(0);
+    QVariantList dirs = configMap[QStringLiteral("dataDirectories")].toList();
+    QCOMPARE(dirs.size(), 2);
+    QCOMPARE(dirs[0].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Games"));
+    QCOMPARE(dirs[0].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("acl"));
+    QCOMPARE(dirs[1].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Saves"));
+    QCOMPARE(dirs[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("acl"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("LegacySharedDirsProfile"));
+}
+
+void TestSessionManager::testLoadSaveDataDirectoriesRoundtrip()
+{
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+
+    QVariantList dirs;
+    QVariantMap dir1;
+    dir1[QStringLiteral("path")] = QStringLiteral("/home/compositor/Games");
+    dir1[QStringLiteral("mode")] = QStringLiteral("copy");
+    QVariantMap dir2;
+    dir2[QStringLiteral("path")] = QStringLiteral("/home/compositor/Steam");
+    dir2[QStringLiteral("mode")] = QStringLiteral("overlay");
+    dirs.append(dir1);
+    dirs.append(dir2);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("DataDirRoundtripProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("DataDirRoundtripProfile")));
+
+    QVariantList restored = m_sessionManager->getInstanceConfig(0)[QStringLiteral("dataDirectories")].toList();
+    QCOMPARE(restored.size(), 2);
+    QCOMPARE(restored[0].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Games"));
+    QCOMPARE(restored[0].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("copy"));
+    QCOMPARE(restored[1].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Steam"));
+    QCOMPARE(restored[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("overlay"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("DataDirRoundtripProfile"));
 }
 
 void TestSessionManager::testDeleteProfile()

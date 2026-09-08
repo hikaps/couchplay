@@ -202,8 +202,9 @@ bool SessionManager::loadProfile(const QString &name)
         inst.gameCommand = instGroup.readEntry("gameCommand", QString());
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
-        QString dataDirsRaw = instGroup.readEntry("dataDirectories", instGroup.readEntry("sharedDirectories", QString()));
-        if (!dataDirsRaw.isEmpty()) {
+        if (instGroup.hasKey("dataDirectories")) {
+            // New format: newline-separated "path|mode" entries
+            QString dataDirsRaw = instGroup.readEntry("dataDirectories", QString());
             const QStringList entries = dataDirsRaw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
             for (const QString &entry : entries) {
                 int pipePos = entry.indexOf(QLatin1Char('|'));
@@ -217,8 +218,8 @@ bool SessionManager::loadProfile(const QString &name)
                     inst.dataDirectories.append(dir);
                 }
             }
-        } else {
-            // Legacy: sharedDirectories was a plain QStringList (paths only), migrate to DataDirectory with "acl" mode
+        } else if (instGroup.hasKey("sharedDirectories")) {
+            // Legacy: sharedDirectories was a plain QStringList (paths only), migrate to acl-mode DataDirectory
             QStringList legacyDirs = instGroup.readEntry("sharedDirectories", QStringList());
             for (const QString &path : legacyDirs) {
                 DataDirectory dir;
