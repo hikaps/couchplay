@@ -37,6 +37,7 @@ private Q_SLOTS:
     void testRemoveCustomPreset();
 
     void testGetSetSharedDirectories();
+    void testSetDataDirectoriesQmlShape();
     void testLauncherInfoFlags();
 
     void testLauncherIdPersistence();
@@ -267,6 +268,53 @@ void TestPresetManager::testGetSetSharedDirectories()
 
     dirs = manager.getDataDirectories(id);
     QCOMPARE(dirs.size(), 2);
+}
+
+void TestPresetManager::testSetDataDirectoriesQmlShape()
+{
+    PresetManager manager;
+
+    QString id = manager.addCustomPreset(QStringLiteral("QML Shape Test"), QStringLiteral("/path/to/game"));
+
+    // QML sends JS objects, which arrive as QVariantMap — not gadget variants
+    QVariantMap map1;
+    map1[QStringLiteral("path")] = QStringLiteral("/qml/dir1");
+    map1[QStringLiteral("mode")] = QStringLiteral("copy");
+    QVariantMap map2;
+    map2[QStringLiteral("path")] = QStringLiteral("/qml/dir2");
+    map2[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantMap map3; // unknown mode must sanitize to "acl"
+    map3[QStringLiteral("path")] = QStringLiteral("/qml/dir3");
+    map3[QStringLiteral("mode")] = QStringLiteral("bogus");
+    QVariantMap map4; // empty mode must default to "acl"
+    map4[QStringLiteral("path")] = QStringLiteral("/qml/dir4");
+
+    QVariantList qmlDirs;
+    qmlDirs.append(map1);
+    qmlDirs.append(map2);
+    qmlDirs.append(map3);
+    qmlDirs.append(map4);
+
+    QVERIFY(manager.setDataDirectories(id, qmlDirs));
+
+    QVariantList result = manager.getDataDirectories(id);
+    QCOMPARE(result.size(), 4);
+
+    QCOMPARE(result[0].value<DataDirectory>().path, QStringLiteral("/qml/dir1"));
+    QCOMPARE(result[0].value<DataDirectory>().mode, QStringLiteral("copy"));
+    QCOMPARE(result[1].value<DataDirectory>().path, QStringLiteral("/qml/dir2"));
+    QCOMPARE(result[1].value<DataDirectory>().mode, QStringLiteral("overlay"));
+    QCOMPARE(result[2].value<DataDirectory>().path, QStringLiteral("/qml/dir3"));
+    QCOMPARE(result[2].value<DataDirectory>().mode, QStringLiteral("acl"));
+    QCOMPARE(result[3].value<DataDirectory>().path, QStringLiteral("/qml/dir4"));
+    QCOMPARE(result[3].value<DataDirectory>().mode, QStringLiteral("acl"));
+
+    // Mixed shapes in one call must also work (map + gadget)
+    QVariantList mixed;
+    mixed.append(map1);
+    mixed.append(QVariant::fromValue(DataDirectory{QStringLiteral("/cpp/dir"), QStringLiteral("acl")}));
+    QVERIFY(manager.setDataDirectories(id, mixed));
+    QCOMPARE(manager.getDataDirectories(id).size(), 2);
 }
 
 void TestPresetManager::testLauncherInfoFlags()

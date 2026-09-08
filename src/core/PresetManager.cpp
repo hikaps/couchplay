@@ -53,6 +53,22 @@ void PresetManager::setSteamConfigManager(SteamConfigManager *manager)
     }
 }
 
+DataDirectory DataDirectory::fromVariant(const QVariant &var)
+{
+    DataDirectory dir;
+    if (var.canConvert<DataDirectory>()) {
+        dir = var.value<DataDirectory>();
+    } else if (var.userType() == QMetaType::QVariantMap) {
+        const QVariantMap map = var.toMap();
+        dir.path = map[QStringLiteral("path")].toString();
+        dir.mode = map[QStringLiteral("mode")].toString();
+    }
+    if (dir.mode != QStringLiteral("acl") && dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
+        dir.mode = QStringLiteral("acl");
+    }
+    return dir;
+}
+
 QList<DataDirectory> PresetManager::getDefaultDataDirectories(const QString &id) const
 {
     using Resolver = std::function<QList<DataDirectory>(const PresetManager *)>;
@@ -409,7 +425,7 @@ bool PresetManager::setDataDirectories(const QString &id, const QVariantList &di
 {
     QList<DataDirectory> dataDirs;
     for (const QVariant &var : directories) {
-        DataDirectory dir = var.value<DataDirectory>();
+        DataDirectory dir = DataDirectory::fromVariant(var);
         if (!dir.path.isEmpty()) {
             dataDirs.append(dir);
         }

@@ -33,14 +33,10 @@ void InstanceConfig::setDataDirectoriesFromVariant(const QVariantList &dirs)
 {
     dataDirectories.clear();
     for (const QVariant &var : dirs) {
-        const QVariantMap dirMap = var.toMap();
-        DataDirectory dir;
-        dir.path = dirMap[QStringLiteral("path")].toString();
-        dir.mode = dirMap[QStringLiteral("mode")].toString();
-        if (dir.mode.isEmpty()) {
-            dir.mode = QStringLiteral("acl");
+        DataDirectory dir = DataDirectory::fromVariant(var);
+        if (!dir.path.isEmpty()) {
+            dataDirectories.append(dir);
         }
-        dataDirectories.append(dir);
     }
 }
 
@@ -464,14 +460,10 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         const QVariantList dirs = config[QStringLiteral("dataDirectories")].toList();
         QList<DataDirectory> dataDirs;
         for (const QVariant &var : dirs) {
-            const QVariantMap dirMap = var.toMap();
-            DataDirectory dir;
-            dir.path = dirMap[QStringLiteral("path")].toString();
-            dir.mode = dirMap[QStringLiteral("mode")].toString();
-            if (dir.mode.isEmpty()) {
-                dir.mode = QStringLiteral("acl");
+            DataDirectory dir = DataDirectory::fromVariant(var);
+            if (!dir.path.isEmpty()) {
+                dataDirs.append(dir);
             }
-            dataDirs.append(dir);
         }
         inst.dataDirectories = dataDirs;
     }
@@ -574,14 +566,10 @@ void SessionManager::setInstanceDataDirectories(int index, const QVariantList &d
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         QList<DataDirectory> dataDirs;
         for (const QVariant &var : directories) {
-            const QVariantMap dirMap = var.toMap();
-            DataDirectory dir;
-            dir.path = dirMap[QStringLiteral("path")].toString();
-            dir.mode = dirMap[QStringLiteral("mode")].toString();
-            if (dir.mode.isEmpty()) {
-                dir.mode = QStringLiteral("acl");
+            DataDirectory dir = DataDirectory::fromVariant(var);
+            if (!dir.path.isEmpty()) {
+                dataDirs.append(dir);
             }
-            dataDirs.append(dir);
         }
         m_currentProfile.instances[index].dataDirectories = dataDirs;
         Q_EMIT instancesChanged();

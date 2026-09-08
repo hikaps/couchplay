@@ -25,6 +25,14 @@ public:
     bool operator==(const DataDirectory &other) const {
         return path == other.path && mode == other.mode;
     }
+
+    /**
+     * Build a DataDirectory from a QVariant coming from QML or C++.
+     * Accepts both a QVariantMap with "path"/"mode" keys (how JS objects
+     * arrive from QML) and an encapsulated DataDirectory gadget.
+     * Empty or unrecognized modes fall back to "acl".
+     */
+    static DataDirectory fromVariant(const QVariant &var);
 };
 
 Q_DECLARE_METATYPE(DataDirectory)
