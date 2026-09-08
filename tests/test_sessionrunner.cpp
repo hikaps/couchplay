@@ -126,6 +126,8 @@ private Q_SLOTS:
     void testSetupSteamConfigSteamIntegrationDisabled();
     void testSetupSteamConfigAppliesHeroicAcls();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
+    void testSetupDataDirectoriesUsesInstanceDirs();
+    void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
 
@@ -286,6 +288,60 @@ void TestSessionRunner::testSetupSteamConfigAppliesHeroicAcls()
 void TestSessionRunner::testStartSessionHeroicPresetUsesAclsAndSharedConfig()
 {
     QSKIP("Requires D-Bus (m_runner->start()). Will be rewritten in Commit 11 when setupDataDirectories() is implemented.");
+}
+
+void TestSessionRunner::testSetupDataDirectoriesUsesInstanceDirs()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Instance Dirs Game"),
+                                                        QStringLiteral("/usr/bin/game"));
+
+    QVariantMap presetDir;
+    presetDir[QStringLiteral("path")] = QStringLiteral("/preset/dir");
+    presetDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList presetDirs;
+    presetDirs.append(presetDir);
+    QVERIFY(m_presetManager->setDataDirectories(presetId, presetDirs));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    QVariantMap instanceDir;
+    instanceDir[QStringLiteral("path")] = QStringLiteral("/instance/dir");
+    instanceDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList instanceDirs;
+    instanceDirs.append(instanceDir);
+    m_sessionManager->setInstanceDataDirectories(0, instanceDirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    QCOMPARE(m_helperClient->aclCalls.size(), 1);
+    QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/instance/dir"));
+    QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Fallback Dirs Game"),
+                                                        QStringLiteral("/usr/bin/game2"));
+
+    QVariantMap presetDir;
+    presetDir[QStringLiteral("path")] = QStringLiteral("/preset/dir");
+    presetDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList presetDirs;
+    presetDirs.append(presetDir);
+    QVERIFY(m_presetManager->setDataDirectories(presetId, presetDirs));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    // No instance directories set — must fall back to the preset's defaults
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    QCOMPARE(m_helperClient->aclCalls.size(), 1);
+    QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/preset/dir"));
+    QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
 }
 
 void TestSessionRunner::testResolveUserIdentityViaHelper()

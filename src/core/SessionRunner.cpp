@@ -689,7 +689,13 @@ bool SessionRunner::setupDataDirectories()
             configManager = m_heroicConfigManager;
         }
 
-        const QList<DataDirectory> &dataDirs = preset.dataDirectories;
+        // Prefer the instance's persisted directories (snapshotted at preset
+        // selection and saved in the profile); fall back to the preset's
+        // current defaults for instances configured before snapshotting existed.
+        QList<DataDirectory> dataDirs = profile.instances[i].dataDirectories;
+        if (dataDirs.isEmpty()) {
+            dataDirs = preset.dataDirectories;
+        }
         if (dataDirs.isEmpty()) {
             qDebug() << "SessionRunner: No data directories for instance" << i << "user" << username;
             continue;
