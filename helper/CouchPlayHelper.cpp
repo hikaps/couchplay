@@ -1560,6 +1560,8 @@ bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
         QStringLiteral("/home/"),
         QStringLiteral("/var/home/"), // Bazzite/Fedora Silverblue
         QStringLiteral("/run/media/"),
+        QStringLiteral("/media/"), // keep in sync with SetPathAclWithParents stop boundaries
+        QStringLiteral("/mnt/"),
         QStringLiteral("/tmp/"),
     };
 

@@ -383,6 +383,7 @@ private Q_SLOTS:
     void testCopyDirectoryToUserSourceOutsideAllowedPrefixes();
     void testCopyDirectoryToUserSourceNotExists();
     void testCopyDirectoryToUserSuccessReplacesAndChowns();
+    void testIsPathWithinAllowedPrefixMountRoots();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -947,6 +948,24 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
     QCOMPARE(m_ops->m_processInvocations[2].args,
              QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
                          QStringLiteral("/home/player1/games")});
+}
+
+void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
+{
+    // Must accept the same mount roots SetPathAclWithParents treats as
+    // traversal stop boundaries, so external libraries keep working
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/player1/games")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/home/player1/games")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/run/media/user/disk/steamlibrary")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/media/steamlibrary")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/mnt/steamlibrary")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/tmp/couchplay/share")));
+
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/etc")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/usr/share/games")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home"))); // root itself, not a subdir
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/a/../b")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QString()));
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerInvalidPathNotUnderDevInput()
