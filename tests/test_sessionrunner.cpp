@@ -537,6 +537,7 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
     libraryVdf.close();
 
     auto *steamManager = new SteamConfigManager(this);
+    steamManager->setHelperClient(m_helperClient); // prepareDataDir ACLs/mounts via the manager's own client
     m_runner->setSteamConfigManager(steamManager);
     QVERIFY(steamManager->isSteamDetected());
     steamManager->setShareLibraryEnabled(true);
