@@ -49,6 +49,12 @@ public:
         QString targetRelativePath;
     };
 
+    struct MountCall {
+        QString username;
+        uint compositorUid;
+        QStringList directories;
+    };
+
     QList<AclCall> aclCalls;
     QList<MountCall> mountCalls;
     struct DeviceOwnerCall { QString path; int uid; };
