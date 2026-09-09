@@ -987,7 +987,9 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
 
     QFileInfo replaced(targetDir.filePath(QStringLiteral("config.ini")));
     QVERIFY(replaced.exists());
-    QCOMPARE(QFile(replaced.absoluteFilePath()).readAll(), QByteArray("player=1\n"));
+    QFile replacedFile(replaced.absoluteFilePath());
+    QVERIFY(replacedFile.open(QIODevice::ReadOnly));
+    QCOMPARE(replacedFile.readAll(), QByteArray("player=1\n"));
     QVERIFY(QFileInfo(targetDir.filePath(QStringLiteral("subdir/data.bin"))).exists());
     QVERIFY(!QFileInfo(targetDir.filePath(QStringLiteral("stale.txt"))).exists());
 
@@ -1101,8 +1103,12 @@ void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
     QVERIFY(reply.value());
 
     // Merge: staged file copied in, pre-existing file untouched
-    QCOMPARE(QFile(targetDir.filePath(QStringLiteral("config.ini"))).readAll(), QByteArray("player=1\n"));
-    QCOMPARE(QFile(targetDir.filePath(QStringLiteral("keep.txt"))).readAll(), QByteArray("keep"));
+    QFile copied(targetDir.filePath(QStringLiteral("config.ini")));
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    QCOMPARE(copied.readAll(), QByteArray("player=1\n"));
+    QFile kept(targetDir.filePath(QStringLiteral("keep.txt")));
+    QVERIFY(kept.open(QIODevice::ReadOnly));
+    QCOMPARE(kept.readAll(), QByteArray("keep"));
 
     if (geteuid() == 0) {
         struct stat st;
