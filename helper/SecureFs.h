@@ -107,13 +107,18 @@ bool mountApiAvailable();
 int bindMountFd(const QString &canonicalSource, int targetParentFd, const QString &leafName);
 
 /**
- * Mount an overlay filesystem (lowerdir=sourceDir, upperdir/workdir as
- * given) at (targetParentFd, leafName) via fsopen/fsconfig/fsmount +
- * move_mount. Layer strings are resolved by the kernel at fsconfig time and
- * must already live under non-player-writable storage (see SetupOverlayMount).
+ * Mount an overlay filesystem at (targetParentFd, leafName) via
+ * fsopen/fsconfig/fsmount + move_mount. The lowerdir is passed as
+ * /proc/self/fd/<sourceDirFd> — the caller pins the validated source with a
+ * no-follow walk and keeps the FD open until this call returns, so a mutable
+ * source path cannot be swapped after validation (a renamed source still
+ * resolves to the same inode; a deleted one fails the mount closed).
+ * upperdir/workdir are plain strings and must live under non-player-writable
+ * storage (see SetupOverlayMount). The superblock is created with
+ * FSCONFIG_CMD_CREATE before fsmount, as the new mount API requires.
  * @return 0 on success, -errno on failure
  */
-int overlayMountFd(const QString &sourceDir, const QString &upperdir, const QString &workdir,
+int overlayMountFd(int sourceDirFd, const QString &upperdir, const QString &workdir,
                    int targetParentFd, const QString &leafName);
 
 /**

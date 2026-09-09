@@ -217,7 +217,22 @@ CouchPlayHelper::~CouchPlayHelper()
 
     if (!m_activeMounts.isEmpty()) {
         for (const QString &username : m_activeMounts.keys()) {
-            for (const MountInfo &mount : m_activeMounts[username]) {
+            for (MountInfo &mount : m_activeMounts[username]) {
+                // Prefer the pinned FD: same race protections as explicit
+                // unmount, so shutdown cleanup cannot be redirected by an
+                // ancestor swap. Restored (post-restart) state has no FD and
+                // falls back to the path-based lazy umount.
+                if (mount.targetParentFd >= 0) {
+                    int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
+                    ::close(mount.targetParentFd);
+                    mount.targetParentFd = -1;
+                    if (result != 0) {
+                        qWarning() << "CouchPlayHelper: FD umount failed during shutdown for" << mount.target
+                                   << ":" << strerror(-result);
+                        runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 5000);
+                    }
+                    continue;
+                }
                 QProcess *umountProc = m_ops->createProcess();
                 m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
                 m_ops->waitForFinished(umountProc, 5000);
@@ -1749,45 +1764,31 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
         info.target = target;
         info.mountType = QStringLiteral("bind");
 
-        bool mounted = false;
-        if (SecureFs::mountApiAvailable()) {
-            // FD-anchored bind: pin the target parent (no-follow walk), clone
-            // the source with AT_SYMLINK_NOFOLLOW, attach with move_mount —
-            // no pathname re-resolution a player could race
-            int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
-            if (parentFd < 0) {
-                qWarning() << "MountSharedDirectories: Could not anchor target parent:" << targetParentPath;
-                continue;
-            }
-            int mountResult =
-                SecureFs::bindMountFd(canonicalSource.isEmpty() ? source : canonicalSource, parentFd, targetLeaf);
-            if (mountResult == 0) {
-                mounted = true;
-                info.targetParentFd = parentFd;
-                info.targetLeaf = targetLeaf;
-            } else {
-                ::close(parentFd);
-                qWarning() << "MountSharedDirectories: FD bind mount failed for" << source << "->" << target << ":"
-                           << strerror(-mountResult);
-            }
+        // FD-anchored bind only — a mount(8) fallback would re-introduce the
+        // pathname race this design exists to close, so fail closed instead
+        // when the kernel mount API is unavailable
+        if (!SecureFs::mountApiAvailable()) {
+            qWarning() << "MountSharedDirectories: kernel mount API unavailable, refusing path-based mount";
+            continue;
         }
-        if (!mounted) {
-            // Fallback for kernels without the mount API (pre-5.2): path-based
-            // mount(8) with the validation checks above
-            QProcess *mountProcess = m_ops->createProcess();
-            m_ops->startProcess(mountProcess,
-                                QStringLiteral("/usr/bin/mount"),
-                                {QStringLiteral("--bind"), source, target});
-            m_ops->waitForFinished(mountProcess, 10000);
-
-            if (m_ops->processExitCode(mountProcess) != 0) {
-                qWarning() << "MountSharedDirectories: Failed to mount" << source << "to" << target << ":"
-                           << QString::fromLocal8Bit(m_ops->readStandardError(mountProcess));
-                delete mountProcess;
-                continue;
-            }
-            delete mountProcess;
+        // Pin the target parent (no-follow walk), clone the source with
+        // AT_SYMLINK_NOFOLLOW, attach with move_mount — no pathname
+        // re-resolution a player could race
+        int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
+        if (parentFd < 0) {
+            qWarning() << "MountSharedDirectories: Could not anchor target parent:" << targetParentPath;
+            continue;
         }
+        int mountResult =
+            SecureFs::bindMountFd(canonicalSource.isEmpty() ? source : canonicalSource, parentFd, targetLeaf);
+        if (mountResult != 0) {
+            ::close(parentFd);
+            qWarning() << "MountSharedDirectories: FD bind mount failed for" << source << "->" << target << ":"
+                       << strerror(-mountResult);
+            continue;
+        }
+        info.targetParentFd = parentFd;
+        info.targetLeaf = targetLeaf;
 
         m_activeMounts[username].append(info);
 
@@ -1940,48 +1941,43 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
     info.upperDir = upperDir;
     info.workDir = workDir;
 
-    bool mounted = false;
-    if (SecureFs::mountApiAvailable()) {
-        int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
-        if (parentFd >= 0) {
-            int mountResult = SecureFs::overlayMountFd(sourceDir, upperDir, workDir, parentFd, targetLeaf);
-            if (mountResult == 0) {
-                mounted = true;
-                info.targetParentFd = parentFd;
-                info.targetLeaf = targetLeaf;
-            } else {
-                ::close(parentFd);
-                qWarning() << "SetupOverlayMount: FD overlay mount failed on" << target << ":"
-                           << strerror(-mountResult);
-            }
-        } else {
-            qWarning() << "SetupOverlayMount: Could not anchor target parent:" << targetParentPath;
-        }
+    // FD-anchored attach only — no path-based fallback: a failed FD mount
+    // must fail closed instead of retrying through a raceable pathname
+    if (!SecureFs::mountApiAvailable()) {
+        qWarning() << "SetupOverlayMount: kernel mount API unavailable, refusing path-based mount";
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Kernel mount API unavailable"));
+        return false;
     }
-        if (!mounted) {
-            QString mountOpts = QStringLiteral("lowerdir=%1,upperdir=%2,workdir=%3,metacopy=on,xino=auto")
-                                    .arg(sourceDir, upperDir, workDir);
 
-            QProcess *mountProcess = m_ops->createProcess();
-            m_ops->startProcess(mountProcess,
-                                QStringLiteral("/usr/bin/mount"),
-                                {QStringLiteral("-t"),
-                                 QStringLiteral("overlay"),
-                                 QStringLiteral("overlay"),
-                                 QStringLiteral("-o"),
-                                 mountOpts,
-                                 target});
-            m_ops->waitForFinished(mountProcess, 10000);
+    // Pin the validated source with a no-follow walk; overlayMountFd passes
+    // the lowerdir through /proc/self/fd so fsconfig resolution follows the
+    // pinned inode, not the (mutable) namespace path. The FD stays open until
+    // the mount is attached.
+    int sourceFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? sourceDir : canonicalSource);
+    if (sourceFd < 0) {
+        qWarning() << "SetupOverlayMount: Could not anchor source directory:" << sourceDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not anchor source directory"));
+        return false;
+    }
 
-            if (m_ops->processExitCode(mountProcess) != 0) {
-                qWarning() << "SetupOverlayMount: Failed to mount overlay on" << target << ":"
-                           << QString::fromLocal8Bit(m_ops->readStandardError(mountProcess));
-                delete mountProcess;
-                sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to mount overlay filesystem"));
-                return false;
-            }
-            delete mountProcess;
-        }
+    int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
+    if (parentFd < 0) {
+        ::close(sourceFd);
+        qWarning() << "SetupOverlayMount: Could not anchor target parent:" << targetParentPath;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not anchor target parent"));
+        return false;
+    }
+
+    int mountResult = SecureFs::overlayMountFd(sourceFd, upperDir, workDir, parentFd, targetLeaf);
+    ::close(sourceFd);
+    if (mountResult != 0) {
+        ::close(parentFd);
+        qWarning() << "SetupOverlayMount: FD overlay mount failed on" << target << ":" << strerror(-mountResult);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to mount overlay filesystem"));
+        return false;
+    }
+    info.targetParentFd = parentFd;
+    info.targetLeaf = targetLeaf;
 
     m_activeMounts[username].append(info);
 

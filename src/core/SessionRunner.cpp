@@ -778,7 +778,7 @@ bool SessionRunner::setupDataDirectories()
             QString playerViewRelative; // where the player sees this directory
             if (dir.mode == QStringLiteral("copy")) {
                 QString relativePath;
-                if (dir.path.startsWith(compositorHome)) {
+                if (dir.path.startsWith(compositorHome + QLatin1Char('/'))) {
                     relativePath = dir.path.mid(compositorHome.length() + 1);
                 } else {
                     // External sources have no home-relative location; map the
@@ -797,7 +797,7 @@ bool SessionRunner::setupDataDirectories()
                 // Both mount at the player's home-relative equivalent path
                 // (external paths land under .couchplay/mounts), mirroring
                 // computeMountTarget's empty-alias mapping
-                if (dir.path.startsWith(compositorHome)) {
+                if (dir.path.startsWith(compositorHome + QLatin1Char('/'))) {
                     playerViewRelative = dir.path.mid(compositorHome.length() + 1);
                 } else {
                     playerViewRelative = QStringLiteral(".couchplay/mounts") + dir.path;

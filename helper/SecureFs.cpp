@@ -325,6 +325,9 @@ int copyTreeContents(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid)
 #ifndef FSCONFIG_SET_STRING
 #define FSCONFIG_SET_STRING 1
 #endif
+#ifndef FSCONFIG_CMD_CREATE
+#define FSCONFIG_CMD_CREATE 6
+#endif
 #ifndef MOVE_MOUNT_F_EMPTY_PATH
 #define MOVE_MOUNT_F_EMPTY_PATH 0x00000004
 #endif
@@ -378,9 +381,14 @@ int bindMountFd(const QString &canonicalSource, int targetParentFd, const QStrin
     return 0;
 }
 
-int overlayMountFd(const QString &sourceDir, const QString &upperdir, const QString &workdir,
+int overlayMountFd(int sourceDirFd, const QString &upperdir, const QString &workdir,
                    int targetParentFd, const QString &leafName)
 {
+    // Pin the lowerdir through the caller's validated source FD: the kernel
+    // resolves this magic symlink to the FD's inode, bypassing any namespace
+    // path a player could swap. The FD must stay open until this returns.
+    const QString lowerdir = QStringLiteral("/proc/self/fd/%1").arg(QString::number(sourceDirFd));
+
     int fsFd = static_cast<int>(::syscall(SYS_fsopen, "overlay", FSOPEN_CLOEXEC));
     if (fsFd < 0) {
         return -errno;
@@ -393,12 +401,17 @@ int overlayMountFd(const QString &sourceDir, const QString &upperdir, const QStr
         return 0;
     };
 
-    int result = setString("lowerdir", sourceDir);
+    int result = setString("lowerdir", lowerdir);
     if (result == 0) {
         result = setString("upperdir", upperdir);
     }
     if (result == 0) {
         result = setString("workdir", workdir);
+    }
+    // The new mount API requires an explicit create command to build the
+    // superblock before fsmount() is legal
+    if (result == 0 && ::syscall(SYS_fsconfig, fsFd, FSCONFIG_CMD_CREATE, nullptr, nullptr, 0) != 0) {
+        result = -errno;
     }
     if (result != 0) {
         ::close(fsFd);
