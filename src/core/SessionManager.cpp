@@ -137,11 +137,20 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("gameCommand", inst.gameCommand);
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
-        QStringList dirEntries;
-        for (const DataDirectory &dir : inst.dataDirectories) {
-            dirEntries.append(dir.path + QLatin1Char('|') + dir.mode);
+        // Only persist a snapshot when one was taken: writing an empty
+        // dataDirectories key for an unsnapshotted instance would turn
+        // "use preset defaults" into "explicitly no directories" after a
+        // save/load round-trip
+        if (inst.dataDirectoriesSnapshotted) {
+            QStringList dirEntries;
+            for (const DataDirectory &dir : inst.dataDirectories) {
+                dirEntries.append(dir.path + QLatin1Char('|') + dir.mode);
+            }
+            instGroup.writeEntry("dataDirectories", dirEntries.join(QLatin1Char('\n')));
+        } else {
+            instGroup.deleteEntry("dataDirectories");
+            instGroup.deleteEntry("sharedDirectories");
         }
-        instGroup.writeEntry("dataDirectories", dirEntries.join(QLatin1Char('\n')));
         instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
@@ -393,6 +402,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
         dataDirsVariant.append(dirMap);
     }
     map[QStringLiteral("dataDirectories")] = dataDirsVariant;
+    map[QStringLiteral("dataDirectoriesSnapshotted")] = inst.dataDirectoriesSnapshotted;
     map[QStringLiteral("outputMode")] = inst.outputMode;
     map[QStringLiteral("streamResolution")] = inst.streamResolution;
     map[QStringLiteral("streamFps")] = inst.streamFps;

@@ -44,6 +44,7 @@ private Q_SLOTS:
     void testLoadProfile();
     void testLoadProfileLegacySharedDirectories();
     void testLoadSaveDataDirectoriesRoundtrip();
+    void testUnsnapshottedStaysUnsnapshottedAfterSaveLoad();
     void testPlayerDataFolderPath();
     void testDeleteProfile();
     void testSavedProfiles();
@@ -315,6 +316,28 @@ void TestSessionManager::testLoadSaveDataDirectoriesRoundtrip()
     QCOMPARE(restored[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("overlay"));
 
     m_sessionManager->deleteProfile(QStringLiteral("DataDirRoundtripProfile"));
+}
+
+void TestSessionManager::testUnsnapshottedStaysUnsnapshottedAfterSaveLoad()
+{
+    // An instance that never had a snapshot taken must survive a save/load
+    // round-trip without being converted into an explicit empty snapshot
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+    // No setInstanceDataDirectories call: unsnapshotted, uses preset defaults
+
+    QCOMPARE(m_sessionManager->getInstanceConfig(0)[QStringLiteral("dataDirectoriesSnapshotted")].toBool(), false);
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("UnsnapshottedProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("UnsnapshottedProfile")));
+
+    QVariantMap config = m_sessionManager->getInstanceConfig(0);
+    QCOMPARE(config[QStringLiteral("dataDirectoriesSnapshotted")].toBool(), false);
+    QVERIFY(config[QStringLiteral("dataDirectories")].toList().isEmpty());
+
+    m_sessionManager->deleteProfile(QStringLiteral("UnsnapshottedProfile"));
 }
 
 void TestSessionManager::testPlayerDataFolderPath()
