@@ -3,7 +3,7 @@
 
 #include "SecureFs.h"
 
-#include <QDir>
+#include <QDebug>
 
 #include <dirent.h>
 #include <errno.h>
@@ -160,6 +160,8 @@ static int copyTree(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid)
 
 static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gid_t gid)
 {
+    const QString entryName = QString::fromLocal8Bit(name);
+
     struct stat st;
     if (::fstatat(srcDirFd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
         return -errno;
@@ -172,7 +174,19 @@ static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gi
             return -errno;
         }
         target[len] = '\0';
-        ::symlinkat(target.data(), dstDirFd, name); // may EEXIST on merge — non-fatal
+        if (::symlinkat(target.data(), dstDirFd, name) != 0) {
+            if (errno == EEXIST) {
+                // Merge overwrite: keep the existing entry as-is
+                return 0;
+            }
+            return -errno;
+        }
+        // A root-owned link inside the player's tree is confusing at best;
+        // assign the link itself to the target user without following it
+        if (::fchownat(dstDirFd, name, uid, gid, AT_SYMLINK_NOFOLLOW) != 0) {
+            qWarning() << "SecureFs: Could not assign ownership of copied symlink"
+                                               << entryName << strerror(errno);
+        }
         return 0;
     }
 
@@ -199,7 +213,15 @@ static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gi
         return result;
     }
 
-    // Regular file (and anything else treated as opaque bytes)
+    if (!S_ISREG(st.st_mode)) {
+        // FIFOs would block the synchronous D-Bus call on open; device nodes
+        // and sockets must never be recreated by a copy. Fail loudly instead
+        // of silently hanging or dropping.
+        qWarning() << "SecureFs: refusing to copy special file" << entryName;
+        return -EOPNOTSUPP;
+    }
+
+    // Regular file
     int srcFile = ::openat(srcDirFd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (srcFile < 0) {
         return -errno;
