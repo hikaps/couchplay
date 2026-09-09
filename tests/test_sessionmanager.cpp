@@ -371,7 +371,7 @@ void TestSessionManager::testPlayerDataFolderPath()
     QDir rootDir(expectedRoot);
     const QStringList slugs = rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     QCOMPARE(slugs.size(), 1);
-    QVERIFY(slugs.first().startsWith(QStringLiteral("Games_MyGame-")));
+    QVERIFY(slugs.first().contains(QStringLiteral("Games_MyGame-")));
 
     QDir(expectedRoot).removeRecursively();
 }

@@ -389,8 +389,8 @@ void TestPresetManager::testStagingSlugInjective()
     QString home = QStringLiteral("/home/compositor");
     QString slugA = dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home);
     QString slugB = dataDirectoryStagingSlug(QStringLiteral("/mnt/a/b_c"), home);
-    QVERIFY(slugA.endsWith(QStringLiteral("_mnt_a_b_c")));
-    QVERIFY(slugB.endsWith(QStringLiteral("_mnt_a_b_c")));
+    QVERIFY(slugA.startsWith(QStringLiteral("mnt_a_b_c-")));
+    QVERIFY(slugB.startsWith(QStringLiteral("mnt_a_b_c-")));
     QVERIFY(slugA != slugB);
 
     // Stable across calls
