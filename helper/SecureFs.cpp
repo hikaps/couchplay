@@ -213,20 +213,38 @@ static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gi
         return result;
     }
 
-    if (!S_ISREG(st.st_mode)) {
-        // FIFOs would block the synchronous D-Bus call on open; device nodes
-        // and sockets must never be recreated by a copy. Fail loudly instead
-        // of silently hanging or dropping.
+    if (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
+        // Quick pre-filter: the authoritative classification happens on the
+        // opened FD below (a writable source can swap the entry between the
+        // fstatat check and the open). O_NONBLOCK guarantees a swapped-in
+        // FIFO cannot block the open.
         qWarning() << "SecureFs: refusing to copy special file" << entryName;
         return -EOPNOTSUPP;
     }
 
-    // Regular file
-    int srcFile = ::openat(srcDirFd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    // Open before classifying, then classify the FD itself: open FIFOs and
+    // device nodes with O_NONBLOCK|O_NOFOLLOW so a swapped-in FIFO can never
+    // block the synchronous helper
+    int srcFile = ::openat(srcDirFd, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
     if (srcFile < 0) {
         return -errno;
     }
-    int dstFile = ::openat(dstDirFd, name, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, st.st_mode & 07777);
+
+    struct stat openedSt;
+    if (::fstat(srcFile, &openedSt) != 0) {
+        int err = errno;
+        ::close(srcFile);
+        return -err;
+    }
+    if (!S_ISREG(openedSt.st_mode)) {
+        // Whatever this is now (raced FIFO, device, socket...), we don't copy
+        // it — and the open cannot have blocked thanks to O_NONBLOCK
+        ::close(srcFile);
+        qWarning() << "SecureFs: refusing to copy non-regular file" << entryName;
+        return -EOPNOTSUPP;
+    }
+
+    int dstFile = ::openat(dstDirFd, name, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, openedSt.st_mode & 07777);
     if (dstFile < 0) {
         int err = errno;
         ::close(srcFile);
@@ -257,7 +275,7 @@ static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gi
 
     if (result == 0) {
         ::fchown(dstFile, uid, gid);
-        ::fchmod(dstFile, st.st_mode & 07777);
+        ::fchmod(dstFile, openedSt.st_mode & 07777);
     }
     ::close(dstFile);
     return result;
