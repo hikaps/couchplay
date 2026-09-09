@@ -753,7 +753,10 @@ bool SessionRunner::setupDataDirectories()
             }
 
             if (isSteamLauncher && m_steamConfigManager) {
-                m_steamConfigManager->prepareDataDir(dir, username);
+                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam prepareDataDir failed for" << dir.path;
+                    allSucceeded = false;
+                }
             }
 
             if (dir.mode == QStringLiteral("copy")) {
@@ -780,7 +783,10 @@ bool SessionRunner::setupDataDirectories()
             }
 
             if (isSteamLauncher && m_steamConfigManager) {
-                m_steamConfigManager->finalizeDataDir(dir, username);
+                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
+                    allSucceeded = false;
+                }
             }
         }
     }

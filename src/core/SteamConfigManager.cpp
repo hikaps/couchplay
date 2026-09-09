@@ -1031,6 +1031,20 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
                 anyFailure = true;
             }
         }
+
+        // Secondary libraries are advertised in the player's libraryfolders.vdf
+        // at ~/.couchplay/steam-libs/<i> — mount the real content there so
+        // games outside the primary library exist for the player too.
+        // finalizeDataDir() then writes manifests through these overlays.
+        for (int i = 1; i < m_libraries.size(); ++i) {
+            const QString alias = QStringLiteral(".couchplay/steam-libs/") + QString::number(i);
+            qCDebug(couchplaySteam) << "prepareDataDir: Overlaying secondary library" << m_libraries[i].path
+                                    << "at" << alias << "for" << username;
+            if (!m_helperClient->setupOverlayMount(username, static_cast<uint>(getuid()), m_libraries[i].path, alias)) {
+                qCWarning(couchplaySteam) << "prepareDataDir: Failed to mount secondary library" << m_libraries[i].path;
+                anyFailure = true;
+            }
+        }
         return !anyFailure;
     }
 

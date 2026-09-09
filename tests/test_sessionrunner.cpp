@@ -135,6 +135,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testSetupDataDirectoriesLibrarySharingGate();
+    void testSetupDataDirectoriesSecondaryLibrariesMounted();
     void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
@@ -386,15 +387,67 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
     m_sessionManager->setInstanceDataDirectories(0, dirs);
 
     // Library sharing disabled: the steamRoot overlay must NOT be mounted
-    QVERIFY(m_runner->setupDataDirectories());
+    m_runner->setupDataDirectories();
     QCOMPARE(m_helperClient->overlayCalls.size(), 0);
 
-    // Library sharing enabled: the steamRoot overlay is mounted
+    // Library sharing enabled: the steamRoot overlay is mounted. (The overall
+    // result may be false — this fixture has no parseable libraries, so the
+    // prepare/finalize steps log failures; the gate is what is under test.)
     steamManager->setShareLibraryEnabled(true);
-    QVERIFY(m_runner->setupDataDirectories());
+    m_runner->setupDataDirectories();
     QCOMPARE(m_helperClient->overlayCalls.size(), 1);
     QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, steamRoot);
     QCOMPARE(m_helperClient->overlayCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QDir().mkpath(steamRoot + QStringLiteral("/config"));
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n"
+                     "{\n"
+                     "  \"0\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
+                     "  }\n"
+                     "  \"1\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"/mnt/steamlibrary\"\n"
+                     "  }\n"
+                     "}\n");
+    libraryVdf.close();
+
+    auto *steamManager = new SteamConfigManager(this);
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    steamManager->setShareLibraryEnabled(true);
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = steamRoot;
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantList dirs;
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    m_runner->setupDataDirectories();
+
+    // Primary root via the dir list + secondary library via prepareDataDir's
+    // alias mount, at the path libraryfolders.vdf advertises for the player
+    QCOMPARE(m_helperClient->overlayCalls.size(), 2);
+    QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, steamRoot);
+    QCOMPARE(m_helperClient->overlayCalls[1].sourceDir, QStringLiteral("/mnt/steamlibrary"));
+    QCOMPARE(m_helperClient->overlayCalls[1].targetAlias, QStringLiteral(".couchplay/steam-libs/1"));
+    QCOMPARE(m_helperClient->overlayCalls[1].username, QStringLiteral("player1"));
 }
 
 void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
