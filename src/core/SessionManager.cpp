@@ -219,12 +219,14 @@ bool SessionManager::loadProfile(const QString &name)
                 }
             }
         } else if (instGroup.hasKey("sharedDirectories")) {
-            // Legacy: sharedDirectories was a plain QStringList (paths only), migrate to acl-mode DataDirectory
+            // Legacy: sharedDirectories was a plain QStringList (paths only) that
+            // got bind-mounted at the player's home-relative equivalent path —
+            // migrate as bind to preserve that visibility
             QStringList legacyDirs = instGroup.readEntry("sharedDirectories", QStringList());
             for (const QString &path : legacyDirs) {
                 DataDirectory dir;
                 dir.path = path;
-                dir.mode = QStringLiteral("acl");
+                dir.mode = QStringLiteral("bind");
                 inst.dataDirectories.append(dir);
             }
         }

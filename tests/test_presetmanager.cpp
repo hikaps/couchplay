@@ -289,17 +289,21 @@ void TestPresetManager::testSetDataDirectoriesQmlShape()
     map3[QStringLiteral("mode")] = QStringLiteral("bogus");
     QVariantMap map4; // empty mode must default to "acl"
     map4[QStringLiteral("path")] = QStringLiteral("/qml/dir4");
+    QVariantMap map5; // bind is a valid mode and must be preserved
+    map5[QStringLiteral("path")] = QStringLiteral("/qml/dir5");
+    map5[QStringLiteral("mode")] = QStringLiteral("bind");
 
     QVariantList qmlDirs;
     qmlDirs.append(map1);
     qmlDirs.append(map2);
     qmlDirs.append(map3);
     qmlDirs.append(map4);
+    qmlDirs.append(map5);
 
     QVERIFY(manager.setDataDirectories(id, qmlDirs));
 
     QVariantList result = manager.getDataDirectories(id);
-    QCOMPARE(result.size(), 4);
+    QCOMPARE(result.size(), 5);
 
     QCOMPARE(result[0].value<DataDirectory>().path, QStringLiteral("/qml/dir1"));
     QCOMPARE(result[0].value<DataDirectory>().mode, QStringLiteral("copy"));
@@ -309,6 +313,8 @@ void TestPresetManager::testSetDataDirectoriesQmlShape()
     QCOMPARE(result[2].value<DataDirectory>().mode, QStringLiteral("acl"));
     QCOMPARE(result[3].value<DataDirectory>().path, QStringLiteral("/qml/dir4"));
     QCOMPARE(result[3].value<DataDirectory>().mode, QStringLiteral("acl"));
+    QCOMPARE(result[4].value<DataDirectory>().path, QStringLiteral("/qml/dir5"));
+    QCOMPARE(result[4].value<DataDirectory>().mode, QStringLiteral("bind"));
 
     // Mixed shapes in one call must also work (map + gadget)
     QVariantList mixed;
@@ -392,9 +398,9 @@ void TestPresetManager::testKConfigMigrationLegacySharedDirectories()
     QVariantList dirs = manager.getDataDirectories(QStringLiteral("custom-legacy-dirs"));
     QCOMPARE(dirs.size(), 2);
     QCOMPARE(dirs[0].value<DataDirectory>().path, QStringLiteral("/home/compositor/Games"));
-    QCOMPARE(dirs[0].value<DataDirectory>().mode, QStringLiteral("acl"));
+    QCOMPARE(dirs[0].value<DataDirectory>().mode, QStringLiteral("bind"));
     QCOMPARE(dirs[1].value<DataDirectory>().path, QStringLiteral("/home/compositor/Saves"));
-    QCOMPARE(dirs[1].value<DataDirectory>().mode, QStringLiteral("acl"));
+    QCOMPARE(dirs[1].value<DataDirectory>().mode, QStringLiteral("bind"));
 }
 
 void TestPresetManager::testDetectLauncherId_NativeSteam()

@@ -278,9 +278,9 @@ void TestSessionManager::testLoadProfileLegacySharedDirectories()
     QVariantList dirs = configMap[QStringLiteral("dataDirectories")].toList();
     QCOMPARE(dirs.size(), 2);
     QCOMPARE(dirs[0].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Games"));
-    QCOMPARE(dirs[0].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("acl"));
+    QCOMPARE(dirs[0].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("bind"));
     QCOMPARE(dirs[1].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Saves"));
-    QCOMPARE(dirs[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("acl"));
+    QCOMPARE(dirs[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("bind"));
 
     m_sessionManager->deleteProfile(QStringLiteral("LegacySharedDirsProfile"));
 }

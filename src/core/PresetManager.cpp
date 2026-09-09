@@ -63,7 +63,8 @@ DataDirectory DataDirectory::fromVariant(const QVariant &var)
         dir.path = map[QStringLiteral("path")].toString();
         dir.mode = map[QStringLiteral("mode")].toString();
     }
-    if (dir.mode != QStringLiteral("acl") && dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
+    if (dir.mode != QStringLiteral("acl") && dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")
+        && dir.mode != QStringLiteral("bind")) {
         dir.mode = QStringLiteral("acl");
     }
     return dir;
@@ -744,7 +745,9 @@ void PresetManager::loadCustomPresets()
         } else if (group.hasKey(QStringLiteral("sharedDirectories"))) {
             const QStringList legacyDirs = group.readEntry(QStringLiteral("sharedDirectories"), QStringList());
             for (const QString &path : legacyDirs) {
-                preset.dataDirectories.append({path, QStringLiteral("acl")});
+                // Legacy sharedDirectories were bind-mounted at the player's
+                // home-relative equivalent path — migrate as bind to preserve that
+                preset.dataDirectories.append({path, QStringLiteral("bind")});
             }
             if (!legacyDirs.isEmpty()) {
                 qCDebug(couchplayCore) << "Migrated legacy sharedDirectories for preset" << preset.id;

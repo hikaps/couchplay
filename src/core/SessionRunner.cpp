@@ -775,6 +775,14 @@ bool SessionRunner::setupDataDirectories()
                     qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path << "user" << username;
                     allSucceeded = false;
                 }
+            } else if (dir.mode == QStringLiteral("bind")) {
+                // Legacy mount semantics: bind at the player's home-relative
+                // equivalent path (or .couchplay/mounts/... for external paths)
+                const QStringList dirSpec = {dir.path + QLatin1Char('|')};
+                if (m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) < 1) {
+                    qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;
+                    allSucceeded = false;
+                }
             } else if (dir.mode == QStringLiteral("acl")) {
                 if (!m_helperClient->setPathAclWithParents(dir.path, username)) {
                     qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;

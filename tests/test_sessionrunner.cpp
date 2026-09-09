@@ -88,10 +88,8 @@ public:
 
     int mountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories) override
     {
-        Q_UNUSED(username)
-        Q_UNUSED(compositorUid)
-        Q_UNUSED(directories)
-        return 0;
+        mountCalls.append({username, compositorUid, directories});
+        return directories.size();
     }
     bool setDeviceOwner(const QString &devicePath, int uid) override
     {
@@ -134,6 +132,7 @@ private Q_SLOTS:
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
+    void testSetupDataDirectoriesBindModeMounts();
     void testSetupDataDirectoriesLibrarySharingGate();
     void testSetupDataDirectoriesSecondaryLibrariesMounted();
     void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
@@ -353,6 +352,30 @@ void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/preset/dir"));
     QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Bind Game"), QStringLiteral("/usr/bin/game3"));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    QVariantMap bindDir;
+    bindDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/.config/game");
+    bindDir[QStringLiteral("mode")] = QStringLiteral("bind");
+    QVariantList dirs;
+    dirs.append(bindDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    // Legacy mount spec: "path|" (empty alias => home-relative target)
+    QCOMPARE(m_helperClient->mountCalls.size(), 1);
+    QCOMPARE(m_helperClient->mountCalls[0].username, QStringLiteral("player1"));
+    QCOMPARE(m_helperClient->mountCalls[0].directories,
+             (QStringList{QStringLiteral("/home/compositor/.config/game|")}));
 }
 
 void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()

@@ -16,7 +16,7 @@
 struct DataDirectory {
     Q_GADGET
     Q_PROPERTY(QString path MEMBER path)
-    Q_PROPERTY(QString mode MEMBER mode) // "copy", "overlay", "acl"
+    Q_PROPERTY(QString mode MEMBER mode) // "copy", "overlay", "acl", "bind"
 
 public:
     QString path;

@@ -63,7 +63,7 @@ Kirigami.Dialog {
         
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            text: i18nc("@info", "Choose how to share data: 'Shared (ACL)' shares a single folder among all users, 'Copy' duplicates it for each user, and 'Overlay' creates a per-user copy-on-write overlay.")
+            text: i18nc("@info", "Choose how to share data: 'Shared (ACL)' shares a single folder among all users, 'Copy' duplicates it for each user, 'Overlay' creates a per-user copy-on-write overlay, and 'Bind mount' exposes the folder at the same path inside each player's home.")
             type: Kirigami.MessageType.Information
             visible: true
         }
@@ -98,13 +98,15 @@ Kirigami.Dialog {
                         model: [
                             { value: "acl", text: i18nc("@item:inlistbox", "Shared (ACL)") },
                             { value: "copy", text: i18nc("@item:inlistbox", "Copy files") },
-                            { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay") }
+                            { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay") },
+                            { value: "bind", text: i18nc("@item:inlistbox", "Bind mount (same home path)") }
                         ]
                         textRole: "text"
                         valueRole: "value"
                         currentIndex: {
                             if (mode === "copy") return 1;
                             if (mode === "overlay") return 2;
+                            if (mode === "bind") return 3;
                             return 0;
                         }
                         onActivated: {
