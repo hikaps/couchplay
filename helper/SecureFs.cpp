@@ -27,9 +27,12 @@ int openDirBelow(int baseFd, const QStringList &parts, bool create, uid_t uid, g
     }
 
     for (const QString &part : parts) {
-        if (part.isEmpty() || part == QStringLiteral(".") || part == QStringLiteral("..")) {
+        if (part.isEmpty() || part == QStringLiteral("..")) {
             ::close(current);
             return -EINVAL;
+        }
+        if (part == QStringLiteral(".")) {
+            continue; // refers to the base directory itself
         }
 
         int next = ::openat(current, part.toUtf8().constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);

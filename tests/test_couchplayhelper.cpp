@@ -1084,6 +1084,8 @@ void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
     // Existing merge target (e.g. an overlay mount point) with its own file
     QDir targetDir(homeDir.path() + QStringLiteral("/Games/MyGame"));
     QVERIFY(targetDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(targetDir.path(), true);
+    m_ops->setDirectoryExists(targetDir.path(), true);
     {
         QFile existing(targetDir.filePath(QStringLiteral("keep.txt")));
         QVERIFY(existing.open(QIODevice::WriteOnly));
