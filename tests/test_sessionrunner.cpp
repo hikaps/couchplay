@@ -556,12 +556,23 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
     m_runner->setupDataDirectories();
 
     // Primary root via the dir list + secondary library via prepareDataDir's
-    // alias mount, at the path libraryfolders.vdf advertises for the player
+    // alias mount (which runs before the generic action), at the path
+    // libraryfolders.vdf advertises for the player — assert by membership
+    bool foundPrimary = false;
+    bool foundSecondary = false;
+    for (const auto &call : m_helperClient->overlayCalls) {
+        if (call.sourceDir == steamRoot && call.targetAlias.isEmpty()) {
+            foundPrimary = true;
+        }
+        if (call.sourceDir == QStringLiteral("/mnt/steamlibrary")) {
+            foundSecondary = true;
+            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/1"));
+            QCOMPARE(call.username, QStringLiteral("player1"));
+        }
+    }
     QCOMPARE(m_helperClient->overlayCalls.size(), 2);
-    QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, steamRoot);
-    QCOMPARE(m_helperClient->overlayCalls[1].sourceDir, QStringLiteral("/mnt/steamlibrary"));
-    QCOMPARE(m_helperClient->overlayCalls[1].targetAlias, QStringLiteral(".couchplay/steam-libs/1"));
-    QCOMPARE(m_helperClient->overlayCalls[1].username, QStringLiteral("player1"));
+    QVERIFY(foundPrimary);
+    QVERIFY(foundSecondary);
 }
 
 void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
