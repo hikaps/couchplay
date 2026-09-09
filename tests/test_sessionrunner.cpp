@@ -428,8 +428,9 @@ void TestSessionRunner::testSetupDataDirectoriesMirrorsStagedData()
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     m_sessionManager->setInstancePreset(0, presetId);
 
-    // External overlay dir with staged files, external bind dir without
-    // staging, and an acl dir (staging never applies to acl)
+    // External overlay dir with staged files, a bind dir WITH staged files
+    // (must be ignored: bind has no private layer — seeding would mutate the
+    // shared source), and an acl dir (staging never applies to acl)
     QVariantList dirs;
     QVariantMap overlayDir;
     overlayDir[QStringLiteral("path")] = QStringLiteral("/opt/games/game");
@@ -455,11 +456,19 @@ void TestSessionRunner::testSetupDataDirectoriesMirrorsStagedData()
     QVERIFY(seed.open(QIODevice::WriteOnly));
     seed.write("player=1\n");
     seed.close();
+    QString bindStaging = stagingRoot + QLatin1Char('/')
+        + dataDirectoryStagingSlug(QStringLiteral("/opt/other/lib"), compositorHome);
+    QVERIFY(QDir().mkpath(bindStaging));
+    QFile bindSeed(bindStaging + QStringLiteral("/seed.ini"));
+    QVERIFY(bindSeed.open(QIODevice::WriteOnly));
+    bindSeed.write("must-not-mirror\n");
+    bindSeed.close();
 
     QVERIFY(m_runner->setupDataDirectories());
 
-    // Only the overlay dir had staged content; mirrored into the player's view
-    // of that dir (external path -> .couchplay/mounts mapping)
+    // Only the overlay dir is mirrored, into the player's view of that dir
+    // (external path -> .couchplay/mounts mapping); the bind staging content
+    // must be ignored entirely
     QCOMPARE(m_helperClient->mirrorCalls.size(), 1);
     QCOMPARE(m_helperClient->mirrorCalls[0].username, QStringLiteral("player1"));
     QCOMPARE(m_helperClient->mirrorCalls[0].sourceDir, overlayStaging);

@@ -630,11 +630,13 @@ QString SessionManager::playerDataFolderPath(int index)
         return QString();
     }
 
-    // One subfolder per writable shared directory so users see where files go
+    // One subfolder per private (copy/overlay) shared directory so users see
+    // where files go; bind mounts are shared with everyone, so seeding them
+    // per-player is impossible (writes would mutate the shared source)
     struct passwd *pw = getpwuid(getuid());
     QString compositorHome = pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
     for (const DataDirectory &dir : inst.dataDirectories) {
-        if (dir.mode == QStringLiteral("acl")) {
+        if (dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
             continue;
         }
         QDir().mkpath(root + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome));

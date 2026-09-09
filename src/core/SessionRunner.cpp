@@ -818,8 +818,12 @@ bool SessionRunner::setupDataDirectories()
             }
 
             // Merge hand-staged per-player files into the player's view (after
-            // the mount/copy, so overlay/bind writes land in the private layer)
-            if (!playerViewRelative.isEmpty()) {
+            // the mount/copy). Only copy and overlay qualify: both give the
+            // player a private tree, while bind mounts have no upper layer —
+            // mirroring into a bind mount would mutate and re-own the shared
+            // source itself.
+            if (!playerViewRelative.isEmpty()
+                && (dir.mode == QStringLiteral("copy") || dir.mode == QStringLiteral("overlay"))) {
                 const QString stagingDir = playerDataStagingRoot(presetId.isEmpty() ? QStringLiteral("steam") : presetId,
                                                                  username)
                     + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome);
