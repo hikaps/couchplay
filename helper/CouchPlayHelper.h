@@ -476,6 +476,7 @@ private:
     QString findGamescopePath();
     bool unloadNullSinkModule(const QString &username, const QString &sinkName);
     bool isPathWithinAllowedPrefix(const QString &path) const;
+    bool pathHasSymlinkComponents(const QString &path, const QString &root);
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;

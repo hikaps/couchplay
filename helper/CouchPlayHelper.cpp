@@ -678,6 +678,13 @@ bool CouchPlayHelper::validateUserPath(const QString &path,
         return false;
     }
 
+    if (pathHasSymlinkComponents(path, userHome)) {
+        qWarning() << callerName << ": Path" << path << "contains a symlinked component below" << userHome;
+        sendErrorReply(QDBusError::InvalidArgs,
+                       QStringLiteral("Path contains a symlinked component inside the user's home"));
+        return false;
+    }
+
     QStringList pathParts = path.mid(userHome.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
     QString checkPath = userHome;
     for (const QString &part : pathParts) {
@@ -1574,6 +1581,26 @@ bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
     return false;
 }
 
+bool CouchPlayHelper::pathHasSymlinkComponents(const QString &path, const QString &root)
+{
+    // Every existing component of `path` strictly below `root` must be a real
+    // directory: a player-owned symlinked ancestor (e.g. ~/.config -> /etc)
+    // would redirect root-run rm/cp/chown/mount outside the verified root.
+    if (!path.startsWith(root + QLatin1Char('/'))) {
+        return true; // not below the root at all — caller decides, treat as unsafe
+    }
+
+    QString current = root;
+    const QStringList parts = path.mid(root.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        current += QLatin1Char('/') + part;
+        if (m_ops->fileExists(current) && m_ops->isSymLink(current)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString CouchPlayHelper::computeMountTarget(const QString &source,
                                             const QString &alias,
                                             const QString &userHome,
@@ -1658,9 +1685,21 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
             continue;
         }
 
+        QString canonicalSource = m_ops->canonicalFilePath(source);
+        if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+            qWarning() << "MountSharedDirectories: Source path resolves outside allowed prefixes:" << source << "->"
+                       << canonicalSource;
+            continue;
+        }
+
         QString target = computeMountTarget(source, alias, userHome, compositorHome);
         if (target.isEmpty()) {
             qWarning() << "MountSharedDirectories: Invalid mount target computed";
+            continue;
+        }
+
+        if (pathHasSymlinkComponents(target, userHome)) {
+            qWarning() << "MountSharedDirectories: Target contains a symlinked component:" << target;
             continue;
         }
 
@@ -1729,6 +1768,14 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
         return false;
     }
 
+    QString canonicalSource = m_ops->canonicalFilePath(sourceDir);
+    if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+        qWarning() << "SetupOverlayMount: Source path resolves outside allowed prefixes:" << sourceDir << "->"
+                   << canonicalSource;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path resolves outside allowed prefixes"));
+        return false;
+    }
+
     QString userHome = getUserHome(username);
     if (userHome.isEmpty()) {
         sendErrorReply(QDBusError::Failed,
@@ -1746,6 +1793,12 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
     if (target.isEmpty()) {
         qWarning() << "SetupOverlayMount: Invalid mount target computed";
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid mount target"));
+        return false;
+    }
+
+    if (pathHasSymlinkComponents(target, userHome)) {
+        qWarning() << "SetupOverlayMount: Target contains a symlinked component:" << target;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Target contains a symlinked component"));
         return false;
     }
 
@@ -2010,6 +2063,14 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     if (!isPathWithinAllowedPrefix(sourceDir)) {
         qWarning() << "CopyDirectoryToUser: Source path is outside allowed prefixes:" << sourceDir;
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
+    QString canonicalSource = m_ops->canonicalFilePath(sourceDir);
+    if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+        qWarning() << "CopyDirectoryToUser: Source path resolves outside allowed prefixes:" << sourceDir << "->"
+                   << canonicalSource;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path resolves outside allowed prefixes"));
         return false;
     }
 

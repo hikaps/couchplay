@@ -70,6 +70,15 @@ public:
     {
         m_directories[path] = exists;
     }
+    void setSymlink(const QString &path, const QString &canonicalTarget)
+    {
+        m_files[path] = true;
+        m_symlinks[path] = canonicalTarget;
+    }
+    void setCanonicalMapping(const QString &path, const QString &canonical)
+    {
+        m_canonical[path] = canonical;
+    }
     void setChownResult(int result)
     {
         m_chownResult = result;
@@ -85,6 +94,8 @@ public:
         m_grEntries.clear();
         m_files.clear();
         m_directories.clear();
+        m_symlinks.clear();
+        m_canonical.clear();
         m_authorized = true;
         m_processExitCode = 0;
         m_chownResult = 0;
@@ -152,6 +163,16 @@ public:
     bool isDirectory(const QString &path) override
     {
         return m_directories.value(path, false);
+    }
+
+    bool isSymLink(const QString &path) override
+    {
+        return m_symlinks.contains(path);
+    }
+
+    QString canonicalFilePath(const QString &path) override
+    {
+        return m_canonical.value(path, path);
     }
 
     bool mkpath(const QString &path) override
@@ -322,6 +343,8 @@ private:
     QMap<QString, GrEntry> m_grEntries;
     QMap<QString, bool> m_files;
     QMap<QString, bool> m_directories;
+    QMap<QString, QString> m_symlinks;
+    QMap<QString, QString> m_canonical;
     bool m_authorized = true;
     int m_processExitCode = 0;
     int m_chownResult = 0;
@@ -383,6 +406,9 @@ private Q_SLOTS:
     void testCopyDirectoryToUserSourceOutsideAllowedPrefixes();
     void testCopyDirectoryToUserSourceNotExists();
     void testCopyDirectoryToUserSuccessReplacesAndChowns();
+    void testCopyDirectoryToUserSymlinkedTargetRejected();
+    void testCopyDirectoryToUserSourceSymlinkResolvesOutside();
+    void testSetupOverlayMountSymlinkedTargetRejected();
     void testIsPathWithinAllowedPrefixMountRoots();
 
     // Device ownership tests
@@ -948,6 +974,71 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
     QCOMPARE(m_ops->m_processInvocations[2].args,
              (QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
                           QStringLiteral("/home/player1/games")}));
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserSymlinkedTargetRejected()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/compositor/games"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/games"), true);
+    // Player replaced ~/.config with a symlink: root-run rm/cp/chown must not follow it
+    m_ops->setSymlink(QStringLiteral("/home/player1/.config"), QStringLiteral("/etc"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/games"),
+                                                   QStringLiteral(".config/games"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserSourceSymlinkResolvesOutside()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    // An allowed-prefix source that is really a symlink to /etc
+    m_ops->setFileExists(QStringLiteral("/home/compositor/link"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/link"), true);
+    m_ops->setCanonicalMapping(QStringLiteral("/home/compositor/link"), QStringLiteral("/etc"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/link"),
+                                                   QStringLiteral("games"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
+}
+
+void TestCouchPlayHelper::testSetupOverlayMountSymlinkedTargetRejected()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    struct passwd *self = getpwuid(getuid());
+    QVERIFY(self);
+    m_ops->setUserExists(QString::fromLocal8Bit(self->pw_name), true, getuid(), self->pw_gid,
+                         QStringLiteral("/home/compositor"));
+    m_ops->setFileExists(QStringLiteral("/home/compositor/games"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/games"), true);
+    // Symlinked ancestor on the mount target path
+    m_ops->setSymlink(QStringLiteral("/home/player1/shares"), QStringLiteral("/etc"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetupOverlayMount"),
+                                                   QStringLiteral("player1"),
+                                                   static_cast<uint>(getuid()),
+                                                   QStringLiteral("/home/compositor/games"),
+                                                   QStringLiteral("shares/games"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
 }
 
 void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
