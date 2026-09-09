@@ -781,7 +781,12 @@ bool SessionRunner::setupDataDirectories()
                 if (dir.path.startsWith(compositorHome)) {
                     relativePath = dir.path.mid(compositorHome.length() + 1);
                 } else {
-                    relativePath = dir.path.mid(dir.path.lastIndexOf(QLatin1Char('/')) + 1);
+                    // External sources have no home-relative location; map the
+                    // full normalized path under .couchplay/copies — a basename
+                    // alone would collide (/mnt/a/save vs /media/b/save) and
+                    // replacement semantics would delete the first copy
+                    relativePath = QStringLiteral(".couchplay/copies/")
+                        + dataDirectoryStagingSlug(dir.path, compositorHome);
                 }
                 playerViewRelative = relativePath;
                 if (!m_helperClient->copyDirectoryToUser(username, dir.path, relativePath)) {
