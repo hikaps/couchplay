@@ -22,6 +22,14 @@ SessionManager::SessionManager(QObject *parent)
     refreshProfiles();
 }
 
+void SessionManager::setPresetManager(PresetManager *manager)
+{
+    if (m_presetManager != manager) {
+        m_presetManager = manager;
+        Q_EMIT presetManagerChanged();
+    }
+}
+
 QVariantList InstanceConfig::dataDirectoriesAsVariant() const
 {
     QVariantList list;
@@ -632,10 +640,16 @@ QString SessionManager::playerDataFolderPath(int index)
 
     // One subfolder per private (copy/overlay) shared directory so users see
     // where files go; bind mounts are shared with everyone, so seeding them
-    // per-player is impossible (writes would mutate the shared source)
+    // per-player is impossible (writes would mutate the shared source).
+    // Resolve the same effective list as SessionRunner's fallback: unsnapshotted
+    // instances use the preset's current defaults.
+    QList<DataDirectory> effectiveDirs = inst.dataDirectories;
+    if (effectiveDirs.isEmpty() && !inst.dataDirectoriesSnapshotted && m_presetManager) {
+        effectiveDirs = m_presetManager->getPreset(presetId).dataDirectories;
+    }
     struct passwd *pw = getpwuid(getuid());
     QString compositorHome = pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
-    for (const DataDirectory &dir : inst.dataDirectories) {
+    for (const DataDirectory &dir : effectiveDirs) {
         if (dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
             continue;
         }

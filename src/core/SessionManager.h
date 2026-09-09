@@ -115,10 +115,18 @@ class SessionManager : public QObject
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
+    Q_PROPERTY(PresetManager *presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
 
 public:
     explicit SessionManager(QObject *parent = nullptr);
     ~SessionManager() override;
+
+    PresetManager *presetManager() const
+    {
+        return m_presetManager;
+    }
+    void setPresetManager(PresetManager *manager);
+
     // Profile management
     Q_INVOKABLE bool saveProfile(const QString &name);
     Q_INVOKABLE bool loadProfile(const QString &name);
@@ -213,6 +221,7 @@ Q_SIGNALS:
     void instanceCountChanged();
     void savedProfilesChanged();
     void instancesChanged();
+    void presetManagerChanged();
     void errorOccurred(const QString &message);
     /**
      * @brief Emitted after a profile is successfully loaded
@@ -230,6 +239,7 @@ private:
 
     SessionProfile m_currentProfile;
     QList<SessionProfile> m_savedProfiles;
+    PresetManager *m_presetManager = nullptr;
 };
 
 /**

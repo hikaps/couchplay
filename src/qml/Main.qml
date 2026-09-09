@@ -48,7 +48,8 @@ Kirigami.ApplicationWindow {
 
     SessionManager {
         id: sessionManager
-        
+        presetManager: presetManager
+
         onProfileLoaded: function(deviceInfoByInstance) {
             if (deviceManager) {
                 deviceManager.unassignAll()
