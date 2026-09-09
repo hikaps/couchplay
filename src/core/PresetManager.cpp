@@ -7,6 +7,7 @@
 #include "Logging.h"
 #include "SteamConfigManager.h"
 
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -84,6 +85,12 @@ QString dataDirectoryStagingSlug(const QString &dirPath, const QString &composit
     }
     QString slug = relative;
     slug.replace(QLatin1Char('/'), QLatin1Char('_'));
+    // "_"-collapsing is not injective (/a_b/c vs /a/b_c); append a short
+    // stable hash of the normalized path so distinct sources can't share
+    // a staging folder and bleed data into each other's player views
+    const QByteArray hash =
+        QCryptographicHash::hash(relative.toUtf8(), QCryptographicHash::Sha256).toHex().left(8);
+    slug += QLatin1Char('-') + QString::fromLatin1(hash);
     return slug;
 }
 

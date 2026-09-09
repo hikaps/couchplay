@@ -366,11 +366,12 @@ void TestSessionManager::testPlayerDataFolderPath()
     QCOMPARE(m_sessionManager->playerDataFolderPath(0), expectedRoot);
     QVERIFY(QDir(expectedRoot).exists());
 
-    // A staging subfolder exists per writable dir; read-only dirs get none
+    // A staging subfolder exists per writable dir; read-only dirs get none.
+    // Slugs carry a hash suffix, so assert on the readable prefix.
     QDir rootDir(expectedRoot);
     const QStringList slugs = rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     QCOMPARE(slugs.size(), 1);
-    QVERIFY(slugs.first().endsWith(QStringLiteral("Games_MyGame")));
+    QVERIFY(slugs.first().startsWith(QStringLiteral("Games_MyGame-")));
 
     QDir(expectedRoot).removeRecursively();
 }

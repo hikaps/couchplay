@@ -43,6 +43,7 @@ private Q_SLOTS:
     void testLauncherIdPersistence();
     void testKConfigMigration();
     void testKConfigMigrationLegacySharedDirectories();
+    void testStagingSlugInjective();
 
     void testDetectLauncherId_NativeSteam();
     void testDetectLauncherId_NativeHeroic();
@@ -379,6 +380,21 @@ void TestPresetManager::testKConfigMigration()
     PresetManager manager;
     LaunchPreset preset = manager.getPreset(QStringLiteral("custom-migrate-test"));
     QCOMPARE(preset.launcherId, QStringLiteral("steam"));
+}
+
+void TestPresetManager::testStagingSlugInjective()
+{
+    // "/"-collapsing alone is not injective: these two paths collapsed to the
+    // same name and would bleed staged data into each other's player views
+    QString home = QStringLiteral("/home/compositor");
+    QString slugA = dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home);
+    QString slugB = dataDirectoryStagingSlug(QStringLiteral("/mnt/a/b_c"), home);
+    QVERIFY(slugA.endsWith(QStringLiteral("_mnt_a_b_c")));
+    QVERIFY(slugB.endsWith(QStringLiteral("_mnt_a_b_c")));
+    QVERIFY(slugA != slugB);
+
+    // Stable across calls
+    QCOMPARE(dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home), slugA);
 }
 
 void TestPresetManager::testKConfigMigrationLegacySharedDirectories()
