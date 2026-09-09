@@ -7,7 +7,11 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <linux/fs.h>
+#include <linux/mount.h>
 #include <string>
+#include <sys/mount.h>
+#include <sys/syscall.h>
 #include <vector>
 
 namespace SecureFs
@@ -284,5 +288,149 @@ static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gi
 int copyTreeContents(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid)
 {
     return copyTree(srcDirFd, dstDirFd, uid, gid);
+}
+
+// ---------------------------------------------------------------------------
+// FD-anchored mounting
+// ---------------------------------------------------------------------------
+
+#ifndef SYS_open_tree
+#define SYS_open_tree 428
+#endif
+#ifndef SYS_move_mount
+#define SYS_move_mount 429
+#endif
+#ifndef SYS_fsopen
+#define SYS_fsopen 430
+#endif
+#ifndef SYS_fsconfig
+#define SYS_fsconfig 431
+#endif
+#ifndef SYS_fsmount
+#define SYS_fsmount 432
+#endif
+
+#ifndef OPEN_TREE_CLONE
+#define OPEN_TREE_CLONE 1
+#endif
+#ifndef OPEN_TREE_CLOEXEC
+#define OPEN_TREE_CLOEXEC 4
+#endif
+#ifndef FSOPEN_CLOEXEC
+#define FSOPEN_CLOEXEC 1
+#endif
+#ifndef FSMOUNT_CLOEXEC
+#define FSMOUNT_CLOEXEC 1
+#endif
+#ifndef FSCONFIG_SET_STRING
+#define FSCONFIG_SET_STRING 1
+#endif
+#ifndef MOVE_MOUNT_F_EMPTY_PATH
+#define MOVE_MOUNT_F_EMPTY_PATH 0x00000004
+#endif
+#ifndef AT_SYMLINK_NOFOLLOW
+#define AT_SYMLINK_NOFOLLOW 0x100
+#endif
+
+bool mountApiAvailable()
+{
+    static int cached = -1;
+    if (cached < 0) {
+        int fd = static_cast<int>(::syscall(SYS_fsopen, "overlay", FSOPEN_CLOEXEC));
+        if (fd >= 0) {
+            ::close(fd);
+            cached = 1;
+        } else {
+            cached = (errno == ENOSYS || errno == EPERM) ? 0 : 0; // anything else: treat unavailable too
+        }
+    }
+    return cached == 1;
+}
+
+int bindMountFd(const QString &canonicalSource, int targetParentFd, const QString &leafName)
+{
+    // Pin the source parent with a whole-chain no-follow walk, then clone the
+    // source leaf with AT_SYMLINK_NOFOLLOW so a last-instant symlink swap
+    // fails instead of being followed
+    const int lastSlash = canonicalSource.lastIndexOf(QLatin1Char('/'));
+    const QString sourceParent = lastSlash <= 0 ? QStringLiteral("/") : canonicalSource.left(lastSlash);
+    const QString sourceLeaf = canonicalSource.mid(lastSlash + 1);
+
+    int srcParentFd = openExistingDirNoFollow(sourceParent);
+    if (srcParentFd < 0) {
+        return srcParentFd;
+    }
+    int treeFd = static_cast<int>(::syscall(SYS_open_tree, srcParentFd, sourceLeaf.toUtf8().constData(),
+                                            AT_SYMLINK_NOFOLLOW | OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC));
+    ::close(srcParentFd);
+    if (treeFd < 0) {
+        return -errno;
+    }
+
+    if (::syscall(SYS_move_mount, treeFd, "", targetParentFd, leafName.toUtf8().constData(),
+                  MOVE_MOUNT_F_EMPTY_PATH)
+        != 0) {
+        int err = errno;
+        ::close(treeFd);
+        return -err;
+    }
+    ::close(treeFd); // the mount stays attached; the fd was only for attaching
+    return 0;
+}
+
+int overlayMountFd(const QString &sourceDir, const QString &upperdir, const QString &workdir,
+                   int targetParentFd, const QString &leafName)
+{
+    int fsFd = static_cast<int>(::syscall(SYS_fsopen, "overlay", FSOPEN_CLOEXEC));
+    if (fsFd < 0) {
+        return -errno;
+    }
+
+    auto setString = [fsFd](const char *key, const QString &value) -> int {
+        if (::syscall(SYS_fsconfig, fsFd, FSCONFIG_SET_STRING, key, value.toUtf8().constData(), 0) != 0) {
+            return -errno;
+        }
+        return 0;
+    };
+
+    int result = setString("lowerdir", sourceDir);
+    if (result == 0) {
+        result = setString("upperdir", upperdir);
+    }
+    if (result == 0) {
+        result = setString("workdir", workdir);
+    }
+    if (result != 0) {
+        ::close(fsFd);
+        return result;
+    }
+
+    int mntFd = static_cast<int>(::syscall(SYS_fsmount, fsFd, FSMOUNT_CLOEXEC, 0));
+    ::close(fsFd);
+    if (mntFd < 0) {
+        return -errno;
+    }
+
+    if (::syscall(SYS_move_mount, mntFd, "", targetParentFd, leafName.toUtf8().constData(),
+                  MOVE_MOUNT_F_EMPTY_PATH)
+        != 0) {
+        int err = errno;
+        ::close(mntFd);
+        return -err;
+    }
+    ::close(mntFd);
+    return 0;
+}
+
+int umountAtFd(int targetParentFd, const QString &leafName)
+{
+    const QString procPath =
+        QStringLiteral("/proc/self/fd/%1/%2").arg(QString::number(targetParentFd), leafName);
+    if (::umount2(procPath.toLocal8Bit().constData(), 0) != 0) {
+        if (::umount2(procPath.toLocal8Bit().constData(), MNT_DETACH) != 0) {
+            return -errno;
+        }
+    }
+    return 0;
 }
 }

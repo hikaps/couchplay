@@ -80,6 +80,50 @@ int removeTreeAt(int dirFd);
  */
 int copyTreeContents(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid);
 
+// ---------------------------------------------------------------------------
+// FD-anchored mounting (Linux mount API, kernel 5.2+; overlayfs 5.11+)
+//
+// mount(8) resolves source and target by name at execution time, so a user
+// who can replace a validated ancestor with a symlink can race a root mount
+// onto an arbitrary path. These helpers keep verified directory FDs pinned
+// through the operation: the attach point is a (parentFd, leafName) pair,
+// the parent FD is a no-follow walk anchored at "/", and move_mount does not
+// follow symlinks on the leaf by default — a swapped-in symlink fails the
+// mount instead of redirecting it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Probe whether the new mount API (fsopen/open_tree/move_mount) is available
+ * to this process. Cached: the first call performs the probe.
+ */
+bool mountApiAvailable();
+
+/**
+ * Bind-mount canonicalSource at (targetParentFd, leafName).
+ * The source is cloned via open_tree with AT_SYMLINK_NOFOLLOW below a
+ * no-follow-anchored parent, then attached with move_mount.
+ * @return 0 on success, -errno on failure
+ */
+int bindMountFd(const QString &canonicalSource, int targetParentFd, const QString &leafName);
+
+/**
+ * Mount an overlay filesystem (lowerdir=sourceDir, upperdir/workdir as
+ * given) at (targetParentFd, leafName) via fsopen/fsconfig/fsmount +
+ * move_mount. Layer strings are resolved by the kernel at fsconfig time and
+ * must already live under non-player-writable storage (see SetupOverlayMount).
+ * @return 0 on success, -errno on failure
+ */
+int overlayMountFd(const QString &sourceDir, const QString &upperdir, const QString &workdir,
+                   int targetParentFd, const QString &leafName);
+
+/**
+ * Unmount whatever is attached at (targetParentFd, leafName) through the
+ * pinned parent FD via /proc/self/fd — immune to ancestor swaps.
+ * Tries a clean unmount, then a lazy detach.
+ * @return 0 on success, -errno on failure
+ */
+int umountAtFd(int targetParentFd, const QString &leafName);
+
 /**
  * Convenience: open the user's home directory (trusted — owned/maintained
  * by the system, not writable by the user's own privilege) as the anchor

@@ -519,6 +519,11 @@ private:
         QString mountType; // "bind" or "overlay"
         QString upperDir;  // overlay only: upper directory
         QString workDir;   // overlay only: work directory
+        // FD-backed reference for race-free unmount: pinned parent directory
+        // of the mount target (valid for the helper's lifetime; -1 after a
+        // state reload, in which case unmount falls back to the target path)
+        int targetParentFd = -1;
+        QString targetLeaf;
     };
     QMap<QString, QList<MountInfo>> m_activeMounts; // username -> list of mounts
 
