@@ -499,18 +499,21 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
     dirs.append(overlayDir);
     m_sessionManager->setInstanceDataDirectories(0, dirs);
 
-    // Library sharing disabled: the steamRoot overlay must NOT be mounted
+    // Library sharing disabled: the steamRoot entry must NOT be mounted — the
+    // player's own Steam root is never overlaid
     m_runner->setupDataDirectories();
     QCOMPARE(m_helperClient->overlayCalls.size(), 0);
 
-    // Library sharing enabled: the steamRoot overlay is mounted. (The overall
-    // result may be false — this fixture has no parseable libraries, so the
-    // prepare/finalize steps log failures; the gate is what is under test.)
+    // Library sharing enabled with no parseable libraries: still no mounts
+    // (nothing to share), and crucially no home-relative overlay of the
+    // player's Steam root
     steamManager->setShareLibraryEnabled(true);
     m_runner->setupDataDirectories();
-    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
-    QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, steamRoot);
-    QCOMPARE(m_helperClient->overlayCalls[0].username, QStringLiteral("player1"));
+    QCOMPARE(m_helperClient->overlayCalls.size(), 0);
+    for (const auto &call : m_helperClient->overlayCalls) {
+        QVERIFY(!call.targetAlias.isEmpty()); // everything alias-mounted, never at the player's Steam root path
+        QVERIFY(call.sourceDir != steamRoot || call.targetAlias == QStringLiteral(".couchplay/steam-libs/0"));
+    }
 }
 
 void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
@@ -555,22 +558,23 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
 
     m_runner->setupDataDirectories();
 
-    // Primary root via the dir list + secondary library via prepareDataDir's
-    // alias mount (which runs before the generic action), at the path
-    // libraryfolders.vdf advertises for the player — assert by membership
+    // Both libraries are alias-mounted under ~/.couchplay/steam-libs/<i>;
+    // the player's Steam root path is never a mount target
+    QCOMPARE(m_helperClient->overlayCalls.size(), 2);
     bool foundPrimary = false;
     bool foundSecondary = false;
     for (const auto &call : m_helperClient->overlayCalls) {
-        if (call.sourceDir == steamRoot && call.targetAlias.isEmpty()) {
+        QVERIFY(!call.targetAlias.isEmpty());
+        if (call.sourceDir == steamRoot) {
             foundPrimary = true;
+            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/0"));
         }
         if (call.sourceDir == QStringLiteral("/mnt/steamlibrary")) {
             foundSecondary = true;
             QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/1"));
-            QCOMPARE(call.username, QStringLiteral("player1"));
         }
+        QCOMPARE(call.username, QStringLiteral("player1"));
     }
-    QCOMPARE(m_helperClient->overlayCalls.size(), 2);
     QVERIFY(foundPrimary);
     QVERIFY(foundSecondary);
 }

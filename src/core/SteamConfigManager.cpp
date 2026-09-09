@@ -1032,16 +1032,17 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
             }
         }
 
-        // Secondary libraries are advertised in the player's libraryfolders.vdf
-        // at ~/.couchplay/steam-libs/<i> — mount the real content there so
-        // games outside the primary library exist for the player too.
-        // finalizeDataDir() then writes manifests through these overlays.
-        for (int i = 1; i < m_libraries.size(); ++i) {
+        // Mount EVERY library (primary included) at its advertised alias
+        // ~/.couchplay/steam-libs/<i>: the player's own Steam root is never
+        // overlaid, so their installation, account state and userdata stay
+        // intact. finalizeDataDir() then writes manifests and
+        // libraryfolders.vdf pointing at these aliases.
+        for (int i = 0; i < m_libraries.size(); ++i) {
             const QString alias = QStringLiteral(".couchplay/steam-libs/") + QString::number(i);
-            qCDebug(couchplaySteam) << "prepareDataDir: Overlaying secondary library" << m_libraries[i].path
-                                    << "at" << alias << "for" << username;
+            qCDebug(couchplaySteam) << "prepareDataDir: Overlaying library" << m_libraries[i].path << "at" << alias
+                                    << "for" << username;
             if (!m_helperClient->setupOverlayMount(username, static_cast<uint>(getuid()), m_libraries[i].path, alias)) {
-                qCWarning(couchplaySteam) << "prepareDataDir: Failed to mount secondary library" << m_libraries[i].path;
+                qCWarning(couchplaySteam) << "prepareDataDir: Failed to mount library" << m_libraries[i].path;
                 anyFailure = true;
             }
         }
@@ -1090,12 +1091,10 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
             const SteamLibraryFolder &library = m_libraries[i];
             QString sourceSteamApps = library.path + QStringLiteral("/steamapps");
 
-            QString targetLibPath;
-            if (i == 0) {
-                targetLibPath = targetPaths.steamRoot;
-            } else {
-                targetLibPath = targetHome + QStringLiteral("/.couchplay/steam-libs/") + QString::number(i);
-            }
+            // Every library lives at its alias mount under the player's home —
+            // matches prepareDataDir's mounts and keeps the player's own Steam
+            // root (and thus their identity and userdata) out of the sharing path
+            QString targetLibPath = targetHome + QStringLiteral("/.couchplay/steam-libs/") + QString::number(i);
             QString targetSteamApps = targetLibPath + QStringLiteral("/steamapps");
 
             QDir sourceSteamAppsDir(sourceSteamApps);
@@ -1124,6 +1123,12 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
             targetLib.appIds = library.appIds;
             targetLibraries.append(targetLib);
         }
+
+        // Keep the player's own Steam root as the first library so their own
+        // installed content and default install location survive sharing
+        SteamLibraryFolder ownRoot;
+        ownRoot.path = targetPaths.steamRoot;
+        targetLibraries.prepend(ownRoot);
 
         QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
         if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, username)) {

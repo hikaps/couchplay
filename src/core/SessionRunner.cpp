@@ -737,12 +737,26 @@ bool SessionRunner::setupDataDirectories()
         qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
 
         for (const DataDirectory &dir : dataDirs) {
-            // Library sharing is opt-in: skip the steamRoot overlay when the
-            // setting is off, matching the stop-side cleanup gating
+            // Library sharing is opt-in: the steamRoot overlay entry is a
+            // marker handled entirely by prepareDataDir (libraries are
+            // alias-mounted under ~/.couchplay/steam-libs/<i> so the player's
+            // own Steam root, account state and userdata stay untouched) —
+            // never mount it at the home-relative path, which would shadow
+            // the player's installation
             if (dir.mode == QStringLiteral("overlay") && isSteamLauncher && m_steamConfigManager
-                && !m_steamConfigManager->shareLibraryEnabled()
                 && dir.path == m_steamConfigManager->steamPaths().steamRoot) {
-                qDebug() << "SessionRunner: Library sharing disabled, skipping overlay for" << dir.path;
+                if (!m_steamConfigManager->shareLibraryEnabled()) {
+                    qDebug() << "SessionRunner: Library sharing disabled, skipping Steam root entry for" << dir.path;
+                    continue;
+                }
+                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
+                    allSucceeded = false;
+                }
+                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam library finalize failed for" << dir.path;
+                    allSucceeded = false;
+                }
                 continue;
             }
 
