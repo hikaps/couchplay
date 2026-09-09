@@ -1840,13 +1840,17 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
         QCryptographicHash::hash(sourceDir.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
     QString hash = QString::fromUtf8(hashBytes);
 
-    QString overlayBase = userHome + QStringLiteral("/.local/share/couchplay/overlays/%1/%2").arg(username, hash);
+    // Overlay layer storage lives under root-owned /var/lib/couchplay, NOT
+    // the player's home: with every ancestor root-owned (the helper runs as
+    // root, players have no write access to the chain), the player cannot
+    // swap a component for a symlink between secure creation and the
+    // pathname-based mount(8) — closing the re-resolution race. Only the
+    // upper/work leaves are chowned to the player (the kernel writes overlay
+    // data with the player's credentials through the mount).
+    QString overlayBase = QStringLiteral("/var/lib/couchplay/overlays/%1/%2").arg(username, hash);
     QString upperDir = overlayBase + QStringLiteral("/upper");
     QString workDir = overlayBase + QStringLiteral("/work");
 
-    // Create upper/work with openat(O_NOFOLLOW) below the home FD and apply
-    // ownership via fchown: a player-owned symlinked ancestor must never
-    // redirect a root chown (path-based chown follows symlinks)
     uint userUid = getUserUid(username);
     struct passwd *pw = m_ops->getpwuid(userUid);
     if (!pw) {
@@ -1855,24 +1859,33 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
         return false;
     }
 
-    int homeFd = SecureFs::openBaseDir(userHome);
-    if (homeFd < 0) {
-        qWarning() << "SetupOverlayMount: Could not open home directory:" << userHome;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+    int varLibFd = SecureFs::openBaseDir(QStringLiteral("/var/lib"));
+    if (varLibFd < 0) {
+        qWarning() << "SetupOverlayMount: Could not open /var/lib:" << strerror(-varLibFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open overlay storage root"));
         return false;
     }
-    const QStringList upperParts = QDir(userHome).relativeFilePath(upperDir).split(QLatin1Char('/'), Qt::SkipEmptyParts);
-    int upperFd = SecureFs::openDirBelow(homeFd, upperParts, true, userUid, pw->pw_gid);
+    const QStringList baseParts =
+        QStringList{QStringLiteral("couchplay"), QStringLiteral("overlays"), username, hash};
+    int baseFd =
+        SecureFs::openDirBelow(varLibFd, baseParts, true, 0, 0, SecureFs::ChownMode::FinalOnly);
+    ::close(varLibFd);
+    if (baseFd < 0) {
+        qWarning() << "SetupOverlayMount: Could not create overlay storage under /var/lib/couchplay:"
+                   << strerror(-baseFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not create overlay storage"));
+        return false;
+    }
+    int upperFd = SecureFs::openDirBelow(baseFd, {QStringLiteral("upper")}, true, userUid, pw->pw_gid);
     if (upperFd < 0) {
-        ::close(homeFd);
+        ::close(baseFd);
         qWarning() << "SetupOverlayMount: Failed to securely create upper directory:" << upperDir;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay upper directory"));
         return false;
     }
     ::close(upperFd);
-    const QStringList workParts = QDir(userHome).relativeFilePath(workDir).split(QLatin1Char('/'), Qt::SkipEmptyParts);
-    int workFd = SecureFs::openDirBelow(homeFd, workParts, true, userUid, pw->pw_gid);
-    ::close(homeFd);
+    int workFd = SecureFs::openDirBelow(baseFd, {QStringLiteral("work")}, true, userUid, pw->pw_gid);
+    ::close(baseFd);
     if (workFd < 0) {
         qWarning() << "SetupOverlayMount: Failed to securely create work directory:" << workDir;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay work directory"));
@@ -1880,6 +1893,11 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
     }
     ::close(workFd);
 
+    // Residual (documented): mount(8) resolves the target/upper/work paths by
+    // name. upper/work are now under root-owned storage, so a player cannot
+    // race them; the target lives in the player's home by design, where a
+    // raced symlink only lets the player redirect their OWN overlay view
+    // (self-harm), never another user's data.
     QString mountOpts = QStringLiteral("lowerdir=%1,upperdir=%2,workdir=%3,metacopy=on,xino=auto")
                             .arg(sourceDir, upperDir, workDir);
 

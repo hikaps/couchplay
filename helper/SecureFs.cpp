@@ -19,14 +19,29 @@ int openBaseDir(const QString &absolutePath)
     return fd >= 0 ? fd : -errno;
 }
 
-int openDirBelow(int baseFd, const QStringList &parts, bool create, uid_t uid, gid_t gid)
+int openExistingDirNoFollow(const QString &absolutePath)
+{
+    const QStringList parts = absolutePath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int baseFd = ::open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (baseFd < 0) {
+        return -errno;
+    }
+    int result = openDirBelow(baseFd, parts, false, 0, 0);
+    ::close(baseFd);
+    return result;
+}
+
+int openDirBelow(int baseFd, const QStringList &parts, bool create, uid_t uid, gid_t gid, ChownMode chownMode)
 {
     int current = ::fcntl(baseFd, F_DUPFD_CLOEXEC, 3);
     if (current < 0) {
         return -errno;
     }
 
+    const int total = static_cast<int>(parts.size());
+    int index = -1;
     for (const QString &part : parts) {
+        index++;
         if (part.isEmpty() || part == QStringLiteral("..")) {
             ::close(current);
             return -EINVAL;
@@ -34,6 +49,7 @@ int openDirBelow(int baseFd, const QStringList &parts, bool create, uid_t uid, g
         if (part == QStringLiteral(".")) {
             continue; // refers to the base directory itself
         }
+        const bool finalComponent = (index == total - 1);
 
         int next = ::openat(current, part.toUtf8().constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (next < 0 && create && (errno == ENOENT)) {
@@ -43,7 +59,9 @@ int openDirBelow(int baseFd, const QStringList &parts, bool create, uid_t uid, g
                 return -err;
             }
             next = ::openat(current, part.toUtf8().constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            if (next >= 0 && (::fchown(next, uid, gid) != 0)) {
+            if (next >= 0
+                && (chownMode == ChownMode::All || (chownMode == ChownMode::FinalOnly && finalComponent))
+                && (::fchown(next, uid, gid) != 0)) {
                 int err = errno; // ownership failure is fatal: never mutate with wrong owner
                 ::close(next);
                 ::close(current);

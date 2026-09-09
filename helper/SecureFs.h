@@ -26,18 +26,42 @@ namespace SecureFs
 {
 
 /**
+ * Which created components get fchown'd to uid/gid.
+ * All: every created component (used below a user's home).
+ * FinalOnly: only the final component (used below root-owned storage, where
+ * intermediates must stay root-owned so a user cannot alter the chain).
+ */
+enum class ChownMode {
+    All,
+    FinalOnly,
+};
+
+/**
  * Open (and optionally create) the directory at `parts` below `baseFd`.
  * Never follows symlinks: any existing component that is a symlink fails
- * with ELOOP. Missing components are created (mode 0755) and fchown'd to
- * uid/gid when `create` is true.
+ * with ELOOP. Missing components are created (mode 0755); created
+ * components are fchown'd to uid/gid per chownMode.
  *
  * @param baseFd FD of the trusted base directory
- * @param parts Path components below baseFd
+ * @param parts Path components below baseFd ("." components are skipped)
  * @param create Create missing components instead of failing with ENOENT
  * @param uid/gid Ownership for created components
+ * @param chownMode Which created components receive the ownership
  * @return FD of the final directory (caller closes), or -errno
  */
-int openDirBelow(int baseFd, const QStringList &parts, bool create, uid_t uid, gid_t gid);
+int openDirBelow(int baseFd, const QStringList &parts, bool create, uid_t uid, gid_t gid,
+                 ChownMode chownMode = ChownMode::All);
+
+/**
+ * Open an existing absolute directory by walking every component from "/"
+ * with openat(O_NOFOLLOW). Unlike openBaseDir (which only protects the
+ * final component), this pins the whole chain: it fails closed if any
+ * ancestor is (or has just become) a symlink. Intended to re-open a
+ * freshly canonicalized path.
+ *
+ * @return FD of the directory (caller closes), or -errno
+ */
+int openExistingDirNoFollow(const QString &absolutePath);
 
 /**
  * Recursively remove the directory referenced by dirFd (the directory
