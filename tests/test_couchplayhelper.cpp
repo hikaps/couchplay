@@ -945,38 +945,56 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSourceNotExists()
 
 void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
 {
+    // Real filesystem layout: mutations are FD-anchored in-process, not
+    // subprocess calls, so this verifies end behavior rather than argv
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
     m_ops->clear();
-    m_ops->setMockProcessStart(true);
-    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
-    m_ops->setFileExists(QStringLiteral("/home/compositor/games"), true);
-    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/games"), true);
-    // Stale target from a previous session: must be removed, not nested into
-    m_ops->setFileExists(QStringLiteral("/home/player1/games"), true);
-    m_ops->setDirectoryExists(QStringLiteral("/home/player1/games"), true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+
+    QDir sourceDir(homeDir.path() + QStringLiteral("/source-game"));
+    QVERIFY(sourceDir.mkpath(QStringLiteral(".")));
+    {
+        QFile f(sourceDir.filePath(QStringLiteral("config.ini")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("player=1\n");
+    }
+    QVERIFY(sourceDir.mkpath(QStringLiteral("subdir")));
+    {
+        QFile f(sourceDir.filePath(QStringLiteral("subdir/data.bin")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("data");
+    }
+
+    // Stale target from a previous session: must be replaced, not nested into
+    QDir targetDir(homeDir.path() + QStringLiteral("/games"));
+    QVERIFY(targetDir.mkpath(QStringLiteral(".")));
+    {
+        QFile stale(targetDir.filePath(QStringLiteral("stale.txt")));
+        QVERIFY(stale.open(QIODevice::WriteOnly));
+        stale.write("old");
+    }
 
     QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
                                                    QStringLiteral("player1"),
-                                                   QStringLiteral("/home/compositor/games"),
+                                                   sourceDir.path(),
                                                    QStringLiteral("games"));
 
     QVERIFY(reply.isValid());
     QVERIFY(reply.value());
 
-    // rm (replace) -> cp -a -> chown -R uid:gid
-    QCOMPARE(m_ops->m_processInvocations.size(), 3);
-    QCOMPARE(m_ops->m_processInvocations[0].command, QStringLiteral("/usr/bin/rm"));
-    QCOMPARE(m_ops->m_processInvocations[0].args,
-             (QStringList{QStringLiteral("-rf"), QStringLiteral("--"), QStringLiteral("/home/player1/games")}));
-    QCOMPARE(m_ops->m_processInvocations[1].command, QStringLiteral("/usr/bin/cp"));
-    QCOMPARE(m_ops->m_processInvocations[1].args,
-             (QStringList{QStringLiteral("-a"),
-                          QStringLiteral("--"),
-                          QStringLiteral("/home/compositor/games"),
-                          QStringLiteral("/home/player1/games")}));
-    QCOMPARE(m_ops->m_processInvocations[2].command, QStringLiteral("/usr/bin/chown"));
-    QCOMPARE(m_ops->m_processInvocations[2].args,
-             (QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
-                          QStringLiteral("/home/player1/games")}));
+    QFileInfo replaced(targetDir.filePath(QStringLiteral("config.ini")));
+    QVERIFY(replaced.exists());
+    QCOMPARE(replaced.readAll(), QByteArray("player=1\n"));
+    QVERIFY(QFileInfo(targetDir.filePath(QStringLiteral("subdir/data.bin"))).exists());
+    QVERIFY(!QFileInfo(targetDir.filePath(QStringLiteral("stale.txt"))).exists());
+
+    if (geteuid() == 0) { // ownership transfer requires root (CI runs as root)
+        struct stat st;
+        QCOMPARE(::stat(replaced.absoluteFilePath().toLocal8Bit().constData(), &st), 0);
+        QCOMPARE(st.st_uid, static_cast<uid_t>(1001));
+        QCOMPARE(st.st_gid, static_cast<gid_t>(1001));
+    }
 }
 
 void TestCouchPlayHelper::testCopyDirectoryToUserSymlinkedTargetRejected()
@@ -1046,35 +1064,45 @@ void TestCouchPlayHelper::testSetupOverlayMountSymlinkedTargetRejected()
 
 void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
 {
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
     m_ops->clear();
-    m_ops->setMockProcessStart(true);
-    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
-    m_ops->setFileExists(QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging"), true);
-    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging"), true);
-    // Existing merge target (e.g. an overlay mount point)
-    m_ops->setFileExists(QStringLiteral("/home/player1/Games/MyGame"), true);
-    m_ops->setDirectoryExists(QStringLiteral("/home/player1/Games/MyGame"), true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+
+    QDir stagingDir(homeDir.path() + QStringLiteral("/staging"));
+    QVERIFY(stagingDir.mkpath(QStringLiteral(".")));
+    {
+        QFile f(stagingDir.filePath(QStringLiteral("config.ini")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("player=1\n");
+    }
+
+    // Existing merge target (e.g. an overlay mount point) with its own file
+    QDir targetDir(homeDir.path() + QStringLiteral("/Games/MyGame"));
+    QVERIFY(targetDir.mkpath(QStringLiteral(".")));
+    {
+        QFile existing(targetDir.filePath(QStringLiteral("keep.txt")));
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        existing.write("keep");
+    }
 
     QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("MirrorDirectoryContents"),
                                                    QStringLiteral("player1"),
-                                                   QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging"),
+                                                   stagingDir.path(),
                                                    QStringLiteral("Games/MyGame"));
 
     QVERIFY(reply.isValid());
     QVERIFY(reply.value());
 
-    // Merge copy of the source CONTENTS ("src/.") then recursive ownership
-    QCOMPARE(m_ops->m_processInvocations.size(), 2);
-    QCOMPARE(m_ops->m_processInvocations[0].command, QStringLiteral("/usr/bin/cp"));
-    QCOMPARE(m_ops->m_processInvocations[0].args,
-             (QStringList{QStringLiteral("-a"),
-                          QStringLiteral("--"),
-                          QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging/."),
-                          QStringLiteral("/home/player1/Games/MyGame")}));
-    QCOMPARE(m_ops->m_processInvocations[1].command, QStringLiteral("/usr/bin/chown"));
-    QCOMPARE(m_ops->m_processInvocations[1].args,
-             (QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
-                          QStringLiteral("/home/player1/Games/MyGame")}));
+    // Merge: staged file copied in, pre-existing file untouched
+    QCOMPARE(QFileInfo(targetDir.filePath(QStringLiteral("config.ini"))).readAll(), QByteArray("player=1\n"));
+    QCOMPARE(QFileInfo(targetDir.filePath(QStringLiteral("keep.txt"))).readAll(), QByteArray("keep"));
+
+    if (geteuid() == 0) {
+        struct stat st;
+        QCOMPARE(::stat(targetDir.filePath(QStringLiteral("config.ini")).toLocal8Bit().constData(), &st), 0);
+        QCOMPARE(st.st_uid, static_cast<uid_t>(1001));
+    }
 }
 
 void TestCouchPlayHelper::testMirrorDirectoryContentsTargetNotExists()

@@ -3,6 +3,7 @@
 
 #include "CouchPlayHelper.h"
 #include "PolkitActions.h"
+#include "SecureFs.h"
 #include "SystemOps.h"
 
 #include <QCryptographicHash>
@@ -1601,6 +1602,36 @@ bool CouchPlayHelper::pathHasSymlinkComponents(const QString &path, const QStrin
     return false;
 }
 
+bool CouchPlayHelper::secureCreateUserDir(const QString &username, const QString &absolutePath)
+{
+    // Race-safe mkdir+chown below the user's home: openat(O_NOFOLLOW) walk,
+    // fchown on FDs — immune to symlinked-ancestor swaps between check and use
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty() || !absolutePath.startsWith(userHome + QLatin1Char('/'))) {
+        return false;
+    }
+
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        return false;
+    }
+
+    int homeFd = SecureFs::openBaseDir(userHome);
+    if (homeFd < 0) {
+        return false;
+    }
+    const QStringList parts =
+        QDir(userHome).relativeFilePath(absolutePath).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int dirFd = SecureFs::openDirBelow(homeFd, parts, true, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (dirFd < 0) {
+        return false;
+    }
+    ::close(dirFd);
+    return true;
+}
+
 QString CouchPlayHelper::computeMountTarget(const QString &source,
                                             const QString &alias,
                                             const QString &userHome,
@@ -1704,14 +1735,9 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
         }
 
         if (!m_ops->fileExists(target)) {
-            if (!m_ops->mkpath(target)) {
+            if (!secureCreateUserDir(username, target)) {
                 qWarning() << "MountSharedDirectories: Failed to create target directory:" << target;
                 continue;
-            }
-            uint userUid = getUserUid(username);
-            struct passwd *pw = m_ops->getpwuid(userUid);
-            if (pw) {
-                m_ops->chown(target, userUid, pw->pw_gid);
             }
         }
 
@@ -1803,15 +1829,10 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
     }
 
     if (!m_ops->fileExists(target)) {
-        if (!m_ops->mkpath(target)) {
+        if (!secureCreateUserDir(username, target)) {
             qWarning() << "SetupOverlayMount: Failed to create target directory:" << target;
             sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory: %1").arg(target));
             return false;
-        }
-        uint userUid = getUserUid(username);
-        struct passwd *pw = m_ops->getpwuid(userUid);
-        if (pw) {
-            m_ops->chown(target, userUid, pw->pw_gid);
         }
     }
 
@@ -1823,23 +1844,41 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
     QString upperDir = overlayBase + QStringLiteral("/upper");
     QString workDir = overlayBase + QStringLiteral("/work");
 
-    if (!m_ops->mkpath(upperDir)) {
-        qWarning() << "SetupOverlayMount: Failed to create upper directory:" << upperDir;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay upper directory"));
-        return false;
-    }
-    if (!m_ops->mkpath(workDir)) {
-        qWarning() << "SetupOverlayMount: Failed to create work directory:" << workDir;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay work directory"));
+    // Create upper/work with openat(O_NOFOLLOW) below the home FD and apply
+    // ownership via fchown: a player-owned symlinked ancestor must never
+    // redirect a root chown (path-based chown follows symlinks)
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "SetupOverlayMount: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
         return false;
     }
 
-    uint userUid = getUserUid(username);
-    struct passwd *pw = m_ops->getpwuid(userUid);
-    if (pw) {
-        m_ops->chown(upperDir, userUid, pw->pw_gid);
-        m_ops->chown(workDir, userUid, pw->pw_gid);
+    int homeFd = SecureFs::openBaseDir(userHome);
+    if (homeFd < 0) {
+        qWarning() << "SetupOverlayMount: Could not open home directory:" << userHome;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
     }
+    const QStringList upperParts = QDir(userHome).relativeFilePath(upperDir).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int upperFd = SecureFs::openDirBelow(homeFd, upperParts, true, userUid, pw->pw_gid);
+    if (upperFd < 0) {
+        ::close(homeFd);
+        qWarning() << "SetupOverlayMount: Failed to securely create upper directory:" << upperDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay upper directory"));
+        return false;
+    }
+    ::close(upperFd);
+    const QStringList workParts = QDir(userHome).relativeFilePath(workDir).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int workFd = SecureFs::openDirBelow(homeFd, workParts, true, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (workFd < 0) {
+        qWarning() << "SetupOverlayMount: Failed to securely create work directory:" << workDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay work directory"));
+        return false;
+    }
+    ::close(workFd);
 
     QString mountOpts = QStringLiteral("lowerdir=%1,upperdir=%2,workdir=%3,metacopy=on,xino=auto")
                             .arg(sourceDir, upperDir, workDir);
@@ -2096,44 +2135,80 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         return false;
     }
 
-    QString parentDir = targetPath.left(targetPath.lastIndexOf(QLatin1Char('/')));
-    if (!parentDir.isEmpty() && !m_ops->fileExists(parentDir)) {
-        if (!m_ops->mkpath(parentDir)) {
-            qWarning() << "CopyDirectoryToUser: Failed to create parent directory:" << parentDir;
-            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create parent directory: %1").arg(parentDir));
-            return false;
-        }
-    }
-    for (const QString &dir : dirsToChown) {
-        m_ops->chown(dir, userUid, pw->pw_gid);
-    }
-
-    // Defined replacement semantics: remove an existing target first, so the
-    // copy can never nest the source inside a stale destination
-    if (m_ops->fileExists(targetPath)) {
-        if (!runCommand(QStringLiteral("/usr/bin/rm"), {QStringLiteral("-rf"), QStringLiteral("--"), targetPath}, 120000)) {
-            qWarning() << "CopyDirectoryToUser: Failed to remove existing target:" << targetPath;
-            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to remove existing target: %1").arg(targetPath));
-            return false;
-        }
-    }
-
-    if (!runCommand(QStringLiteral("/usr/bin/cp"),
-                    {QStringLiteral("-a"), QStringLiteral("--"), sourceDir, targetPath},
-                    120000)) {
-        qWarning() << "CopyDirectoryToUser: Failed to copy directory" << sourceDir << "to" << targetPath;
-        sendErrorReply(QDBusError::Failed,
-                       QStringLiteral("Failed to copy directory from %1 to %2").arg(sourceDir, targetPath));
+    // Mutation phase is FD-anchored (openat O_NOFOLLOW below the home FD,
+    // fchown on FDs): a player swapping an ancestor for a symlink between
+    // validation and use cannot redirect root operations outside the home
+    int srcFd = SecureFs::openBaseDir(sourceDir);
+    if (srcFd < 0) {
+        qWarning() << "CopyDirectoryToUser: Could not open source directory:" << sourceDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open source directory"));
         return false;
     }
 
-    // cp -a preserves source ownership; hand the whole tree to the target user
-    QString ownerSpec = QString::number(userUid) + QLatin1Char(':') + QString::number(static_cast<uint>(pw->pw_gid));
-    if (!runCommand(QStringLiteral("/usr/bin/chown"),
-                    {QStringLiteral("-R"), QStringLiteral("--"), ownerSpec, targetPath},
-                    120000)) {
-        qWarning() << "CopyDirectoryToUser: Failed to set ownership on" << targetPath;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to set ownership on: %1").arg(targetPath));
+    int homeFd = SecureFs::openBaseDir(userHome);
+    if (homeFd < 0) {
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Could not open home directory:" << userHome;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+
+    const QString leafName = targetPath.mid(targetPath.lastIndexOf(QLatin1Char('/')) + 1);
+    const QString parentRelative = QDir(userHome).relativeFilePath(targetPath.left(targetPath.lastIndexOf(QLatin1Char('/'))));
+    const QStringList parentParts =
+        parentRelative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int parentFd = SecureFs::openDirBelow(homeFd, parentParts, true, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (parentFd < 0) {
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to securely create parent directory:" << parentRelative;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create parent directory"));
+        return false;
+    }
+
+    // Defined replacement semantics: remove an existing target first (by FD,
+    // never following symlinks), so the copy can never nest into a stale
+    // destination or follow a player-planted symlink at the leaf
+    struct stat st;
+    if (::fstatat(parentFd, leafName.toUtf8().constData(), &st, AT_SYMLINK_NOFOLLOW) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+            int existingFd =
+                ::openat(parentFd, leafName.toUtf8().constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (existingFd >= 0) {
+                SecureFs::removeTreeAt(existingFd);
+                ::close(existingFd);
+            }
+            ::unlinkat(parentFd, leafName.toUtf8().constData(), AT_REMOVEDIR);
+        } else {
+            ::unlinkat(parentFd, leafName.toUtf8().constData(), 0);
+        }
+    }
+    if (::mkdirat(parentFd, leafName.toUtf8().constData(), 0755) != 0) {
+        int err = errno;
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to create target directory:" << targetPath << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory"));
+        return false;
+    }
+    int dstFd = ::openat(parentFd, leafName.toUtf8().constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    ::close(parentFd);
+    if (dstFd < 0) {
+        int err = errno;
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Could not open new target directory:" << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open target directory"));
+        return false;
+    }
+    ::fchown(dstFd, userUid, pw->pw_gid);
+
+    int copyResult = SecureFs::copyTreeContents(srcFd, dstFd, userUid, pw->pw_gid);
+    ::close(srcFd);
+    ::close(dstFd);
+    if (copyResult != 0) {
+        qWarning() << "CopyDirectoryToUser: Failed to copy tree:" << strerror(-copyResult);
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Failed to copy directory from %1 to %2").arg(sourceDir, targetPath));
         return false;
     }
 
@@ -2215,25 +2290,43 @@ bool CouchPlayHelper::MirrorDirectoryContents(const QString &username,
         return false;
     }
 
-    // Merge semantics: copy contents into the existing target ("src/." — no
-    // nesting, no removal). Through an overlay mount the writes land in the
-    // player's private upper layer.
-    QString sourceContents = sourceDir + QStringLiteral("/.");
-    if (!runCommand(QStringLiteral("/usr/bin/cp"),
-                    {QStringLiteral("-a"), QStringLiteral("--"), sourceContents, targetPath},
-                    120000)) {
-        qWarning() << "MirrorDirectoryContents: Failed to merge" << sourceDir << "into" << targetPath;
-        sendErrorReply(QDBusError::Failed,
-                       QStringLiteral("Failed to merge %1 into %2").arg(sourceDir, targetPath));
+    // Merge semantics: copy contents into the existing target ("src/.") with
+    // FD-anchored no-follow operations — through an overlay mount the writes
+    // land in the player's private upper layer, and a symlinked ancestor
+    // swapped between validation and use cannot redirect the mutation
+    int srcFd = SecureFs::openBaseDir(sourceDir);
+    if (srcFd < 0) {
+        qWarning() << "MirrorDirectoryContents: Could not open source directory:" << sourceDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open source directory"));
         return false;
     }
 
-    QString ownerSpec = QString::number(userUid) + QLatin1Char(':') + QString::number(static_cast<uint>(pw->pw_gid));
-    if (!runCommand(QStringLiteral("/usr/bin/chown"),
-                    {QStringLiteral("-R"), QStringLiteral("--"), ownerSpec, targetPath},
-                    120000)) {
-        qWarning() << "MirrorDirectoryContents: Failed to set ownership on" << targetPath;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to set ownership on: %1").arg(targetPath));
+    int homeFd = SecureFs::openBaseDir(userHome);
+    if (homeFd < 0) {
+        ::close(srcFd);
+        qWarning() << "MirrorDirectoryContents: Could not open home directory:" << userHome;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+    const QStringList targetParts =
+        QDir(userHome).relativeFilePath(targetPath).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int dstFd = SecureFs::openDirBelow(homeFd, targetParts, false, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (dstFd < 0) {
+        ::close(srcFd);
+        qWarning() << "MirrorDirectoryContents: Target directory missing or unsafe:" << targetPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Target directory does not exist: %1").arg(targetPath));
+        return false;
+    }
+
+    int copyResult = SecureFs::copyTreeContents(srcFd, dstFd, userUid, pw->pw_gid);
+    ::close(srcFd);
+    ::close(dstFd);
+    if (copyResult != 0) {
+        qWarning() << "MirrorDirectoryContents: Failed to merge" << sourceDir << "into" << targetPath
+                   << strerror(-copyResult);
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Failed to merge %1 into %2").arg(sourceDir, targetPath));
         return false;
     }
 

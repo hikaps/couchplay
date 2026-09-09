@@ -7,6 +7,8 @@ add_executable(couchplay-helper
     main.cpp
     CouchPlayHelper.cpp
     CouchPlayHelper.h
+    SecureFs.cpp
+    SecureFs.h
     SystemOps.cpp
     SystemOps.h
     PolkitActions.h

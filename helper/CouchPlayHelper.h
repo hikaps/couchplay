@@ -494,6 +494,7 @@ private:
     bool unloadNullSinkModule(const QString &username, const QString &sinkName);
     bool isPathWithinAllowedPrefix(const QString &path) const;
     bool pathHasSymlinkComponents(const QString &path, const QString &root);
+    bool secureCreateUserDir(const QString &username, const QString &absolutePath);
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;
