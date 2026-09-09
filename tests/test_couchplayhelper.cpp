@@ -937,17 +937,17 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
     QCOMPARE(m_ops->m_processInvocations.size(), 3);
     QCOMPARE(m_ops->m_processInvocations[0].command, QStringLiteral("/usr/bin/rm"));
     QCOMPARE(m_ops->m_processInvocations[0].args,
-             QStringList{QStringLiteral("-rf"), QStringLiteral("--"), QStringLiteral("/home/player1/games")});
+             (QStringList{QStringLiteral("-rf"), QStringLiteral("--"), QStringLiteral("/home/player1/games")}));
     QCOMPARE(m_ops->m_processInvocations[1].command, QStringLiteral("/usr/bin/cp"));
     QCOMPARE(m_ops->m_processInvocations[1].args,
-             QStringList{QStringLiteral("-a"),
-                         QStringLiteral("--"),
-                         QStringLiteral("/home/compositor/games"),
-                         QStringLiteral("/home/player1/games")});
+             (QStringList{QStringLiteral("-a"),
+                          QStringLiteral("--"),
+                          QStringLiteral("/home/compositor/games"),
+                          QStringLiteral("/home/player1/games")}));
     QCOMPARE(m_ops->m_processInvocations[2].command, QStringLiteral("/usr/bin/chown"));
     QCOMPARE(m_ops->m_processInvocations[2].args,
-             QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
-                         QStringLiteral("/home/player1/games")});
+             (QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
+                          QStringLiteral("/home/player1/games")}));
 }
 
 void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
