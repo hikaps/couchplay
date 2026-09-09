@@ -954,6 +954,8 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
 
     QDir sourceDir(homeDir.path() + QStringLiteral("/source-game"));
     QVERIFY(sourceDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(sourceDir.path(), true); // validation layer consults the mock
+    m_ops->setDirectoryExists(sourceDir.path(), true);
     {
         QFile f(sourceDir.filePath(QStringLiteral("config.ini")));
         QVERIFY(f.open(QIODevice::WriteOnly));
@@ -1071,6 +1073,8 @@ void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
 
     QDir stagingDir(homeDir.path() + QStringLiteral("/staging"));
     QVERIFY(stagingDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(stagingDir.path(), true); // validation layer consults the mock
+    m_ops->setDirectoryExists(stagingDir.path(), true);
     {
         QFile f(stagingDir.filePath(QStringLiteral("config.ini")));
         QVERIFY(f.open(QIODevice::WriteOnly));
