@@ -2156,7 +2156,11 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     // Mutation phase is FD-anchored (openat O_NOFOLLOW below the home FD,
     // fchown on FDs): a player swapping an ancestor for a symlink between
     // validation and use cannot redirect root operations outside the home
-    int srcFd = SecureFs::openBaseDir(sourceDir);
+    // Anchor the source by re-opening the freshly canonicalized path with a
+    // whole-chain O_NOFOLLOW walk from "/": openBaseDir alone would protect
+    // only the final component. If any ancestor changed into a symlink since
+    // canonicalization, the walk fails closed (ELOOP).
+    int srcFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? sourceDir : canonicalSource);
     if (srcFd < 0) {
         qWarning() << "CopyDirectoryToUser: Could not open source directory:" << sourceDir;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open source directory"));
@@ -2312,7 +2316,8 @@ bool CouchPlayHelper::MirrorDirectoryContents(const QString &username,
     // FD-anchored no-follow operations — through an overlay mount the writes
     // land in the player's private upper layer, and a symlinked ancestor
     // swapped between validation and use cannot redirect the mutation
-    int srcFd = SecureFs::openBaseDir(sourceDir);
+    // Same whole-chain no-follow anchoring as CopyDirectoryToUser
+    int srcFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? sourceDir : canonicalSource);
     if (srcFd < 0) {
         qWarning() << "MirrorDirectoryContents: Could not open source directory:" << sourceDir;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open source directory"));
