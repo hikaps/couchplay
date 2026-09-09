@@ -8,6 +8,7 @@
 #include <QDesktopServices>
 #include <QDebug>
 #include <QDir>
+#include <QSet>
 #include <QStandardPaths>
 #include <QUrl>
 
@@ -647,10 +648,26 @@ QString SessionManager::playerDataFolderPath(int index)
     if (effectiveDirs.isEmpty() && !inst.dataDirectoriesSnapshotted && m_presetManager) {
         effectiveDirs = m_presetManager->getPreset(presetId).dataDirectories;
     }
+
+    // The Steam-root overlay entry is a library-sharing marker handled
+    // entirely by session setup (libraries are alias-mounted) — it never
+    // receives staged data, so don't create a misleading folder for it
+    QSet<QString> markerPaths;
+    if (m_presetManager) {
+        for (const DataDirectory &d : m_presetManager->getPreset(QStringLiteral("steam")).dataDirectories) {
+            if (d.mode == QStringLiteral("overlay")) {
+                markerPaths.insert(d.path);
+            }
+        }
+    }
+
     struct passwd *pw = getpwuid(getuid());
     QString compositorHome = pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
     for (const DataDirectory &dir : effectiveDirs) {
         if (dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
+            continue;
+        }
+        if (markerPaths.contains(dir.path)) {
             continue;
         }
         QDir().mkpath(root + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome));
