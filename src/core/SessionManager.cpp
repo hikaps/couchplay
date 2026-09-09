@@ -38,6 +38,7 @@ void InstanceConfig::setDataDirectoriesFromVariant(const QVariantList &dirs)
             dataDirectories.append(dir);
         }
     }
+    dataDirectoriesSnapshotted = true;
 }
 
 QString SessionManager::profilesDir() const
@@ -203,7 +204,10 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
         if (instGroup.hasKey("dataDirectories")) {
-            // New format: newline-separated "path|mode" entries
+            // New format: newline-separated "path|mode" entries. The key's
+            // presence marks a taken snapshot — an explicitly empty list stays
+            // empty (no preset-default fallback at session start).
+            inst.dataDirectoriesSnapshotted = true;
             QString dataDirsRaw = instGroup.readEntry("dataDirectories", QString());
             const QStringList entries = dataDirsRaw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
             for (const QString &entry : entries) {
@@ -222,6 +226,7 @@ bool SessionManager::loadProfile(const QString &name)
             // Legacy: sharedDirectories was a plain QStringList (paths only) that
             // got bind-mounted at the player's home-relative equivalent path —
             // migrate as bind to preserve that visibility
+            inst.dataDirectoriesSnapshotted = true;
             QStringList legacyDirs = instGroup.readEntry("sharedDirectories", QStringList());
             for (const QString &path : legacyDirs) {
                 DataDirectory dir;
@@ -469,6 +474,7 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
             }
         }
         inst.dataDirectories = dataDirs;
+        inst.dataDirectoriesSnapshotted = true;
     }
 
     Q_EMIT instancesChanged();
@@ -575,6 +581,7 @@ void SessionManager::setInstanceDataDirectories(int index, const QVariantList &d
             }
         }
         m_currentProfile.instances[index].dataDirectories = dataDirs;
+        m_currentProfile.instances[index].dataDirectoriesSnapshotted = true;
         Q_EMIT instancesChanged();
 
         if (!m_currentProfile.name.isEmpty()) {

@@ -722,9 +722,11 @@ bool SessionRunner::setupDataDirectories()
 
         // Prefer the instance's persisted directories (snapshotted at preset
         // selection and saved in the profile); fall back to the preset's
-        // current defaults for instances configured before snapshotting existed.
+        // current defaults only when no snapshot was ever taken. An explicitly
+        // empty snapshot must stay empty — it must not inherit later preset
+        // edits.
         QList<DataDirectory> dataDirs = profile.instances[i].dataDirectories;
-        if (dataDirs.isEmpty()) {
+        if (dataDirs.isEmpty() && !profile.instances[i].dataDirectoriesSnapshotted) {
             dataDirs = preset.dataDirectories;
         }
         if (dataDirs.isEmpty()) {

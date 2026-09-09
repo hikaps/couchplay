@@ -132,6 +132,7 @@ private Q_SLOTS:
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
+    void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
     void testSetupDataDirectoriesBindModeMounts();
     void testSetupDataDirectoriesLibrarySharingGate();
     void testSetupDataDirectoriesSecondaryLibrariesMounted();
@@ -352,6 +353,33 @@ void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/preset/dir"));
     QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesEmptySnapshotStaysEmpty()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Empty Snapshot Game"),
+                                                        QStringLiteral("/usr/bin/game4"));
+
+    QVariantMap presetDir;
+    presetDir[QStringLiteral("path")] = QStringLiteral("/preset/dir");
+    presetDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList presetDirs;
+    presetDirs.append(presetDir);
+    QVERIFY(m_presetManager->setDataDirectories(presetId, presetDirs));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    // Explicitly empty snapshot (preset selected while it had no dirs)
+    m_sessionManager->setInstanceDataDirectories(0, QVariantList());
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    // Later preset additions must not leak into the intentionally-empty snapshot
+    QCOMPARE(m_helperClient->aclCalls.size(), 0);
+    QCOMPARE(m_helperClient->overlayCalls.size(), 0);
+    QCOMPARE(m_helperClient->copyDirCalls.size(), 0);
+    QCOMPARE(m_helperClient->mountCalls.size(), 0);
 }
 
 void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()

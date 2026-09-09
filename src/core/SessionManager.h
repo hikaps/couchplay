@@ -65,6 +65,7 @@ public:
     QString steamAppId; // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam"); // ID of the launch preset to use
     QList<DataDirectory> dataDirectories; // Per-instance data directories (from preset)
+    bool dataDirectoriesSnapshotted = false; // True once a snapshot was taken (even an empty one)
     QVariantList dataDirectoriesAsVariant() const;
     void setDataDirectoriesFromVariant(const QVariantList &dirs);
     QString overrideGamePath;
