@@ -37,6 +37,13 @@ public:
 
 Q_DECLARE_METATYPE(DataDirectory)
 
+/**
+ * Stable folder name for a shared directory's per-player staging area:
+ * the directory's path relative to the compositor home with '/' replaced by
+ * '_' (external paths use the sanitized full path).
+ */
+QString dataDirectoryStagingSlug(const QString &dirPath, const QString &compositorHome);
+
 struct LauncherInfo {
     Q_GADGET
     Q_PROPERTY(QString configPath MEMBER configPath)

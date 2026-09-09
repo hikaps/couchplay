@@ -2141,6 +2141,106 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     return true;
 }
 
+bool CouchPlayHelper::MirrorDirectoryContents(const QString &username,
+                                              const QString &sourceDir,
+                                              const QString &targetRelativePath)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (targetRelativePath.startsWith(QLatin1Char('/'))) {
+        qWarning() << "MirrorDirectoryContents: targetRelativePath must be relative:" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must be relative"));
+        return false;
+    }
+
+    if (targetRelativePath.contains(QStringLiteral(".."))) {
+        qWarning() << "MirrorDirectoryContents: targetRelativePath contains '..':" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must not contain '..'"));
+        return false;
+    }
+
+    if (!m_ops->fileExists(sourceDir)) {
+        qWarning() << "MirrorDirectoryContents: Source directory does not exist:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source directory does not exist: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!m_ops->isDirectory(sourceDir)) {
+        qWarning() << "MirrorDirectoryContents: Source is not a directory:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source is not a directory: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(sourceDir)) {
+        qWarning() << "MirrorDirectoryContents: Source path is outside allowed prefixes:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
+    QString canonicalSource = m_ops->canonicalFilePath(sourceDir);
+    if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+        qWarning() << "MirrorDirectoryContents: Source path resolves outside allowed prefixes:" << sourceDir << "->"
+                   << canonicalSource;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path resolves outside allowed prefixes"));
+        return false;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
+        return false;
+    }
+
+    QString targetPath = userHome + QLatin1Char('/') + targetRelativePath;
+
+    if (!m_ops->fileExists(targetPath) || !m_ops->isDirectory(targetPath)) {
+        qWarning() << "MirrorDirectoryContents: Target directory does not exist:" << targetPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Target directory does not exist: %1").arg(targetPath));
+        return false;
+    }
+
+    QStringList dirsToChown;
+    if (!validateUserPath(targetPath, username, QStringLiteral("MirrorDirectoryContents"), dirsToChown)) {
+        return false;
+    }
+
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "MirrorDirectoryContents: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+
+    // Merge semantics: copy contents into the existing target ("src/." — no
+    // nesting, no removal). Through an overlay mount the writes land in the
+    // player's private upper layer.
+    QString sourceContents = sourceDir + QStringLiteral("/.");
+    if (!runCommand(QStringLiteral("/usr/bin/cp"),
+                    {QStringLiteral("-a"), QStringLiteral("--"), sourceContents, targetPath},
+                    120000)) {
+        qWarning() << "MirrorDirectoryContents: Failed to merge" << sourceDir << "into" << targetPath;
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Failed to merge %1 into %2").arg(sourceDir, targetPath));
+        return false;
+    }
+
+    QString ownerSpec = QString::number(userUid) + QLatin1Char(':') + QString::number(static_cast<uint>(pw->pw_gid));
+    if (!runCommand(QStringLiteral("/usr/bin/chown"),
+                    {QStringLiteral("-R"), QStringLiteral("--"), ownerSpec, targetPath},
+                    120000)) {
+        qWarning() << "MirrorDirectoryContents: Failed to set ownership on" << targetPath;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to set ownership on: %1").arg(targetPath));
+        return false;
+    }
+
+    qDebug() << "MirrorDirectoryContents: Merged" << sourceDir << "into" << targetPath << "for user" << username;
+    return true;
+}
+
 bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {

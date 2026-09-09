@@ -119,7 +119,6 @@ class SessionManager : public QObject
 public:
     explicit SessionManager(QObject *parent = nullptr);
     ~SessionManager() override;
-
     // Profile management
     Q_INVOKABLE bool saveProfile(const QString &name);
     Q_INVOKABLE bool loadProfile(const QString &name);
@@ -149,6 +148,27 @@ public:
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
     Q_INVOKABLE void setInstanceDataDirectories(int index, const QVariantList &directories);
+
+    /**
+     * @brief Per-player staging folder path for hand-seeded data (configs etc.)
+     *
+     * Creates the folder (and one subfolder per writable shared directory)
+     * if needed and returns the path. Files dropped here are merged into the
+     * player's view of the corresponding shared directory at session start.
+     * Returns an empty string for invalid indices or instances without a
+     * user/preset.
+     */
+    Q_INVOKABLE QString playerDataFolderPath(int index);
+
+    /**
+     * @brief Open the per-player staging folder in the file manager
+     *
+     * No-op under Flatpak (no host filesystem access) — use
+     * playerDataFolderPath() to show a copyable path instead.
+     *
+     * @return true if an opener was launched
+     */
+    Q_INVOKABLE bool openPlayerDataFolder(int index);
 
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;
@@ -211,3 +231,10 @@ private:
     SessionProfile m_currentProfile;
     QList<SessionProfile> m_savedProfiles;
 };
+
+/**
+ * Per-player staging root for hand-seeded data (one subfolder per writable
+ * shared directory, named by dataDirectoryStagingSlug()):
+ *   <AppConfigLocation>/player-data/<presetId>/<username>/
+ */
+QString playerDataStagingRoot(const QString &presetId, const QString &username);

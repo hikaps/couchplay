@@ -44,6 +44,7 @@ private Q_SLOTS:
     void testLoadProfile();
     void testLoadProfileLegacySharedDirectories();
     void testLoadSaveDataDirectoriesRoundtrip();
+    void testPlayerDataFolderPath();
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
@@ -314,6 +315,41 @@ void TestSessionManager::testLoadSaveDataDirectoriesRoundtrip()
     QCOMPARE(restored[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("overlay"));
 
     m_sessionManager->deleteProfile(QStringLiteral("DataDirRoundtripProfile"));
+}
+
+void TestSessionManager::testPlayerDataFolderPath()
+{
+    // Invalid index and missing user yield an empty path
+    QCOMPARE(m_sessionManager->playerDataFolderPath(99), QString());
+    m_sessionManager->setInstanceCount(1);
+    QCOMPARE(m_sessionManager->playerDataFolderPath(0), QString());
+
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("custom-staging"));
+
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/Games/MyGame");
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantMap aclDir;
+    aclDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/ReadOnly");
+    aclDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    dirs.append(overlayDir);
+    dirs.append(aclDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QString expectedRoot = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
+        + QStringLiteral("/player-data/custom-staging/player1");
+    QCOMPARE(m_sessionManager->playerDataFolderPath(0), expectedRoot);
+    QVERIFY(QDir(expectedRoot).exists());
+
+    // A staging subfolder exists per writable dir; read-only dirs get none
+    QDir rootDir(expectedRoot);
+    const QStringList slugs = rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QCOMPARE(slugs.size(), 1);
+    QVERIFY(slugs.first().endsWith(QStringLiteral("Games_MyGame")));
+
+    QDir(expectedRoot).removeRecursively();
 }
 
 void TestSessionManager::testDeleteProfile()

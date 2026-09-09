@@ -70,6 +70,23 @@ DataDirectory DataDirectory::fromVariant(const QVariant &var)
     return dir;
 }
 
+QString dataDirectoryStagingSlug(const QString &dirPath, const QString &compositorHome)
+{
+    QString relative;
+    if (!compositorHome.isEmpty() && dirPath.startsWith(compositorHome + QLatin1Char('/'))) {
+        relative = dirPath.mid(compositorHome.length() + 1);
+    } else {
+        // External path: sanitize the full path into a unique folder name
+        relative = dirPath;
+        while (relative.startsWith(QLatin1Char('/'))) {
+            relative.remove(0, 1);
+        }
+    }
+    QString slug = relative;
+    slug.replace(QLatin1Char('/'), QLatin1Char('_'));
+    return slug;
+}
+
 QList<DataDirectory> PresetManager::getDefaultDataDirectories(const QString &id) const
 {
     using Resolver = std::function<QList<DataDirectory>(const PresetManager *)>;

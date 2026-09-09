@@ -761,6 +761,7 @@ bool SessionRunner::setupDataDirectories()
                 }
             }
 
+            QString playerViewRelative; // where the player sees this directory
             if (dir.mode == QStringLiteral("copy")) {
                 QString relativePath;
                 if (dir.path.startsWith(compositorHome)) {
@@ -768,27 +769,53 @@ bool SessionRunner::setupDataDirectories()
                 } else {
                     relativePath = dir.path.mid(dir.path.lastIndexOf(QLatin1Char('/')) + 1);
                 }
+                playerViewRelative = relativePath;
                 if (!m_helperClient->copyDirectoryToUser(username, dir.path, relativePath)) {
                     qWarning() << "SessionRunner: Failed to copy directory" << dir.path << "for user" << username;
                     allSucceeded = false;
                 }
-            } else if (dir.mode == QStringLiteral("overlay")) {
-                if (!m_helperClient->setupOverlayMount(username, compositorUid, dir.path, QString())) {
-                    qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path << "user" << username;
-                    allSucceeded = false;
+            } else if (dir.mode == QStringLiteral("overlay") || dir.mode == QStringLiteral("bind")) {
+                // Both mount at the player's home-relative equivalent path
+                // (external paths land under .couchplay/mounts), mirroring
+                // computeMountTarget's empty-alias mapping
+                if (dir.path.startsWith(compositorHome)) {
+                    playerViewRelative = dir.path.mid(compositorHome.length() + 1);
+                } else {
+                    playerViewRelative = QStringLiteral(".couchplay/mounts") + dir.path;
                 }
-            } else if (dir.mode == QStringLiteral("bind")) {
-                // Legacy mount semantics: bind at the player's home-relative
-                // equivalent path (or .couchplay/mounts/... for external paths)
-                const QStringList dirSpec = {dir.path + QLatin1Char('|')};
-                if (m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) < 1) {
-                    qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;
-                    allSucceeded = false;
+                if (dir.mode == QStringLiteral("overlay")) {
+                    if (!m_helperClient->setupOverlayMount(username, compositorUid, dir.path, QString())) {
+                        qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path
+                                   << "user" << username;
+                        allSucceeded = false;
+                    }
+                } else {
+                    const QStringList dirSpec = {dir.path + QLatin1Char('|')};
+                    if (m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) < 1) {
+                        qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;
+                        allSucceeded = false;
+                    }
                 }
             } else if (dir.mode == QStringLiteral("acl")) {
                 if (!m_helperClient->setPathAclWithParents(dir.path, username)) {
                     qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
                     allSucceeded = false;
+                }
+            }
+
+            // Merge hand-staged per-player files into the player's view (after
+            // the mount/copy, so overlay/bind writes land in the private layer)
+            if (!playerViewRelative.isEmpty()) {
+                const QString stagingDir = playerDataStagingRoot(presetId.isEmpty() ? QStringLiteral("steam") : presetId,
+                                                                 username)
+                    + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome);
+                const QDir staging(stagingDir);
+                if (staging.exists() && !staging.entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot).isEmpty()) {
+                    qCDebug(couchplaySharing) << "Mirroring staged data" << stagingDir << "for user" << username;
+                    if (!m_helperClient->mirrorDirectoryContents(username, stagingDir, playerViewRelative)) {
+                        qWarning() << "SessionRunner: Failed to mirror staged data" << stagingDir;
+                        allSucceeded = false;
+                    }
                 }
             }
 

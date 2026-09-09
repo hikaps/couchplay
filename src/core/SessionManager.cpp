@@ -5,9 +5,14 @@
 #include "Logging.h"
 #include "SessionRunner.h"
 
+#include <QDesktopServices>
 #include <QDebug>
 #include <QDir>
 #include <QStandardPaths>
+#include <QUrl>
+
+#include <unistd.h>
+#include <pwd.h>
 
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
@@ -588,6 +593,59 @@ void SessionManager::setInstanceDataDirectories(int index, const QVariantList &d
             saveProfile(m_currentProfile.name);
         }
     }
+}
+
+QString playerDataStagingRoot(const QString &presetId, const QString &username)
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + QStringLiteral("/player-data/")
+        + presetId + QLatin1Char('/') + username;
+}
+
+QString SessionManager::playerDataFolderPath(int index)
+{
+    if (index < 0 || index >= m_currentProfile.instances.size()) {
+        return QString();
+    }
+
+    const InstanceConfig &inst = m_currentProfile.instances[index];
+    if (inst.username.isEmpty()) {
+        return QString();
+    }
+    const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
+
+    const QString root = playerDataStagingRoot(presetId, inst.username);
+    if (!QDir().mkpath(root)) {
+        qWarning() << "SessionManager: Failed to create player data folder:" << root;
+        Q_EMIT errorOccurred(QStringLiteral("Could not create player data folder"));
+        return QString();
+    }
+
+    // One subfolder per writable shared directory so users see where files go
+    struct passwd *pw = getpwuid(getuid());
+    QString compositorHome = pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+    for (const DataDirectory &dir : inst.dataDirectories) {
+        if (dir.mode == QStringLiteral("acl")) {
+            continue;
+        }
+        QDir().mkpath(root + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome));
+    }
+
+    return root;
+}
+
+bool SessionManager::openPlayerDataFolder(int index)
+{
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        // No host filesystem access from the sandbox; the caller should show
+        // the path from playerDataFolderPath() instead
+        return false;
+    }
+
+    const QString path = playerDataFolderPath(index);
+    if (path.isEmpty()) {
+        return false;
+    }
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 QVariantList SessionManager::savedProfilesAsVariant() const

@@ -495,6 +495,29 @@ Kirigami.ScrollablePage {
                             }
                         }
 
+                        Controls.Button {
+                            objectName: "btnPlayerDataFolder"
+                            icon.name: "folder-open"
+                            text: i18nc("@action:button", "Player data")
+                            display: Controls.AbstractButton.TextBesideIcon
+                            Layout.fillWidth: true
+                            Accessible.role: Accessible.Button
+                            Accessible.name: text
+                            Controls.ToolTip.text: i18nc("@info:tooltip", "Open a folder where you can place per-player files (e.g. configs). They are copied into this player's copy of the shared directories at session start.")
+                            Controls.ToolTip.visible: hovered
+                            Controls.ToolTip.delay: 1000
+                            onClicked: {
+                                if (!instanceCard.cardSessionManager)
+                                    return
+                                if (!instanceCard.cardSessionManager.openPlayerDataFolder(instanceCard.index)) {
+                                    // Not opened (e.g. Flatpak): show the path so it can be opened manually
+                                    const path = instanceCard.cardSessionManager.playerDataFolderPath(instanceCard.index)
+                                    if (path)
+                                        root.showPassiveNotification(i18nc("@info:status", "Player data folder: %1", path), 10000)
+                                }
+                            }
+                        }
+
                         Controls.ComboBox {
                             id: outputModeCombo
                             objectName: "comboOutputMode"

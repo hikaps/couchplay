@@ -409,6 +409,9 @@ private Q_SLOTS:
     void testCopyDirectoryToUserSymlinkedTargetRejected();
     void testCopyDirectoryToUserSourceSymlinkResolvesOutside();
     void testSetupOverlayMountSymlinkedTargetRejected();
+    void testMirrorDirectoryContentsSuccess();
+    void testMirrorDirectoryContentsTargetNotExists();
+    void testMirrorDirectoryContentsTraversalTarget();
     void testIsPathWithinAllowedPrefixMountRoots();
 
     // Device ownership tests
@@ -1035,6 +1038,73 @@ void TestCouchPlayHelper::testSetupOverlayMountSymlinkedTargetRejected()
                                                    static_cast<uint>(getuid()),
                                                    QStringLiteral("/home/compositor/games"),
                                                    QStringLiteral("shares/games"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
+}
+
+void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging"), true);
+    // Existing merge target (e.g. an overlay mount point)
+    m_ops->setFileExists(QStringLiteral("/home/player1/Games/MyGame"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/player1/Games/MyGame"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("MirrorDirectoryContents"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging"),
+                                                   QStringLiteral("Games/MyGame"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+
+    // Merge copy of the source CONTENTS ("src/.") then recursive ownership
+    QCOMPARE(m_ops->m_processInvocations.size(), 2);
+    QCOMPARE(m_ops->m_processInvocations[0].command, QStringLiteral("/usr/bin/cp"));
+    QCOMPARE(m_ops->m_processInvocations[0].args,
+             (QStringList{QStringLiteral("-a"),
+                          QStringLiteral("--"),
+                          QStringLiteral("/home/compositor/.config/couchplay/player-data/p/g/staging/."),
+                          QStringLiteral("/home/player1/Games/MyGame")}));
+    QCOMPARE(m_ops->m_processInvocations[1].command, QStringLiteral("/usr/bin/chown"));
+    QCOMPARE(m_ops->m_processInvocations[1].args,
+             (QStringList{QStringLiteral("-R"), QStringLiteral("--"), QStringLiteral("1001:1001"),
+                          QStringLiteral("/home/player1/Games/MyGame")}));
+}
+
+void TestCouchPlayHelper::testMirrorDirectoryContentsTargetNotExists()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/compositor/staging"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/staging"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("MirrorDirectoryContents"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/staging"),
+                                                   QStringLiteral("Games/MyGame")); // not mocked -> missing
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
+}
+
+void TestCouchPlayHelper::testMirrorDirectoryContentsTraversalTarget()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/compositor/staging"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/compositor/staging"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("MirrorDirectoryContents"),
+                                                   QStringLiteral("player1"),
+                                                   QStringLiteral("/home/compositor/staging"),
+                                                   QStringLiteral("../escape"));
 
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);

@@ -301,6 +301,23 @@ public Q_SLOTS:
                              const QString &targetRelativePath);
 
     /**
+     * Merge-copy staged files into an existing directory in a user's home
+     *
+     * Copies the *contents* of sourceDir into the existing target directory
+     * (no removal, no nesting — unlike CopyDirectoryToUser's replace
+     * semantics). Used to seed per-player staged data (e.g. configs) through
+     * an overlay/bind mount so files land in the player's private layer.
+     *
+     * @param username Target user
+     * @param sourceDir Staging directory whose contents are merged
+     * @param targetRelativePath Existing relative directory under the user's home
+     * @return true if successful
+     */
+    bool MirrorDirectoryContents(const QString &username,
+                                 const QString &sourceDir,
+                                 const QString &targetRelativePath);
+
+    /**
      * Create a directory with proper ownership
      *
      * Creates the directory and all parent directories, setting ownership

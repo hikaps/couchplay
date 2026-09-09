@@ -202,6 +202,10 @@ class MockHelper(dbus.service.Object):
     def CopyFileToUser(self, sourcePath, targetPath, username):
         return True
 
+    @dbus.service.method(INTERFACE_NAME, in_signature="sss", out_signature="b")
+    def MirrorDirectoryContents(self, username, sourceDir, targetRelativePath):
+        return True
+
     @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="b")
     def CreateUserDirectory(self, path, username):
         try:

@@ -212,6 +212,16 @@ public:
     Q_INVOKABLE virtual bool
     copyDirectoryToUser(const QString &username, const QString &sourceDir, const QString &targetRelativePath);
 
+    /**
+     * @brief Merge-copy staged files into an existing directory in a user's home
+     * @param username Target user
+     * @param sourceDir Staging directory whose contents are merged
+     * @param targetRelativePath Existing relative directory under the user's home
+     * @return true if successful
+     */
+    Q_INVOKABLE virtual bool
+    mirrorDirectoryContents(const QString &username, const QString &sourceDir, const QString &targetRelativePath);
+
 Q_SIGNALS:
     void availabilityChanged();
     void errorOccurred(const QString &message);

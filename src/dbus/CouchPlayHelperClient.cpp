@@ -616,3 +616,23 @@ bool CouchPlayHelperClient::copyDirectoryToUser(const QString &username,
 
     return reply.value();
 }
+
+bool CouchPlayHelperClient::mirrorDirectoryContents(const QString &username,
+                                                    const QString &sourceDir,
+                                                    const QString &targetRelativePath)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply =
+        m_interface->call(QStringLiteral("MirrorDirectoryContents"), username, sourceDir, targetRelativePath);
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}

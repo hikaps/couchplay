@@ -55,12 +55,19 @@ public:
         QStringList directories;
     };
 
+    struct MirrorCall {
+        QString username;
+        QString sourceDir;
+        QString targetRelativePath;
+    };
+
     QList<AclCall> aclCalls;
     QList<MountCall> mountCalls;
     struct DeviceOwnerCall { QString path; int uid; };
     QList<DeviceOwnerCall> deviceOwnerCalls;
     QList<OverlayCall> overlayCalls;
     QList<CopyDirCall> copyDirCalls;
+    QList<MirrorCall> mirrorCalls;
 
     explicit MockCouchPlayHelperClient(QObject *parent = nullptr)
         : CouchPlayHelperClient(parent)
@@ -83,6 +90,12 @@ public:
     bool copyDirectoryToUser(const QString &username, const QString &sourceDir, const QString &targetRelativePath) override
     {
         copyDirCalls.append({username, sourceDir, targetRelativePath});
+        return true;
+    }
+
+    bool mirrorDirectoryContents(const QString &username, const QString &sourceDir, const QString &targetRelativePath) override
+    {
+        mirrorCalls.append({username, sourceDir, targetRelativePath});
         return true;
     }
 
@@ -134,6 +147,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
     void testSetupDataDirectoriesBindModeMounts();
+    void testSetupDataDirectoriesMirrorsStagedData();
     void testSetupDataDirectoriesLibrarySharingGate();
     void testSetupDataDirectoriesSecondaryLibrariesMounted();
     void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
@@ -404,6 +418,54 @@ void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()
     QCOMPARE(m_helperClient->mountCalls[0].username, QStringLiteral("player1"));
     QCOMPARE(m_helperClient->mountCalls[0].directories,
              (QStringList{QStringLiteral("/home/compositor/.config/game|")}));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesMirrorsStagedData()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Staged Game"), QStringLiteral("/usr/bin/game5"));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    // External overlay dir with staged files, external bind dir without
+    // staging, and an acl dir (staging never applies to acl)
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = QStringLiteral("/opt/games/game");
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantMap bindDir;
+    bindDir[QStringLiteral("path")] = QStringLiteral("/opt/other/lib");
+    bindDir[QStringLiteral("mode")] = QStringLiteral("bind");
+    QVariantMap aclDir;
+    aclDir[QStringLiteral("path")] = QStringLiteral("/opt/readonly");
+    aclDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    dirs.append(overlayDir);
+    dirs.append(bindDir);
+    dirs.append(aclDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    struct passwd *pw = getpwuid(getuid());
+    QString compositorHome = pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+    QString stagingRoot = playerDataStagingRoot(presetId, QStringLiteral("player1"));
+    QString overlayStaging = stagingRoot + QLatin1Char('/')
+        + dataDirectoryStagingSlug(QStringLiteral("/opt/games/game"), compositorHome);
+    QVERIFY(QDir().mkpath(overlayStaging));
+    QFile seed(overlayStaging + QStringLiteral("/config.ini"));
+    QVERIFY(seed.open(QIODevice::WriteOnly));
+    seed.write("player=1\n");
+    seed.close();
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    // Only the overlay dir had staged content; mirrored into the player's view
+    // of that dir (external path -> .couchplay/mounts mapping)
+    QCOMPARE(m_helperClient->mirrorCalls.size(), 1);
+    QCOMPARE(m_helperClient->mirrorCalls[0].username, QStringLiteral("player1"));
+    QCOMPARE(m_helperClient->mirrorCalls[0].sourceDir, overlayStaging);
+    QCOMPARE(m_helperClient->mirrorCalls[0].targetRelativePath, QStringLiteral(".couchplay/mounts/opt/games/game"));
+
+    QDir(stagingRoot).removeRecursively();
 }
 
 void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
