@@ -749,9 +749,13 @@ bool SessionRunner::setupDataDirectories()
                     qDebug() << "SessionRunner: Library sharing disabled, skipping Steam root entry for" << dir.path;
                     continue;
                 }
+                // Finalization writes manifests and libraryfolders.vdf
+                // entries for the alias mounts — skip it when preparation
+                // failed, or it would advertise libraries that never mounted
                 if (!m_steamConfigManager->prepareDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
                     allSucceeded = false;
+                    continue;
                 }
                 if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam library finalize failed for" << dir.path;
@@ -788,32 +792,43 @@ bool SessionRunner::setupDataDirectories()
                     relativePath = QStringLiteral(".couchplay/copies/")
                         + dataDirectoryStagingSlug(dir.path, compositorHome);
                 }
-                playerViewRelative = relativePath;
                 if (!m_helperClient->copyDirectoryToUser(username, dir.path, relativePath)) {
                     qWarning() << "SessionRunner: Failed to copy directory" << dir.path << "for user" << username;
                     allSucceeded = false;
+                } else {
+                    playerViewRelative = relativePath;
                 }
             } else if (dir.mode == QStringLiteral("overlay") || dir.mode == QStringLiteral("bind")) {
                 // Both mount at the player's home-relative equivalent path
                 // (external paths land under .couchplay/mounts), mirroring
-                // computeMountTarget's empty-alias mapping
+                // computeMountTarget's empty-alias mapping. The player view is
+                // only recorded on success: mirroring staged data into a
+                // failed mount's plain target directory would put files where
+                // a later successful mount would hide them.
+                QString relativePath;
                 if (dir.path.startsWith(compositorHome + QLatin1Char('/'))) {
-                    playerViewRelative = dir.path.mid(compositorHome.length() + 1);
+                    relativePath = dir.path.mid(compositorHome.length() + 1);
                 } else {
-                    playerViewRelative = QStringLiteral(".couchplay/mounts") + dir.path;
+                    relativePath = QStringLiteral(".couchplay/mounts") + dir.path;
                 }
+                bool mounted = false;
                 if (dir.mode == QStringLiteral("overlay")) {
-                    if (!m_helperClient->setupOverlayMount(username, compositorUid, dir.path, QString())) {
+                    mounted = m_helperClient->setupOverlayMount(username, compositorUid, dir.path, QString());
+                    if (!mounted) {
                         qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path
                                    << "user" << username;
                         allSucceeded = false;
                     }
                 } else {
                     const QStringList dirSpec = {dir.path + QLatin1Char('|')};
-                    if (m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) < 1) {
+                    mounted = m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) >= 1;
+                    if (!mounted) {
                         qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;
                         allSucceeded = false;
                     }
+                }
+                if (mounted) {
+                    playerViewRelative = relativePath;
                 }
             } else if (dir.mode == QStringLiteral("acl")) {
                 if (!m_helperClient->setPathAclWithParents(dir.path, username)) {

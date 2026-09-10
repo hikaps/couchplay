@@ -1659,7 +1659,9 @@ QString CouchPlayHelper::computeMountTarget(const QString &source,
     }
 
     QString target;
-    if (source.startsWith(compositorHome) && alias.isEmpty()) {
+    // Require the '/' boundary: /home/deck2/game must not be treated as
+    // home-relative to /home/deck (that produced /home/<player>2/game)
+    if (source.startsWith(compositorHome + QLatin1Char('/')) && alias.isEmpty()) {
         // Prevent traversal via source containing ../ after compositorHome prefix
         QString relativePath = source.mid(compositorHome.length());
         if (relativePath.contains(QStringLiteral(".."))) {

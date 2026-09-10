@@ -513,7 +513,8 @@ Kirigami.ScrollablePage {
                                     // Not opened (e.g. Flatpak): show the path so it can be opened manually
                                     const path = instanceCard.cardSessionManager.playerDataFolderPath(instanceCard.index)
                                     if (path)
-                                        root.showPassiveNotification(i18nc("@info:status", "Player data folder: %1", path), 10000)
+                                        applicationWindow().showPassiveNotification(
+                                            i18nc("@info:status", "Player data folder: %1", path), 10000)
                                 }
                             }
                         }

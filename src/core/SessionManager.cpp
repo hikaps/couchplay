@@ -651,13 +651,14 @@ QString SessionManager::playerDataFolderPath(int index)
 
     // The Steam-root overlay entry is a library-sharing marker handled
     // entirely by session setup (libraries are alias-mounted) — it never
-    // receives staged data, so don't create a misleading folder for it
+    // receives staged data, so don't create a misleading folder for it.
+    // Only the actual detected Steam root is a marker: other overlay dirs on
+    // the steam preset are ordinary user entries and keep their staging.
     QSet<QString> markerPaths;
     if (m_presetManager) {
-        for (const DataDirectory &d : m_presetManager->getPreset(QStringLiteral("steam")).dataDirectories) {
-            if (d.mode == QStringLiteral("overlay")) {
-                markerPaths.insert(d.path);
-            }
+        const QString steamRoot = m_presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
+        if (!steamRoot.isEmpty()) {
+            markerPaths.insert(steamRoot);
         }
     }
 
