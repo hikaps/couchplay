@@ -179,11 +179,18 @@ static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gi
         }
         target[len] = '\0';
         if (::symlinkat(target.data(), dstDirFd, name) != 0) {
-            if (errno == EEXIST) {
-                // Merge overwrite: keep the existing entry as-is
-                return 0;
+            if (errno != EEXIST) {
+                return -errno;
             }
-            return -errno;
+            // Merge overwrite: replace the stale entry — a regular file, a
+            // symlink, or an empty directory — so an updated link target
+            // reaches the destination instead of being silently dropped
+            if (::unlinkat(dstDirFd, name, 0) != 0 && ::unlinkat(dstDirFd, name, AT_REMOVEDIR) != 0) {
+                return -errno;
+            }
+            if (::symlinkat(target.data(), dstDirFd, name) != 0) {
+                return -errno;
+            }
         }
         // A root-owned link inside the player's tree is confusing at best;
         // assign the link itself to the target user without following it

@@ -406,10 +406,14 @@ private Q_SLOTS:
     void testCopyDirectoryToUserSourceOutsideAllowedPrefixes();
     void testCopyDirectoryToUserSourceNotExists();
     void testCopyDirectoryToUserSuccessReplacesAndChowns();
+    void testCopyDirectoryToUserPreservesTargetOnFailedCopy();
+    void testCopyDirectoryToUserDotDotNameAccepted();
     void testCopyDirectoryToUserSymlinkedTargetRejected();
     void testCopyDirectoryToUserSourceSymlinkResolvesOutside();
     void testSetupOverlayMountSymlinkedTargetRejected();
     void testMirrorDirectoryContentsSuccess();
+    void testMirrorDirectoryContentsReplacesExistingSymlink();
+    void testMirrorDirectoryContentsSymlinkVsNonEmptyDirFails();
     void testMirrorDirectoryContentsTargetNotExists();
     void testMirrorDirectoryContentsTraversalTarget();
     void testIsPathWithinAllowedPrefixMountRoots();
@@ -999,6 +1003,89 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
         QCOMPARE(st.st_uid, static_cast<uid_t>(1001));
         QCOMPARE(st.st_gid, static_cast<gid_t>(1001));
     }
+
+    // The temp-sibling swap must not leave hidden siblings behind
+    const QStringList parentEntries =
+        QDir(homeDir.path()).entryList(QDir::Dirs | QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+    QCOMPARE(parentEntries.size(), 2); // source-game + games
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserPreservesTargetOnFailedCopy()
+{
+    // A replacement copy that fails midway (special file in the source) must
+    // leave the player's previous data intact — never delete-then-copy
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+
+    QDir sourceDir(homeDir.path() + QStringLiteral("/source-game"));
+    QVERIFY(sourceDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(sourceDir.path(), true); // validation layer consults the mock
+    m_ops->setDirectoryExists(sourceDir.path(), true);
+    {
+        QFile f(sourceDir.filePath(QStringLiteral("config.ini")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("new");
+    }
+    // The copier refuses special files -> the copy fails partway through
+    QCOMPARE(::mkfifo(sourceDir.filePath(QStringLiteral("pipe")).toLocal8Bit().constData(), 0666), 0);
+
+    QDir targetDir(homeDir.path() + QStringLiteral("/games"));
+    QVERIFY(targetDir.mkpath(QStringLiteral(".")));
+    {
+        QFile previous(targetDir.filePath(QStringLiteral("save.dat")));
+        QVERIFY(previous.open(QIODevice::WriteOnly));
+        previous.write("previous");
+    }
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   sourceDir.path(),
+                                                   QStringLiteral("games"));
+
+    QVERIFY(!reply.isValid()); // failed copy -> D-Bus error
+
+    // The player's previous data survived the failed replacement
+    QFile survived(targetDir.filePath(QStringLiteral("save.dat")));
+    QVERIFY(survived.open(QIODevice::ReadOnly));
+    QCOMPARE(survived.readAll(), QByteArray("previous"));
+    QVERIFY(!QFileInfo(targetDir.filePath(QStringLiteral("config.ini"))).exists());
+
+    // No temporary/backup siblings left next to the target
+    const QStringList parentEntries =
+        QDir(homeDir.path()).entryList(QDir::Dirs | QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+    QVERIFY(parentEntries.contains(QStringLiteral("source-game")));
+    QVERIFY(parentEntries.contains(QStringLiteral("games")));
+    QCOMPARE(parentEntries.size(), 2);
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserDotDotNameAccepted()
+{
+    // ".." inside a name is valid; only whole ".." components climb the tree
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+
+    QDir sourceDir(homeDir.path() + QStringLiteral("/source-game"));
+    QVERIFY(sourceDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(sourceDir.path(), true);
+    m_ops->setDirectoryExists(sourceDir.path(), true);
+    {
+        QFile f(sourceDir.filePath(QStringLiteral("config.ini")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("x");
+    }
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   sourceDir.path(),
+                                                   QStringLiteral("Saves/Foo..Bar"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+    QVERIFY(QFileInfo(homeDir.filePath(QStringLiteral("Saves/Foo..Bar/config.ini"))).exists());
 }
 
 void TestCouchPlayHelper::testCopyDirectoryToUserSymlinkedTargetRejected()
@@ -1117,6 +1204,83 @@ void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
     }
 }
 
+void TestCouchPlayHelper::testMirrorDirectoryContentsReplacesExistingSymlink()
+{
+    // Merge-overwrite semantics: a staged symlink replaces a stale symlink
+    // (and a regular file) of the same name instead of being silently dropped
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+
+    QDir stagingDir(homeDir.path() + QStringLiteral("/staging"));
+    QVERIFY(stagingDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(stagingDir.path(), true); // validation layer consults the mock
+    m_ops->setDirectoryExists(stagingDir.path(), true);
+    QCOMPARE(::symlink("new-target", stagingDir.filePath(QStringLiteral("link")).toLocal8Bit().constData()), 0);
+    QCOMPARE(::symlink("entry-link", stagingDir.filePath(QStringLiteral("entry")).toLocal8Bit().constData()), 0);
+
+    QDir targetDir(homeDir.path() + QStringLiteral("/Games/MyGame"));
+    QVERIFY(targetDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(targetDir.path(), true);
+    m_ops->setDirectoryExists(targetDir.path(), true);
+    QCOMPARE(::symlink("old-target", targetDir.filePath(QStringLiteral("link")).toLocal8Bit().constData()), 0);
+    {
+        QFile stale(targetDir.filePath(QStringLiteral("entry"))); // regular file replaced by a link
+        QVERIFY(stale.open(QIODevice::WriteOnly));
+        stale.write("data");
+    }
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("MirrorDirectoryContents"),
+                                                   QStringLiteral("player1"),
+                                                   stagingDir.path(),
+                                                   QStringLiteral("Games/MyGame"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+
+    QCOMPARE(QFileInfo(targetDir.filePath(QStringLiteral("link"))).symLinkTarget(), QStringLiteral("new-target"));
+    const QFileInfo replacedEntry(targetDir.filePath(QStringLiteral("entry")));
+    QVERIFY(replacedEntry.isSymLink());
+    QCOMPARE(replacedEntry.symLinkTarget(), QStringLiteral("entry-link"));
+}
+
+void TestCouchPlayHelper::testMirrorDirectoryContentsSymlinkVsNonEmptyDirFails()
+{
+    // A staged symlink cannot replace a non-empty directory — fail loudly
+    // instead of silently keeping the stale entry
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+
+    QDir stagingDir(homeDir.path() + QStringLiteral("/staging"));
+    QVERIFY(stagingDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(stagingDir.path(), true);
+    m_ops->setDirectoryExists(stagingDir.path(), true);
+    QCOMPARE(::symlink("target", stagingDir.filePath(QStringLiteral("entry")).toLocal8Bit().constData()), 0);
+
+    QDir targetDir(homeDir.path() + QStringLiteral("/Games/MyGame"));
+    QVERIFY(targetDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(targetDir.path(), true);
+    m_ops->setDirectoryExists(targetDir.path(), true);
+    QVERIFY(targetDir.mkpath(QStringLiteral("entry")));
+    {
+        QFile f(targetDir.filePath(QStringLiteral("entry/keep.txt")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("keep");
+    }
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("MirrorDirectoryContents"),
+                                                   QStringLiteral("player1"),
+                                                   stagingDir.path(),
+                                                   QStringLiteral("Games/MyGame"));
+
+    QVERIFY(!reply.isValid());
+    // The conflicting directory is untouched
+    QVERIFY(QFileInfo(targetDir.filePath(QStringLiteral("entry/keep.txt"))).exists());
+}
+
 void TestCouchPlayHelper::testMirrorDirectoryContentsTargetNotExists()
 {
     m_ops->clear();
@@ -1167,6 +1331,12 @@ void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home"))); // root itself, not a subdir
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/a/../b")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QString()));
+
+    // ".." inside a name is fine; a whole ".." component is traversal
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/deck/Games/Foo..Bar")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/mnt/library..2/saves")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/deck/Games/..")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/tmp/a/../../etc")));
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerInvalidPathNotUnderDevInput()

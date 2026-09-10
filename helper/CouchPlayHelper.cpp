@@ -19,6 +19,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QThread>
@@ -1573,9 +1574,17 @@ void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString
     m_monitors.insert(serviceName, monitor);
 }
 
+// Only a complete ".." component climbs the tree; names like "Foo..Bar" are
+// ordinary and folder pickers produce them happily. openDirBelow additionally
+// rejects ".." parts during its walk as defense in depth.
+static bool pathHasDotDotComponent(const QString &path)
+{
+    return path.split(QLatin1Char('/'), Qt::SkipEmptyParts).contains(QStringLiteral(".."));
+}
+
 bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
 {
-    if (path.contains(QStringLiteral(".."))) {
+    if (pathHasDotDotComponent(path)) {
         return false;
     }
 
@@ -2149,6 +2158,26 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
     return true;
 }
 
+// Remove an entry (recursively for directories) below an open parent FD,
+// never following symlinks: a leaf symlink is unlinked, not descended into
+static void removeEntryUnder(int parentFd, const char *name)
+{
+    struct stat st;
+    if (::fstatat(parentFd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+        return;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        int fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd >= 0) {
+            SecureFs::removeTreeAt(fd);
+            ::close(fd);
+        }
+        ::unlinkat(parentFd, name, AT_REMOVEDIR);
+    } else {
+        ::unlinkat(parentFd, name, 0);
+    }
+}
+
 bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
                                           const QString &sourceDir,
                                           const QString &targetRelativePath)
@@ -2163,7 +2192,7 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         return false;
     }
 
-    if (targetRelativePath.contains(QStringLiteral(".."))) {
+    if (pathHasDotDotComponent(targetRelativePath)) {
         qWarning() << "CopyDirectoryToUser: targetRelativePath contains '..':" << targetRelativePath;
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must not contain '..'"));
         return false;
@@ -2252,51 +2281,83 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         return false;
     }
 
-    // Defined replacement semantics: remove an existing target first (by FD,
-    // never following symlinks), so the copy can never nest into a stale
-    // destination or follow a player-planted symlink at the leaf
-    struct stat st;
-    if (::fstatat(parentFd, leafName.toUtf8().constData(), &st, AT_SYMLINK_NOFOLLOW) == 0) {
-        if (S_ISDIR(st.st_mode)) {
-            int existingFd =
-                ::openat(parentFd, leafName.toUtf8().constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            if (existingFd >= 0) {
-                SecureFs::removeTreeAt(existingFd);
-                ::close(existingFd);
-            }
-            ::unlinkat(parentFd, leafName.toUtf8().constData(), AT_REMOVEDIR);
-        } else {
-            ::unlinkat(parentFd, leafName.toUtf8().constData(), 0);
-        }
-    }
-    if (::mkdirat(parentFd, leafName.toUtf8().constData(), 0755) != 0) {
+    // Build the replacement in a hidden sibling of the target and swap it in
+    // with renames only after the copy fully succeeded: a mid-copy failure
+    // (full disk, special file) must leave the player's previous data intact,
+    // and a rename never nests into a stale destination nor follows a
+    // player-planted symlink at the leaf
+    const QByteArray leafNameUtf8 = leafName.toUtf8();
+    const QString tempName = QStringLiteral(".%1.cptmp-%2")
+                                 .arg(leafName, QString::number(QRandomGenerator::global()->generate(), 16));
+    const QByteArray tempNameUtf8 = tempName.toUtf8();
+    if (::mkdirat(parentFd, tempNameUtf8.constData(), 0755) != 0) {
         int err = errno;
         ::close(parentFd);
         ::close(srcFd);
-        qWarning() << "CopyDirectoryToUser: Failed to create target directory:" << targetPath << strerror(err);
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory"));
+        qWarning() << "CopyDirectoryToUser: Failed to create temporary copy directory:" << targetPath
+                   << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create temporary copy directory"));
         return false;
     }
-    int dstFd = ::openat(parentFd, leafName.toUtf8().constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    ::close(parentFd);
+    int dstFd = ::openat(parentFd, tempNameUtf8.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dstFd < 0) {
         int err = errno;
+        ::unlinkat(parentFd, tempNameUtf8.constData(), AT_REMOVEDIR);
+        ::close(parentFd);
         ::close(srcFd);
-        qWarning() << "CopyDirectoryToUser: Could not open new target directory:" << strerror(err);
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open target directory"));
+        qWarning() << "CopyDirectoryToUser: Could not open temporary copy directory:" << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open temporary copy directory"));
         return false;
     }
     ::fchown(dstFd, userUid, pw->pw_gid);
 
     int copyResult = SecureFs::copyTreeContents(srcFd, dstFd, userUid, pw->pw_gid);
-    ::close(srcFd);
     ::close(dstFd);
     if (copyResult != 0) {
+        // The player's previous tree is untouched — discard only the partial copy
+        removeEntryUnder(parentFd, tempNameUtf8.constData());
+        ::close(parentFd);
+        ::close(srcFd);
         qWarning() << "CopyDirectoryToUser: Failed to copy tree:" << strerror(-copyResult);
         sendErrorReply(QDBusError::Failed,
                        QStringLiteral("Failed to copy directory from %1 to %2").arg(sourceDir, targetPath));
         return false;
     }
+
+    // Swap: move any existing target aside, rename the fresh copy into place,
+    // then discard the old tree. If the swap fails, restore the old target.
+    struct stat existingSt;
+    const bool hadExisting =
+        ::fstatat(parentFd, leafNameUtf8.constData(), &existingSt, AT_SYMLINK_NOFOLLOW) == 0;
+    QString oldName;
+    bool asideMoved = false;
+    if (hadExisting) {
+        oldName = QStringLiteral(".%1.cpold-%2")
+                      .arg(leafName, QString::number(QRandomGenerator::global()->generate(), 16));
+        asideMoved = ::renameat(parentFd, leafNameUtf8.constData(), parentFd, oldName.toUtf8().constData()) == 0;
+    }
+    bool renamedIn = asideMoved || !hadExisting;
+    if (renamedIn) {
+        renamedIn = ::renameat(parentFd, tempNameUtf8.constData(), parentFd, leafNameUtf8.constData()) == 0;
+    }
+    if (!renamedIn) {
+        int err = errno;
+        if (asideMoved
+            && ::renameat(parentFd, oldName.toUtf8().constData(), parentFd, leafNameUtf8.constData()) != 0) {
+            qWarning() << "CopyDirectoryToUser: Could not restore previous target" << targetPath << strerror(errno);
+        }
+        removeEntryUnder(parentFd, tempNameUtf8.constData());
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to swap in copied directory:" << targetPath << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to replace target directory"));
+        return false;
+    }
+    if (hadExisting) {
+        removeEntryUnder(parentFd, oldName.toUtf8().constData());
+    }
+    ::close(parentFd);
+    ::close(srcFd);
 
     qDebug() << "CopyDirectoryToUser: Copied" << sourceDir << "to" << targetPath << "for user" << username;
     return true;
@@ -2316,7 +2377,7 @@ bool CouchPlayHelper::MirrorDirectoryContents(const QString &username,
         return false;
     }
 
-    if (targetRelativePath.contains(QStringLiteral(".."))) {
+    if (pathHasDotDotComponent(targetRelativePath)) {
         qWarning() << "MirrorDirectoryContents: targetRelativePath contains '..':" << targetRelativePath;
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must not contain '..'"));
         return false;

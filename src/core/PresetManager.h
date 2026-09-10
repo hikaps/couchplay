@@ -228,6 +228,8 @@ private:
     void initBuiltinPresets();
     void loadCustomPresets();
     void saveCustomPresets();
+    void saveBuiltinDataDirectoryOverride(const QString &id);
+    void applyBuiltinDataDirectoryOverrides();
     void loadFlatpakCache();
     void saveFlatpakCache();
     QString resolveLaunchCommand(const QString &nativeCommand,

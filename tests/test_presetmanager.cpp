@@ -16,6 +16,7 @@
 #include <KSharedConfig>
 
 #include "PresetManager.h"
+#include "SteamConfigManager.h"
 
 class TestPresetManager : public QObject
 {
@@ -38,6 +39,7 @@ private Q_SLOTS:
 
     void testGetSetSharedDirectories();
     void testSetDataDirectoriesQmlShape();
+    void testSetDataDirectoriesBuiltinPersisted();
     void testLauncherInfoFlags();
 
     void testLauncherIdPersistence();
@@ -92,6 +94,7 @@ void TestPresetManager::init()
             config->deleteGroup(groupName);
         }
     }
+    config->deleteGroup(QStringLiteral("Builtin Data Directories"));
     config->sync();
 }
 
@@ -323,6 +326,43 @@ void TestPresetManager::testSetDataDirectoriesQmlShape()
     mixed.append(QVariant::fromValue(DataDirectory{QStringLiteral("/cpp/dir"), QStringLiteral("acl")}));
     QVERIFY(manager.setDataDirectories(id, mixed));
     QCOMPARE(manager.getDataDirectories(id).size(), 2);
+}
+
+void TestPresetManager::testSetDataDirectoriesBuiltinPersisted()
+{
+    // Built-in preset edits must survive a restart: stored as overrides and
+    // reapplied after detected defaults are (re)resolved
+    PresetManager manager;
+
+    QVariantMap dir1;
+    dir1[QStringLiteral("path")] = QStringLiteral("/persist/dir1");
+    dir1[QStringLiteral("mode")] = QStringLiteral("copy");
+    QVariantMap dir2;
+    dir2[QStringLiteral("path")] = QStringLiteral("/persist/dir2");
+    dir2[QStringLiteral("mode")] = QStringLiteral("bind");
+    QVariantList dirs;
+    dirs.append(dir1);
+    dirs.append(dir2);
+    QVERIFY(manager.setDataDirectories(QStringLiteral("steam"), dirs));
+    QCOMPARE(manager.getDataDirectories(QStringLiteral("steam")).size(), 2);
+
+    // A fresh instance resolves detected defaults first, then reapplies the
+    // persisted override
+    PresetManager reloaded;
+    const QVariantList restored = reloaded.getDataDirectories(QStringLiteral("steam"));
+    QCOMPARE(restored.size(), 2);
+    QCOMPARE(restored[0].value<DataDirectory>().path, QStringLiteral("/persist/dir1"));
+    QCOMPARE(restored[0].value<DataDirectory>().mode, QStringLiteral("copy"));
+    QCOMPARE(restored[1].value<DataDirectory>().path, QStringLiteral("/persist/dir2"));
+    QCOMPARE(restored[1].value<DataDirectory>().mode, QStringLiteral("bind"));
+
+    // Config-manager (re)injection re-runs initBuiltinPresets; the override
+    // must survive the rebuild too
+    SteamConfigManager steamManager;
+    reloaded.setSteamConfigManager(&steamManager);
+    QCOMPARE(reloaded.getDataDirectories(QStringLiteral("steam")).size(), 2);
+    const LaunchPreset steamPreset = reloaded.getPreset(QStringLiteral("steam"));
+    QCOMPARE(steamPreset.dataDirectories.first().path, QStringLiteral("/persist/dir1"));
 }
 
 void TestPresetManager::testLauncherInfoFlags()

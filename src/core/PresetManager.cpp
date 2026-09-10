@@ -316,6 +316,11 @@ void PresetManager::initBuiltinPresets()
 
     loadFlatpakCache();
     saveFlatpakCache();
+
+    // initBuiltinPresets re-runs whenever a config manager is (re)injected,
+    // re-resolving detected defaults and wiping in-memory edits — reapply the
+    // persisted user overrides so built-in preset edits survive restarts
+    applyBuiltinDataDirectoryOverrides();
 }
 
 QList<LaunchPreset> PresetManager::presets() const
@@ -448,6 +453,7 @@ bool PresetManager::setDataDirectories(const QString &id, const QVariantList &di
     for (int i = 0; i < m_builtinPresets.size(); ++i) {
         if (m_builtinPresets[i].id == id) {
             m_builtinPresets[i].dataDirectories = dataDirs;
+            saveBuiltinDataDirectoryOverride(id);
             Q_EMIT presetsChanged();
             return true;
         }
@@ -719,6 +725,57 @@ QString PresetManager::generateCustomId()
 {
     return QStringLiteral("custom-") +
            QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+}
+
+void PresetManager::saveBuiltinDataDirectoryOverride(const QString &id)
+{
+    // Built-in presets are rebuilt from detected defaults on every start, so
+    // user edits only survive as persisted overrides (same "path|mode"
+    // serialization as custom presets)
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Builtin Data Directories"));
+
+    for (const LaunchPreset &preset : m_builtinPresets) {
+        if (preset.id != id) {
+            continue;
+        }
+        QStringList entries;
+        for (const DataDirectory &dir : preset.dataDirectories) {
+            entries.append(dir.path + QLatin1Char('|') + dir.mode);
+        }
+        // An explicitly empty edit persists as an empty list, not as "default"
+        group.writeEntry(id, entries.join(QLatin1Char('\n')));
+        group.sync();
+        return;
+    }
+}
+
+void PresetManager::applyBuiltinDataDirectoryOverrides()
+{
+    KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup group = config->group(QStringLiteral("Builtin Data Directories"));
+    if (!group.exists()) {
+        return;
+    }
+
+    for (int i = 0; i < m_builtinPresets.size(); ++i) {
+        const QString id = m_builtinPresets[i].id;
+        if (!group.hasKey(id)) {
+            continue;
+        }
+        QList<DataDirectory> dirs;
+        const QStringList entries = group.readEntry(id, QString()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        for (const QString &entry : entries) {
+            const int pipePos = entry.indexOf(QLatin1Char('|'));
+            if (pipePos > 0) {
+                DataDirectory dir;
+                dir.path = entry.left(pipePos);
+                dir.mode = entry.mid(pipePos + 1);
+                dirs.append(dir);
+            }
+        }
+        m_builtinPresets[i].dataDirectories = dirs;
+    }
 }
 
 void PresetManager::loadCustomPresets()

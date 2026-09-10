@@ -11,7 +11,9 @@
 #include <KConfig>
 #include <KConfigGroup>
 
+#include "PresetManager.h"
 #include "SessionManager.h"
+#include "SteamConfigManager.h"
 
 #define KEY(x) QStringLiteral(x)
 
@@ -46,6 +48,7 @@ private Q_SLOTS:
     void testLoadSaveDataDirectoriesRoundtrip();
     void testUnsnapshottedStaysUnsnapshottedAfterSaveLoad();
     void testPlayerDataFolderPath();
+    void testPlayerDataFolderPathMarkerPredicate();
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
@@ -374,6 +377,75 @@ void TestSessionManager::testPlayerDataFolderPath()
     QVERIFY(slugs.first().contains(QStringLiteral("Games_MyGame-")));
 
     QDir(expectedRoot).removeRecursively();
+}
+
+void TestSessionManager::testPlayerDataFolderPathMarkerPredicate()
+{
+    // The Steam-root overlay marker is excluded from staging folders only
+    // under the exact runtime predicate (Steam launcher + overlay mode +
+    // detected Steam root); anything else keeps its folder
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QByteArray originalHome = qgetenv("HOME");
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+    QStandardPaths::setTestModeEnabled(true);
+
+    // Fake a detected Steam installation
+    const QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QVERIFY(QDir(steamRoot).mkpath(QStringLiteral("config")));
+    {
+        QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+        libraryVdf.write("\"libraryfolders\"\n{\n}\n");
+    }
+
+    SteamConfigManager steamManager;
+    QVERIFY(steamManager.isSteamDetected());
+    QCOMPARE(steamManager.steamPaths().steamRoot, steamRoot);
+    PresetManager presetManager;
+    presetManager.setSteamConfigManager(&steamManager);
+    m_sessionManager->setPresetManager(&presetManager);
+
+    QVariantMap markerDir; // overlay at the detected Steam root: library-sharing marker
+    markerDir[QStringLiteral("path")] = steamRoot;
+    markerDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantMap copyRootDir; // same path in copy mode: ordinary private directory
+    copyRootDir[QStringLiteral("path")] = steamRoot;
+    copyRootDir[QStringLiteral("mode")] = QStringLiteral("copy");
+
+    auto stagingDirCount = [this](const QString &presetId, const QVariantList &dirs) -> int {
+        m_sessionManager->setInstanceCount(1);
+        m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+        m_sessionManager->setInstancePreset(0, presetId);
+        m_sessionManager->setInstanceDataDirectories(0, dirs);
+        const QString root = m_sessionManager->playerDataFolderPath(0);
+        if (root.isEmpty()) {
+            return -1;
+        }
+        const int count = QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size();
+        QDir(root).removeRecursively();
+        return count;
+    };
+
+    // Compute everything first so a failed assertion can't leak the patched env
+    const int steamOverlayCount = stagingDirCount(QStringLiteral("steam"), QVariantList{markerDir});
+    const int steamCopyCount = stagingDirCount(QStringLiteral("steam"), QVariantList{copyRootDir});
+    const QString customId =
+        presetManager.addCustomPreset(QStringLiteral("Marker Test"), QStringLiteral("/usr/bin/game"));
+    const int customOverlayCount = stagingDirCount(customId, QVariantList{markerDir});
+
+    QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + QStringLiteral("/player-data"))
+        .removeRecursively();
+    QStandardPaths::setTestModeEnabled(false);
+    if (!originalHome.isNull()) {
+        qputenv("HOME", originalHome);
+    } else {
+        qunsetenv("HOME");
+    }
+
+    QCOMPARE(steamOverlayCount, 0); // marker: no staging folder
+    QCOMPARE(steamCopyCount, 1); // copy mode at the same path: staged
+    QCOMPARE(customOverlayCount, 1); // non-Steam preset: staged
 }
 
 void TestSessionManager::testDeleteProfile()

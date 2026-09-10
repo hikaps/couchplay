@@ -8,7 +8,6 @@
 #include <QDesktopServices>
 #include <QDebug>
 #include <QDir>
-#include <QSet>
 #include <QStandardPaths>
 #include <QUrl>
 
@@ -652,14 +651,14 @@ QString SessionManager::playerDataFolderPath(int index)
     // The Steam-root overlay entry is a library-sharing marker handled
     // entirely by session setup (libraries are alias-mounted) — it never
     // receives staged data, so don't create a misleading folder for it.
-    // Only the actual detected Steam root is a marker: other overlay dirs on
-    // the steam preset are ordinary user entries and keep their staging.
-    QSet<QString> markerPaths;
-    if (m_presetManager) {
-        const QString steamRoot = m_presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
-        if (!steamRoot.isEmpty()) {
-            markerPaths.insert(steamRoot);
-        }
+    // Match the runtime predicate exactly (SessionRunner::setupDataDirectories):
+    // the instance runs the Steam launcher, the entry is overlay-mode, and the
+    // path is the detected Steam root. Anything else — the same path in copy
+    // mode, or on another launcher's preset — is an ordinary private directory
+    // that session setup stages data for, so it keeps its folder.
+    QString steamMarkerPath;
+    if (m_presetManager && m_presetManager->getPreset(presetId).launcherId == QStringLiteral("steam")) {
+        steamMarkerPath = m_presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
     }
 
     struct passwd *pw = getpwuid(getuid());
@@ -668,7 +667,8 @@ QString SessionManager::playerDataFolderPath(int index)
         if (dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
             continue;
         }
-        if (markerPaths.contains(dir.path)) {
+        if (!steamMarkerPath.isEmpty() && dir.path == steamMarkerPath
+            && dir.mode == QStringLiteral("overlay")) {
             continue;
         }
         QDir().mkpath(root + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome));
