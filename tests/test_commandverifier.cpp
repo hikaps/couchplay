@@ -154,11 +154,27 @@ void TestCommandVerifier::testExtractFlatpakAppId()
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --user net.lutris.Lutris")),
              QStringLiteral("net.lutris.Lutris"));
 
-    // Space-separated option values must not be mistaken for the app ID
+    // Space-separated option values must not be mistaken for the app ID —
+    // including dotted values like a runtime reference
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --command steam com.valvesoftware.Steam")),
              QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --runtime org.freedesktop.Platform com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --runtime=org.freedesktop.Platform com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --branch stable com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
 
-    // Not a launch command / no ID present
+    // "--" opens the positional section; value-less flags before the ID
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run -- com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --file-forwarding com.valvesoftware.Steam @@u %u @@")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Not a launch command / no valid ID present
     QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak install com.valvesoftware.Steam")).isEmpty());
     QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run")).isEmpty());
     QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run steam")).isEmpty());

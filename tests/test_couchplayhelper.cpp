@@ -1364,6 +1364,21 @@ void TestCouchPlayHelper::testComputeMountTargetDotDotNames()
     QVERIFY(
         m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("../escape"), userHome, compositorHome)
             .isEmpty());
+
+    // An alias or source that normalizes to the home itself would attach the
+    // shared source over the player's entire home
+    QVERIFY(m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("."), userHome, compositorHome)
+                .isEmpty());
+    QVERIFY(
+        m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("./"), userHome, compositorHome)
+            .isEmpty());
+    QVERIFY(m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("/"), userHome, compositorHome)
+                .isEmpty());
+    QVERIFY(m_helper->computeMountTarget(QStringLiteral("/home/deck/."), QString(), userHome, compositorHome).isEmpty());
+    // A trailing "/." deeper down is a valid descendant once normalized
+    QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("shares/."), userHome,
+                                          compositorHome),
+             QStringLiteral("/home/player1/shares"));
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerInvalidPathNotUnderDevInput()

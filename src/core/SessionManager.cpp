@@ -487,18 +487,14 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.streamCodec = config[QStringLiteral("streamCodec")].toString();
     if (config.contains(QStringLiteral("sunshinePort")))
         inst.sunshinePort = config[QStringLiteral("sunshinePort")].toInt();
-    if (config.contains(QStringLiteral("dataDirectories"))) {
-        const QVariantList dirs = config[QStringLiteral("dataDirectories")].toList();
-        QList<DataDirectory> dataDirs;
-        for (const QVariant &var : dirs) {
-            DataDirectory dir = DataDirectory::fromVariant(var);
-            if (!dir.path.isEmpty()) {
-                dataDirs.append(dir);
-            }
-        }
-        inst.dataDirectories = dataDirs;
-        inst.dataDirectoriesSnapshotted = true;
-    }
+    // Deliberately NOT applying dataDirectories here: getInstanceConfig()
+    // always carries the key (empty for unsnapshotted instances), so any
+    // unrelated edit — codec, refresh rate, output mode — round-tripping the
+    // map through setInstanceConfig() would convert an unsnapshotted
+    // instance into an explicit empty snapshot and silently suppress the
+    // preset's configured directories at session start. Snapshot creation
+    // belongs solely to setInstanceDataDirectories(); the fields stay
+    // exposed in the map read-only.
 
     Q_EMIT instancesChanged();
 

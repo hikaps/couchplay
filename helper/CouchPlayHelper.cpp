@@ -1689,9 +1689,12 @@ QString CouchPlayHelper::computeMountTarget(const QString &source,
         target = userHome + QStringLiteral("/.couchplay/mounts") + source;
     }
 
-    // Verify the target stays within userHome
-    if (!target.startsWith(userHome)) {
-        qWarning() << "computeMountTarget: target escapes user home:" << target;
+    // Normalize, then require a strict descendant of the home: an alias or
+    // source that cleans to the home itself (".", "./", "/home/deck/.")
+    // would attach the shared source over the player's entire home
+    target = QDir::cleanPath(target);
+    if (!target.startsWith(userHome + QLatin1Char('/'))) {
+        qWarning() << "computeMountTarget: target is not a strict descendant of the user home:" << target;
         return {};
     }
 

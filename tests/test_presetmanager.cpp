@@ -507,6 +507,10 @@ void TestPresetManager::testDetectLauncherId_FlatpakRunWithOptions()
              QStringLiteral("steam"));
     QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run --command steam com.valvesoftware.Steam")),
              QStringLiteral("steam"));
+    // Dotted option values (a runtime reference) must not be mistaken for the ID
+    QCOMPARE(manager.detectLauncherId(
+                 QStringLiteral("flatpak run --runtime org.freedesktop.Platform com.valvesoftware.Steam")),
+             QStringLiteral("steam"));
     QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run --branch=beta com.heroicgameslauncher.hgl")),
              QStringLiteral("heroic"));
     QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run --user net.lutris.Lutris")),

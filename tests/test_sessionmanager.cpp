@@ -49,6 +49,7 @@ private Q_SLOTS:
     void testUnsnapshottedStaysUnsnapshottedAfterSaveLoad();
     void testPlayerDataFolderPath();
     void testPlayerDataFolderPathMarkerPredicate();
+    void testSetInstanceConfigPreservesDirectorySnapshot();
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
@@ -166,6 +167,39 @@ void TestSessionManager::testSetInstanceConfig()
     QCOMPARE(retrieved.value(KEY("internalWidth")).toInt(), 1280);
     QCOMPARE(retrieved.value(KEY("internalHeight")).toInt(), 720);
     QCOMPARE(retrieved.value(KEY("refreshRate")).toInt(), 120);
+}
+
+void TestSessionManager::testSetInstanceConfigPreservesDirectorySnapshot()
+{
+    // QML round-trips the whole config map for unrelated edits (codec,
+    // refresh rate…). The map always carries dataDirectories (empty while
+    // unsnapshotted), so applying it would convert the instance into an
+    // explicit empty snapshot and suppress the preset's directories.
+    m_sessionManager->setInstanceCount(1);
+
+    QVariantMap config = m_sessionManager->getInstanceConfig(0);
+    config[KEY("streamCodec")] = QStringLiteral("h265");
+    m_sessionManager->setInstanceConfig(0, config);
+    QVariantMap after = m_sessionManager->getInstanceConfig(0);
+    QVERIFY(!after.value(KEY("dataDirectoriesSnapshotted")).toBool());
+    QCOMPARE(after.value(KEY("dataDirectories")).toList().size(), 0);
+    QCOMPARE(after.value(KEY("streamCodec")).toString(), QStringLiteral("h265"));
+
+    // An existing explicit snapshot must survive the same round-trip
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[KEY("path")] = QStringLiteral("/home/compositor/Games/MyGame");
+    overlayDir[KEY("mode")] = QStringLiteral("overlay");
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    config = m_sessionManager->getInstanceConfig(0);
+    config[KEY("refreshRate")] = 144;
+    m_sessionManager->setInstanceConfig(0, config);
+    after = m_sessionManager->getInstanceConfig(0);
+    QVERIFY(after.value(KEY("dataDirectoriesSnapshotted")).toBool());
+    QCOMPARE(after.value(KEY("dataDirectories")).toList().size(), 1);
+    QCOMPARE(after.value(KEY("refreshRate")).toInt(), 144);
 }
 
 void TestSessionManager::testSetInstanceResolution()

@@ -51,7 +51,7 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
         // exported desktop entries commonly insert options between "run" and
         // the app ID, so a fixed token position misses every exported launcher
         const QString appID = extractFlatpakAppId(command);
-        if (appID.isEmpty()) {
+        if (appID.isEmpty() || !isValidFlatpakAppId(appID)) {
             result.isValid = false;
             result.errorMessage = QStringLiteral("Invalid Flatpak command format");
             return result;
@@ -306,22 +306,65 @@ bool CommandVerifier::isAccessibleToOtherUsersPath(const QString &path)
 
 QString CommandVerifier::extractFlatpakAppId(const QString &command)
 {
-    // "flatpak run [--branch=… --arch=… --command …] <app-id> [args…]":
-    // exported desktop entries commonly insert options (and their values)
-    // between "run" and the ID. The ID is the first token that is not an
-    // option flag and passes app-ID validation — option values without a
-    // dotted reverse-DNS shape (e.g. "--command steam") never match.
+    // "flatpak run [--opt value | --opt=value]… [--] <app-id> [args…]":
+    // exported desktop entries commonly insert options between "run" and the
+    // ID. Skip value-taking options in both forms (a bare scan for the first
+    // dotted non-flag token mistook e.g. "--runtime org.freedesktop.Platform"
+    // for the app), honor the "--" terminator, then take the first positional
+    // as the application reference.
+    static const QStringList valueTakingOptions = {
+        QStringLiteral("arch"),
+        QStringLiteral("branch"),
+        QStringLiteral("command"),
+        QStringLiteral("cwd"),
+        QStringLiteral("runtime"),
+        QStringLiteral("runtime-version"),
+        QStringLiteral("extra-arguments"),
+        QStringLiteral("env"),
+        QStringLiteral("filesystem"),
+        QStringLiteral("socket"),
+        QStringLiteral("device"),
+        QStringLiteral("share"),
+        QStringLiteral("inter-share"),
+        QStringLiteral("talk-name"),
+        QStringLiteral("call"),
+        QStringLiteral("bind"),
+        QStringLiteral("bind-mount"),
+        QStringLiteral("ro-bind"),
+        QStringLiteral("persist"),
+        QStringLiteral("subpath"),
+    };
+
     const QStringList tokens = command.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (tokens.size() < 3 || tokens.at(0) != QStringLiteral("flatpak") || tokens.at(1) != QStringLiteral("run")) {
         return QString();
     }
-    for (int i = 2; i < tokens.size(); ++i) {
+    QString positional;
+    for (int i = 2; i < tokens.size() && positional.isEmpty(); ++i) {
         const QString &token = tokens.at(i);
-        if (!token.startsWith(QLatin1Char('-')) && isValidFlatpakAppId(token)) {
-            return token;
+        if (token == QStringLiteral("--")) {
+            // Positional section begins: the application reference is next
+            if (i + 1 < tokens.size()) {
+                positional = tokens.at(i + 1);
+            }
+            break;
+        }
+        if (!token.startsWith(QLatin1Char('-'))) {
+            positional = token; // first positional is the application reference
+            break;
+        }
+        if (token.contains(QLatin1Char('='))) {
+            continue; // self-contained --opt=value
+        }
+        QString option = token;
+        while (option.startsWith(QLatin1Char('-'))) {
+            option.remove(0, 1);
+        }
+        if (valueTakingOptions.contains(option)) {
+            ++i; // consume the option's space-separated value
         }
     }
-    return QString();
+    return isValidFlatpakAppId(positional) ? positional : QString();
 }
 
 bool CommandVerifier::isValidFlatpakAppId(const QString &appID)
