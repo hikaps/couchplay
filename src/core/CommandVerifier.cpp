@@ -103,7 +103,10 @@ QString CommandVerifier::detectCommandType(const QString &command)
         return QStringLiteral("invalid");
     }
 
-    if (command.startsWith(QStringLiteral("flatpak run "))) {
+    const QStringList flatpakTokens = command.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (flatpakTokens.size() >= 2 && QFileInfo(flatpakTokens.at(0)).fileName() == QStringLiteral("flatpak")
+        && flatpakTokens.at(1) == QStringLiteral("run")) {
+        // Exported desktop files often carry the absolute executable
         return QStringLiteral("flatpak");
     }
 
@@ -321,7 +324,14 @@ QString CommandVerifier::extractFlatpakAppId(const QString &command)
         QStringLiteral("runtime-version"),
         QStringLiteral("extra-arguments"),
         QStringLiteral("env"),
+        QStringLiteral("set-env"),
+        QStringLiteral("unset-env"),
         QStringLiteral("env-fd"),
+        QStringLiteral("instance-id"),
+        QStringLiteral("instance-id-fd"),
+        QStringLiteral("usb"),
+        QStringLiteral("allow"),
+        QStringLiteral("disallow"),
         QStringLiteral("commit"),
         QStringLiteral("runtime-commit"),
         QStringLiteral("parent-pid"),
@@ -353,22 +363,30 @@ QString CommandVerifier::extractFlatpakAppId(const QString &command)
     };
 
     const QStringList tokens = command.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    if (tokens.size() < 3 || tokens.at(0) != QStringLiteral("flatpak") || tokens.at(1) != QStringLiteral("run")) {
+    if (tokens.size() < 3 || QFileInfo(tokens.at(0)).fileName() != QStringLiteral("flatpak")
+        || tokens.at(1) != QStringLiteral("run")) {
         return QString();
     }
-    QString positional;
-    for (int i = 2; i < tokens.size() && positional.isEmpty(); ++i) {
+    // The application reference is the first positional actually shaped like
+    // an app ID: a value of an option we do not know (e.g. "--unset-env
+    // DISPLAY" on an older list) is skipped rather than taken for the app.
+    // Known value-taking options additionally consume their value outright.
+    // Tokens after the application reference are its arguments; they can
+    // never displace this choice because the first valid ID wins.
+    for (int i = 2; i < tokens.size(); ++i) {
         const QString &token = tokens.at(i);
         if (token == QStringLiteral("--")) {
             // Positional section begins: the application reference is next
-            if (i + 1 < tokens.size()) {
-                positional = tokens.at(i + 1);
+            if (i + 1 < tokens.size() && isValidFlatpakAppId(tokens.at(i + 1))) {
+                return tokens.at(i + 1);
             }
-            break;
+            return QString();
         }
         if (!token.startsWith(QLatin1Char('-'))) {
-            positional = token; // first positional is the application reference
-            break;
+            if (isValidFlatpakAppId(token)) {
+                return token;
+            }
+            continue;
         }
         if (token.contains(QLatin1Char('='))) {
             continue; // self-contained --opt=value
@@ -381,7 +399,7 @@ QString CommandVerifier::extractFlatpakAppId(const QString &command)
             ++i; // consume the option's space-separated value
         }
     }
-    return isValidFlatpakAppId(positional) ? positional : QString();
+    return QString();
 }
 
 bool CommandVerifier::isValidFlatpakAppId(const QString &appID)

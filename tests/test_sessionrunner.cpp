@@ -192,6 +192,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
     void testSetupDataDirectoriesBindModeMounts();
+    void testSetupDataDirectoriesBindModeEscapesPipePath();
     void testSetupDataDirectoriesMirrorsStagedData();
     void testSetupDataDirectoriesLibrarySharingGate();
     void testSetupDataDirectoriesSecondaryLibrariesMounted();
@@ -461,11 +462,34 @@ void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()
 
     QVERIFY(m_runner->setupDataDirectories());
 
-    // Legacy mount spec: "path|" (empty alias => home-relative target)
+    // Escaped mount spec — identical to the legacy form for plain paths
+    // (empty alias => home-relative target)
     QCOMPARE(m_helperClient->mountCalls.size(), 1);
     QCOMPARE(m_helperClient->mountCalls[0].username, QStringLiteral("player1"));
     QCOMPARE(m_helperClient->mountCalls[0].directories,
              (QStringList{QStringLiteral("/home/compositor/.config/game|")}));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesBindModeEscapesPipePath()
+{
+    // Legal paths containing '|' must survive the source|alias wire format
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Pipe Bind"), QStringLiteral("/usr/bin/game7"));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    QVariantMap bindDir;
+    bindDir[QStringLiteral("path")] = QStringLiteral("/mnt/Game|Saves");
+    bindDir[QStringLiteral("mode")] = QStringLiteral("bind");
+    QVariantList dirs;
+    dirs.append(bindDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    QCOMPARE(m_helperClient->mountCalls.size(), 1);
+    QCOMPARE(m_helperClient->mountCalls[0].directories, (QStringList{QStringLiteral("/mnt/Game\\|Saves")}));
 }
 
 void TestSessionRunner::testSetupDataDirectoriesMirrorsStagedData()

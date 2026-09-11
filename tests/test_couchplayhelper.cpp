@@ -12,6 +12,7 @@
 #include "../helper/CouchPlayHelper.h"
 #undef private
 #include "../helper/SystemOps.h"
+#include "../helper/MountSpec.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -422,6 +423,7 @@ private Q_SLOTS:
     void testIsPathWithinAllowedPrefixMountRoots();
     void testComputeMountTargetDotDotNames();
     void testUnmountRetainsFailedMounts();
+    void testMountSpecCodec();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -1383,6 +1385,46 @@ void TestCouchPlayHelper::testComputeMountTargetDotDotNames()
     QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("shares/."),
                                           userHome, compositorHome),
              QStringLiteral("/home/player1/shares"));
+}
+
+void TestCouchPlayHelper::testMountSpecCodec()
+{
+    // Round-trips: pipes, backslashes and aliases must survive the wire
+    struct Case {
+        QString source;
+        QString alias;
+    };
+    const QList<Case> cases = {
+        {QStringLiteral("/home/compositor/.config/game"), QString()},
+        {QStringLiteral("/mnt/Game|Saves"), QString()},
+        {QStringLiteral("/mnt/Game|Saves"), QStringLiteral("shares/game|x")},
+        {QStringLiteral("/data\\set"), QStringLiteral("alias")},
+        {QStringLiteral("/both|and\\mix"), QStringLiteral("a|b")},
+    };
+    for (const Case &c : cases) {
+        QString source;
+        QString alias;
+        QVERIFY2(decodeMountSpec(encodeMountSpec(c.source, c.alias), source, alias),
+                 qPrintable(encodeMountSpec(c.source, c.alias)));
+        QCOMPARE(source, c.source);
+        QCOMPARE(alias, c.alias);
+    }
+
+    // Legacy unescaped specs decode unchanged
+    QString source;
+    QString alias;
+    QVERIFY(decodeMountSpec(QStringLiteral("/plain/path|"), source, alias));
+    QCOMPARE(source, QStringLiteral("/plain/path"));
+    QCOMPARE(alias, QString());
+    QVERIFY(decodeMountSpec(QStringLiteral("/src|shares/game"), source, alias));
+    QCOMPARE(source, QStringLiteral("/src"));
+    QCOMPARE(alias, QStringLiteral("shares/game"));
+    QVERIFY(decodeMountSpec(QStringLiteral("/lone\\backslash|x"), source, alias));
+    QCOMPARE(source, QStringLiteral("/lone\\backslash"));
+    QCOMPARE(alias, QStringLiteral("x"));
+
+    // More than one unescaped separator is malformed
+    QVERIFY(!decodeMountSpec(QStringLiteral("/mnt/Game|Saves|extra"), source, alias));
 }
 
 void TestCouchPlayHelper::testUnmountRetainsFailedMounts()

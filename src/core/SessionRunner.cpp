@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SessionRunner.h"
+#include "../../helper/MountSpec.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "DeviceManager.h"
 #include "GamescopeInstance.h"
@@ -818,7 +819,9 @@ bool SessionRunner::setupDataDirectories()
                         allSucceeded = false;
                     }
                 } else {
-                    const QStringList dirSpec = {dir.path + QLatin1Char('|')};
+                    // Escaped spec: paths containing '|' or '\' survive the
+                    // helper's source|alias wire format
+                    const QStringList dirSpec = {encodeMountSpec(dir.path, QString())};
                     mounted = m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) >= 1;
                     if (!mounted) {
                         qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;

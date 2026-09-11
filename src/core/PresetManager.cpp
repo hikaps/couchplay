@@ -11,6 +11,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -725,7 +726,13 @@ QString PresetManager::detectLauncherId(const QString &command) const
         return QString();
     }
 
-    if (firstToken == QStringLiteral("flatpak")) {
+    // Exported desktop files often carry the absolute executable
+    // (/usr/bin/flatpak run …, /usr/bin/steam …) — match on the basename so
+    // imported launchers keep their launcherId (Steam's Gamescope -e,
+    // launcher-specific data setup)
+    const QString execName = QFileInfo(firstToken).fileName();
+
+    if (execName == QStringLiteral("flatpak")) {
         // Exported desktop entries insert options between "run" and the app
         // ID (--branch=…, --arch=…, --command …); the shared extractor skips
         // them — a fixed token position misses every exported launcher
@@ -742,13 +749,13 @@ QString PresetManager::detectLauncherId(const QString &command) const
         return QString();
     }
 
-    if (firstToken == QStringLiteral("steam")) {
+    if (execName == QStringLiteral("steam")) {
         return QStringLiteral("steam");
     }
-    if (firstToken == QStringLiteral("heroic")) {
+    if (execName == QStringLiteral("heroic")) {
         return QStringLiteral("heroic");
     }
-    if (firstToken == QStringLiteral("lutris")) {
+    if (execName == QStringLiteral("lutris")) {
         return QStringLiteral("lutris");
     }
 

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "CouchPlayHelper.h"
+#include "MountSpec.h"
 #include "PolkitActions.h"
 #include "SecureFs.h"
 #include "SystemOps.h"
@@ -1735,13 +1736,14 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
     int successCount = 0;
 
     for (const QString &dirSpec : directories) {
-        QStringList parts = dirSpec.split(QLatin1Char('|'));
-        if (parts.isEmpty()) {
+        // Specs escape '|' and '\' inside the fields (paths like
+        // /mnt/Game|Saves must survive the wire); malformed specs are skipped
+        QString source;
+        QString alias;
+        if (!decodeMountSpec(dirSpec, source, alias)) {
+            qWarning() << "MountSharedDirectories: Malformed directory spec:" << dirSpec;
             continue;
         }
-
-        QString source = parts.at(0);
-        QString alias = parts.size() > 1 ? parts.at(1) : QString();
 
         if (!m_ops->fileExists(source)) {
             qWarning() << "MountSharedDirectories: Source path does not exist:" << source;

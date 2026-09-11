@@ -34,6 +34,8 @@ void TestCommandVerifier::testFlatpakDetection()
     // Test flatpak command detection
     QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("flatpak run com.heroicgameslauncher.heroic")));
     QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("flatpak run com.valvesoftware.Steam")));
+    // Exported desktop files carry the absolute executable
+    QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("/usr/bin/flatpak run com.valvesoftware.Steam")));
 
     // Test non-flatpak commands
     QVERIFY(!CommandVerifier::isFlatpakCommand(QStringLiteral("steam")));
@@ -188,6 +190,21 @@ void TestCommandVerifier::testExtractFlatpakAppId()
              QStringLiteral("net.lutris.Lutris"));
     QCOMPARE(CommandVerifier::extractFlatpakAppId(
                  QStringLiteral("flatpak run --runtime-commit def456 --unshare network com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Absolute executable path (exported desktop files)
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("/usr/bin/flatpak run com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Options absent from the value-taking list: their value must not be
+    // mistaken for the app reference
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --unset-env DISPLAY com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --usb 054c:0268 com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --instance-id-fd 5 net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --future-opt value com.valvesoftware.Steam")),
              QStringLiteral("com.valvesoftware.Steam"));
 
     // Not a launch command / no valid ID present

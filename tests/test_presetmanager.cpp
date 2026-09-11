@@ -56,6 +56,7 @@ private Q_SLOTS:
     void testDetectLauncherId_FlatpakHeroic();
     void testDetectLauncherId_FlatpakLutris();
     void testDetectLauncherId_FlatpakRunWithOptions();
+    void testDetectLauncherId_AbsoluteExecPaths();
     void testDetectLauncherId_UnknownBinary();
     void testDetectLauncherId_UrlScheme();
 
@@ -570,6 +571,23 @@ void TestPresetManager::testDetectLauncherId_FlatpakRunWithOptions()
 
     // Not a launch command
     QVERIFY(manager.detectLauncherId(QStringLiteral("flatpak install com.valvesoftware.Steam")).isEmpty());
+}
+
+void TestPresetManager::testDetectLauncherId_AbsoluteExecPaths()
+{
+    // Exported desktop files often carry the absolute executable; the
+    // basename must drive detection or Steam misses Gamescope -e and
+    // launcher-specific setup is skipped
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("/usr/bin/flatpak run com.valvesoftware.Steam")),
+             QStringLiteral("steam"));
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("/usr/bin/flatpak run --branch=stable com.heroicgameslauncher.hgl")),
+             QStringLiteral("heroic"));
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("/usr/bin/steam -bigpicture")), QStringLiteral("steam"));
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("/usr/games/lutris")), QStringLiteral("lutris"));
+
+    // Basenames that merely contain a launcher name must not match
+    QVERIFY(manager.detectLauncherId(QStringLiteral("/opt/steam-game/launcher")).isEmpty());
 }
 
 void TestPresetManager::testDetectLauncherId_UnknownBinary()
