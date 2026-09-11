@@ -1399,10 +1399,10 @@ void TestCouchPlayHelper::testUnmountRetainsFailedMounts()
 
     // FD-pinned entry whose target is not actually a mount point: the FD
     // umount fails (EINVAL) and the entry must survive with its pinned FD
-    const int fd = ::open(QFile::encodeName(dir.path()), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    const int fd = ::open(QFile::encodeName(dir.path()).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     QVERIFY(fd >= 0);
 
-    MountInfo info;
+    CouchPlayHelper::MountInfo info;
     info.source = QStringLiteral("/home/compositor/games");
     info.target = dir.filePath(QStringLiteral("target"));
     info.mountType = QStringLiteral("bind");
@@ -1422,7 +1422,7 @@ void TestCouchPlayHelper::testUnmountRetainsFailedMounts()
     // Path-based entry (post-restart state) with a failing umount: retained too
     m_ops->setMockProcessStart(true);
     m_ops->setProcessExitCode(1);
-    MountInfo pathInfo;
+    CouchPlayHelper::MountInfo pathInfo;
     pathInfo.source = QStringLiteral("/home/compositor/other");
     pathInfo.target = dir.filePath(QStringLiteral("other"));
     pathInfo.mountType = QStringLiteral("bind");
