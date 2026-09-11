@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QString>
 #include <QStringList>
 
@@ -79,6 +80,15 @@ int removeTreeAt(int dirFd);
  * symlinkat relative to dstDirFd, never followed.
  */
 int copyTreeContents(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid);
+
+/**
+ * Write a file below an already-open directory without following a leaf
+ * symlink. The file is truncated only after O_NOFOLLOW has accepted the
+ * target, then ownership and permissions are applied to the opened FD.
+ *
+ * @return 0 on success, -errno on failure
+ */
+int writeFileAt(int parentFd, const QString &name, const QByteArray &content, uid_t uid, gid_t gid, mode_t mode = 0644);
 
 // ---------------------------------------------------------------------------
 // FD-anchored mounting (Linux mount API, kernel 5.2+; overlayfs 5.11+)

@@ -297,6 +297,49 @@ int copyTreeContents(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid)
     return copyTree(srcDirFd, dstDirFd, uid, gid);
 }
 
+int writeFileAt(int parentFd, const QString &name, const QByteArray &content, uid_t uid, gid_t gid, mode_t mode)
+{
+    if (name.isEmpty() || name == QStringLiteral(".") || name == QStringLiteral("..")
+        || name.contains(QLatin1Char('/'))) {
+        return -EINVAL;
+    }
+
+    const QByteArray nameBytes = name.toUtf8();
+    const int fileFd =
+        ::openat(parentFd, nameBytes.constData(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, mode);
+    if (fileFd < 0) {
+        return -errno;
+    }
+
+    qsizetype offset = 0;
+    while (offset < content.size()) {
+        const ssize_t written = ::write(fileFd, content.constData() + offset, content.size() - offset);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            const int error = errno;
+            ::close(fileFd);
+            return -error;
+        }
+        offset += written;
+    }
+
+    if (::fchown(fileFd, uid, gid) != 0) {
+        const int error = errno;
+        ::close(fileFd);
+        return -error;
+    }
+    if (::fchmod(fileFd, mode) != 0) {
+        const int error = errno;
+        ::close(fileFd);
+        return -error;
+    }
+
+    ::close(fileFd);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // FD-anchored mounting
 // ---------------------------------------------------------------------------

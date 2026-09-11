@@ -1026,8 +1026,10 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
         bool anyFailure = false;
         for (const SteamLibraryFolder &library : m_libraries) {
             qCDebug(couchplaySteam) << "prepareDataDir: Setting ACL on" << library.path << "for" << username;
-            if (!m_helperClient->setPathAclWithParents(library.path, username)) {
-                qCWarning(couchplaySteam) << "prepareDataDir: Failed to set ACL on" << library.path;
+            const bool parentAclOk = m_helperClient->setPathAclWithParents(library.path, username);
+            const bool contentAclOk = m_helperClient->setDirectoryAcl(library.path, username, true);
+            if (!parentAclOk || !contentAclOk) {
+                qCWarning(couchplaySteam) << "prepareDataDir: Failed to set recursive ACL on" << library.path;
                 anyFailure = true;
             }
         }

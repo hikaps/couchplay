@@ -2507,44 +2507,59 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
         return false;
     }
 
-    uint userUid = getUserUid(username);
+    const uint userUid = getUserUid(username);
     struct passwd *pw = m_ops->getpwuid(userUid);
     if (!pw) {
         qWarning() << "WriteFileToUser: Could not get user info for" << username;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
         return false;
     }
+    const gid_t userGid = pw->pw_gid;
+    const QString userHome = QString::fromLocal8Bit(pw->pw_dir);
 
-    int lastSlash = targetPath.lastIndexOf(QLatin1Char('/'));
-    QString targetDir = (lastSlash >= 0) ? targetPath.left(lastSlash) : QStringLiteral(".");
-
-    QStringList dirsToChown;
-    if (!validateUserPath(targetDir, username, QStringLiteral("WriteFileToUser"), dirsToChown)) {
+    const int lastSlash = targetPath.lastIndexOf(QLatin1Char('/'));
+    const QString targetDir = (lastSlash >= 0) ? targetPath.left(lastSlash) : QStringLiteral(".");
+    QStringList unusedDirsToChown;
+    if (!validateUserPath(targetDir, username, QStringLiteral("WriteFileToUser"), unusedDirsToChown)) {
         return false;
     }
 
-    if (!m_ops->mkpath(targetDir)) {
-        qWarning() << "WriteFileToUser: Failed to create directory:" << targetDir;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create directory: %1").arg(targetDir));
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const QString safeHome = canonicalHome.isEmpty() ? userHome : canonicalHome;
+    const QString relativeTarget = QDir(userHome).relativeFilePath(targetPath);
+    QStringList targetParts = relativeTarget.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (relativeTarget.startsWith(QLatin1Char('/')) || targetParts.isEmpty()
+        || targetParts.contains(QStringLiteral(".."))) {
+        qWarning() << "WriteFileToUser: Invalid target path:" << targetPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid target path"));
+        return false;
+    }
+    const QString leafName = targetParts.takeLast();
+    if (leafName.isEmpty() || leafName == QStringLiteral(".") || leafName == QStringLiteral("..")) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid target filename"));
         return false;
     }
 
-    for (const QString &dir : dirsToChown) {
-        m_ops->chown(dir, userUid, pw->pw_gid);
+    const int homeFd = SecureFs::openBaseDir(safeHome);
+    if (homeFd < 0) {
+        qWarning() << "WriteFileToUser: Could not securely open user home:" << safeHome;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+    const int parentFd = SecureFs::openDirBelow(homeFd, targetParts, true, userUid, userGid);
+    ::close(homeFd);
+    if (parentFd < 0) {
+        qWarning() << "WriteFileToUser: Failed to securely create target parent:" << targetDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory"));
+        return false;
     }
 
-    if (!m_ops->writeFile(targetPath, content)) {
-        qWarning() << "WriteFileToUser: Failed to write to" << targetPath;
+    const int writeResult = SecureFs::writeFileAt(parentFd, leafName, content, userUid, userGid, 0644);
+    ::close(parentFd);
+    if (writeResult != 0) {
+        qWarning() << "WriteFileToUser: Failed to write to" << targetPath << ":" << strerror(-writeResult);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to write to file"));
         return false;
-    }
-
-    if (m_ops->chown(targetPath, userUid, pw->pw_gid) != 0) {
-        qWarning() << "WriteFileToUser: Failed to set ownership on" << targetPath;
-    }
-
-    if (m_ops->chmod(targetPath, 0644) != 0) {
-        qWarning() << "WriteFileToUser: Failed to set permissions on" << targetPath;
     }
 
     return true;
