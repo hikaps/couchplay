@@ -489,7 +489,8 @@ void TestSessionRunner::testSetupDataDirectoriesBindModeEscapesPipePath()
     QVERIFY(m_runner->setupDataDirectories());
 
     QCOMPARE(m_helperClient->mountCalls.size(), 1);
-    QCOMPARE(m_helperClient->mountCalls[0].directories, (QStringList{QStringLiteral("/mnt/Game\\|Saves")}));
+    // Escaped pipe + trailing separator (empty alias)
+    QCOMPARE(m_helperClient->mountCalls[0].directories, (QStringList{QStringLiteral("/mnt/Game\\|Saves|")}));
 }
 
 void TestSessionRunner::testSetupDataDirectoriesMirrorsStagedData()
