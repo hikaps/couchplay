@@ -21,11 +21,9 @@ inline QString escapeMountSpecField(const QString &field)
 
 inline QString encodeMountSpec(const QString &source, const QString &alias)
 {
-    QString spec = escapeMountSpecField(source);
-    if (!alias.isEmpty()) {
-        spec += QLatin1Char('|') + escapeMountSpecField(alias);
-    }
-    return spec;
+    // Always emit the separator: "source|" (empty alias) stays byte-identical
+    // to the legacy wire form
+    return escapeMountSpecField(source) + QLatin1Char('|') + escapeMountSpecField(alias);
 }
 
 inline bool decodeMountSpec(const QString &spec, QString &source, QString &alias)
