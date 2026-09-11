@@ -153,6 +153,14 @@ public:
      * @return QVariantList of DataDirectory gadgets
      */
     Q_INVOKABLE QVariantList getDataDirectories(const QString &id) const;
+    /**
+     * @brief Resolve a Flatpak document-portal directory to its host path
+     *
+     * Native paths are returned unchanged. Flatpak folder dialogs may return
+     * document-portal paths that the privileged host helper cannot resolve;
+     * this maps those paths through the Documents portal before persistence.
+     */
+    Q_INVOKABLE QString resolveDirectoryPath(const QString &path) const;
 
     /**
      * @brief Set data directories for a preset and persist

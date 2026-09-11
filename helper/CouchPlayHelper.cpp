@@ -2734,10 +2734,18 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
         return false;
     }
 
+    const QString canonicalDir = m_ops->canonicalFilePath(path);
+    if (!canonicalDir.isEmpty() && !isPathWithinAllowedPrefix(canonicalDir)) {
+        qWarning() << "SetDirectoryAcl: Path resolves outside allowed prefixes:" << path << "->" << canonicalDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path resolves outside allowed prefixes"));
+        return false;
+    }
+    const QString safePath = canonicalDir.isEmpty() ? path : canonicalDir;
+
     // Keep the ACL operation anchored to a no-follow FD. The canonical
     // pathname check above is only a fast rejection; it cannot close a
     // rename/symlink race before setfacl resolves a path.
-    const int directoryFd = SecureFs::openExistingDirNoFollow(path);
+    const int directoryFd = SecureFs::openExistingDirNoFollow(safePath);
     if (directoryFd < 0) {
         qWarning() << "SetDirectoryAcl: Refusing unsafe or non-directory path:" << path;
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is not a safe directory"));
@@ -2796,7 +2804,7 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
     };
 
     QStringList pathsToSet;
-    QString current = path;
+    QString current = canonicalPath.isEmpty() ? path : canonicalPath;
 
     while (current.endsWith(QLatin1Char('/')) && current.length() > 1) {
         current.chop(1);
@@ -2815,13 +2823,7 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
             current = QStringLiteral("/");
         }
 
-        bool atBoundary = false;
-        for (const QString &boundary : stopBoundaries) {
-            if (current == boundary || current.length() < boundary.length()) {
-                atBoundary = true;
-                break;
-            }
-        }
+        const bool atBoundary = stopBoundaries.contains(current);
 
         if (atBoundary) {
             break;

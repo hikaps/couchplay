@@ -150,6 +150,13 @@ Kirigami.Dialog {
             let path = selectedFolder.toString()
             if (path.startsWith("file://")) path = path.substring(7)
             path = decodeURIComponent(path)
+            const resolvedPath = root.presetManager.resolveDirectoryPath(path)
+            if (resolvedPath === "") {
+                applicationWindow().showPassiveNotification(
+                    i18nc("@info", "Could not resolve the selected directory for the host helper"), "long")
+                return
+            }
+            path = resolvedPath
             
             let exists = false
             for (let i = 0; i < directoriesModel.count; i++) {

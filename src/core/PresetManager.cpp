@@ -7,8 +7,12 @@
 #include "Logging.h"
 #include "SteamConfigManager.h"
 
+#include <QByteArray>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDBusArgument>
+#include <QDBusConnection>
+#include <QDBusMessage>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -16,6 +20,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUuid>
@@ -497,6 +502,75 @@ QVariantList PresetManager::getDataDirectories(const QString &id) const
     }
     return result;
 }
+QString PresetManager::resolveDirectoryPath(const QString &path) const
+{
+    if (!qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        return path;
+    }
+
+    // The file chooser exposes granted documents through either the
+    // sandbox-visible /run/flatpak/doc mount or the host-style
+    // /run/user/<uid>/doc mount. Resolve only those exact namespaces; an
+    // arbitrary path containing "/doc/" must never be treated as a portal
+    // document.
+    const QString cleanPath = QDir::cleanPath(path);
+    static const QRegularExpression portalPathPattern(
+        QStringLiteral("^/run/(?:flatpak/doc|user/[0-9]+/doc)/([^/]+)(/.*)?$"));
+    const QRegularExpressionMatch match = portalPathPattern.match(cleanPath);
+    if (!match.hasMatch()) {
+        return path;
+    }
+    const QString documentId = match.captured(1);
+
+    // GetHostPaths returns the host path for the exported document root. The
+    // first suffix component is that same exported root name, so only append
+    // components below it (if the chooser returned a descendant).
+    const QString portalSuffix = match.captured(2);
+    QString suffix;
+    if (!portalSuffix.isEmpty()) {
+        const int descendantSlash = portalSuffix.indexOf(QLatin1Char('/'), 1);
+        if (descendantSlash >= 0) {
+            suffix = portalSuffix.mid(descendantSlash);
+        }
+    }
+    QDBusMessage request =
+        QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.portal.Documents"),
+                                       QStringLiteral("/org/freedesktop/portal/documents"),
+                                       QStringLiteral("org.freedesktop.portal.Documents"),
+                                       QStringLiteral("GetHostPaths"));
+    request << QStringList{documentId};
+
+    const QDBusMessage reply = QDBusConnection::sessionBus().call(request);
+    if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) {
+        qWarning() << "PresetManager: Failed to resolve document portal path" << path << ":"
+                   << reply.errorMessage();
+        return {};
+    }
+
+    const QDBusArgument paths = reply.arguments().constFirst().value<QDBusArgument>();
+    QString hostPath;
+    QDBusArgument map = paths;
+    map.beginMap();
+    while (!map.atEnd()) {
+        QString id;
+        QByteArray pathBytes;
+        map.beginMapEntry();
+        map >> id >> pathBytes;
+        map.endMapEntry();
+        if (id == documentId) {
+            hostPath = QString::fromUtf8(pathBytes);
+            break;
+        }
+    }
+    map.endMap();
+
+    if (hostPath.isEmpty() || !hostPath.startsWith(QLatin1Char('/'))) {
+        qWarning() << "PresetManager: Documents portal returned no absolute host path for" << documentId;
+        return {};
+    }
+    return QDir::cleanPath(hostPath + suffix);
+}
+
 
 bool PresetManager::setDataDirectories(const QString &id, const QVariantList &directories)
 {
