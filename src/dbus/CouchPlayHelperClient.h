@@ -126,7 +126,7 @@ public:
      * @brief Unmount all shared directories for all users
      * @return Number of successful unmounts, or -1 on error
      */
-    Q_INVOKABLE int unmountAllSharedDirectories();
+    Q_INVOKABLE virtual int unmountAllSharedDirectories();
 
     /**
      * @brief Copy a file to a user's directory with proper ownership

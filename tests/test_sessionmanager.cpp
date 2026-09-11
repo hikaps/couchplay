@@ -15,7 +15,9 @@
 #include "SessionManager.h"
 #include "SteamConfigManager.h"
 
+#define private public
 #include "CouchPlayHelperClient.h"
+#undef private
 
 #define KEY(x) QStringLiteral(x)
 
