@@ -424,6 +424,8 @@ private Q_SLOTS:
     void testComputeMountTargetDotDotNames();
     void testUnmountRetainsFailedMounts();
     void testMountSpecCodec();
+    void testSetPathAclWithParentsSymlinkEscapeRejected();
+    void testSetDirectoryAclSymlinkEscapeRejected();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -1385,6 +1387,45 @@ void TestCouchPlayHelper::testComputeMountTargetDotDotNames()
     QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("shares/."),
                                           userHome, compositorHome),
              QStringLiteral("/home/player1/shares"));
+}
+
+void TestCouchPlayHelper::testSetPathAclWithParentsSymlinkEscapeRejected()
+{
+    // setfacl follows symlinks: an allowed-prefix path resolving outside the
+    // allowed roots must be refused before any ACL is applied
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/deck/shared-link"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/deck/shared-link"), true);
+    m_ops->setCanonicalMapping(QStringLiteral("/home/deck/shared-link"), QStringLiteral("/root/private"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetPathAclWithParents"),
+                                                   QStringLiteral("/home/deck/shared-link"),
+                                                   QStringLiteral("player1"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
+}
+
+void TestCouchPlayHelper::testSetDirectoryAclSymlinkEscapeRejected()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setFileExists(QStringLiteral("/home/deck/shared-link"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/home/deck/shared-link"), true);
+    m_ops->setCanonicalMapping(QStringLiteral("/home/deck/shared-link"), QStringLiteral("/root/private"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetDirectoryAcl"),
+                                                   QStringLiteral("/home/deck/shared-link"),
+                                                   QStringLiteral("player1"),
+                                                   false);
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
 }
 
 void TestCouchPlayHelper::testMountSpecCodec()

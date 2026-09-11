@@ -2590,6 +2590,15 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
         return false;
     }
 
+    // setfacl follows symlinks: an allowed-prefix path that resolves outside
+    // the allowed roots would grant the player access beyond the shared tree
+    const QString canonicalDir = m_ops->canonicalFilePath(path);
+    if (!canonicalDir.isEmpty() && !isPathWithinAllowedPrefix(canonicalDir)) {
+        qWarning() << "SetDirectoryAcl: Path resolves outside allowed prefixes:" << path << "->" << canonicalDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path resolves outside allowed prefixes"));
+        return false;
+    }
+
     QStringList args;
     if (recursive) {
         args << QStringLiteral("-R");
@@ -2632,6 +2641,16 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
 
     if (!m_ops->fileExists(path)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path does not exist: %1").arg(path));
+        return false;
+    }
+
+    // setfacl follows symlinks: an allowed-prefix path that resolves outside
+    // the allowed roots would grant the player access beyond the shared tree
+    const QString canonicalPath = m_ops->canonicalFilePath(path);
+    if (!canonicalPath.isEmpty() && !isPathWithinAllowedPrefix(canonicalPath)) {
+        qWarning() << "SetPathAclWithParents: Path resolves outside allowed prefixes:" << path << "->"
+                   << canonicalPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path resolves outside allowed prefixes"));
         return false;
     }
 

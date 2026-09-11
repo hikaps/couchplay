@@ -207,6 +207,19 @@ void TestCommandVerifier::testExtractFlatpakAppId()
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --future-opt value com.valvesoftware.Steam")),
              QStringLiteral("com.valvesoftware.Steam"));
 
+    // Boolean flags must not consume the app ID; negating permission
+    // options and --installation take a value in both forms
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --log-session-bus com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --log-system-bus com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --installation user com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --nosocket wayland com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --nofilesystem home net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+
     // Not a launch command / no valid ID present
     QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak install com.valvesoftware.Steam")).isEmpty());
     QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run")).isEmpty());

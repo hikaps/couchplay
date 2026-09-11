@@ -357,9 +357,11 @@ QString CommandVerifier::extractFlatpakAppId(const QString &command)
         QStringLiteral("remove-policy"),
         QStringLiteral("app-path"),
         QStringLiteral("usr-path"),
-        QStringLiteral("log-session-bus"),
-        QStringLiteral("log-system-bus"),
-        QStringLiteral("log-a11y-bus"),
+        QStringLiteral("installation"),
+        QStringLiteral("nosocket"),
+        QStringLiteral("nodevice"),
+        QStringLiteral("nofilesystem"),
+        QStringLiteral("nousb"),
     };
 
     const QStringList tokens = command.split(QLatin1Char(' '), Qt::SkipEmptyParts);

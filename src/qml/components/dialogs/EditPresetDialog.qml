@@ -82,6 +82,10 @@ Kirigami.Dialog {
                     width: ListView.view.width
                     spacing: Kirigami.Units.smallSpacing
 
+                    // Capture the delegate's row before ComboBox handlers
+                    // shadow `index` with their own signal parameter
+                    readonly property int rowIndex: index
+
                     Kirigami.Icon {
                         source: "folder"
                         Layout.preferredWidth: Kirigami.Units.iconSizes.small
@@ -110,7 +114,7 @@ Kirigami.Dialog {
                             return 0;
                         }
                         onActivated: {
-                            directoriesModel.setProperty(index, "mode", currentValue)
+                            directoriesModel.setProperty(rowIndex, "mode", currentValue)
                             root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
                         }
                     }
