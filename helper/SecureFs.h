@@ -92,21 +92,18 @@ int writeFileAt(int parentFd, const QString &name, const QByteArray &content, ui
 
 // ---------------------------------------------------------------------------
 // FD-anchored mounting (Linux mount API, kernel 5.2+; overlayfs 5.11+)
-//
-// mount(8) resolves source and target by name at execution time, so a user
-// who can replace a validated ancestor with a symlink can race a root mount
-// onto an arbitrary path. These helpers keep verified directory FDs pinned
-// through the operation: the attach point is a (parentFd, leafName) pair,
-// the parent FD is a no-follow walk anchored at "/", and move_mount does not
-// follow symlinks on the leaf by default — a swapped-in symlink fails the
-// mount instead of redirecting it.
-// ---------------------------------------------------------------------------
-
 /**
- * Probe whether the new mount API (fsopen/open_tree/move_mount) is available
- * to this process. Cached: the first call performs the probe.
+ * Probe whether FD-relative bind mounting is available to this process.
+ * Cached: probes open_tree(), which is independent of overlayfs support.
  */
 bool mountApiAvailable();
+
+/**
+ * Probe whether overlayfs can be created through the new mount API.
+ * Cached separately because overlayfs may be unavailable while bind mounts
+ * still work.
+ */
+bool overlayMountApiAvailable();
 
 /**
  * Bind-mount canonicalSource at (targetParentFd, leafName).

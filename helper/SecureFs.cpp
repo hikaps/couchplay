@@ -389,12 +389,27 @@ bool mountApiAvailable()
 {
     static int cached = -1;
     if (cached < 0) {
-        int fd = static_cast<int>(::syscall(SYS_fsopen, "overlay", FSOPEN_CLOEXEC));
+        const int fd = static_cast<int>(::syscall(SYS_open_tree, AT_FDCWD, "/", OPEN_TREE_CLOEXEC));
         if (fd >= 0) {
             ::close(fd);
             cached = 1;
         } else {
-            cached = (errno == ENOSYS || errno == EPERM) ? 0 : 0; // anything else: treat unavailable too
+            cached = 0;
+        }
+    }
+    return cached == 1;
+}
+
+bool overlayMountApiAvailable()
+{
+    static int cached = -1;
+    if (cached < 0) {
+        const int fd = static_cast<int>(::syscall(SYS_fsopen, "overlay", FSOPEN_CLOEXEC));
+        if (fd >= 0) {
+            ::close(fd);
+            cached = 1;
+        } else {
+            cached = 0;
         }
     }
     return cached == 1;

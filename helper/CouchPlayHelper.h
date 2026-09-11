@@ -91,6 +91,15 @@ public Q_SLOTS:
     QString GetUserHomeByUid(uint uid);
 
     /**
+     * Resolve a target user's existing Steam root on the host.
+     *
+     * The returned path uses the user's home spelling but has symlinked
+     * components below that home removed, so secure helper writes can walk it
+     * with O_NOFOLLOW.
+     */
+    QString GetUserSteamRoot(const QString &username);
+
+    /**
      * Enable systemd linger for a user
      * Required for systemd-run to work properly
      *

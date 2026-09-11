@@ -8,6 +8,7 @@
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QRect>
+#include <QSet>
 #include <QString>
 #include <QVariantMap>
 
@@ -251,4 +252,5 @@ private:
     // Privileged sharing state (mounts, Steam library sharing) is active from
     // setup until teardown — natural instance exit must release it too
     bool m_sharedStateActive = false;
+    QSet<QString> m_steamSharedUsers;
 };

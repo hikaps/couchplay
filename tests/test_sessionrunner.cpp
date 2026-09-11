@@ -162,6 +162,11 @@ public:
     {
         return username == QStringLiteral("player1") ? QStringLiteral("12345") : QString();
     }
+    QString player1SteamRoot;
+    QString getUserSteamRoot(const QString &username) override
+    {
+        return username == QStringLiteral("player1") ? player1SteamRoot : QString();
+    }
 
     bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username) override
     {

@@ -223,6 +223,20 @@ QString CouchPlayHelperClient::getUserHomeByUid(uint uid)
     return reply.value();
 }
 
+QString CouchPlayHelperClient::getUserSteamRoot(const QString &username)
+{
+    if (!m_available) {
+        return {};
+    }
+
+    QDBusReply<QString> reply = m_interface->call(QStringLiteral("GetUserSteamRoot"), username);
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return {};
+    }
+    return reply.value();
+}
+
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              uint compositorUid,
                                              const QStringList &gamescopeArgs,

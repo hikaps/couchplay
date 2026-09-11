@@ -194,8 +194,9 @@ public:
     /**
      * Clean up library sharing state for a target user
      * Removes copied manifests and restores original libraryfolders.vdf
+     * @return true when the target metadata was successfully restored
      */
-    void cleanupLibrarySharing(const QString &targetUsername);
+    bool cleanupLibrarySharing(const QString &targetUsername);
 
     /**
      * Get shortcuts as QVariantList for QML

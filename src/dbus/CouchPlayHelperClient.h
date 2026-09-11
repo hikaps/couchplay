@@ -73,6 +73,14 @@ public:
     Q_INVOKABLE virtual QString getUserHomeByUid(uint uid);
 
     /**
+     * @brief Resolve a target user's existing Steam root on the host
+     *
+     * Returns an in-home path with symlinked components removed, or empty
+     * when Steam has not been bootstrapped for that user.
+     */
+    Q_INVOKABLE virtual QString getUserSteamRoot(const QString &username);
+
+    /**
      * @brief Launch a gamescope instance as a specified user
      * @param username User to run as
      * @param compositorUid UID of compositor user (for Wayland socket access)

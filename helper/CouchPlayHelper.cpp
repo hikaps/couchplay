@@ -818,6 +818,49 @@ QString CouchPlayHelper::GetUserHomeByUid(uint uid)
     return QString::fromLocal8Bit(pw->pw_dir);
 }
 
+QString CouchPlayHelper::GetUserSteamRoot(const QString &username)
+{
+    if (!s_validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid username format"));
+        return {};
+    }
+
+    const QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("User '%1' does not exist").arg(username));
+        return {};
+    }
+
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const QString safeHome = canonicalHome.isEmpty() ? userHome : canonicalHome;
+    const QStringList candidates = {
+        userHome + QStringLiteral("/.local/share/Steam"),
+        userHome + QStringLiteral("/.steam/steam"),
+        userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
+        userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"),
+    };
+
+    for (const QString &candidate : candidates) {
+        if (!m_ops->fileExists(candidate)) {
+            continue;
+        }
+
+        const QString canonicalCandidate = m_ops->canonicalFilePath(candidate);
+        if (canonicalCandidate.isEmpty()
+            || (canonicalCandidate != safeHome && !canonicalCandidate.startsWith(safeHome + QLatin1Char('/')))) {
+            qWarning() << "GetUserSteamRoot: Ignoring Steam path outside user home:" << candidate << "->"
+                       << canonicalCandidate;
+            continue;
+        }
+
+        // Keep the user's configured home spelling, but strip symlinked
+        // components below it so callers can use no-follow FD walks.
+        return userHome + canonicalCandidate.mid(safeHome.length());
+    }
+
+    return {};
+}
+
 bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
 {
     if (!validateUserAndAuth(username, ACTION_DELETE_USER)) {
@@ -1979,9 +2022,9 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
 
     // FD-anchored attach only — no path-based fallback: a failed FD mount
     // must fail closed instead of retrying through a raceable pathname
-    if (!SecureFs::mountApiAvailable()) {
-        qWarning() << "SetupOverlayMount: kernel mount API unavailable, refusing path-based mount";
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Kernel mount API unavailable"));
+    if (!SecureFs::overlayMountApiAvailable()) {
+        qWarning() << "SetupOverlayMount: overlayfs mount API unavailable, refusing path-based mount";
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Overlay filesystem mount API unavailable"));
         return false;
     }
 

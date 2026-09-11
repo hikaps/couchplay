@@ -275,6 +275,27 @@ class MockHelper(dbus.service.Object):
         name, uid_, gid, home, shell = fields
         return home
 
+    @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="s")
+    def GetUserSteamRoot(self, username):
+        fields = self._userFields(username)
+        if fields is None:
+            return ""
+        _, _, _, home, _ = fields
+        canonical_home = os.path.realpath(home)
+        candidates = [
+            os.path.join(home, ".local/share/Steam"),
+            os.path.join(home, ".steam/steam"),
+            os.path.join(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+            os.path.join(home, ".var/app/com.valvesoftware.Steam/.steam/steam"),
+        ]
+        for candidate in candidates:
+            if not os.path.exists(candidate):
+                continue
+            canonical = os.path.realpath(candidate)
+            if canonical == canonical_home or canonical.startswith(canonical_home + os.sep):
+                return os.path.join(home, os.path.relpath(canonical, canonical_home))
+        return ""
+
     def _couchplayUsernames(self):
         if FAKE_USERS:
             return list(self._created_users.keys())

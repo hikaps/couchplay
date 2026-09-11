@@ -662,7 +662,7 @@ bool SessionRunner::setupDataDirectories()
     // Arm the sharing-state tracker: teardown must run when the session ends,
     // including when the last game exits on its own
     m_sharedStateActive = true;
-
+    m_steamSharedUsers.clear();
     uint compositorUid = static_cast<uint>(getuid());
     // Helper-first resolution: the Flatpak sandbox's getpwuid(getuid()) cannot
     // see host accounts, which would misroute home-relative copy/mount targets
@@ -742,20 +742,28 @@ bool SessionRunner::setupDataDirectories()
             // own Steam root, account state and userdata stay untouched) —
             // never mount it at the home-relative path, which would shadow
             // the player's installation
-            if (dir.mode == QStringLiteral("overlay") && isSteamLauncher && m_steamConfigManager
+            // The Steam-root overlay entry is a library-sharing marker, not a
+            // generic directory. Never let a stale Steam snapshot overlay the
+            // full compositor Steam root for a non-Steam launcher.
+            if (dir.mode == QStringLiteral("overlay") && m_steamConfigManager
                 && dir.path == m_steamConfigManager->steamPaths().steamRoot) {
+                if (!isSteamLauncher) {
+                    qCWarning(couchplaySteam) << "Ignoring Steam root data marker for non-Steam launcher" << username;
+                    continue;
+                }
                 if (!m_steamConfigManager->shareLibraryEnabled()) {
                     qDebug() << "SessionRunner: Library sharing disabled, skipping Steam root entry for" << dir.path;
                     continue;
                 }
                 // Finalization writes manifests and libraryfolders.vdf
                 // entries for the alias mounts — skip it when preparation
-                // failed, or it would advertise libraries that never mounted
+                // failed, or it would advertise libraries that never mounted.
                 if (!m_steamConfigManager->prepareDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
                     allSucceeded = false;
                     continue;
                 }
+                m_steamSharedUsers.insert(username);
                 if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam library finalize failed for" << dir.path;
                     allSucceeded = false;
@@ -900,12 +908,12 @@ void SessionRunner::teardownSharingState()
 
     teardownSharedDirectories();
 
-    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_sessionManager) {
-        const auto &profile = m_sessionManager->currentProfile();
-        for (int i = 0; i < profile.instances.size(); ++i) {
-            const QString &username = profile.instances[i].username;
-            if (!username.isEmpty()) {
-                m_steamConfigManager->cleanupLibrarySharing(username);
+    if (m_steamConfigManager && !m_steamSharedUsers.isEmpty()) {
+        const QSet<QString> sharedUsers = m_steamSharedUsers;
+        m_steamSharedUsers.clear();
+        for (const QString &username : sharedUsers) {
+            if (!m_steamConfigManager->cleanupLibrarySharing(username)) {
+                qCWarning(couchplaySteam) << "Failed to clean up Steam sharing for" << username;
             }
         }
     }
