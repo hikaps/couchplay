@@ -655,20 +655,20 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
 
     m_runner->setupDataDirectories();
 
-    // Both libraries are alias-mounted under ~/.couchplay/steam-libs/<i>;
-    // the player's Steam root path is never a mount target
+    // Both libraries expose only steamapps/common under their player aliases;
+    // the player's Steam root and the compositor's account state stay private.
     QCOMPARE(m_helperClient->overlayCalls.size(), 2);
     bool foundPrimary = false;
     bool foundSecondary = false;
     for (const auto &call : m_helperClient->overlayCalls) {
         QVERIFY(!call.targetAlias.isEmpty());
-        if (call.sourceDir == steamRoot) {
+        if (call.sourceDir == steamRoot + QStringLiteral("/steamapps/common")) {
             foundPrimary = true;
-            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/0"));
+            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/0/steamapps/common"));
         }
-        if (call.sourceDir == QStringLiteral("/mnt/steamlibrary")) {
+        if (call.sourceDir == QStringLiteral("/mnt/steamlibrary/steamapps/common")) {
             foundSecondary = true;
-            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/1"));
+            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/1/steamapps/common"));
         }
         QCOMPARE(call.username, QStringLiteral("player1"));
     }

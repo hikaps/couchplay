@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
+#include <cerrno>
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
@@ -11,6 +12,7 @@
 #define private public
 #include "../helper/CouchPlayHelper.h"
 #undef private
+#include "../helper/SecureFs.h"
 #include "../helper/SystemOps.h"
 #include "../helper/MountSpec.h"
 
@@ -426,6 +428,7 @@ private Q_SLOTS:
     void testMountSpecCodec();
     void testSetPathAclWithParentsSymlinkEscapeRejected();
     void testSetDirectoryAclSymlinkEscapeRejected();
+    void testSecureWriteRejectsSymlinkLeaf();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -1426,6 +1429,31 @@ void TestCouchPlayHelper::testSetDirectoryAclSymlinkEscapeRejected()
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
     QCOMPARE(m_ops->m_processInvocations.size(), 0);
+}
+void TestCouchPlayHelper::testSecureWriteRejectsSymlinkLeaf()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString protectedFile = tempDir.path() + QStringLiteral("/protected");
+    QFile file(protectedFile);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QVERIFY(file.write("original") == 8);
+    file.close();
+    QVERIFY(QFile::link(protectedFile, tempDir.path() + QStringLiteral("/target")));
+
+    const int parentFd = SecureFs::openBaseDir(tempDir.path());
+    QVERIFY(parentFd >= 0);
+    QCOMPARE(SecureFs::writeFileAt(parentFd,
+                                   QStringLiteral("target"),
+                                   QByteArrayLiteral("replacement"),
+                                   getuid(),
+                                   getgid()),
+             -ELOOP);
+    ::close(parentFd);
+
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), QByteArrayLiteral("original"));
 }
 
 void TestCouchPlayHelper::testMountSpecCodec()
