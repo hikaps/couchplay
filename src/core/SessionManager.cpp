@@ -608,13 +608,17 @@ void SessionManager::setInstanceDataDirectories(int index, const QVariantList &d
 
 QString playerDataStagingRoot(const QString &presetId, const QString &username)
 {
-    // Deliberately home-based instead of QStandardPaths: under Flatpak the
-    // XDG locations redirect into the sandbox-private ~/.var/app tree, which
-    // the root helper must not depend on and whose path the user never sees
-    // in the host file manager. HOME stays the real home inside the sandbox,
-    // and the manifest persists this subtree so the GUI can write it.
-    return QDir::homePath() + QStringLiteral("/.local/share/couchplay/player-data/") + presetId
-        + QLatin1Char('/') + username;
+    // Native installs use the conventional CouchPlay data directory. Flatpak
+    // exports XDG_DATA_HOME to its host-visible per-app data directory, so
+    // using AppDataLocation here gives the GUI and the root helper the same
+    // absolute path and inode.
+    QString dataRoot;
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        dataRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    } else {
+        dataRoot = QDir::homePath() + QStringLiteral("/.local/share/couchplay");
+    }
+    return dataRoot + QStringLiteral("/player-data/") + presetId + QLatin1Char('/') + username;
 }
 
 QString SessionManager::playerDataFolderPath(int index)

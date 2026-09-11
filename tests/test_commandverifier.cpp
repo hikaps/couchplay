@@ -196,8 +196,8 @@ void TestCommandVerifier::testExtractFlatpakAppId()
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("/usr/bin/flatpak run com.valvesoftware.Steam")),
              QStringLiteral("com.valvesoftware.Steam"));
 
-    // Options absent from the value-taking list: their value must not be
-    // mistaken for the app reference
+    // Value-taking options must consume separate values, including D-Bus
+    // permission options and conditional permission options.
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --unset-env DISPLAY com.valvesoftware.Steam")),
              QStringLiteral("com.valvesoftware.Steam"));
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --usb 054c:0268 com.valvesoftware.Steam")),
@@ -205,6 +205,19 @@ void TestCommandVerifier::testExtractFlatpakAppId()
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --instance-id-fd 5 net.lutris.Lutris")),
              QStringLiteral("net.lutris.Lutris"));
     QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --future-opt value com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --no-talk-name org.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --system-no-talk-name org.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --a11y-own-name org.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --share-if=has-wayland --socket-if=wayland:has-wayland "
+                                 "--device-if=input:has-input-device com.valvesoftware.Steam")),
              QStringLiteral("com.valvesoftware.Steam"));
 
     // Boolean flags must not consume the app ID; negating permission

@@ -256,6 +256,6 @@ private:
 /**
  * Per-player staging root for hand-seeded data (one subfolder per writable
  * shared directory, named by dataDirectoryStagingSlug()):
- *   <AppConfigLocation>/player-data/<presetId>/<username>/
+ *   <CouchPlay app data location>/player-data/<presetId>/<username>/
  */
 QString playerDataStagingRoot(const QString &presetId, const QString &username);

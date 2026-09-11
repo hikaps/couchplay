@@ -31,11 +31,18 @@
 #include <QTimer>
 #include <QFileSystemWatcher>
 
+#include <cerrno>
+#include <cstring>
+#include <dirent.h>
+#include <functional>
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef O_PATH
+#define O_PATH 010000000
+#endif
 
 class UnitMonitor : public QObject
 {
@@ -2573,6 +2580,143 @@ bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &us
     return true;
 }
 
+namespace
+{
+
+bool runSetfaclOnFd(SystemOps *ops, int objectFd, const QStringList &options, int timeoutMs, const QString &context)
+{
+    // QProcess does not provide a pathname that is anchored to an already
+    // opened object. Duplicate the verified FD and make it available to the
+    // child as fd 3; /proc/self/fd/3 then names that inode, even if a user
+    // renames or replaces any pathname component concurrently.
+    const int childFd = ::fcntl(objectFd, F_DUPFD_CLOEXEC, 10);
+    if (childFd < 0) {
+        qWarning() << "ACL:" << context << "failed to duplicate object FD:" << strerror(errno);
+        return false;
+    }
+
+    QProcess *process = ops->createProcess();
+    process->setChildProcessModifier([childFd]() {
+        if (::dup2(childFd, 3) < 0) {
+            ::_exit(127);
+        }
+    });
+
+    QStringList args = options;
+    args.append(QStringLiteral("/proc/self/fd/3"));
+    ops->startProcess(process, QStringLiteral("setfacl"), args);
+
+    const bool finished = ops->waitForFinished(process, timeoutMs);
+    bool success = finished && ops->processExitCode(process) == 0;
+    if (!finished) {
+        qWarning() << "ACL:" << context << "setfacl timed out";
+    } else if (!success) {
+        qWarning() << "ACL:" << context << "setfacl failed:"
+                   << QString::fromUtf8(ops->readStandardError(process));
+    }
+
+    ::close(childFd);
+    delete process;
+    return success;
+}
+
+int openAclEntry(int parentFd, const char *name, const struct stat &entryStat)
+{
+    int fd;
+    if (S_ISDIR(entryStat.st_mode)) {
+        fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    } else {
+        // O_PATH avoids blocking on a raced FIFO and pins the exact object for
+        // the ACL subprocess. Symlinks are rejected by the post-open fstat.
+        fd = ::openat(parentFd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    }
+    if (fd < 0) {
+        return -errno;
+    }
+
+    struct stat openedStat;
+    if (::fstat(fd, &openedStat) != 0) {
+        const int error = errno;
+        ::close(fd);
+        return -error;
+    }
+    if (S_ISLNK(openedStat.st_mode)) {
+        ::close(fd);
+        return -ELOOP;
+    }
+    return fd;
+}
+
+bool applyAclTree(SystemOps *ops, int dirFd, const QString &username, const QString &context)
+{
+    if (!runSetfaclOnFd(ops, dirFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000, context)) {
+        return false;
+    }
+
+    const int scanFd = ::fcntl(dirFd, F_DUPFD_CLOEXEC, 10);
+    if (scanFd < 0) {
+        qWarning() << "ACL:" << context << "failed to duplicate directory FD:" << strerror(errno);
+        return false;
+    }
+    DIR *directory = ::fdopendir(scanFd);
+    if (!directory) {
+        const int error = errno;
+        ::close(scanFd);
+        qWarning() << "ACL:" << context << "failed to enumerate directory:" << strerror(error);
+        return false;
+    }
+
+    bool success = true;
+    while (struct dirent *entry = ::readdir(directory)) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        struct stat entryStat;
+        if (::fstatat(dirFd, entry->d_name, &entryStat, AT_SYMLINK_NOFOLLOW) != 0) {
+            qWarning() << "ACL:" << context << "failed to inspect" << entry->d_name << ":" << strerror(errno);
+            success = false;
+            break;
+        }
+        if (S_ISLNK(entryStat.st_mode)) {
+            // Never follow a link while recursively applying permissions.
+            continue;
+        }
+
+        const int childFd = openAclEntry(dirFd, entry->d_name, entryStat);
+        if (childFd < 0) {
+            qWarning() << "ACL:" << context << "failed to open" << entry->d_name << ":" << strerror(-childFd);
+            success = false;
+            break;
+        }
+
+        struct stat openedStat;
+        if (::fstat(childFd, &openedStat) != 0) {
+            qWarning() << "ACL:" << context << "failed to stat" << entry->d_name << ":" << strerror(errno);
+            ::close(childFd);
+            success = false;
+            break;
+        }
+
+        const QString childContext = context + QLatin1Char('/') + QString::fromLocal8Bit(entry->d_name);
+        if (!runSetfaclOnFd(ops, childFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000,
+                             childContext)) {
+            success = false;
+        } else if (S_ISDIR(openedStat.st_mode) && !applyAclTree(ops, childFd, username, childContext)) {
+            success = false;
+        }
+        ::close(childFd);
+        if (!success) {
+            break;
+        }
+    }
+
+    ::closedir(directory);
+    return success;
+}
+
+} // namespace
+
 bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &username, bool recursive)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
@@ -2590,41 +2734,27 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
         return false;
     }
 
-    // setfacl follows symlinks: an allowed-prefix path that resolves outside
-    // the allowed roots would grant the player access beyond the shared tree
-    const QString canonicalDir = m_ops->canonicalFilePath(path);
-    if (!canonicalDir.isEmpty() && !isPathWithinAllowedPrefix(canonicalDir)) {
-        qWarning() << "SetDirectoryAcl: Path resolves outside allowed prefixes:" << path << "->" << canonicalDir;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path resolves outside allowed prefixes"));
+    // Keep the ACL operation anchored to a no-follow FD. The canonical
+    // pathname check above is only a fast rejection; it cannot close a
+    // rename/symlink race before setfacl resolves a path.
+    const int directoryFd = SecureFs::openExistingDirNoFollow(path);
+    if (directoryFd < 0) {
+        qWarning() << "SetDirectoryAcl: Refusing unsafe or non-directory path:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is not a safe directory"));
         return false;
     }
 
-    QStringList args;
-    if (recursive) {
-        args << QStringLiteral("-R");
+    const QString context = QStringLiteral("SetDirectoryAcl ") + path;
+    const bool success = recursive
+        ? applyAclTree(m_ops, directoryFd, username, context)
+        : runSetfaclOnFd(m_ops, directoryFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000,
+                         context);
+    ::close(directoryFd);
+
+    if (!success) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("setfacl failed for path: %1").arg(path));
     }
-    args << QStringLiteral("-m");
-    args << QStringLiteral("u:%1:rx").arg(username);
-    args << path;
-
-    QProcess *setfacl = m_ops->createProcess();
-    m_ops->startProcess(setfacl, QStringLiteral("setfacl"), args);
-
-    if (!m_ops->waitForFinished(setfacl, 60000)) { // 60 second timeout for recursive operations
-        sendErrorReply(QDBusError::Failed, QStringLiteral("setfacl timed out for path: %1").arg(path));
-        delete setfacl;
-        return false;
-    }
-
-    if (m_ops->processExitCode(setfacl) != 0) {
-        QString errorOutput = QString::fromUtf8(m_ops->readStandardError(setfacl));
-        sendErrorReply(QDBusError::Failed, QStringLiteral("setfacl failed for path %1: %2").arg(path, errorOutput));
-        delete setfacl;
-        return false;
-    }
-    delete setfacl;
-
-    return true;
+    return success;
 }
 
 bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
@@ -2644,8 +2774,9 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
         return false;
     }
 
-    // setfacl follows symlinks: an allowed-prefix path that resolves outside
-    // the allowed roots would grant the player access beyond the shared tree
+    // Keep the ACL operation anchored to no-follow directory FDs. The
+    // canonical check is retained as a fast rejection, but never substitutes
+    // for pinning the objects that setfacl will modify.
     const QString canonicalPath = m_ops->canonicalFilePath(path);
     if (!canonicalPath.isEmpty() && !isPathWithinAllowedPrefix(canonicalPath)) {
         qWarning() << "SetPathAclWithParents: Path resolves outside allowed prefixes:" << path << "->"
@@ -2706,33 +2837,24 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
             continue;
         }
 
-        QProcess *removeProc = m_ops->createProcess();
-        m_ops->startProcess(removeProc,
-                            QStringLiteral("setfacl"),
-                            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), p});
-        m_ops->waitForFinished(removeProc, 5000);
-        delete removeProc;
-
-        QStringList args;
-        args << QStringLiteral("-m");
-        args << QStringLiteral("u:%1:rx").arg(username);
-        args << p;
-
-        QProcess *setfacl = m_ops->createProcess();
-        m_ops->startProcess(setfacl, QStringLiteral("setfacl"), args);
-
-        if (!m_ops->waitForFinished(setfacl, 5000)) {
-            qWarning() << "SetPathAclWithParents: setfacl timed out for:" << p;
+        const int directoryFd = SecureFs::openExistingDirNoFollow(p);
+        if (directoryFd < 0) {
+            qWarning() << "SetPathAclWithParents: Refusing unsafe or non-directory path:" << p;
             allSucceeded = false;
-            delete setfacl;
             continue;
         }
 
-        if (m_ops->processExitCode(setfacl) != 0) {
-            QString errorOutput = QString::fromUtf8(m_ops->readStandardError(setfacl));
-            qWarning() << "SetPathAclWithParents: setfacl failed for" << p << ":" << errorOutput;
+        // Remove a stale entry first, preserving the helper's existing
+        // remove-before-set behavior. Both commands target the pinned inode.
+        runSetfaclOnFd(m_ops, directoryFd, {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username)}, 5000, p);
+        if (!runSetfaclOnFd(m_ops,
+                            directoryFd,
+                            {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)},
+                            5000,
+                            p)) {
+            allSucceeded = false;
         }
-        delete setfacl;
+        ::close(directoryFd);
     }
 
     return allSucceeded;
