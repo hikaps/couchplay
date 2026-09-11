@@ -11,13 +11,15 @@
 #include <KConfig>
 #include <KConfigGroup>
 
-#include "PresetManager.h"
-#include "SessionManager.h"
-#include "SteamConfigManager.h"
-
+// First: the client header under the test-access macro, before any other
+// project header can pull it in unguarded
 #define private public
 #include "CouchPlayHelperClient.h"
 #undef private
+
+#include "PresetManager.h"
+#include "SessionManager.h"
+#include "SteamConfigManager.h"
 
 #define KEY(x) QStringLiteral(x)
 
