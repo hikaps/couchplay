@@ -792,7 +792,10 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     QVERIFY(steamManager->finalizeDataDir(dir, QStringLiteral("player1")));
 
     // Manifests and libraryfolders.vdf landed under the helper-resolved home
-    QVERIFY(QFile::exists(homeDir.path() + QStringLiteral("/.couchplay/steam-libs/1/appmanifest_730.acf")));
+    // (each alias mount presents its library, so the manifest sits in the
+    // library's own steamapps/)
+    QVERIFY(QFile::exists(
+        homeDir.path() + QStringLiteral("/.couchplay/steam-libs/1/steamapps/appmanifest_730.acf")));
     QVERIFY(QFile::exists(steamRoot + QStringLiteral("/config/libraryfolders.vdf")));
     QFile vdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
     QVERIFY(vdf.open(QIODevice::ReadOnly));
