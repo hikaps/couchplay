@@ -1239,10 +1239,12 @@ void TestCouchPlayHelper::testMirrorDirectoryContentsReplacesExistingSymlink()
     QVERIFY(reply.isValid());
     QVERIFY(reply.value());
 
-    QCOMPARE(QFileInfo(targetDir.filePath(QStringLiteral("link"))).symLinkTarget(), QStringLiteral("new-target"));
+    // symLinkTarget() resolves the raw link string against the link's directory
+    QCOMPARE(QFileInfo(targetDir.filePath(QStringLiteral("link"))).symLinkTarget(),
+             targetDir.filePath(QStringLiteral("new-target")));
     const QFileInfo replacedEntry(targetDir.filePath(QStringLiteral("entry")));
     QVERIFY(replacedEntry.isSymLink());
-    QCOMPARE(replacedEntry.symLinkTarget(), QStringLiteral("entry-link"));
+    QCOMPARE(replacedEntry.symLinkTarget(), targetDir.filePath(QStringLiteral("entry-link")));
 }
 
 void TestCouchPlayHelper::testMirrorDirectoryContentsSymlinkVsNonEmptyDirFails()
