@@ -26,6 +26,7 @@ private Q_SLOTS:
     void testAbsoluteValidation();
     void testNonExistentCommand();
     void testFlatpakAppDetection();
+    void testExtractFlatpakAppId();
 };
 
 void TestCommandVerifier::testFlatpakDetection()
@@ -136,6 +137,32 @@ void TestCommandVerifier::testFlatpakAppDetection()
     QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("")));
     QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com")));
     QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com.example")));
+}
+
+void TestCommandVerifier::testExtractFlatpakAppId()
+{
+    // Plain form
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Exported desktop entries insert options between "run" and the app ID
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --branch=beta com.heroicgameslauncher.hgl")),
+             QStringLiteral("com.heroicgameslauncher.hgl"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --user net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+
+    // Space-separated option values must not be mistaken for the app ID
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --command steam com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Not a launch command / no ID present
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak install com.valvesoftware.Steam")).isEmpty());
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run")).isEmpty());
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run steam")).isEmpty());
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("steam -bigpicture")).isEmpty());
 }
 
 QTEST_MAIN(TestCommandVerifier)

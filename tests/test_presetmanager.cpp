@@ -53,6 +53,7 @@ private Q_SLOTS:
     void testDetectLauncherId_FlatpakSteam();
     void testDetectLauncherId_FlatpakHeroic();
     void testDetectLauncherId_FlatpakLutris();
+    void testDetectLauncherId_FlatpakRunWithOptions();
     void testDetectLauncherId_UnknownBinary();
     void testDetectLauncherId_UrlScheme();
 
@@ -493,6 +494,26 @@ void TestPresetManager::testDetectLauncherId_FlatpakLutris()
 {
     PresetManager manager;
     QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run net.lutris.Lutris")), QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testDetectLauncherId_FlatpakRunWithOptions()
+{
+    // Exported desktop entries insert options between "run" and the app ID;
+    // a fixed token position yields no launcherId, disabling launcher-specific
+    // sync and Steam's Gamescope -e behavior
+    PresetManager manager;
+    QCOMPARE(manager.detectLauncherId(
+                 QStringLiteral("flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam")),
+             QStringLiteral("steam"));
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run --command steam com.valvesoftware.Steam")),
+             QStringLiteral("steam"));
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run --branch=beta com.heroicgameslauncher.hgl")),
+             QStringLiteral("heroic"));
+    QCOMPARE(manager.detectLauncherId(QStringLiteral("flatpak run --user net.lutris.Lutris")),
+             QStringLiteral("lutris"));
+
+    // Not a launch command
+    QVERIFY(manager.detectLauncherId(QStringLiteral("flatpak install com.valvesoftware.Steam")).isEmpty());
 }
 
 void TestPresetManager::testDetectLauncherId_UnknownBinary()

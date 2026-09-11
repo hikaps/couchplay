@@ -1661,8 +1661,9 @@ QString CouchPlayHelper::computeMountTarget(const QString &source,
                                             const QString &userHome,
                                             const QString &compositorHome)
 {
-    // Reject alias with path traversal
-    if (alias.contains(QStringLiteral(".."))) {
+    // Reject alias with path traversal (whole ".." components only — names
+    // like "Foo..Bar" are valid)
+    if (pathHasDotDotComponent(alias)) {
         qWarning() << "computeMountTarget: alias contains path traversal:" << alias;
         return {};
     }
@@ -1673,8 +1674,8 @@ QString CouchPlayHelper::computeMountTarget(const QString &source,
     if (source.startsWith(compositorHome + QLatin1Char('/')) && alias.isEmpty()) {
         // Prevent traversal via source containing ../ after compositorHome prefix
         QString relativePath = source.mid(compositorHome.length());
-        if (relativePath.contains(QStringLiteral(".."))) {
-            qWarning() << "computeMountTarget: source relative path contains '..':" << source;
+        if (pathHasDotDotComponent(relativePath)) {
+            qWarning() << "computeMountTarget: source relative path contains a '..' component:" << source;
             return {};
         }
         target = userHome + relativePath;

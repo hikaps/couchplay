@@ -47,27 +47,22 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
             return result;
         }
 
-        // Extract app ID from "flatpak run <app-id>"
-        QStringList parts = command.split(QStringLiteral(" "));
-        if (parts.size() >= 3 && parts[0] == QStringLiteral("flatpak") && parts[1] == QStringLiteral("run")) {
-            QString appID = parts[2];
-
-            if (!isValidFlatpakAppId(appID)) {
-                result.isValid = false;
-                result.errorMessage = QStringLiteral("Invalid Flatpak app ID format");
-                return result;
-            }
-
-            result.isValid = isFlatpakAppInstalled(appID);
-            if (!result.isValid) {
-                result.errorMessage =
-                    QString(QStringLiteral("Flatpak app '%1' not installed or not accessible to all users")).arg(appID);
-            }
-            result.isAccessibleToOtherUsers = result.isValid; // Flatpak apps are generally accessible
-        } else {
+        // Extract the app ID from "flatpak run [--options] <app-id> [args]":
+        // exported desktop entries commonly insert options between "run" and
+        // the app ID, so a fixed token position misses every exported launcher
+        const QString appID = extractFlatpakAppId(command);
+        if (appID.isEmpty()) {
             result.isValid = false;
             result.errorMessage = QStringLiteral("Invalid Flatpak command format");
+            return result;
         }
+
+        result.isValid = isFlatpakAppInstalled(appID);
+        if (!result.isValid) {
+            result.errorMessage =
+                QString(QStringLiteral("Flatpak app '%1' not installed or not accessible to all users")).arg(appID);
+        }
+        result.isAccessibleToOtherUsers = result.isValid; // Flatpak apps are generally accessible
     } else if (result.commandType == QStringLiteral("absolute")) {
         result.isFlatpak = false;
         result.isAbsolutePath = true;
@@ -307,6 +302,26 @@ bool CommandVerifier::isAccessibleToOtherUsersPath(const QString &path)
     bool hasOtherAccess = permissions.testFlag(QFileDevice::ReadOther) && permissions.testFlag(QFileDevice::ExeOther);
 
     return hasGroupAccess || hasOtherAccess;
+}
+
+QString CommandVerifier::extractFlatpakAppId(const QString &command)
+{
+    // "flatpak run [--branch=… --arch=… --command …] <app-id> [args…]":
+    // exported desktop entries commonly insert options (and their values)
+    // between "run" and the ID. The ID is the first token that is not an
+    // option flag and passes app-ID validation — option values without a
+    // dotted reverse-DNS shape (e.g. "--command steam") never match.
+    const QStringList tokens = command.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (tokens.size() < 3 || tokens.at(0) != QStringLiteral("flatpak") || tokens.at(1) != QStringLiteral("run")) {
+        return QString();
+    }
+    for (int i = 2; i < tokens.size(); ++i) {
+        const QString &token = tokens.at(i);
+        if (!token.startsWith(QLatin1Char('-')) && isValidFlatpakAppId(token)) {
+            return token;
+        }
+    }
+    return QString();
 }
 
 bool CommandVerifier::isValidFlatpakAppId(const QString &appID)

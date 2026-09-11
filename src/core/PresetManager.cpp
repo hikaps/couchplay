@@ -669,10 +669,10 @@ QString PresetManager::detectLauncherId(const QString &command) const
     }
 
     if (firstToken == QStringLiteral("flatpak")) {
-        if (tokens.size() < 3) {
-            return QString();
-        }
-        const QString &appId = tokens.at(2);
+        // Exported desktop entries insert options between "run" and the app
+        // ID (--branch=…, --arch=…, --command …); the shared extractor skips
+        // them — a fixed token position misses every exported launcher
+        const QString appId = CommandVerifier::extractFlatpakAppId(command);
         if (appId == QStringLiteral("com.valvesoftware.Steam")) {
             return QStringLiteral("steam");
         }

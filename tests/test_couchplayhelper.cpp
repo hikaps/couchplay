@@ -417,6 +417,7 @@ private Q_SLOTS:
     void testMirrorDirectoryContentsTargetNotExists();
     void testMirrorDirectoryContentsTraversalTarget();
     void testIsPathWithinAllowedPrefixMountRoots();
+    void testComputeMountTargetDotDotNames();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -1339,6 +1340,30 @@ void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/mnt/library..2/saves")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/deck/Games/..")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/tmp/a/../../etc")));
+}
+
+void TestCouchPlayHelper::testComputeMountTargetDotDotNames()
+{
+    // Source validation accepts names containing ".."; mount-target
+    // computation must agree instead of rejecting them (whole ".."
+    // components are still traversal)
+    const QString userHome = QStringLiteral("/home/player1");
+    const QString compositorHome = QStringLiteral("/home/deck");
+
+    QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/home/deck/Games/Foo..Bar"), QString(), userHome, compositorHome),
+             QStringLiteral("/home/player1/Games/Foo..Bar"));
+    QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/mnt/lib..2"),
+                                          QStringLiteral("shares/Foo..Bar"),
+                                          userHome,
+                                          compositorHome),
+             QStringLiteral("/home/player1/shares/Foo..Bar"));
+    QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/mnt/lib..2/save"), QString(), userHome, compositorHome),
+             QStringLiteral("/home/player1/.couchplay/mounts/mnt/lib..2/save"));
+
+    QVERIFY(m_helper->computeMountTarget(QStringLiteral("/home/deck/../etc"), QString(), userHome, compositorHome).isEmpty());
+    QVERIFY(
+        m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("../escape"), userHome, compositorHome)
+            .isEmpty());
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerInvalidPathNotUnderDevInput()
