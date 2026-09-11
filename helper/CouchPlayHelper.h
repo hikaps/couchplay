@@ -473,6 +473,7 @@ private:
     void restartUserPipeWirePulse(uint compositorUid);
 
     // Internal helpers (not exposed via D-Bus)
+    struct MountInfo; // defined below; referenced by unmountMountInfo
     bool userExists(const QString &username);
     uint getUserUid(const QString &username);
     QString getUserHome(const QString &username);
