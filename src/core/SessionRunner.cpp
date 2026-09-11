@@ -832,8 +832,10 @@ bool SessionRunner::setupDataDirectories()
                     playerViewRelative = relativePath;
                 }
             } else if (dir.mode == QStringLiteral("acl")) {
-                if (!m_helperClient->setPathAclWithParents(dir.path, username)) {
-                    qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
+                const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
+                const bool contentsOk = m_helperClient->setDirectoryAcl(dir.path, username, true);
+                if (!parentsOk || !contentsOk) {
+                    qWarning() << "SessionRunner: Failed to set recursive ACL for" << dir.path << "user" << username;
                     allSucceeded = false;
                 }
             }

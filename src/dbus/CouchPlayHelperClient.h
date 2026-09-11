@@ -153,7 +153,7 @@ public:
      * @param recursive Apply recursively to all contents
      * @return true if successful
      */
-    Q_INVOKABLE bool setDirectoryAcl(const QString &path, const QString &username, bool recursive);
+    Q_INVOKABLE virtual bool setDirectoryAcl(const QString &path, const QString &username, bool recursive);
 
     /**
      * @brief Set ACLs on a path and all parent directories needed for traversal

@@ -39,6 +39,11 @@ public:
         QString username;
     };
 
+    struct DirectoryAclCall {
+        QString path;
+        QString username;
+        bool recursive;
+    };
     struct OverlayCall {
         QString username;
         uint compositorUid;
@@ -65,6 +70,7 @@ public:
     };
 
     QList<AclCall> aclCalls;
+    QList<DirectoryAclCall> directoryAclCalls;
     QList<MountCall> mountCalls;
     struct DeviceOwnerCall { QString path; int uid; };
     QList<DeviceOwnerCall> deviceOwnerCalls;
@@ -81,6 +87,11 @@ public:
     bool setPathAclWithParents(const QString &path, const QString &username) override
     {
         aclCalls.append({path, username});
+        return true;
+    }
+    bool setDirectoryAcl(const QString &path, const QString &username, bool recursive) override
+    {
+        directoryAclCalls.append({path, username, recursive});
         return true;
     }
 
@@ -392,6 +403,10 @@ void TestSessionRunner::testSetupDataDirectoriesUsesInstanceDirs()
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/instance/dir"));
     QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+    QCOMPARE(m_helperClient->directoryAclCalls.size(), 1);
+    QCOMPARE(m_helperClient->directoryAclCalls[0].path, QStringLiteral("/instance/dir"));
+    QCOMPARE(m_helperClient->directoryAclCalls[0].username, QStringLiteral("player1"));
+    QVERIFY(m_helperClient->directoryAclCalls[0].recursive);
 }
 
 void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
