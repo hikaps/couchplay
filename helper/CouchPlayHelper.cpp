@@ -841,7 +841,11 @@ QString CouchPlayHelper::GetUserSteamRoot(const QString &username)
     };
 
     for (const QString &candidate : candidates) {
-        if (!m_ops->fileExists(candidate)) {
+        const bool rootExists = m_ops->fileExists(candidate) || m_ops->fileExists(candidate + QStringLiteral("/steam.sh"))
+            || m_ops->fileExists(candidate + QStringLiteral("/ubuntu12_32/steam"))
+            || m_ops->fileExists(candidate + QStringLiteral("/userdata"))
+            || m_ops->fileExists(candidate + QStringLiteral("/config"));
+        if (!rootExists) {
             continue;
         }
 
@@ -2932,28 +2936,22 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
         return QString();
     }
 
-    QString userHome = getUserHome(username);
-    if (userHome.isEmpty()) {
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (steamRoot.isEmpty()) {
         return QString();
     }
 
-    QStringList possibleRoots = {
-        userHome + QStringLiteral("/.steam/steam/userdata"),
-        userHome + QStringLiteral("/.local/share/Steam/userdata"),
-    };
+    const QString userDataBase = steamRoot + QStringLiteral("/userdata");
+    if (!m_ops->fileExists(userDataBase)) {
+        return QString();
+    }
 
-    for (const QString &userDataBase : possibleRoots) {
-        if (!m_ops->fileExists(userDataBase)) {
-            continue;
-        }
-
-        QStringList entries = m_ops->entryList(userDataBase, QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const QString &entry : entries) {
-            bool ok;
-            entry.toULongLong(&ok);
-            if (ok) {
-                return entry;
-            }
+    const QStringList entries = m_ops->entryList(userDataBase, QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &entry : entries) {
+        bool ok;
+        entry.toULongLong(&ok);
+        if (ok) {
+            return entry;
         }
     }
 
@@ -2967,23 +2965,15 @@ bool CouchPlayHelper::IsSteamBootstrapped(const QString &username)
         return false;
     }
 
-    QString userHome = getUserHome(username);
-    if (userHome.isEmpty()) {
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (steamRoot.isEmpty()) {
         return false;
     }
 
-    // Bootstrap complete when steam.sh or the ubuntu12_32 binary exists (userdata alone is insufficient).
-    const QStringList roots = {
-        userHome + QStringLiteral("/.local/share/Steam"),
-        userHome + QStringLiteral("/.steam/steam"),
-    };
-    for (const QString &root : roots) {
-        if (m_ops->fileExists(root + QStringLiteral("/steam.sh"))
-            || m_ops->fileExists(root + QStringLiteral("/ubuntu12_32/steam"))) {
-            return true;
-        }
-    }
-    return false;
+    // Bootstrap complete when steam.sh or the ubuntu12_32 binary exists
+    // (userdata alone is insufficient).
+    return m_ops->fileExists(steamRoot + QStringLiteral("/steam.sh"))
+        || m_ops->fileExists(steamRoot + QStringLiteral("/ubuntu12_32/steam"));
 }
 
 QString CouchPlayHelper::findGamescopePath()
