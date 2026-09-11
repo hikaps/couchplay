@@ -207,6 +207,22 @@ QVariantMap CouchPlayHelperClient::getUserInfo(const QString &username)
     return reply.value();
 }
 
+QString CouchPlayHelperClient::getUserHomeByUid(uint uid)
+{
+    if (!m_available) {
+        return QString();
+    }
+
+    QDBusReply<QString> reply = m_interface->call(QStringLiteral("GetUserHomeByUid"), uid);
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return QString();
+    }
+
+    return reply.value();
+}
+
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              uint compositorUid,
                                              const QStringList &gamescopeArgs,

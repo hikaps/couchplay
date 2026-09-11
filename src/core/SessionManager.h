@@ -15,6 +15,8 @@
 
 #include "PresetManager.h"
 
+class CouchPlayHelperClient;
+
 class SessionManager;
 
 /**
@@ -116,6 +118,7 @@ class SessionManager : public QObject
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
     Q_PROPERTY(PresetManager *presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
+    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
 
 public:
     explicit SessionManager(QObject *parent = nullptr);
@@ -126,6 +129,12 @@ public:
         return m_presetManager;
     }
     void setPresetManager(PresetManager *manager);
+
+    CouchPlayHelperClient *helperClient() const
+    {
+        return m_helperClient;
+    }
+    void setHelperClient(CouchPlayHelperClient *client);
 
     // Profile management
     Q_INVOKABLE bool saveProfile(const QString &name);
@@ -222,6 +231,7 @@ Q_SIGNALS:
     void savedProfilesChanged();
     void instancesChanged();
     void presetManagerChanged();
+    void helperClientChanged();
     void errorOccurred(const QString &message);
     /**
      * @brief Emitted after a profile is successfully loaded
@@ -240,6 +250,7 @@ private:
     SessionProfile m_currentProfile;
     QList<SessionProfile> m_savedProfiles;
     PresetManager *m_presetManager = nullptr;
+    CouchPlayHelperClient *m_helperClient = nullptr;
 };
 
 /**

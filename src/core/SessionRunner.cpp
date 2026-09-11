@@ -380,6 +380,9 @@ bool SessionRunner::start()
 void SessionRunner::stop()
 {
     if (!isRunning() && m_streamingInstances.isEmpty()) {
+        // Nothing to stop — but outstanding mounts from a session whose games
+        // already exited must not be bypassed by this early return
+        teardownSharingState();
         return;
     }
 
@@ -421,18 +424,8 @@ void SessionRunner::stop()
     }
 
     restoreDeviceOwnership();
-    teardownSharedDirectories();
+    teardownSharingState();
     teardownStreamingInstances();
-
-    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_sessionManager) {
-        const auto &profile = m_sessionManager->currentProfile();
-        for (int i = 0; i < profile.instances.size(); ++i) {
-            const QString &username = profile.instances[i].username;
-            if (!username.isEmpty()) {
-                m_steamConfigManager->cleanupLibrarySharing(username);
-            }
-        }
-    }
 
     cleanupInstances();
     cleanupOverrideDirs(overridePaths);
@@ -665,9 +658,14 @@ bool SessionRunner::setupDataDirectories()
         return true;
     }
 
+    // Arm the sharing-state tracker: teardown must run when the session ends,
+    // including when the last game exits on its own
+    m_sharedStateActive = true;
+
     uint compositorUid = static_cast<uint>(getuid());
-    struct passwd *compositorPw = getpwuid(getuid());
-    QString compositorHome = compositorPw ? QString::fromLocal8Bit(compositorPw->pw_dir) : QString();
+    // Helper-first resolution: the Flatpak sandbox's getpwuid(getuid()) cannot
+    // see host accounts, which would misroute home-relative copy/mount targets
+    QString compositorHome = resolveCompositorHome(m_helperClient);
 
     const auto &profile = m_sessionManager->currentProfile();
     bool allSucceeded = true;
@@ -881,6 +879,31 @@ void SessionRunner::teardownSharedDirectories()
     }
 
     m_helperClient->unmountAllSharedDirectories();
+}
+
+void SessionRunner::teardownSharingState()
+{
+    // Release the privileged sharing state exactly once per session: shared
+    // mounts plus per-player Steam library sharing. Invoked from stop() and
+    // from the natural-exit path (last game exited on its own) — without the
+    // latter, mounts persist for the helper's lifetime and the next session
+    // stacks on top or fails reusing the same overlay work directory.
+    if (!m_sharedStateActive) {
+        return;
+    }
+    m_sharedStateActive = false;
+
+    teardownSharedDirectories();
+
+    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_sessionManager) {
+        const auto &profile = m_sessionManager->currentProfile();
+        for (int i = 0; i < profile.instances.size(); ++i) {
+            const QString &username = profile.instances[i].username;
+            if (!username.isEmpty()) {
+                m_steamConfigManager->cleanupLibrarySharing(username);
+            }
+        }
+    }
 }
 
 bool SessionRunner::buildBindPaths()
@@ -1161,6 +1184,12 @@ void SessionRunner::onInstanceStopped()
             uninhibitScreenSaver();
             setStatus(QStringLiteral("Session ended"));
             restoreDeviceOwnership();
+            // Games exiting on their own must release the privileged sharing
+            // state too — otherwise mounts stay attached until helper shutdown
+            // and the next session stacks on top of them
+            if (m_streamingInstances.isEmpty()) {
+                teardownSharingState();
+            }
             Q_EMIT runningChanged();
             Q_EMIT sessionStopped();
         }

@@ -44,6 +44,17 @@ Q_DECLARE_METATYPE(DataDirectory)
  */
 QString dataDirectoryStagingSlug(const QString &dirPath, const QString &compositorHome);
 
+/**
+ * @brief Reversible persistence encoding for data-directory lists
+ *
+ * JSON (compact array of {path, mode} objects), so paths containing '|' or
+ * newlines — legal on Linux and selectable in the folder picker — round-trip
+ * intact. decodeDataDirectories() falls back to the legacy newline-separated
+ * "path|mode" format written by earlier versions.
+ */
+QString encodeDataDirectories(const QList<DataDirectory> &directories);
+QList<DataDirectory> decodeDataDirectories(const QString &payload);
+
 struct LauncherInfo {
     Q_GADGET
     Q_PROPERTY(QString configPath MEMBER configPath)

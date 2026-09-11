@@ -13,6 +13,9 @@
 #undef private
 #include "../helper/SystemOps.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 class MockSystemOps : public SystemOps
 {
 public:
@@ -418,6 +421,7 @@ private Q_SLOTS:
     void testMirrorDirectoryContentsTraversalTarget();
     void testIsPathWithinAllowedPrefixMountRoots();
     void testComputeMountTargetDotDotNames();
+    void testUnmountRetainsFailedMounts();
 
     // Device ownership tests
     void testChangeDeviceOwnerInvalidPathNotUnderDevInput();
@@ -1376,9 +1380,63 @@ void TestCouchPlayHelper::testComputeMountTargetDotDotNames()
                 .isEmpty());
     QVERIFY(m_helper->computeMountTarget(QStringLiteral("/home/deck/."), QString(), userHome, compositorHome).isEmpty());
     // A trailing "/." deeper down is a valid descendant once normalized
-    QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("shares/."), userHome,
-                                          compositorHome),
+    QCOMPARE(m_helper->computeMountTarget(QStringLiteral("/home/deck/games"), QStringLiteral("shares/."),
+                                          userHome, compositorHome),
              QStringLiteral("/home/player1/shares"));
+}
+
+void TestCouchPlayHelper::testUnmountRetainsFailedMounts()
+{
+    // A failed unmount (persistent EBUSY, post-restart stale path…) must keep
+    // the MountInfo AND its pinned FD, so later teardown or destruction can
+    // retry instead of orphaning a root mount nobody can clean up anymore
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("target")));
+
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+
+    // FD-pinned entry whose target is not actually a mount point: the FD
+    // umount fails (EINVAL) and the entry must survive with its pinned FD
+    const int fd = ::open(QFile::encodeName(dir.path()), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    QVERIFY(fd >= 0);
+
+    MountInfo info;
+    info.source = QStringLiteral("/home/compositor/games");
+    info.target = dir.filePath(QStringLiteral("target"));
+    info.mountType = QStringLiteral("bind");
+    info.targetParentFd = fd;
+    info.targetLeaf = QStringLiteral("target");
+    m_helper->m_activeMounts[QStringLiteral("player1")].append(info);
+
+    QDBusReply<int> reply = m_dbusInterface->call(QStringLiteral("UnmountAllSharedDirectories"));
+    QVERIFY(reply.isValid());
+    QCOMPARE(reply.value(), 0);
+    QVERIFY(m_helper->m_activeMounts.contains(QStringLiteral("player1")));
+    QCOMPARE(m_helper->m_activeMounts[QStringLiteral("player1")].size(), 1);
+    const int pinnedFd = m_helper->m_activeMounts[QStringLiteral("player1")].first().targetParentFd;
+    QVERIFY(pinnedFd >= 0);
+    QCOMPARE(::fcntl(pinnedFd, F_GETFD) != -1, true); // FD stays open for a later retry
+
+    // Path-based entry (post-restart state) with a failing umount: retained too
+    m_ops->setMockProcessStart(true);
+    m_ops->setProcessExitCode(1);
+    MountInfo pathInfo;
+    pathInfo.source = QStringLiteral("/home/compositor/other");
+    pathInfo.target = dir.filePath(QStringLiteral("other"));
+    pathInfo.mountType = QStringLiteral("bind");
+    m_helper->m_activeMounts[QStringLiteral("player1")].append(pathInfo);
+
+    QDBusReply<int> userReply = m_dbusInterface->call(QStringLiteral("UnmountSharedDirectories"),
+                                                      QStringLiteral("player1"));
+    QVERIFY(userReply.isValid());
+    QCOMPARE(userReply.value(), 0);
+    QCOMPARE(m_helper->m_activeMounts[QStringLiteral("player1")].size(), 2);
+
+    // Cleanup so the helper destructor doesn't retry these fake mounts
+    ::close(m_helper->m_activeMounts[QStringLiteral("player1")].first().targetParentFd);
+    m_helper->m_activeMounts.clear();
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerInvalidPathNotUnderDevInput()

@@ -94,6 +94,62 @@ QString dataDirectoryStagingSlug(const QString &dirPath, const QString &composit
     return slug;
 }
 
+QString encodeDataDirectories(const QList<DataDirectory> &directories)
+{
+    QJsonArray array;
+    for (const DataDirectory &dir : directories) {
+        QJsonObject entry;
+        entry.insert(QStringLiteral("path"), dir.path);
+        entry.insert(QStringLiteral("mode"), dir.mode);
+        array.append(entry);
+    }
+    return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
+}
+
+QList<DataDirectory> decodeDataDirectories(const QString &payload)
+{
+    QList<DataDirectory> dirs;
+    const QString trimmed = payload.trimmed();
+
+    // New format: JSON array. Paths containing '|' or newlines cannot survive
+    // the legacy line format, so anything that parses as JSON wins.
+    if (trimmed.startsWith(QLatin1Char('['))) {
+        const QJsonDocument doc = QJsonDocument::fromJson(trimmed.toUtf8());
+        if (doc.isArray()) {
+            const QJsonArray array = doc.array();
+            for (const QJsonValue &value : array) {
+                QVariantMap map;
+                map[QStringLiteral("path")] = entry.value(QStringLiteral("path")).toString();
+                map[QStringLiteral("mode")] = entry.value(QStringLiteral("mode")).toString();
+                // fromVariant skips nothing but sanitizes the mode; drop
+                // entries without a path, mirroring the legacy parser
+                const DataDirectory dir = DataDirectory::fromVariant(map);
+                if (!dir.path.isEmpty()) {
+                    dirs.append(dir);
+                }
+            }
+            return dirs;
+        }
+        // Malformed JSON: fall through to the legacy parser, which yields
+        // nothing usable for a '['-prefixed line — fail closed to empty
+        return dirs;
+    }
+
+    // Legacy format: newline-separated "path|mode" entries (written by
+    // earlier versions; kept so existing presets and profiles load)
+    const QStringList entries = trimmed.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString &entry : entries) {
+        const int pipePos = entry.indexOf(QLatin1Char('|'));
+        if (pipePos > 0) {
+            QVariantMap map;
+            map[QStringLiteral("path")] = entry.left(pipePos);
+            map[QStringLiteral("mode")] = entry.mid(pipePos + 1);
+            dirs.append(DataDirectory::fromVariant(map));
+        }
+    }
+    return dirs;
+}
+
 QList<DataDirectory> PresetManager::getDefaultDataDirectories(const QString &id) const
 {
     using Resolver = std::function<QList<DataDirectory>(const PresetManager *)>;
@@ -739,12 +795,8 @@ void PresetManager::saveBuiltinDataDirectoryOverride(const QString &id)
         if (preset.id != id) {
             continue;
         }
-        QStringList entries;
-        for (const DataDirectory &dir : preset.dataDirectories) {
-            entries.append(dir.path + QLatin1Char('|') + dir.mode);
-        }
         // An explicitly empty edit persists as an empty list, not as "default"
-        group.writeEntry(id, entries.join(QLatin1Char('\n')));
+        group.writeEntry(id, encodeDataDirectories(preset.dataDirectories));
         group.sync();
         return;
     }
@@ -763,18 +815,7 @@ void PresetManager::applyBuiltinDataDirectoryOverrides()
         if (!group.hasKey(id)) {
             continue;
         }
-        QList<DataDirectory> dirs;
-        const QStringList entries = group.readEntry(id, QString()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-        for (const QString &entry : entries) {
-            const int pipePos = entry.indexOf(QLatin1Char('|'));
-            if (pipePos > 0) {
-                DataDirectory dir;
-                dir.path = entry.left(pipePos);
-                dir.mode = entry.mid(pipePos + 1);
-                dirs.append(dir);
-            }
-        }
-        m_builtinPresets[i].dataDirectories = dirs;
+        m_builtinPresets[i].dataDirectories = decodeDataDirectories(group.readEntry(id, QString()));
     }
 }
 
@@ -806,21 +847,13 @@ void PresetManager::loadCustomPresets()
         preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
         preset.launcherId = group.readEntry(QStringLiteral("launcherId"), QString());
 
-        // Load dataDirectories from "path|mode" entries, newline-separated;
-        // migrate legacy sharedDirectories (plain path list) to acl-mode entries
+        // JSON (new) with legacy "path|mode" line fallback; migrate legacy
+        // sharedDirectories (plain path list) to bind-mode entries
         if (group.hasKey(QStringLiteral("dataDirectories"))) {
-            QString dataDirsRaw = group.readEntry(QStringLiteral("dataDirectories"), QString());
-            const QStringList entries = dataDirsRaw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-            for (const QString &entry : entries) {
-                int pipePos = entry.indexOf(QLatin1Char('|'));
-                if (pipePos > 0) {
-                    DataDirectory dir;
-                    dir.path = entry.left(pipePos);
-                    dir.mode = entry.mid(pipePos + 1);
-                    if (dir.mode.isEmpty()) {
-                        dir.mode = QStringLiteral("acl");
-                    }
-                    preset.dataDirectories.append(dir);
+            preset.dataDirectories = decodeDataDirectories(group.readEntry(QStringLiteral("dataDirectories"), QString()));
+            for (DataDirectory &dir : preset.dataDirectories) {
+                if (dir.mode.isEmpty()) {
+                    dir.mode = QStringLiteral("acl");
                 }
             }
         } else if (group.hasKey(QStringLiteral("sharedDirectories"))) {
@@ -875,12 +908,8 @@ void PresetManager::saveCustomPresets()
         group.writeEntry(QStringLiteral("flatpakArgs"), preset.flatpakArgs);
         group.writeEntry(QStringLiteral("launcherId"), preset.launcherId);
 
-        // Save dataDirectories as newline-separated "path|mode" entries
-        QStringList dirEntries;
-        for (const DataDirectory &dir : preset.dataDirectories) {
-            dirEntries.append(dir.path + QLatin1Char('|') + dir.mode);
-        }
-        group.writeEntry(QStringLiteral("dataDirectories"), dirEntries.join(QLatin1Char('\n')));
+        // JSON so paths containing '|' or newlines round-trip intact
+        group.writeEntry(QStringLiteral("dataDirectories"), encodeDataDirectories(preset.dataDirectories));
     }
 
     config->sync();

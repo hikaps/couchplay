@@ -4,6 +4,7 @@
 #include "SessionManager.h"
 #include "Logging.h"
 #include "SessionRunner.h"
+#include "UserLookup.h"
 
 #include <QDesktopServices>
 #include <QDebug>
@@ -12,7 +13,6 @@
 #include <QUrl>
 
 #include <unistd.h>
-#include <pwd.h>
 
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
@@ -27,6 +27,14 @@ void SessionManager::setPresetManager(PresetManager *manager)
     if (m_presetManager != manager) {
         m_presetManager = manager;
         Q_EMIT presetManagerChanged();
+    }
+}
+
+void SessionManager::setHelperClient(CouchPlayHelperClient *client)
+{
+    if (m_helperClient != client) {
+        m_helperClient = client;
+        Q_EMIT helperClientChanged();
     }
 }
 
@@ -150,11 +158,8 @@ bool SessionManager::saveProfile(const QString &name)
         // "use preset defaults" into "explicitly no directories" after a
         // save/load round-trip
         if (inst.dataDirectoriesSnapshotted) {
-            QStringList dirEntries;
-            for (const DataDirectory &dir : inst.dataDirectories) {
-                dirEntries.append(dir.path + QLatin1Char('|') + dir.mode);
-            }
-            instGroup.writeEntry("dataDirectories", dirEntries.join(QLatin1Char('\n')));
+            // JSON so paths containing '|' or newlines round-trip intact
+            instGroup.writeEntry("dataDirectories", encodeDataDirectories(inst.dataDirectories));
         } else {
             instGroup.deleteEntry("dataDirectories");
             instGroup.deleteEntry("sharedDirectories");
@@ -226,22 +231,14 @@ bool SessionManager::loadProfile(const QString &name)
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
         if (instGroup.hasKey("dataDirectories")) {
-            // New format: newline-separated "path|mode" entries. The key's
+            // JSON (new) with legacy "path|mode" line fallback. The key's
             // presence marks a taken snapshot — an explicitly empty list stays
             // empty (no preset-default fallback at session start).
             inst.dataDirectoriesSnapshotted = true;
-            QString dataDirsRaw = instGroup.readEntry("dataDirectories", QString());
-            const QStringList entries = dataDirsRaw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-            for (const QString &entry : entries) {
-                int pipePos = entry.indexOf(QLatin1Char('|'));
-                if (pipePos > 0) {
-                    DataDirectory dir;
-                    dir.path = entry.left(pipePos);
-                    dir.mode = entry.mid(pipePos + 1);
-                    if (dir.mode.isEmpty()) {
-                        dir.mode = QStringLiteral("acl");
-                    }
-                    inst.dataDirectories.append(dir);
+            inst.dataDirectories = decodeDataDirectories(instGroup.readEntry("dataDirectories", QString()));
+            for (DataDirectory &dir : inst.dataDirectories) {
+                if (dir.mode.isEmpty()) {
+                    dir.mode = QStringLiteral("acl");
                 }
             }
         } else if (instGroup.hasKey("sharedDirectories")) {
@@ -611,8 +608,13 @@ void SessionManager::setInstanceDataDirectories(int index, const QVariantList &d
 
 QString playerDataStagingRoot(const QString &presetId, const QString &username)
 {
-    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + QStringLiteral("/player-data/")
-        + presetId + QLatin1Char('/') + username;
+    // Deliberately home-based instead of QStandardPaths: under Flatpak the
+    // XDG locations redirect into the sandbox-private ~/.var/app tree, which
+    // the root helper must not depend on and whose path the user never sees
+    // in the host file manager. HOME stays the real home inside the sandbox,
+    // and the manifest persists this subtree so the GUI can write it.
+    return QDir::homePath() + QStringLiteral("/.local/share/couchplay/player-data/") + presetId
+        + QLatin1Char('/') + username;
 }
 
 QString SessionManager::playerDataFolderPath(int index)
@@ -657,8 +659,9 @@ QString SessionManager::playerDataFolderPath(int index)
         steamMarkerPath = m_presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
     }
 
-    struct passwd *pw = getpwuid(getuid());
-    QString compositorHome = pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+    // Helper-first so the slug matches SessionRunner's target mapping under
+    // Flatpak, where the sandbox resolves the compositor's home differently
+    const QString compositorHome = resolveCompositorHome(m_helperClient);
     for (const DataDirectory &dir : effectiveDirs) {
         if (dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
             continue;

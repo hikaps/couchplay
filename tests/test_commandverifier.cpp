@@ -174,6 +174,22 @@ void TestCommandVerifier::testExtractFlatpakAppId()
                  QStringLiteral("flatpak run --file-forwarding com.valvesoftware.Steam @@u %u @@")),
              QStringLiteral("com.valvesoftware.Steam"));
 
+    // Regression: every documented value-taking option must consume its
+    // space-separated value — a missing entry takes the value as the app
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --parent-pid 123 com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --own-name com.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --system-talk-name org.freedesktop.UPower com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --commit abc123 net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --runtime-commit def456 --unshare network com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
     // Not a launch command / no valid ID present
     QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak install com.valvesoftware.Steam")).isEmpty());
     QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run")).isEmpty());

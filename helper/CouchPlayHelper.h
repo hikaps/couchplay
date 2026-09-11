@@ -88,6 +88,8 @@ public Q_SLOTS:
      */
     QVariantMap GetUserInfo(const QString &username);
 
+    QString GetUserHomeByUid(uint uid);
+
     /**
      * Enable systemd linger for a user
      * Required for systemd-run to work properly
@@ -475,6 +477,7 @@ private:
     uint getUserUid(const QString &username);
     QString getUserHome(const QString &username);
     QString getUserHomeByUid(uint uid);
+    bool unmountMountInfo(MountInfo &mount);
     QString generateServiceName(const QString &username);
     qint64 startTransientUnit(const QString &username,
                               uint compositorUid,

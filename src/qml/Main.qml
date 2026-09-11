@@ -49,6 +49,7 @@ Kirigami.ApplicationWindow {
     SessionManager {
         id: sessionManager
         presetManager: presetManager
+        helperClient: helperClient
 
         onProfileLoaded: function(deviceInfoByInstance) {
             if (deviceManager) {

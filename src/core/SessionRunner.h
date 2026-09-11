@@ -201,6 +201,7 @@ private:
     void restoreDeviceOwnership();
     bool setupDataDirectories();
     void teardownSharedDirectories();
+    void teardownSharingState();
     bool buildBindPaths();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
@@ -246,4 +247,8 @@ private:
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
+
+    // Privileged sharing state (mounts, Steam library sharing) is active from
+    // setup until teardown — natural instance exit must release it too
+    bool m_sharedStateActive = false;
 };

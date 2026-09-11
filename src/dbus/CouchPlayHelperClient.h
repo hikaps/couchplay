@@ -65,6 +65,14 @@ public:
     Q_INVOKABLE virtual QVariantMap getUserInfo(const QString &username);
 
     /**
+     * @brief Resolve a uid to its host-side home directory via the helper
+     *
+     * Needed by the sandboxed (Flatpak) GUI, whose process-local getpwuid
+     * cannot see host user accounts.
+     */
+    Q_INVOKABLE virtual QString getUserHomeByUid(uint uid);
+
+    /**
      * @brief Launch a gamescope instance as a specified user
      * @param username User to run as
      * @param compositorUid UID of compositor user (for Wayland socket access)
@@ -165,7 +173,7 @@ public:
      * @param username User to get Steam ID for
      * @return Steam user ID string, or empty if not found
      */
-    Q_INVOKABLE QString getUserSteamId(const QString &username);
+    Q_INVOKABLE virtual QString getUserSteamId(const QString &username);
 
     /**
      * @brief Check whether Steam's first-run setup completed for a user
@@ -181,7 +189,7 @@ public:
      * @param username Target user (file will be owned by this user)
      * @return true if successful
      */
-    Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
+    Q_INVOKABLE virtual bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
     Q_INVOKABLE QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
 

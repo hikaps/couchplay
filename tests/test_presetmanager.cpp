@@ -40,6 +40,8 @@ private Q_SLOTS:
     void testGetSetSharedDirectories();
     void testSetDataDirectoriesQmlShape();
     void testSetDataDirectoriesBuiltinPersisted();
+    void testDataDirectoriesEncodingRoundTrip();
+    void testDataDirectoriesPersistenceSpecialCharacters();
     void testLauncherInfoFlags();
 
     void testLauncherIdPersistence();
@@ -364,6 +366,56 @@ void TestPresetManager::testSetDataDirectoriesBuiltinPersisted()
     QCOMPARE(reloaded.getDataDirectories(QStringLiteral("steam")).size(), 2);
     const LaunchPreset steamPreset = reloaded.getPreset(QStringLiteral("steam"));
     QCOMPARE(steamPreset.dataDirectories.first().path, QStringLiteral("/persist/dir1"));
+}
+
+void TestPresetManager::testDataDirectoriesEncodingRoundTrip()
+{
+    QList<DataDirectory> dirs;
+    dirs.append({QStringLiteral("/plain/path"), QStringLiteral("acl")});
+    dirs.append({QStringLiteral("/mnt/lib/Game|Saves"), QStringLiteral("copy")});
+    dirs.append({QStringLiteral("/home/deck/Games/Line\nBreak"), QStringLiteral("overlay")});
+    dirs.append({QStringLiteral("/weird/both|and\nline"), QStringLiteral("bind")});
+
+    const QList<DataDirectory> decoded = decodeDataDirectories(encodeDataDirectories(dirs));
+    QCOMPARE(decoded.size(), dirs.size());
+    for (int i = 0; i < dirs.size(); ++i) {
+        QCOMPARE(decoded[i].path, dirs[i].path);
+        QCOMPARE(decoded[i].mode, dirs[i].mode);
+    }
+
+    // Legacy "path|mode" lines written by earlier versions still decode
+    const QList<DataDirectory> legacy = decodeDataDirectories(QStringLiteral("/a|copy\n/b|overlay"));
+    QCOMPARE(legacy.size(), 2);
+    QCOMPARE(legacy[0].path, QStringLiteral("/a"));
+    QCOMPARE(legacy[0].mode, QStringLiteral("copy"));
+    QCOMPARE(legacy[1].mode, QStringLiteral("overlay"));
+}
+
+void TestPresetManager::testDataDirectoriesPersistenceSpecialCharacters()
+{
+    // Paths containing '|' or newlines are legal on Linux and selectable in
+    // the folder picker; the persisted form must not silently misparse them
+    PresetManager manager;
+    const QString id = manager.addCustomPreset(QStringLiteral("Special Chars"), QStringLiteral("/usr/bin/game"));
+
+    QVariantMap pipeDir;
+    pipeDir[QStringLiteral("path")] = QStringLiteral("/mnt/lib/Game|Saves");
+    pipeDir[QStringLiteral("mode")] = QStringLiteral("copy");
+    QVariantMap newlineDir;
+    newlineDir[QStringLiteral("path")] = QStringLiteral("/home/deck/Games/Line\nBreak");
+    newlineDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantList dirs;
+    dirs.append(pipeDir);
+    dirs.append(newlineDir);
+    QVERIFY(manager.setDataDirectories(id, dirs));
+
+    PresetManager reloaded;
+    const QVariantList restored = reloaded.getDataDirectories(id);
+    QCOMPARE(restored.size(), 2);
+    QCOMPARE(restored[0].value<DataDirectory>().path, QStringLiteral("/mnt/lib/Game|Saves"));
+    QCOMPARE(restored[0].value<DataDirectory>().mode, QStringLiteral("copy"));
+    QCOMPARE(restored[1].value<DataDirectory>().path, QStringLiteral("/home/deck/Games/Line\nBreak"));
+    QCOMPARE(restored[1].value<DataDirectory>().mode, QStringLiteral("overlay"));
 }
 
 void TestPresetManager::testLauncherInfoFlags()

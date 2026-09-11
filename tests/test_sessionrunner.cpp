@@ -21,6 +21,9 @@
 #include "SteamConfigManager.h"
 #define private public
 #include "CouchPlayHelperClient.h"
+
+#define private public
+#include "GamescopeInstance.h"
 #undef private
 #include "UserLookup.h"
 
@@ -104,6 +107,14 @@ public:
         mountCalls.append({username, compositorUid, directories});
         return directories.size();
     }
+
+    int unmountAllCalls = 0;
+    int unmountAllSharedDirectories() override
+    {
+        unmountAllCalls++;
+        return 0;
+    }
+
     bool setDeviceOwner(const QString &devicePath, int uid) override
     {
         deviceOwnerCalls.append({devicePath, uid});
@@ -116,9 +127,43 @@ public:
         if (username == QStringLiteral("player1")) {
             info.insert(QStringLiteral("uid"), 1001u);
             info.insert(QStringLiteral("gid"), 1001u);
-            info.insert(QStringLiteral("home"), QStringLiteral("/home/player1"));
+            info.insert(QStringLiteral("home"), player1Home);
         }
         return info;
+    }
+
+    QString player1Home = QStringLiteral("/home/player1");
+
+    // Mirrors the process-local getpwuid view by default so existing slug
+    // expectations stay identical; tests can override to simulate the
+    // helper-resolved host home
+    QString uidHomeOverride;
+    QString getUserHomeByUid(uint uid) override
+    {
+        if (!uidHomeOverride.isEmpty()) {
+            return uidHomeOverride;
+        }
+        struct passwd *pw = getpwuid(uid);
+        return pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+    }
+
+    QString getUserSteamId(const QString &username) override
+    {
+        return username == QStringLiteral("player1") ? QStringLiteral("12345") : QString();
+    }
+
+    bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username) override
+    {
+        Q_UNUSED(username)
+        if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) {
+            return false;
+        }
+        QFile f(targetPath);
+        if (!f.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        f.write(content);
+        return true;
     }
 
     bool isInCouchPlayGroup(const QString &username) override
@@ -153,6 +198,9 @@ private Q_SLOTS:
     void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
+    void testNaturalExitTearsDownSharingState();
+    void testFinalizeDataDirResolvesIdentityViaHelper();
+    void testResolveCompositorHomeViaHelper();
 
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -635,6 +683,117 @@ void TestSessionRunner::testResolveUserIdentityFallback()
 {
     const UserIdentity id = resolveUserIdentity(QStringLiteral("root"), nullptr);
     QVERIFY(id.valid);
+}
+
+void TestSessionRunner::testNaturalExitTearsDownSharingState()
+{
+    // A session whose games exit on their own must release the privileged
+    // sharing state; a later stop() must neither bypass nor double-run it
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/Games/MyGame");
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->m_sharedStateActive);
+    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
+    QCOMPARE(m_helperClient->unmountAllCalls, 0);
+
+    // Last instance exits naturally
+    auto *instance = new GamescopeInstance(m_runner);
+    instance->m_index = 0;
+    m_runner->m_instances.append(instance);
+    QMetaObject::invokeMethod(instance, "stopped");
+
+    QVERIFY(!m_runner->m_sharedStateActive);
+    QCOMPARE(m_helperClient->unmountAllCalls, 1);
+
+    // stop() after natural exit takes the early return without re-tearing down
+    m_runner->stop();
+    QCOMPARE(m_helperClient->unmountAllCalls, 1);
+
+    // A new session re-arms the tracker and stop() cleans it up again
+    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->m_sharedStateActive);
+    m_runner->stop();
+    QCOMPARE(m_helperClient->unmountAllCalls, 2);
+}
+
+void TestSessionRunner::testResolveCompositorHomeViaHelper()
+{
+    // Under Flatpak the sandbox's getpwuid cannot see host accounts; the
+    // helper's host-side answer must win when present
+    m_helperClient->uidHomeOverride = QStringLiteral("/home/compositor-host");
+    QCOMPARE(resolveCompositorHome(m_helperClient), QStringLiteral("/home/compositor-host"));
+
+    // Fallback to the process-local view when the helper has no answer
+    m_helperClient->uidHomeOverride = QString();
+    QCOMPARE(resolveCompositorHome(m_helperClient), resolveCompositorHome(nullptr));
+}
+
+void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
+{
+    // finalizeDataDir must resolve the target home through the helper: a
+    // process-local getpwnam() cannot see CouchPlay host accounts under
+    // Flatpak and aborted finalization after preparation had mounted
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    const QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QVERIFY(QDir(steamRoot).mkpath(QStringLiteral("config")));
+
+    const QString externalLib = homeDir.path() + QStringLiteral("/extlib");
+    QVERIFY(QDir(externalLib).mkpath(QStringLiteral("steamapps")));
+    {
+        QFile manifest(externalLib + QStringLiteral("/steamapps/appmanifest_730.acf"));
+        QVERIFY(manifest.open(QIODevice::WriteOnly));
+        manifest.write("\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n}\n");
+    }
+
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n"
+                     "{\n"
+                     "  \"0\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
+                     "  }\n"
+                     "  \"1\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + externalLib.toUtf8() + "\"\n"
+                     "  }\n"
+                     "}\n");
+    libraryVdf.close();
+
+    // The helper-resolved home points at the temp dir; no passwd entry for
+    // player1 exists in the test environment
+    m_helperClient->player1Home = homeDir.path();
+
+    auto *steamManager = new SteamConfigManager(this);
+    steamManager->setHelperClient(m_helperClient);
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    steamManager->setShareLibraryEnabled(true);
+
+    DataDirectory dir;
+    dir.path = steamRoot;
+    dir.mode = QStringLiteral("overlay");
+    QVERIFY(steamManager->finalizeDataDir(dir, QStringLiteral("player1")));
+
+    // Manifests and libraryfolders.vdf landed under the helper-resolved home
+    QVERIFY(QFile::exists(homeDir.path() + QStringLiteral("/.couchplay/steam-libs/1/appmanifest_730.acf")));
+    QVERIFY(QFile::exists(steamRoot + QStringLiteral("/config/libraryfolders.vdf")));
+    QFile vdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(vdf.open(QIODevice::ReadOnly));
+    const QByteArray vdfContent = vdf.readAll();
+    QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
+    QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
 }
 
 QTEST_MAIN(TestSessionRunner)

@@ -798,6 +798,18 @@ QVariantMap CouchPlayHelper::GetUserInfo(const QString &username)
     return info;
 }
 
+QString CouchPlayHelper::GetUserHomeByUid(uint uid)
+{
+    // Informational, like GetUserInfo: lets the (possibly sandboxed) GUI
+    // resolve the compositor's host-side home for home-relative target mapping
+    struct passwd *pw = m_ops->getpwuid(uid);
+    if (!pw) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("No user with uid %1").arg(uid));
+        return QString();
+    }
+    return QString::fromLocal8Bit(pw->pw_dir);
+}
+
 bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
 {
     if (!validateUserAndAuth(username, ACTION_DELETE_USER)) {
@@ -2001,6 +2013,33 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
     return true;
 }
 
+bool CouchPlayHelper::unmountMountInfo(MountInfo &mount)
+{
+    // Prefer the FD-backed reference: /proc/self/fd/<pinned-parent>/leaf
+    // cannot be raced by a player swapping ancestors of the target path.
+    // The pinned FD is released only on success — a failed unmount (e.g.
+    // persistent EBUSY) must keep the entry AND its FD, so later teardown,
+    // restart reconciliation, or destruction can retry instead of orphaning
+    // a root mount nobody can clean up anymore.
+    if (mount.targetParentFd >= 0) {
+        int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
+        if (result != 0) {
+            qWarning() << "unmountMountInfo: FD umount failed for" << mount.target << ":" << strerror(-result);
+            return false;
+        }
+        ::close(mount.targetParentFd);
+        mount.targetParentFd = -1;
+        return true;
+    }
+
+    // No pinned FD (post-restart state): path-based umount with lazy fallback
+    if (!runCommand(QStringLiteral("/usr/bin/umount"), {mount.target}, 10000)) {
+        qWarning() << "unmountMountInfo: umount failed for" << mount.target << "- trying lazy unmount";
+        return runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 10000);
+    }
+    return true;
+}
+
 int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
 {
     if (!s_validUsername.match(username).hasMatch()) {
@@ -2017,39 +2056,21 @@ int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
         return 0;
     }
 
-    auto unmountOne = [this](MountInfo &mount) -> bool {
-        // Prefer the FD-backed reference: /proc/self/fd/<pinned-parent>/leaf
-        // cannot be raced by a player swapping ancestors of the target path
-        if (mount.targetParentFd >= 0) {
-            int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
-            ::close(mount.targetParentFd);
-            mount.targetParentFd = -1;
-            if (result != 0) {
-                qWarning() << "UnmountSharedDirectories: FD umount failed for" << mount.target << ":"
-                           << strerror(-result);
-                return false;
-            }
-            return true;
-        }
-
-        // No pinned FD (post-restart state): path-based umount with lazy fallback
-        if (!runCommand(QStringLiteral("/usr/bin/umount"), {mount.target}, 10000)) {
-            qWarning() << "UnmountSharedDirectories: umount failed for" << mount.target << "- trying lazy unmount";
-            return runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 10000);
-        }
-        return true;
-    };
-
     int successCount = 0;
-    QList<MountInfo> &mounts = m_activeMounts[username];
+    QList<MountInfo> mounts = m_activeMounts.take(username);
+    QList<MountInfo> remaining;
 
     for (int i = mounts.size() - 1; i >= 0; --i) {
-        if (unmountOne(mounts[i])) {
+        if (unmountMountInfo(mounts[i])) {
             successCount++;
+        } else {
+            remaining.prepend(mounts[i]);
         }
     }
 
-    m_activeMounts.remove(username);
+    if (!remaining.isEmpty()) {
+        m_activeMounts[username] = remaining;
+    }
     saveState();
     return successCount;
 }
@@ -2061,39 +2082,24 @@ int CouchPlayHelper::UnmountAllSharedDirectories()
         return 0;
     }
 
-    auto unmountOne = [this](MountInfo &mount) -> bool {
-        if (mount.targetParentFd >= 0) {
-            int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
-            ::close(mount.targetParentFd);
-            mount.targetParentFd = -1;
-            if (result != 0) {
-                qWarning() << "UnmountAllSharedDirectories: FD umount failed for" << mount.target << ":"
-                           << strerror(-result);
-                return false;
-            }
-            return true;
-        }
-
-        if (!runCommand(QStringLiteral("/usr/bin/umount"), {mount.target}, 10000)) {
-            qWarning() << "UnmountAllSharedDirectories: umount failed for" << mount.target << "- trying lazy unmount";
-            return runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 10000);
-        }
-        return true;
-    };
-
     int successCount = 0;
     QStringList users = m_activeMounts.keys();
 
     for (const QString &username : users) {
-        QList<MountInfo> &mounts = m_activeMounts[username];
+        QList<MountInfo> mounts = m_activeMounts.take(username);
+        QList<MountInfo> remaining;
 
         for (int i = mounts.size() - 1; i >= 0; --i) {
-            if (unmountOne(mounts[i])) {
+            if (unmountMountInfo(mounts[i])) {
                 successCount++;
+            } else {
+                remaining.prepend(mounts[i]);
             }
         }
 
-        m_activeMounts.remove(username);
+        if (!remaining.isEmpty()) {
+            m_activeMounts[username] = remaining;
+        }
     }
 
     saveState();

@@ -1071,13 +1071,16 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
             return false;
         }
 
-        struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
-        if (!pw) {
-            qCWarning(couchplaySteam) << "finalizeDataDir: User not found:" << username;
+        // Resolve through the helper like every other identity lookup here:
+        // the Flatpak sandbox cannot see CouchPlay-created host accounts, so a
+        // process-local getpwnam() would abort finalization even though
+        // preparation already mounted everything
+        const UserIdentity targetIdentity = resolveUserIdentity(username, m_helperClient);
+        if (!targetIdentity.valid) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Could not resolve target user:" << username;
             return false;
         }
-        QString targetHome = QString::fromLocal8Bit(pw->pw_dir);
-
+        QString targetHome = targetIdentity.home;
         QString targetSteamId = getTargetSteamUserId(username);
         if (targetSteamId.isEmpty()) {
             qCWarning(couchplaySteam) << "finalizeDataDir: Target user has not set up Steam:" << username;
