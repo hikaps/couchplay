@@ -704,9 +704,10 @@ void TestSessionRunner::testNaturalExitTearsDownSharingState()
     QCOMPARE(m_helperClient->overlayCalls.size(), 1);
     QCOMPARE(m_helperClient->unmountAllCalls, 0);
 
-    // Last instance exits naturally
+    // Last instance exits naturally (wired the way startNextInstance does)
     auto *instance = new GamescopeInstance(m_runner);
     instance->m_index = 0;
+    connect(instance, &GamescopeInstance::stopped, m_runner, &SessionRunner::onInstanceStopped);
     m_runner->m_instances.append(instance);
     QMetaObject::invokeMethod(instance, "stopped");
 
@@ -784,6 +785,10 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     DataDirectory dir;
     dir.path = steamRoot;
     dir.mode = QStringLiteral("overlay");
+
+    // Production sequence: prepare mounts the alias libraries (and loads
+    // them); finalize then writes manifests and libraryfolders.vdf
+    QVERIFY(steamManager->prepareDataDir(dir, QStringLiteral("player1")));
     QVERIFY(steamManager->finalizeDataDir(dir, QStringLiteral("player1")));
 
     // Manifests and libraryfolders.vdf landed under the helper-resolved home
