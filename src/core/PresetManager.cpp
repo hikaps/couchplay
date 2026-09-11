@@ -118,6 +118,7 @@ QList<DataDirectory> decodeDataDirectories(const QString &payload)
         if (doc.isArray()) {
             const QJsonArray array = doc.array();
             for (const QJsonValue &value : array) {
+                const QJsonObject entry = value.toObject();
                 QVariantMap map;
                 map[QStringLiteral("path")] = entry.value(QStringLiteral("path")).toString();
                 map[QStringLiteral("mode")] = entry.value(QStringLiteral("mode")).toString();
