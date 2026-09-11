@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SteamConfigManager.h"
+#include "PresetManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
 #include "UserLookup.h"
@@ -337,44 +338,14 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
     }
     qCDebug(couchplaySteam) << "Target Steam ID:" << targetSteamId;
 
-    // Get target user's home
-    const UserIdentity id = resolveUserIdentity(targetUsername, m_helperClient);
-    if (!id.valid) {
-        qCWarning(couchplaySteam) << "syncShortcutsToUser failed - User not found:" << targetUsername;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("User not found"));
+    const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
+    if (!targetPaths.valid || targetPaths.shortcutsVdf.isEmpty()) {
+        qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Could not resolve target Steam paths for"
+                                   << targetUsername;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Could not resolve target Steam paths"));
         return false;
     }
-    QString targetHome = id.home;
-    qCDebug(couchplaySteam) << "Target home:" << targetHome;
-
-    // Target path uses TARGET user's Steam ID (not compositor's)
-    // Check for Steam installation location
-    QString targetSteamRoot;
-    QStringList possibleRoots = {
-        targetHome + QStringLiteral("/.steam/steam"),
-        targetHome + QStringLiteral("/.local/share/Steam"),
-    };
-    for (const QString &root : possibleRoots) {
-        if (QDir(root).exists()) {
-            targetSteamRoot = root;
-            break;
-        }
-    }
-    if (targetSteamRoot.isEmpty()) {
-        targetSteamRoot = targetHome + QStringLiteral("/.steam/steam");
-    }
-
-    QString targetConfigDir =
-        targetSteamRoot + QStringLiteral("/userdata/") + targetSteamId + QStringLiteral("/config");
-    QString targetVdf = targetConfigDir + QStringLiteral("/shortcuts.vdf");
-
-    // Safety: ensure target path is under the user's home directory
-    if (!targetVdf.startsWith(targetHome + QLatin1Char('/'))) {
-        qCWarning(couchplaySteam) << "syncShortcutsToUser: Target path" << targetVdf << "is not under user's home"
-                                  << targetHome;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Target path is not under user's home directory"));
-        return false;
-    }
+    const QString targetVdf = targetPaths.shortcutsVdf;
 
     // Direct byte copy - preserves exact Steam format including all end markers
     // This is the preferred approach as it avoids any serialization differences
@@ -417,14 +388,48 @@ SteamPaths SteamConfigManager::getTargetSteamPaths(const QString &username) cons
     }
 
     QString targetHome = id.home;
+    // In a Flatpak build the GUI cannot inspect another user's host home.
+    // Ask the helper to resolve the existing root there before trying any
+    // process-local filesystem checks.
+    if (m_helperClient && m_helperClient->isAvailable()) {
+        const QString helperRoot = m_helperClient->getUserSteamRoot(username);
+        if (!helperRoot.isEmpty()) {
+            paths.steamRoot = helperRoot;
+            paths.configDir = helperRoot + QStringLiteral("/config");
+            paths.libraryFoldersVdf = paths.configDir + QStringLiteral("/libraryfolders.vdf");
+
+            const QString targetSteamId = getTargetSteamUserId(username);
+            if (!targetSteamId.isEmpty()) {
+                paths.userDataDir = helperRoot + QStringLiteral("/userdata/") + targetSteamId;
+                paths.shortcutsVdf = paths.userDataDir + QStringLiteral("/config/shortcuts.vdf");
+            }
+            paths.valid = true;
+            return paths;
+        }
+    }
 
     // Check for Steam in common locations relative to target home
-    QStringList possibleRoots = {
-        targetHome + QStringLiteral("/.steam/steam"),
+    // Prefer Steam's real data directory. On standard installations
+    // ~/.steam/steam is often a symlink to ~/.local/share/Steam; retaining
+    // that spelling would make secure helper writes reject the target.
+    const QString canonicalHome = QFileInfo(targetHome).canonicalFilePath();
+    const QStringList possibleRoots = {
         targetHome + QStringLiteral("/.local/share/Steam"),
+        targetHome + QStringLiteral("/.steam/steam"),
     };
 
-    for (const QString &root : possibleRoots) {
+    for (const QString &candidateRoot : possibleRoots) {
+        QString root = candidateRoot;
+        const QString canonicalRoot = QFileInfo(candidateRoot).canonicalFilePath();
+        if (!canonicalHome.isEmpty() && !canonicalRoot.isEmpty()) {
+            if (canonicalRoot != canonicalHome && !canonicalRoot.startsWith(canonicalHome + QLatin1Char('/'))) {
+                continue;
+            }
+            // Keep the user's home spelling in the path sent to the helper,
+            // while removing any symlink below that home.
+            root = targetHome + canonicalRoot.mid(canonicalHome.length());
+        }
+
         QString configDir = root + QStringLiteral("/config");
 
         // For target user, check if Steam exists
@@ -893,68 +898,52 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         return false;
     }
     
-    QStringList targetLibraryPaths;
     QList<SteamLibraryFolder> targetLibraries;
     bool anyFailure = false;
     
     for (int i = 0; i < m_libraries.size(); ++i) {
         const SteamLibraryFolder &library = m_libraries[i];
-        
-        QString sourceCommon = library.path + QStringLiteral("/steamapps/common");
-        QString sourceSteamApps = library.path + QStringLiteral("/steamapps");
-        
-        QString targetLibPath;
-        if (i == 0) {
-            // Library 0 reuses the target's Steam root as the default install location
-            targetLibPath = targetPaths.steamRoot;
-        } else {
-            targetLibPath = targetHome + QStringLiteral("/.couchplay/steam-libs/") + QString::number(i);
-        }
-        
-        QString targetSteamApps = targetLibPath + QStringLiteral("/steamapps");
-        
-        qCDebug(couchplaySteam) << "Setting ACL on library" << library.path << "for" << targetUsername;
-        if (!m_helperClient->setPathAclWithParents(library.path, targetUsername)) {
-            qCWarning(couchplaySteam) << "Failed to set ACL on" << library.path;
+        const QString sourceCommon = library.path + QStringLiteral("/steamapps/common");
+        const QString sourceSteamApps = library.path + QStringLiteral("/steamapps");
+        const QString targetLibPath =
+            targetHome + QStringLiteral("/.couchplay/steam-libs/") + QString::number(i);
+        const QString targetSteamApps = targetLibPath + QStringLiteral("/steamapps");
+        const QString targetAlias =
+            QStringLiteral(".couchplay/steam-libs/%1/steamapps/common").arg(QString::number(i));
+
+        qCDebug(couchplaySteam) << "Setting ACL on library content" << sourceCommon << "for" << targetUsername;
+        const bool parentAclOk = m_helperClient->setPathAclWithParents(sourceCommon, targetUsername);
+        const bool contentAclOk = m_helperClient->setDirectoryAcl(sourceCommon, targetUsername, true);
+        if (!parentAclOk || !contentAclOk) {
+            qCWarning(couchplaySteam) << "Failed to set recursive ACL on" << sourceCommon;
             anyFailure = true;
         }
-        
-        // Mount spec "source|alias": empty alias (i==0) mounts at natural path,
-        // explicit alias (i>0) mounts into .couchplay/steam-libs/<i>/steamapps/common
-        QString mountSpec;
-        if (i == 0) {
-            mountSpec = sourceCommon + QStringLiteral("|");
-        } else {
-            mountSpec = sourceCommon + QStringLiteral("|/.couchplay/steam-libs/") + QString::number(i) + QStringLiteral("/steamapps/common");
-        }
-        
-        qCDebug(couchplaySteam) << "Mounting" << mountSpec << "for" << targetUsername;
-        int mountResult = m_helperClient->mountSharedDirectories(targetUsername, getuid(), {mountSpec});
-        if (mountResult <= 0) {
-            qCWarning(couchplaySteam) << "Failed to mount library" << i << "for" << targetUsername;
+
+        qCDebug(couchplaySteam) << "Mounting library content" << sourceCommon << "at" << targetAlias
+                                << "for" << targetUsername;
+        if (!m_helperClient->setupOverlayMount(targetUsername, static_cast<uint>(getuid()), sourceCommon, targetAlias)) {
+            qCWarning(couchplaySteam) << "Failed to mount library content" << sourceCommon;
             anyFailure = true;
         }
-        
+
         QDir sourceSteamAppsDir(sourceSteamApps);
-        QStringList manifests = sourceSteamAppsDir.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files);
-        
+        const QStringList manifests = sourceSteamAppsDir.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files);
+
         for (const QString &manifest : manifests) {
-            QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
+            const QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
             QFile manifestFile(manifestPath);
             if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QByteArray content = manifestFile.readAll();
+                const QByteArray content = manifestFile.readAll();
                 manifestFile.close();
-                
-                QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
+
+                const QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
                 if (!m_helperClient->writeFileToUser(content, targetManifestPath, targetUsername)) {
                     qCWarning(couchplaySteam) << "Failed to write manifest" << manifest << "for" << targetUsername;
                     anyFailure = true;
                 }
             }
         }
-        
-        targetLibraryPaths.append(targetLibPath);
-        
+
         // Target path + source metadata (app IDs, label, size) so Steam recognizes installed games
         SteamLibraryFolder targetLib;
         targetLib.path = targetLibPath;
@@ -963,6 +952,11 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         targetLib.appIds = library.appIds;
         targetLibraries.append(targetLib);
     }
+
+    // Preserve the player's own Steam installation as the default library.
+    SteamLibraryFolder ownRoot;
+    ownRoot.path = targetPaths.steamRoot;
+    targetLibraries.prepend(ownRoot);
     
     QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
     
@@ -981,21 +975,174 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
     return !anyFailure;
 }
 
-void SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
+bool SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
 {
     if (!m_helperClient || !m_helperClient->isAvailable()) {
-        return;
+        return false;
     }
 
-    SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
-    if (!targetPaths.valid) {
-        return;
+    const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
+    if (!targetPaths.valid || targetPaths.libraryFoldersVdf.isEmpty()) {
+        return false;
     }
 
     // Restore minimal libraryfolders.vdf — clears shared library entries
     // so Steam doesn't reference bind-mounted paths that no longer exist.
-    QString emptyVdf = QStringLiteral("\"libraryfolders\"\n{\n}\n");
-    m_helperClient->writeFileToUser(emptyVdf.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername);
+    const QString emptyVdf = QStringLiteral("\"libraryfolders\"\n{\n}\n");
+    if (!m_helperClient->writeFileToUser(emptyVdf.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername)) {
+        qCWarning(couchplaySteam) << "Failed to clean up library sharing for" << targetUsername;
+        return false;
+    }
 
     qCDebug(couchplaySteam) << "Cleaned up library sharing for" << targetUsername;
+    return true;
+}
+
+bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString &username)
+{
+    // Library sharing: overlay mode on steamRoot
+    if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
+        && dir.path == m_steamPaths.steamRoot) {
+        if (!m_steamPaths.valid) {
+            qCWarning(couchplaySteam) << "prepareDataDir: Steam not detected";
+            return false;
+        }
+
+        if (m_libraries.isEmpty()) {
+            loadLibraryFolders();
+        }
+        if (m_libraries.isEmpty()) {
+            qCWarning(couchplaySteam) << "prepareDataDir: No Steam libraries loaded";
+            return false;
+        }
+        if (!m_helperClient || !m_helperClient->isAvailable()) {
+            qCWarning(couchplaySteam) << "prepareDataDir: Helper not available";
+            return false;
+        }
+
+        bool anyFailure = false;
+        for (const SteamLibraryFolder &library : m_libraries) {
+            const QString sourceCommon = library.path + QStringLiteral("/steamapps/common");
+            qCDebug(couchplaySteam) << "prepareDataDir: Setting ACL on" << sourceCommon << "for" << username;
+            const bool parentAclOk = m_helperClient->setPathAclWithParents(sourceCommon, username);
+            const bool contentAclOk = m_helperClient->setDirectoryAcl(sourceCommon, username, true);
+            if (!parentAclOk || !contentAclOk) {
+                qCWarning(couchplaySteam) << "prepareDataDir: Failed to set recursive ACL on" << sourceCommon;
+                anyFailure = true;
+            }
+        }
+
+        // Mount only game content. The library root can contain the
+        // compositor's Steam account, userdata, and configuration, none of
+        // which should be exposed to a player.
+        for (int i = 0; i < m_libraries.size(); ++i) {
+            const QString sourceCommon = m_libraries[i].path + QStringLiteral("/steamapps/common");
+            const QString alias =
+                QStringLiteral(".couchplay/steam-libs/%1/steamapps/common").arg(QString::number(i));
+            qCDebug(couchplaySteam) << "prepareDataDir: Overlaying" << sourceCommon << "at" << alias << "for" << username;
+            if (!m_helperClient->setupOverlayMount(username, static_cast<uint>(getuid()), sourceCommon, alias)) {
+                qCWarning(couchplaySteam) << "prepareDataDir: Failed to mount library content" << sourceCommon;
+                anyFailure = true;
+            }
+        }
+        return !anyFailure;
+    }
+
+    return true;
+}
+
+bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString &username)
+{
+    // Library sharing: overlay mode on steamRoot
+    if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
+        && dir.path == m_steamPaths.steamRoot) {
+        if (!m_helperClient || !m_helperClient->isAvailable()) {
+            return false;
+        }
+        if (m_libraries.isEmpty()) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: No libraries loaded";
+            return false;
+        }
+
+        SteamPaths targetPaths = getTargetSteamPaths(username);
+        if (!targetPaths.valid) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Could not resolve target paths for" << username;
+            return false;
+        }
+
+        // Resolve through the helper like every other identity lookup here:
+        // the Flatpak sandbox cannot see CouchPlay-created host accounts, so a
+        // process-local getpwnam() would abort finalization even though
+        // preparation already mounted everything
+        const UserIdentity targetIdentity = resolveUserIdentity(username, m_helperClient);
+        if (!targetIdentity.valid) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Could not resolve target user:" << username;
+            return false;
+        }
+        QString targetHome = targetIdentity.home;
+        QString targetSteamId = getTargetSteamUserId(username);
+        if (targetSteamId.isEmpty()) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Target user has not set up Steam:" << username;
+            return false;
+        }
+
+        QList<SteamLibraryFolder> targetLibraries;
+        bool anyFailure = false;
+
+        for (int i = 0; i < m_libraries.size(); ++i) {
+            const SteamLibraryFolder &library = m_libraries[i];
+            QString sourceSteamApps = library.path + QStringLiteral("/steamapps");
+
+            // Every library lives at its alias mount under the player's home —
+            // matches prepareDataDir's mounts and keeps the player's own Steam
+            // root (and thus their identity and userdata) out of the sharing path
+            QString targetLibPath = targetHome + QStringLiteral("/.couchplay/steam-libs/") + QString::number(i);
+            QString targetSteamApps = targetLibPath + QStringLiteral("/steamapps");
+
+            QDir sourceSteamAppsDir(sourceSteamApps);
+            QStringList manifests =
+                sourceSteamAppsDir.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files);
+
+            for (const QString &manifest : manifests) {
+                QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
+                QFile manifestFile(manifestPath);
+                if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    QByteArray content = manifestFile.readAll();
+                    manifestFile.close();
+
+                    QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
+                    if (!m_helperClient->writeFileToUser(content, targetManifestPath, username)) {
+                        qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write manifest" << manifest;
+                        anyFailure = true;
+                    }
+                }
+            }
+
+            SteamLibraryFolder targetLib;
+            targetLib.path = targetLibPath;
+            targetLib.label = library.label;
+            targetLib.totalSize = library.totalSize;
+            targetLib.appIds = library.appIds;
+            targetLibraries.append(targetLib);
+        }
+
+        // Keep the player's own Steam root as the first library so their own
+        // installed content and default install location survive sharing
+        SteamLibraryFolder ownRoot;
+        ownRoot.path = targetPaths.steamRoot;
+        targetLibraries.prepend(ownRoot);
+
+        QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
+        if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, username)) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write libraryfolders.vdf for" << username;
+            return false;
+        }
+
+        if (!anyFailure) {
+            qCDebug(couchplaySteam) << "finalizeDataDir: Shared" << m_libraries.size() << "libraries to" << username;
+        }
+        return !anyFailure;
+    }
+
+    return true;
 }

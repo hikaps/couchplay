@@ -7,10 +7,15 @@
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QString>
+#include <QVariantList>
 #include <QVariantMap>
 
 #include <KConfig>
 #include <KConfigGroup>
+
+#include "PresetManager.h"
+
+class CouchPlayHelperClient;
 
 class SessionManager;
 
@@ -34,7 +39,7 @@ struct InstanceConfig {
     Q_PROPERTY(QString gameCommand MEMBER gameCommand)
     Q_PROPERTY(QString steamAppId MEMBER steamAppId)
     Q_PROPERTY(QString presetId MEMBER presetId)
-    Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
+    Q_PROPERTY(QVariantList dataDirectories READ dataDirectoriesAsVariant WRITE setDataDirectoriesFromVariant)
     Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
     Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
     Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
@@ -61,7 +66,10 @@ public:
     QString gameCommand;
     QString steamAppId; // Steam App ID for Steam launch mode
     QString presetId = QStringLiteral("steam"); // ID of the launch preset to use
-    QStringList sharedDirectories; // Per-instance shared directories (from preset)
+    QList<DataDirectory> dataDirectories; // Per-instance data directories (from preset)
+    bool dataDirectoriesSnapshotted = false; // True once a snapshot was taken (even an empty one)
+    QVariantList dataDirectoriesAsVariant() const;
+    void setDataDirectoriesFromVariant(const QVariantList &dirs);
     QString overrideGamePath;
     QStringList overrideFiles;
     QStringList overridePatterns; // Glob patterns for per-user overrides
@@ -109,10 +117,24 @@ class SessionManager : public QObject
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
+    Q_PROPERTY(PresetManager *presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
+    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
 
 public:
     explicit SessionManager(QObject *parent = nullptr);
     ~SessionManager() override;
+
+    PresetManager *presetManager() const
+    {
+        return m_presetManager;
+    }
+    void setPresetManager(PresetManager *manager);
+
+    CouchPlayHelperClient *helperClient() const
+    {
+        return m_helperClient;
+    }
+    void setHelperClient(CouchPlayHelperClient *client);
 
     // Profile management
     Q_INVOKABLE bool saveProfile(const QString &name);
@@ -142,7 +164,28 @@ public:
     Q_INVOKABLE void setInstanceDeviceStableIds(int index, const QStringList &stableIds, const QStringList &names);
     Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
-    Q_INVOKABLE void setInstanceSharedDirectories(int index, const QStringList &directories);
+    Q_INVOKABLE void setInstanceDataDirectories(int index, const QVariantList &directories);
+
+    /**
+     * @brief Per-player staging folder path for hand-seeded data (configs etc.)
+     *
+     * Creates the folder (and one subfolder per writable shared directory)
+     * if needed and returns the path. Files dropped here are merged into the
+     * player's view of the corresponding shared directory at session start.
+     * Returns an empty string for invalid indices or instances without a
+     * user/preset.
+     */
+    Q_INVOKABLE QString playerDataFolderPath(int index);
+
+    /**
+     * @brief Open the per-player staging folder in the file manager
+     *
+     * No-op under Flatpak (no host filesystem access) — use
+     * playerDataFolderPath() to show a copyable path instead.
+     *
+     * @return true if an opener was launched
+     */
+    Q_INVOKABLE bool openPlayerDataFolder(int index);
 
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;
@@ -187,6 +230,8 @@ Q_SIGNALS:
     void instanceCountChanged();
     void savedProfilesChanged();
     void instancesChanged();
+    void presetManagerChanged();
+    void helperClientChanged();
     void errorOccurred(const QString &message);
     /**
      * @brief Emitted after a profile is successfully loaded
@@ -204,4 +249,13 @@ private:
 
     SessionProfile m_currentProfile;
     QList<SessionProfile> m_savedProfiles;
+    PresetManager *m_presetManager = nullptr;
+    CouchPlayHelperClient *m_helperClient = nullptr;
 };
+
+/**
+ * Per-player staging root for hand-seeded data (one subfolder per writable
+ * shared directory, named by dataDirectoryStagingSlug()):
+ *   <CouchPlay app data location>/player-data/<presetId>/<username>/
+ */
+QString playerDataStagingRoot(const QString &presetId, const QString &username);

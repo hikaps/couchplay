@@ -8,6 +8,7 @@
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QRect>
+#include <QSet>
 #include <QString>
 #include <QVariantMap>
 
@@ -199,10 +200,10 @@ private:
     void cleanupInstances();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
-    bool setupSharedDirectories();
+    bool setupDataDirectories();
     void teardownSharedDirectories();
+    void teardownSharingState();
     bool buildBindPaths();
-    bool setupLauncherAccess();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
@@ -247,4 +248,9 @@ private:
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
+
+    // Privileged sharing state (mounts, Steam library sharing) is active from
+    // setup until teardown — natural instance exit must release it too
+    bool m_sharedStateActive = false;
+    QSet<QString> m_steamSharedUsers;
 };

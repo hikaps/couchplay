@@ -11,9 +11,35 @@
 #include <KConfig>
 #include <KConfigGroup>
 
+// First: the client header under the test-access macro, before any other
+// project header can pull it in unguarded
+#define private public
+#include "CouchPlayHelperClient.h"
+#undef private
+
+#include "PresetManager.h"
 #include "SessionManager.h"
+#include "SteamConfigManager.h"
 
 #define KEY(x) QStringLiteral(x)
+
+class MockHomeHelperClient : public CouchPlayHelperClient
+{
+    Q_OBJECT
+public:
+    explicit MockHomeHelperClient(QObject *parent = nullptr)
+        : CouchPlayHelperClient(parent)
+    {
+        m_available = true;
+    }
+
+    QString uidHome;
+    QString getUserHomeByUid(uint uid) override
+    {
+        Q_UNUSED(uid)
+        return uidHome;
+    }
+};
 
 class TestSessionManager : public QObject
 {
@@ -42,6 +68,14 @@ private Q_SLOTS:
     // Profile management tests
     void testSaveProfile();
     void testLoadProfile();
+    void testLoadProfileLegacySharedDirectories();
+    void testLoadSaveDataDirectoriesRoundtrip();
+    void testLoadSaveDataDirectoriesSpecialCharacters();
+    void testUnsnapshottedStaysUnsnapshottedAfterSaveLoad();
+    void testPlayerDataFolderPath();
+    void testPlayerDataFolderPathMarkerPredicate();
+    void testSetInstanceConfigPreservesDirectorySnapshot();
+    void testPlayerDataFolderPathUsesHelperResolvedHome();
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
@@ -161,6 +195,69 @@ void TestSessionManager::testSetInstanceConfig()
     QCOMPARE(retrieved.value(KEY("refreshRate")).toInt(), 120);
 }
 
+void TestSessionManager::testPlayerDataFolderPathUsesHelperResolvedHome()
+{
+    // The staging slug must use the helper-resolved compositor home so the
+    // folder names match what SessionRunner mirrors into at session start
+    // (under Flatpak the sandbox resolves a different home)
+    MockHomeHelperClient helper;
+    helper.uidHome = QStringLiteral("/home/compositor");
+    m_sessionManager->setHelperClient(&helper);
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[KEY("path")] = QStringLiteral("/home/compositor/Games/MyGame");
+    overlayDir[KEY("mode")] = QStringLiteral("overlay");
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    const QString root = m_sessionManager->playerDataFolderPath(0);
+    QVERIFY(!root.isEmpty());
+    QDir rootDir(root);
+    const QStringList slugs = rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QCOMPARE(slugs.size(), 1);
+    QVERIFY(slugs.first().startsWith(QStringLiteral("Games_MyGame-"))); // home-relative slug
+
+    rootDir.removeRecursively();
+    QDir(QDir::homePath() + QStringLiteral("/.local/share/couchplay/player-data")).removeRecursively();
+}
+
+void TestSessionManager::testSetInstanceConfigPreservesDirectorySnapshot()
+{
+    // QML round-trips the whole config map for unrelated edits (codec,
+    // refresh rate…). The map always carries dataDirectories (empty while
+    // unsnapshotted), so applying it would convert the instance into an
+    // explicit empty snapshot and suppress the preset's directories.
+    m_sessionManager->setInstanceCount(1);
+
+    QVariantMap config = m_sessionManager->getInstanceConfig(0);
+    config[KEY("streamCodec")] = QStringLiteral("h265");
+    m_sessionManager->setInstanceConfig(0, config);
+    QVariantMap after = m_sessionManager->getInstanceConfig(0);
+    QVERIFY(!after.value(KEY("dataDirectoriesSnapshotted")).toBool());
+    QCOMPARE(after.value(KEY("dataDirectories")).toList().size(), 0);
+    QCOMPARE(after.value(KEY("streamCodec")).toString(), QStringLiteral("h265"));
+
+    // An existing explicit snapshot must survive the same round-trip
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[KEY("path")] = QStringLiteral("/home/compositor/Games/MyGame");
+    overlayDir[KEY("mode")] = QStringLiteral("overlay");
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    config = m_sessionManager->getInstanceConfig(0);
+    config[KEY("refreshRate")] = 144;
+    m_sessionManager->setInstanceConfig(0, config);
+    after = m_sessionManager->getInstanceConfig(0);
+    QVERIFY(after.value(KEY("dataDirectoriesSnapshotted")).toBool());
+    QCOMPARE(after.value(KEY("dataDirectories")).toList().size(), 1);
+    QCOMPARE(after.value(KEY("refreshRate")).toInt(), 144);
+}
+
 void TestSessionManager::testSetInstanceResolution()
 {
     m_sessionManager->setInstanceResolution(0, 2560, 1440, 1920, 1080);
@@ -245,6 +342,232 @@ void TestSessionManager::testLoadProfile()
 
     result = m_sessionManager->loadProfile(QStringLiteral("NonExistentProfile"));
     QCOMPARE(result, false);
+}
+
+void TestSessionManager::testLoadProfileLegacySharedDirectories()
+{
+    // Hand-write a profile in the legacy format: sharedDirectories as a plain
+    // QStringList (paths only), no dataDirectories key
+    QString profilesDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles");
+    QDir().mkpath(profilesDir);
+    QString path = profilesDir + QStringLiteral("/LegacySharedDirsProfile.conf");
+
+    {
+        KConfig config(path, KConfig::SimpleConfig);
+        KConfigGroup general = config.group(QStringLiteral("General"));
+        general.writeEntry("instanceCount", 1);
+        KConfigGroup inst = config.group(QStringLiteral("Instance0"));
+        inst.writeEntry("username", QStringLiteral("player1"));
+        inst.writeEntry("presetId", QStringLiteral("steam"));
+        inst.writeEntry("sharedDirectories",
+                        QStringList{QStringLiteral("/home/compositor/Games"),
+                                    QStringLiteral("/home/compositor/Saves")});
+        config.sync();
+    }
+
+    bool result = m_sessionManager->loadProfile(QStringLiteral("LegacySharedDirsProfile"));
+    QVERIFY(result);
+
+    QVariantMap configMap = m_sessionManager->getInstanceConfig(0);
+    QVariantList dirs = configMap[QStringLiteral("dataDirectories")].toList();
+    QCOMPARE(dirs.size(), 2);
+    QCOMPARE(dirs[0].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Games"));
+    QCOMPARE(dirs[0].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("bind"));
+    QCOMPARE(dirs[1].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Saves"));
+    QCOMPARE(dirs[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("bind"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("LegacySharedDirsProfile"));
+}
+
+void TestSessionManager::testLoadSaveDataDirectoriesRoundtrip()
+{
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+
+    QVariantList dirs;
+    QVariantMap dir1;
+    dir1[QStringLiteral("path")] = QStringLiteral("/home/compositor/Games");
+    dir1[QStringLiteral("mode")] = QStringLiteral("copy");
+    QVariantMap dir2;
+    dir2[QStringLiteral("path")] = QStringLiteral("/home/compositor/Steam");
+    dir2[QStringLiteral("mode")] = QStringLiteral("overlay");
+    dirs.append(dir1);
+    dirs.append(dir2);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("DataDirRoundtripProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("DataDirRoundtripProfile")));
+
+    QVariantList restored = m_sessionManager->getInstanceConfig(0)[QStringLiteral("dataDirectories")].toList();
+    QCOMPARE(restored.size(), 2);
+    QCOMPARE(restored[0].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Games"));
+    QCOMPARE(restored[0].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("copy"));
+    QCOMPARE(restored[1].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/compositor/Steam"));
+    QCOMPARE(restored[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("overlay"));
+
+
+    m_sessionManager->deleteProfile(QStringLiteral("DataDirRoundtripProfile"));
+}
+
+void TestSessionManager::testLoadSaveDataDirectoriesSpecialCharacters()
+{
+    // Paths with '|' or newlines must survive the profile round-trip intact
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+
+    QVariantList dirs;
+    QVariantMap dir1;
+    dir1[QStringLiteral("path")] = QStringLiteral("/mnt/lib/Game|Saves");
+    dir1[QStringLiteral("mode")] = QStringLiteral("copy");
+    QVariantMap dir2;
+    dir2[QStringLiteral("path")] = QStringLiteral("/home/deck/Games/Line\nBreak");
+    dir2[QStringLiteral("mode")] = QStringLiteral("overlay");
+    dirs.append(dir1);
+    dirs.append(dir2);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("DataDirSpecialProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("DataDirSpecialProfile")));
+
+    QVariantList restored = m_sessionManager->getInstanceConfig(0)[QStringLiteral("dataDirectories")].toList();
+    QCOMPARE(restored.size(), 2);
+    QCOMPARE(restored[0].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/mnt/lib/Game|Saves"));
+    QCOMPARE(restored[0].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("copy"));
+    QCOMPARE(restored[1].toMap()[QStringLiteral("path")].toString(), QStringLiteral("/home/deck/Games/Line\nBreak"));
+    QCOMPARE(restored[1].toMap()[QStringLiteral("mode")].toString(), QStringLiteral("overlay"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("DataDirSpecialProfile"));
+}
+
+void TestSessionManager::testUnsnapshottedStaysUnsnapshottedAfterSaveLoad()
+{
+    // An instance that never had a snapshot taken must survive a save/load
+    // round-trip without being converted into an explicit empty snapshot
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+    // No setInstanceDataDirectories call: unsnapshotted, uses preset defaults
+
+    QCOMPARE(m_sessionManager->getInstanceConfig(0)[QStringLiteral("dataDirectoriesSnapshotted")].toBool(), false);
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("UnsnapshottedProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("UnsnapshottedProfile")));
+
+    QVariantMap config = m_sessionManager->getInstanceConfig(0);
+    QCOMPARE(config[QStringLiteral("dataDirectoriesSnapshotted")].toBool(), false);
+    QVERIFY(config[QStringLiteral("dataDirectories")].toList().isEmpty());
+
+    m_sessionManager->deleteProfile(QStringLiteral("UnsnapshottedProfile"));
+}
+
+void TestSessionManager::testPlayerDataFolderPath()
+{
+    // Invalid index and missing user yield an empty path
+    QCOMPARE(m_sessionManager->playerDataFolderPath(99), QString());
+    m_sessionManager->setInstanceCount(1);
+    QCOMPARE(m_sessionManager->playerDataFolderPath(0), QString());
+
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("custom-staging"));
+
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/Games/MyGame");
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantMap aclDir;
+    aclDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/ReadOnly");
+    aclDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    dirs.append(overlayDir);
+    dirs.append(aclDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QString expectedRoot =
+        QDir::homePath() + QStringLiteral("/.local/share/couchplay/player-data/custom-staging/player1");
+    QCOMPARE(m_sessionManager->playerDataFolderPath(0), expectedRoot);
+    QVERIFY(QDir(expectedRoot).exists());
+
+    // A staging subfolder exists per writable dir; read-only dirs get none.
+    // Slugs carry a hash suffix, so assert on the readable prefix.
+    QDir rootDir(expectedRoot);
+    const QStringList slugs = rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QCOMPARE(slugs.size(), 1);
+    QVERIFY(slugs.first().contains(QStringLiteral("Games_MyGame-")));
+
+    QDir(expectedRoot).removeRecursively();
+}
+
+void TestSessionManager::testPlayerDataFolderPathMarkerPredicate()
+{
+    // The Steam-root overlay marker is excluded from staging folders only
+    // under the exact runtime predicate (Steam launcher + overlay mode +
+    // detected Steam root); anything else keeps its folder
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QByteArray originalHome = qgetenv("HOME");
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+    QStandardPaths::setTestModeEnabled(true);
+
+    // Fake a detected Steam installation
+    const QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QVERIFY(QDir(steamRoot).mkpath(QStringLiteral("config")));
+    {
+        QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+        libraryVdf.write("\"libraryfolders\"\n{\n}\n");
+    }
+
+    SteamConfigManager steamManager;
+    QVERIFY(steamManager.isSteamDetected());
+    QCOMPARE(steamManager.steamPaths().steamRoot, steamRoot);
+    PresetManager presetManager;
+    presetManager.setSteamConfigManager(&steamManager);
+    m_sessionManager->setPresetManager(&presetManager);
+
+    QVariantMap markerDir; // overlay at the detected Steam root: library-sharing marker
+    markerDir[QStringLiteral("path")] = steamRoot;
+    markerDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantMap copyRootDir; // same path in copy mode: ordinary private directory
+    copyRootDir[QStringLiteral("path")] = steamRoot;
+    copyRootDir[QStringLiteral("mode")] = QStringLiteral("copy");
+
+    auto stagingDirCount = [this](const QString &presetId, const QVariantList &dirs) -> int {
+        m_sessionManager->setInstanceCount(1);
+        m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+        m_sessionManager->setInstancePreset(0, presetId);
+        m_sessionManager->setInstanceDataDirectories(0, dirs);
+        const QString root = m_sessionManager->playerDataFolderPath(0);
+        if (root.isEmpty()) {
+            return -1;
+        }
+        const int count = QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size();
+        QDir(root).removeRecursively();
+        return count;
+    };
+
+    // Compute everything first so a failed assertion can't leak the patched env
+    const int steamOverlayCount = stagingDirCount(QStringLiteral("steam"), QVariantList{markerDir});
+    const int steamCopyCount = stagingDirCount(QStringLiteral("steam"), QVariantList{copyRootDir});
+    const QString customId =
+        presetManager.addCustomPreset(QStringLiteral("Marker Test"), QStringLiteral("/usr/bin/game"));
+    const int customOverlayCount = stagingDirCount(customId, QVariantList{markerDir});
+
+    QDir(QDir::homePath() + QStringLiteral("/.local/share/couchplay/player-data")).removeRecursively();
+    QStandardPaths::setTestModeEnabled(false);
+    if (!originalHome.isNull()) {
+        qputenv("HOME", originalHome);
+    } else {
+        qunsetenv("HOME");
+    }
+
+    QCOMPARE(steamOverlayCount, 0); // marker: no staging folder
+    QCOMPARE(steamCopyCount, 1); // copy mode at the same path: staged
+    QCOMPARE(customOverlayCount, 1); // non-Steam preset: staged
 }
 
 void TestSessionManager::testDeleteProfile()

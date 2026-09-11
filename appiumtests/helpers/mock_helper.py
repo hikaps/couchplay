@@ -202,6 +202,18 @@ class MockHelper(dbus.service.Object):
     def CopyFileToUser(self, sourcePath, targetPath, username):
         return True
 
+    @dbus.service.method(INTERFACE_NAME, in_signature="sss", out_signature="b")
+    def MirrorDirectoryContents(self, username, sourceDir, targetRelativePath):
+        return True
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="sss", out_signature="b")
+    def CopyDirectoryToUser(self, username, sourceDir, targetRelativePath):
+        return True
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="suss", out_signature="b")
+    def SetupOverlayMount(self, username, compositorUid, sourceDir, targetAlias):
+        return True
+
     @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="b")
     def CreateUserDirectory(self, path, username):
         try:
@@ -255,6 +267,35 @@ class MockHelper(dbus.service.Object):
             "home": home,
         }, signature="sv")
 
+    @dbus.service.method(INTERFACE_NAME, in_signature="u", out_signature="s")
+    def GetUserHomeByUid(self, uid):
+        fields = self._userFieldsByUid(uid)
+        if fields is None:
+            return ""
+        name, uid_, gid, home, shell = fields
+        return home
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="s")
+    def GetUserSteamRoot(self, username):
+        fields = self._userFields(username)
+        if fields is None:
+            return ""
+        _, _, _, home, _ = fields
+        canonical_home = os.path.realpath(home)
+        candidates = [
+            os.path.join(home, ".local/share/Steam"),
+            os.path.join(home, ".steam/steam"),
+            os.path.join(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+            os.path.join(home, ".var/app/com.valvesoftware.Steam/.steam/steam"),
+        ]
+        for candidate in candidates:
+            if not os.path.exists(candidate):
+                continue
+            canonical = os.path.realpath(candidate)
+            if canonical == canonical_home or canonical.startswith(canonical_home + os.sep):
+                return os.path.join(home, os.path.relpath(canonical, canonical_home))
+        return ""
+
     def _couchplayUsernames(self):
         if FAKE_USERS:
             return list(self._created_users.keys())
@@ -271,6 +312,18 @@ class MockHelper(dbus.service.Object):
             return (username, uid, uid, "/home/%s" % username, "/bin/bash")
         try:
             p = pwd.getpwnam(username)
+        except KeyError:
+            return None
+        return (p.pw_name, p.pw_uid, p.pw_gid, p.pw_dir, p.pw_shell)
+
+    def _userFieldsByUid(self, uid):
+        if FAKE_USERS:
+            for username, created_uid in self._created_users.items():
+                if created_uid == uid:
+                    return (username, uid, uid, "/home/%s" % username, "/bin/bash")
+            return None
+        try:
+            p = pwd.getpwuid(uid)
         except KeyError:
             return None
         return (p.pw_name, p.pw_uid, p.pw_gid, p.pw_dir, p.pw_shell)

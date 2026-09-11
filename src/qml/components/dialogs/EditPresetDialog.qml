@@ -39,14 +39,15 @@ Kirigami.Dialog {
     function setDirectoriesFromBackend(dirs) {
         directoriesModel.clear()
         for (let i = 0; i < dirs.length; i++) {
-            directoriesModel.append({ path: dirs[i] })
+            directoriesModel.append({ path: dirs[i].path, mode: dirs[i].mode })
         }
     }
 
     function getDirectoriesArray() {
         let arr = []
         for (let i = 0; i < directoriesModel.count; i++) {
-            arr.push(directoriesModel.get(i).path)
+            let item = directoriesModel.get(i)
+            arr.push({ path: item.path, mode: item.mode })
         }
         return arr
     }
@@ -56,13 +57,13 @@ Kirigami.Dialog {
         
         Kirigami.Heading {
             level: 3
-            text: i18nc("@title", "Shared Directories")
+            text: i18nc("@title", "Data Directories")
             Layout.fillWidth: true
         }
         
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            text: i18nc("@info", "These directories will be accessible to this application when running.")
+            text: i18nc("@info", "Choose how to share data: 'Shared (ACL)' shares a single folder among all users, 'Copy' duplicates it for each user, 'Overlay' creates a per-user copy-on-write overlay, and 'Bind mount' exposes the folder at the same path inside each player's home.")
             type: Kirigami.MessageType.Information
             visible: true
         }
@@ -81,6 +82,10 @@ Kirigami.Dialog {
                     width: ListView.view.width
                     spacing: Kirigami.Units.smallSpacing
 
+                    // Capture the delegate's row before ComboBox handlers
+                    // shadow `index` with their own signal parameter
+                    readonly property int rowIndex: index
+
                     Kirigami.Icon {
                         source: "folder"
                         Layout.preferredWidth: Kirigami.Units.iconSizes.small
@@ -93,6 +98,27 @@ Kirigami.Dialog {
                         elide: Text.ElideMiddle
                     }
 
+                    Kirigami.ComboBox {
+                        model: [
+                            { value: "acl", text: i18nc("@item:inlistbox", "Shared (ACL)") },
+                            { value: "copy", text: i18nc("@item:inlistbox", "Copy files") },
+                            { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay") },
+                            { value: "bind", text: i18nc("@item:inlistbox", "Bind mount (same home path)") }
+                        ]
+                        textRole: "text"
+                        valueRole: "value"
+                        currentIndex: {
+                            if (mode === "copy") return 1;
+                            if (mode === "overlay") return 2;
+                            if (mode === "bind") return 3;
+                            return 0;
+                        }
+                        onActivated: {
+                            directoriesModel.setProperty(rowIndex, "mode", currentValue)
+                            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
+                        }
+                    }
+
                     Controls.Button {
                         objectName: "btnRemoveDirectory"
                         icon.name: "edit-delete"
@@ -102,7 +128,7 @@ Kirigami.Dialog {
                         Accessible.onPressAction: clicked()
                         onClicked: {
                             directoriesModel.remove(index)
-                            root.presetManager.setSharedDirectories(root.presetId, root.getDirectoriesArray())
+                            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
                         }
                     }
                 }
@@ -110,7 +136,7 @@ Kirigami.Dialog {
                 Kirigami.PlaceholderMessage {
                     anchors.centerIn: parent
                     visible: sharedDirsList.count === 0
-                    text: i18nc("@info", "No shared directories configured")
+                    text: i18nc("@info", "No data directories configured")
                     icon.name: "folder-open"
                 }
             }
@@ -119,11 +145,18 @@ Kirigami.Dialog {
 
     FolderDialog {
         id: folderDialog
-        title: i18nc("@title:dialog", "Select Directory to Share")
+        title: i18nc("@title:dialog", "Select Directory")
         onAccepted: {
             let path = selectedFolder.toString()
             if (path.startsWith("file://")) path = path.substring(7)
             path = decodeURIComponent(path)
+            const resolvedPath = root.presetManager.resolveDirectoryPath(path)
+            if (resolvedPath === "") {
+                applicationWindow().showPassiveNotification(
+                    i18nc("@info", "Could not resolve the selected directory for the host helper"), "long")
+                return
+            }
+            path = resolvedPath
             
             let exists = false
             for (let i = 0; i < directoriesModel.count; i++) {
@@ -134,8 +167,8 @@ Kirigami.Dialog {
             }
             
             if (!exists) {
-                directoriesModel.append({ path: path })
-                root.presetManager.setSharedDirectories(root.presetId, root.getDirectoriesArray())
+                directoriesModel.append({ path: path, mode: "acl" })
+                root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
             }
         }
     }

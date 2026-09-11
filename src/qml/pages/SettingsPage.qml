@@ -208,14 +208,6 @@ Kirigami.ScrollablePage {
                             checkable: false
                         }
 
-                        Kirigami.Chip {
-                            visible: modelData.steamIntegration
-                            text: i18nc("@info", "Steam")
-                            icon.name: "steam"
-                            closable: false
-                            checkable: false
-                        }
-
                         Controls.Button {
                             objectName: "btnEditPreset"
                             Accessible.role: Accessible.Button
@@ -230,7 +222,7 @@ Kirigami.ScrollablePage {
                             onClicked: {
                                 editPresetDialog.presetId = modelData.id
                                 editPresetDialog.presetName = modelData.name
-                                editPresetDialog.setDirectoriesFromBackend(activePresetManager.getSharedDirectories(modelData.id))
+                                editPresetDialog.setDirectoriesFromBackend(activePresetManager.getDataDirectories(modelData.id))
                                 editPresetDialog.open()
                             }
                         }

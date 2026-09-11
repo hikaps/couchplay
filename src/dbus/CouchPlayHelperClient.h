@@ -65,6 +65,22 @@ public:
     Q_INVOKABLE virtual QVariantMap getUserInfo(const QString &username);
 
     /**
+     * @brief Resolve a uid to its host-side home directory via the helper
+     *
+     * Needed by the sandboxed (Flatpak) GUI, whose process-local getpwuid
+     * cannot see host user accounts.
+     */
+    Q_INVOKABLE virtual QString getUserHomeByUid(uint uid);
+
+    /**
+     * @brief Resolve a target user's existing Steam root on the host
+     *
+     * Returns an in-home path with symlinked components removed, or empty
+     * when Steam has not been bootstrapped for that user.
+     */
+    Q_INVOKABLE virtual QString getUserSteamRoot(const QString &username);
+
+    /**
      * @brief Launch a gamescope instance as a specified user
      * @param username User to run as
      * @param compositorUid UID of compositor user (for Wayland socket access)
@@ -118,7 +134,7 @@ public:
      * @brief Unmount all shared directories for all users
      * @return Number of successful unmounts, or -1 on error
      */
-    Q_INVOKABLE int unmountAllSharedDirectories();
+    Q_INVOKABLE virtual int unmountAllSharedDirectories();
 
     /**
      * @brief Copy a file to a user's directory with proper ownership
@@ -145,7 +161,7 @@ public:
      * @param recursive Apply recursively to all contents
      * @return true if successful
      */
-    Q_INVOKABLE bool setDirectoryAcl(const QString &path, const QString &username, bool recursive);
+    Q_INVOKABLE virtual bool setDirectoryAcl(const QString &path, const QString &username, bool recursive);
 
     /**
      * @brief Set ACLs on a path and all parent directories needed for traversal
@@ -165,7 +181,7 @@ public:
      * @param username User to get Steam ID for
      * @return Steam user ID string, or empty if not found
      */
-    Q_INVOKABLE QString getUserSteamId(const QString &username);
+    Q_INVOKABLE virtual QString getUserSteamId(const QString &username);
 
     /**
      * @brief Check whether Steam's first-run setup completed for a user
@@ -181,7 +197,7 @@ public:
      * @param username Target user (file will be owned by this user)
      * @return true if successful
      */
-    Q_INVOKABLE bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
+    Q_INVOKABLE virtual bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
     Q_INVOKABLE QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
 
@@ -190,6 +206,37 @@ public:
     Q_INVOKABLE QString createNullSink(const QString &username, const QString &sinkName);
 
     Q_INVOKABLE bool destroyNullSink(const QString &username, const QString &sinkName);
+
+    /**
+     * @brief Set up an overlay mount for a user's instance
+     * @param username Target user
+     * @param compositorUid UID of compositor user (for resolving source paths)
+     * @param sourceDir Source directory to overlay
+     * @param targetAlias Alias path for the overlay target
+     * @return true if successful
+     */
+    Q_INVOKABLE virtual bool
+    setupOverlayMount(const QString &username, uint compositorUid, const QString &sourceDir, const QString &targetAlias);
+
+    /**
+     * @brief Copy a directory tree to a user's home with proper ownership
+     * @param username Target user
+     * @param sourceDir Source directory to copy
+     * @param targetRelativePath Relative path under user's home for the target
+     * @return true if successful
+     */
+    Q_INVOKABLE virtual bool
+    copyDirectoryToUser(const QString &username, const QString &sourceDir, const QString &targetRelativePath);
+
+    /**
+     * @brief Merge-copy staged files into an existing directory in a user's home
+     * @param username Target user
+     * @param sourceDir Staging directory whose contents are merged
+     * @param targetRelativePath Existing relative directory under the user's home
+     * @return true if successful
+     */
+    Q_INVOKABLE virtual bool
+    mirrorDirectoryContents(const QString &username, const QString &sourceDir, const QString &targetRelativePath);
 
 Q_SIGNALS:
     void availabilityChanged();

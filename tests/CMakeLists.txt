@@ -59,6 +59,8 @@ set(TEST_MANAGER_SOURCES
 set(HELPER_TEST_SOURCES
     ../helper/CouchPlayHelper.cpp
     ../helper/CouchPlayHelper.h
+    ../helper/SecureFs.cpp
+    ../helper/SecureFs.h
     ../helper/SystemOps.cpp
     ../helper/SystemOps.h
 )

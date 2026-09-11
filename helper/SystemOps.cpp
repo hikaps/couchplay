@@ -47,6 +47,17 @@ bool RealSystemOps::isDirectory(const QString &path)
     return QFileInfo(path).isDir();
 }
 
+bool RealSystemOps::isSymLink(const QString &path)
+{
+    struct stat st;
+    return lstat(path.toLocal8Bit().constData(), &st) == 0 && S_ISLNK(st.st_mode);
+}
+
+QString RealSystemOps::canonicalFilePath(const QString &path)
+{
+    return QFileInfo(path).canonicalFilePath();
+}
+
 bool RealSystemOps::mkpath(const QString &path)
 {
     return QDir().mkpath(path);

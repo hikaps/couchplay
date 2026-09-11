@@ -88,6 +88,17 @@ public Q_SLOTS:
      */
     QVariantMap GetUserInfo(const QString &username);
 
+    QString GetUserHomeByUid(uint uid);
+
+    /**
+     * Resolve a target user's existing Steam root on the host.
+     *
+     * The returned path uses the user's home spelling but has symlinked
+     * components below that home removed, so secure helper writes can walk it
+     * with O_NOFOLLOW.
+     */
+    QString GetUserSteamRoot(const QString &username);
+
     /**
      * Enable systemd linger for a user
      * Required for systemd-run to work properly
@@ -237,6 +248,24 @@ public Q_SLOTS:
     int MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories);
 
     /**
+     * Set up an OverlayFS mount for a user
+     *
+     * Creates an overlay filesystem that provides a writable layer over a shared
+     * source directory. The user sees the source contents but writes go to a
+     * private upper directory, keeping the source unchanged.
+     *
+     * @param username Target user (must exist)
+     * @param compositorUid UID of the compositor user (for determining home-relative paths)
+     * @param sourceDir Source directory to use as lower layer
+     * @param targetAlias Mount alias (empty for home-relative path)
+     * @return true if successful
+     */
+    bool SetupOverlayMount(const QString &username,
+                           uint compositorUid,
+                           const QString &sourceDir,
+                           const QString &targetAlias);
+
+    /**
      * Unmount all shared directories for a user
      *
      * @param username Target user
@@ -264,6 +293,40 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool CopyFileToUser(const QString &sourcePath, const QString &targetPath, const QString &username);
+
+    /**
+     * Copy a directory to a user's home with proper ownership
+     *
+     * Copies a source directory into the user's home at the specified relative path.
+     * Uses cp -a to preserve ownership, permissions, and symlinks.
+     * The targetRelativePath must be relative (no leading /) and must not
+     * contain ".." components to prevent escaping the user's home.
+     *
+     * @param username Target user
+     * @param sourceDir Source directory path (must exist and be a directory)
+     * @param targetRelativePath Relative path under user's home (e.g., ".local/share/steam")
+     * @return true if successful
+     */
+    bool CopyDirectoryToUser(const QString &username,
+                             const QString &sourceDir,
+                             const QString &targetRelativePath);
+
+    /**
+     * Merge-copy staged files into an existing directory in a user's home
+     *
+     * Copies the *contents* of sourceDir into the existing target directory
+     * (no removal, no nesting — unlike CopyDirectoryToUser's replace
+     * semantics). Used to seed per-player staged data (e.g. configs) through
+     * an overlay/bind mount so files land in the player's private layer.
+     *
+     * @param username Target user
+     * @param sourceDir Staging directory whose contents are merged
+     * @param targetRelativePath Existing relative directory under the user's home
+     * @return true if successful
+     */
+    bool MirrorDirectoryContents(const QString &username,
+                                 const QString &sourceDir,
+                                 const QString &targetRelativePath);
 
     /**
      * Create a directory with proper ownership
@@ -419,10 +482,12 @@ private:
     void restartUserPipeWirePulse(uint compositorUid);
 
     // Internal helpers (not exposed via D-Bus)
+    struct MountInfo; // defined below; referenced by unmountMountInfo
     bool userExists(const QString &username);
     uint getUserUid(const QString &username);
     QString getUserHome(const QString &username);
     QString getUserHomeByUid(uint uid);
+    bool unmountMountInfo(MountInfo &mount);
     QString generateServiceName(const QString &username);
     qint64 startTransientUnit(const QString &username,
                               uint compositorUid,
@@ -440,6 +505,9 @@ private:
     validateUserPath(const QString &path, const QString &username, const QString &callerName, QStringList &dirsToChown);
     QString findGamescopePath();
     bool unloadNullSinkModule(const QString &username, const QString &sinkName);
+    bool isPathWithinAllowedPrefix(const QString &path) const;
+    bool pathHasSymlinkComponents(const QString &path, const QString &root);
+    bool secureCreateUserDir(const QString &username, const QString &absolutePath);
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;
@@ -461,6 +529,14 @@ private:
     struct MountInfo {
         QString source;
         QString target;
+        QString mountType; // "bind" or "overlay"
+        QString upperDir;  // overlay only: upper directory
+        QString workDir;   // overlay only: work directory
+        // FD-backed reference for race-free unmount: pinned parent directory
+        // of the mount target (valid for the helper's lifetime; -1 after a
+        // state reload, in which case unmount falls back to the target path)
+        int targetParentFd = -1;
+        QString targetLeaf;
     };
     QMap<QString, QList<MountInfo>> m_activeMounts; // username -> list of mounts
 

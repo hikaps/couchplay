@@ -11,6 +11,7 @@
 #include <QVariantMap>
 
 class CouchPlayHelperClient;
+struct DataDirectory;
 
 /**
  * SteamPaths - Detected Steam installation paths
@@ -193,8 +194,9 @@ public:
     /**
      * Clean up library sharing state for a target user
      * Removes copied manifests and restores original libraryfolders.vdf
+     * @return true when the target metadata was successfully restored
      */
-    void cleanupLibrarySharing(const QString &targetUsername);
+    bool cleanupLibrarySharing(const QString &targetUsername);
 
     /**
      * Get shortcuts as QVariantList for QML
@@ -219,6 +221,28 @@ public:
      * @return true if successful
      */
     bool syncShortcutsToUser(const QString &targetUsername);
+
+    /**
+     * Prepare a data directory before the generic operation (copy/overlay/acl).
+     * Dispatches to Steam-specific pre-processing based on dir.mode and dir.path.
+     * Non-matching directories return true (no-op).
+     *
+     * @param dir Data directory to prepare
+     * @param username Target username
+     * @return true if successful or no-op
+     */
+    bool prepareDataDir(const DataDirectory &dir, const QString &username);
+
+    /**
+     * Finalize a data directory after the generic operation (copy/overlay/acl).
+     * Dispatches to Steam-specific post-processing based on dir.mode and dir.path.
+     * Non-matching directories return true (no-op).
+     *
+     * @param dir Data directory to finalize
+     * @param username Target username
+     * @return true if successful or no-op
+     */
+    bool finalizeDataDir(const DataDirectory &dir, const QString &username);
 
 Q_SIGNALS:
     void steamPathsChanged();

@@ -4,10 +4,15 @@
 #include "SessionManager.h"
 #include "Logging.h"
 #include "SessionRunner.h"
+#include "UserLookup.h"
 
+#include <QDesktopServices>
 #include <QDebug>
 #include <QDir>
 #include <QStandardPaths>
+#include <QUrl>
+
+#include <unistd.h>
 
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
@@ -15,6 +20,46 @@ SessionManager::SessionManager(QObject *parent)
     QDir().mkpath(profilesDir());
     newSession();
     refreshProfiles();
+}
+
+void SessionManager::setPresetManager(PresetManager *manager)
+{
+    if (m_presetManager != manager) {
+        m_presetManager = manager;
+        Q_EMIT presetManagerChanged();
+    }
+}
+
+void SessionManager::setHelperClient(CouchPlayHelperClient *client)
+{
+    if (m_helperClient != client) {
+        m_helperClient = client;
+        Q_EMIT helperClientChanged();
+    }
+}
+
+QVariantList InstanceConfig::dataDirectoriesAsVariant() const
+{
+    QVariantList list;
+    for (const DataDirectory &dir : dataDirectories) {
+        QVariantMap dirMap;
+        dirMap[QStringLiteral("path")] = dir.path;
+        dirMap[QStringLiteral("mode")] = dir.mode;
+        list.append(dirMap);
+    }
+    return list;
+}
+
+void InstanceConfig::setDataDirectoriesFromVariant(const QVariantList &dirs)
+{
+    dataDirectories.clear();
+    for (const QVariant &var : dirs) {
+        DataDirectory dir = DataDirectory::fromVariant(var);
+        if (!dir.path.isEmpty()) {
+            dataDirectories.append(dir);
+        }
+    }
+    dataDirectoriesSnapshotted = true;
 }
 
 QString SessionManager::profilesDir() const
@@ -108,7 +153,17 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("gameCommand", inst.gameCommand);
         instGroup.writeEntry("steamAppId", inst.steamAppId);
         instGroup.writeEntry("presetId", inst.presetId);
-        instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
+        // Only persist a snapshot when one was taken: writing an empty
+        // dataDirectories key for an unsnapshotted instance would turn
+        // "use preset defaults" into "explicitly no directories" after a
+        // save/load round-trip
+        if (inst.dataDirectoriesSnapshotted) {
+            // JSON so paths containing '|' or newlines round-trip intact
+            instGroup.writeEntry("dataDirectories", encodeDataDirectories(inst.dataDirectories));
+        } else {
+            instGroup.deleteEntry("dataDirectories");
+            instGroup.deleteEntry("sharedDirectories");
+        }
         instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
@@ -175,7 +230,30 @@ bool SessionManager::loadProfile(const QString &name)
         inst.gameCommand = instGroup.readEntry("gameCommand", QString());
         inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
-        inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
+        if (instGroup.hasKey("dataDirectories")) {
+            // JSON (new) with legacy "path|mode" line fallback. The key's
+            // presence marks a taken snapshot — an explicitly empty list stays
+            // empty (no preset-default fallback at session start).
+            inst.dataDirectoriesSnapshotted = true;
+            inst.dataDirectories = decodeDataDirectories(instGroup.readEntry("dataDirectories", QString()));
+            for (DataDirectory &dir : inst.dataDirectories) {
+                if (dir.mode.isEmpty()) {
+                    dir.mode = QStringLiteral("acl");
+                }
+            }
+        } else if (instGroup.hasKey("sharedDirectories")) {
+            // Legacy: sharedDirectories was a plain QStringList (paths only) that
+            // got bind-mounted at the player's home-relative equivalent path —
+            // migrate as bind to preserve that visibility
+            inst.dataDirectoriesSnapshotted = true;
+            QStringList legacyDirs = instGroup.readEntry("sharedDirectories", QStringList());
+            for (const QString &path : legacyDirs) {
+                DataDirectory dir;
+                dir.path = path;
+                dir.mode = QStringLiteral("bind");
+                inst.dataDirectories.append(dir);
+            }
+        }
         inst.overrideGamePath =
             instGroup.readEntry("overrideGamePath", instGroup.readEntry("overlayGamePath", QString()));
         inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
@@ -321,7 +399,15 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("steamAppId")] = inst.steamAppId;
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
-    map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
+    QVariantList dataDirsVariant;
+    for (const DataDirectory &dir : inst.dataDirectories) {
+        QVariantMap dirMap;
+        dirMap[QStringLiteral("path")] = dir.path;
+        dirMap[QStringLiteral("mode")] = dir.mode;
+        dataDirsVariant.append(dirMap);
+    }
+    map[QStringLiteral("dataDirectories")] = dataDirsVariant;
+    map[QStringLiteral("dataDirectoriesSnapshotted")] = inst.dataDirectoriesSnapshotted;
     map[QStringLiteral("outputMode")] = inst.outputMode;
     map[QStringLiteral("streamResolution")] = inst.streamResolution;
     map[QStringLiteral("streamFps")] = inst.streamFps;
@@ -398,6 +484,14 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.streamCodec = config[QStringLiteral("streamCodec")].toString();
     if (config.contains(QStringLiteral("sunshinePort")))
         inst.sunshinePort = config[QStringLiteral("sunshinePort")].toInt();
+    // Deliberately NOT applying dataDirectories here: getInstanceConfig()
+    // always carries the key (empty for unsnapshotted instances), so any
+    // unrelated edit — codec, refresh rate, output mode — round-tripping the
+    // map through setInstanceConfig() would convert an unsnapshotted
+    // instance into an explicit empty snapshot and silently suppress the
+    // preset's configured directories at session start. Snapshot creation
+    // belongs solely to setInstanceDataDirectories(); the fields stay
+    // exposed in the map read-only.
 
     Q_EMIT instancesChanged();
 
@@ -492,16 +586,113 @@ void SessionManager::setInstancePreset(int index, const QString &presetId)
     }
 }
 
-void SessionManager::setInstanceSharedDirectories(int index, const QStringList &directories)
+void SessionManager::setInstanceDataDirectories(int index, const QVariantList &directories)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].sharedDirectories = directories;
+        QList<DataDirectory> dataDirs;
+        for (const QVariant &var : directories) {
+            DataDirectory dir = DataDirectory::fromVariant(var);
+            if (!dir.path.isEmpty()) {
+                dataDirs.append(dir);
+            }
+        }
+        m_currentProfile.instances[index].dataDirectories = dataDirs;
+        m_currentProfile.instances[index].dataDirectoriesSnapshotted = true;
         Q_EMIT instancesChanged();
 
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
         }
     }
+}
+
+QString playerDataStagingRoot(const QString &presetId, const QString &username)
+{
+    // Native installs use the conventional CouchPlay data directory. Flatpak
+    // exports XDG_DATA_HOME to its host-visible per-app data directory, so
+    // using AppDataLocation here gives the GUI and the root helper the same
+    // absolute path and inode.
+    QString dataRoot;
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        dataRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    } else {
+        dataRoot = QDir::homePath() + QStringLiteral("/.local/share/couchplay");
+    }
+    return dataRoot + QStringLiteral("/player-data/") + presetId + QLatin1Char('/') + username;
+}
+
+QString SessionManager::playerDataFolderPath(int index)
+{
+    if (index < 0 || index >= m_currentProfile.instances.size()) {
+        return QString();
+    }
+
+    const InstanceConfig &inst = m_currentProfile.instances[index];
+    if (inst.username.isEmpty()) {
+        return QString();
+    }
+    const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
+
+    const QString root = playerDataStagingRoot(presetId, inst.username);
+    if (!QDir().mkpath(root)) {
+        qWarning() << "SessionManager: Failed to create player data folder:" << root;
+        Q_EMIT errorOccurred(QStringLiteral("Could not create player data folder"));
+        return QString();
+    }
+
+    // One subfolder per private (copy/overlay) shared directory so users see
+    // where files go; bind mounts are shared with everyone, so seeding them
+    // per-player is impossible (writes would mutate the shared source).
+    // Resolve the same effective list as SessionRunner's fallback: unsnapshotted
+    // instances use the preset's current defaults.
+    QList<DataDirectory> effectiveDirs = inst.dataDirectories;
+    if (effectiveDirs.isEmpty() && !inst.dataDirectoriesSnapshotted && m_presetManager) {
+        effectiveDirs = m_presetManager->getPreset(presetId).dataDirectories;
+    }
+
+    // The Steam-root overlay entry is a library-sharing marker handled
+    // entirely by session setup (libraries are alias-mounted) — it never
+    // receives staged data, so don't create a misleading folder for it.
+    // Match the runtime predicate exactly (SessionRunner::setupDataDirectories):
+    // the instance runs the Steam launcher, the entry is overlay-mode, and the
+    // path is the detected Steam root. Anything else — the same path in copy
+    // mode, or on another launcher's preset — is an ordinary private directory
+    // that session setup stages data for, so it keeps its folder.
+    QString steamMarkerPath;
+    if (m_presetManager && m_presetManager->getPreset(presetId).launcherId == QStringLiteral("steam")) {
+        steamMarkerPath = m_presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
+    }
+
+    // Helper-first so the slug matches SessionRunner's target mapping under
+    // Flatpak, where the sandbox resolves the compositor's home differently
+    const QString compositorHome = resolveCompositorHome(m_helperClient);
+    for (const DataDirectory &dir : effectiveDirs) {
+        if (dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
+            continue;
+        }
+        if (!steamMarkerPath.isEmpty() && dir.path == steamMarkerPath
+            && dir.mode == QStringLiteral("overlay")) {
+            continue;
+        }
+        QDir().mkpath(root + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome));
+    }
+
+    return root;
+}
+
+bool SessionManager::openPlayerDataFolder(int index)
+{
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        // No host filesystem access from the sandbox; the caller should show
+        // the path from playerDataFolderPath() instead
+        return false;
+    }
+
+    const QString path = playerDataFolderPath(index);
+    if (path.isEmpty()) {
+        return false;
+    }
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 QVariantList SessionManager::savedProfilesAsVariant() const

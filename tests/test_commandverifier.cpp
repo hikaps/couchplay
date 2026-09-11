@@ -26,6 +26,7 @@ private Q_SLOTS:
     void testAbsoluteValidation();
     void testNonExistentCommand();
     void testFlatpakAppDetection();
+    void testExtractFlatpakAppId();
 };
 
 void TestCommandVerifier::testFlatpakDetection()
@@ -33,6 +34,8 @@ void TestCommandVerifier::testFlatpakDetection()
     // Test flatpak command detection
     QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("flatpak run com.heroicgameslauncher.heroic")));
     QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("flatpak run com.valvesoftware.Steam")));
+    // Exported desktop files carry the absolute executable
+    QVERIFY(CommandVerifier::isFlatpakCommand(QStringLiteral("/usr/bin/flatpak run com.valvesoftware.Steam")));
 
     // Test non-flatpak commands
     QVERIFY(!CommandVerifier::isFlatpakCommand(QStringLiteral("steam")));
@@ -136,6 +139,105 @@ void TestCommandVerifier::testFlatpakAppDetection()
     QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("")));
     QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com")));
     QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com.example")));
+}
+
+void TestCommandVerifier::testExtractFlatpakAppId()
+{
+    // Plain form
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Exported desktop entries insert options between "run" and the app ID
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --branch=beta com.heroicgameslauncher.hgl")),
+             QStringLiteral("com.heroicgameslauncher.hgl"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --user net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+
+    // Space-separated option values must not be mistaken for the app ID —
+    // including dotted values like a runtime reference
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --command steam com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --runtime org.freedesktop.Platform com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --runtime=org.freedesktop.Platform com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --branch stable com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // "--" opens the positional section; value-less flags before the ID
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run -- com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --file-forwarding com.valvesoftware.Steam @@u %u @@")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Regression: every documented value-taking option must consume its
+    // space-separated value — a missing entry takes the value as the app
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --parent-pid 123 com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --own-name com.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --system-talk-name org.freedesktop.UPower com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --commit abc123 net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --runtime-commit def456 --unshare network com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Absolute executable path (exported desktop files)
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("/usr/bin/flatpak run com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Value-taking options must consume separate values, including D-Bus
+    // permission options and conditional permission options.
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --unset-env DISPLAY com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --usb 054c:0268 com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --instance-id-fd 5 net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --future-opt value com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --no-talk-name org.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --system-no-talk-name org.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --a11y-own-name org.example.Service com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(
+                 QStringLiteral("flatpak run --share-if=has-wayland --socket-if=wayland:has-wayland "
+                                 "--device-if=input:has-input-device com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+
+    // Boolean flags must not consume the app ID; negating permission
+    // options and --installation take a value in both forms
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --log-session-bus com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --log-system-bus com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --installation user com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --nosocket wayland com.valvesoftware.Steam")),
+             QStringLiteral("com.valvesoftware.Steam"));
+    QCOMPARE(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run --nofilesystem home net.lutris.Lutris")),
+             QStringLiteral("net.lutris.Lutris"));
+
+    // Not a launch command / no valid ID present
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak install com.valvesoftware.Steam")).isEmpty());
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run")).isEmpty());
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("flatpak run steam")).isEmpty());
+    QVERIFY(CommandVerifier::extractFlatpakAppId(QStringLiteral("steam -bigpicture")).isEmpty());
 }
 
 QTEST_MAIN(TestCommandVerifier)

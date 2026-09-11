@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "CouchPlayHelper.h"
+#include "MountSpec.h"
 #include "PolkitActions.h"
+#include "SecureFs.h"
 #include "SystemOps.h"
 
 #include <QCryptographicHash>
@@ -18,6 +20,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QThread>
@@ -28,11 +31,18 @@
 #include <QTimer>
 #include <QFileSystemWatcher>
 
+#include <cerrno>
+#include <cstring>
+#include <dirent.h>
+#include <functional>
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef O_PATH
+#define O_PATH 010000000
+#endif
 
 class UnitMonitor : public QObject
 {
@@ -216,7 +226,22 @@ CouchPlayHelper::~CouchPlayHelper()
 
     if (!m_activeMounts.isEmpty()) {
         for (const QString &username : m_activeMounts.keys()) {
-            for (const MountInfo &mount : m_activeMounts[username]) {
+            for (MountInfo &mount : m_activeMounts[username]) {
+                // Prefer the pinned FD: same race protections as explicit
+                // unmount, so shutdown cleanup cannot be redirected by an
+                // ancestor swap. Restored (post-restart) state has no FD and
+                // falls back to the path-based lazy umount.
+                if (mount.targetParentFd >= 0) {
+                    int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
+                    ::close(mount.targetParentFd);
+                    mount.targetParentFd = -1;
+                    if (result != 0) {
+                        qWarning() << "CouchPlayHelper: FD umount failed during shutdown for" << mount.target
+                                   << ":" << strerror(-result);
+                        runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 5000);
+                    }
+                    continue;
+                }
                 QProcess *umountProc = m_ops->createProcess();
                 m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
                 m_ops->waitForFinished(umountProc, 5000);
@@ -678,6 +703,13 @@ bool CouchPlayHelper::validateUserPath(const QString &path,
         return false;
     }
 
+    if (pathHasSymlinkComponents(path, userHome)) {
+        qWarning() << callerName << ": Path" << path << "contains a symlinked component below" << userHome;
+        sendErrorReply(QDBusError::InvalidArgs,
+                       QStringLiteral("Path contains a symlinked component inside the user's home"));
+        return false;
+    }
+
     QStringList pathParts = path.mid(userHome.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
     QString checkPath = userHome;
     for (const QString &part : pathParts) {
@@ -772,6 +804,65 @@ QVariantMap CouchPlayHelper::GetUserInfo(const QString &username)
     info.insert(QStringLiteral("gid"), static_cast<uint>(pw->pw_gid));
     info.insert(QStringLiteral("home"), QString::fromLocal8Bit(pw->pw_dir));
     return info;
+}
+
+QString CouchPlayHelper::GetUserHomeByUid(uint uid)
+{
+    // Informational, like GetUserInfo: lets the (possibly sandboxed) GUI
+    // resolve the compositor's host-side home for home-relative target mapping
+    struct passwd *pw = m_ops->getpwuid(uid);
+    if (!pw) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("No user with uid %1").arg(uid));
+        return QString();
+    }
+    return QString::fromLocal8Bit(pw->pw_dir);
+}
+
+QString CouchPlayHelper::GetUserSteamRoot(const QString &username)
+{
+    if (!s_validUsername.match(username).hasMatch()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid username format"));
+        return {};
+    }
+
+    const QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("User '%1' does not exist").arg(username));
+        return {};
+    }
+
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const QString safeHome = canonicalHome.isEmpty() ? userHome : canonicalHome;
+    const QStringList candidates = {
+        userHome + QStringLiteral("/.local/share/Steam"),
+        userHome + QStringLiteral("/.steam/steam"),
+        userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
+        userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"),
+    };
+
+    for (const QString &candidate : candidates) {
+        const bool rootExists = m_ops->fileExists(candidate) || m_ops->fileExists(candidate + QStringLiteral("/steam.sh"))
+            || m_ops->fileExists(candidate + QStringLiteral("/ubuntu12_32/steam"))
+            || m_ops->fileExists(candidate + QStringLiteral("/userdata"))
+            || m_ops->fileExists(candidate + QStringLiteral("/config"));
+        if (!rootExists) {
+            continue;
+        }
+
+        const QString canonicalCandidate = m_ops->canonicalFilePath(candidate);
+        if (canonicalCandidate.isEmpty()
+            || (canonicalCandidate != safeHome && !canonicalCandidate.startsWith(safeHome + QLatin1Char('/')))) {
+            qWarning() << "GetUserSteamRoot: Ignoring Steam path outside user home:" << candidate << "->"
+                       << canonicalCandidate;
+            continue;
+        }
+
+        // Keep the user's configured home spelling, but strip symlinked
+        // components below it so callers can use no-follow FD walks.
+        return userHome + canonicalCandidate.mid(safeHome.length());
+    }
+
+    return {};
 }
 
 bool CouchPlayHelper::DeleteUser(const QString &username, bool removeHome)
@@ -1550,22 +1641,131 @@ void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString
     m_monitors.insert(serviceName, monitor);
 }
 
+// Only a complete ".." component climbs the tree; names like "Foo..Bar" are
+// ordinary and folder pickers produce them happily. openDirBelow additionally
+// rejects ".." parts during its walk as defense in depth.
+static bool pathHasDotDotComponent(const QString &path)
+{
+    return path.split(QLatin1Char('/'), Qt::SkipEmptyParts).contains(QStringLiteral(".."));
+}
+
+bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
+{
+    if (pathHasDotDotComponent(path)) {
+        return false;
+    }
+
+    static const QStringList allowedPrefixes = {
+        QStringLiteral("/home/"),
+        QStringLiteral("/var/home/"), // Bazzite/Fedora Silverblue
+        QStringLiteral("/run/media/"),
+        QStringLiteral("/media/"), // keep in sync with SetPathAclWithParents stop boundaries
+        QStringLiteral("/mnt/"),
+        QStringLiteral("/tmp/"),
+    };
+
+    for (const QString &prefix : allowedPrefixes) {
+        if (path.startsWith(prefix)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool CouchPlayHelper::pathHasSymlinkComponents(const QString &path, const QString &root)
+{
+    // Every existing component of `path` strictly below `root` must be a real
+    // directory: a player-owned symlinked ancestor (e.g. ~/.config -> /etc)
+    // would redirect root-run rm/cp/chown/mount outside the verified root.
+    if (!path.startsWith(root + QLatin1Char('/'))) {
+        return true; // not below the root at all — caller decides, treat as unsafe
+    }
+
+    QString current = root;
+    const QStringList parts = path.mid(root.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        current += QLatin1Char('/') + part;
+        if (m_ops->fileExists(current) && m_ops->isSymLink(current)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CouchPlayHelper::secureCreateUserDir(const QString &username, const QString &absolutePath)
+{
+    // Race-safe mkdir+chown below the user's home: openat(O_NOFOLLOW) walk,
+    // fchown on FDs — immune to symlinked-ancestor swaps between check and use
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty() || !absolutePath.startsWith(userHome + QLatin1Char('/'))) {
+        return false;
+    }
+
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        return false;
+    }
+
+    int homeFd = SecureFs::openBaseDir(userHome);
+    if (homeFd < 0) {
+        return false;
+    }
+    const QStringList parts =
+        QDir(userHome).relativeFilePath(absolutePath).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int dirFd = SecureFs::openDirBelow(homeFd, parts, true, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (dirFd < 0) {
+        return false;
+    }
+    ::close(dirFd);
+    return true;
+}
+
 QString CouchPlayHelper::computeMountTarget(const QString &source,
                                             const QString &alias,
                                             const QString &userHome,
                                             const QString &compositorHome)
 {
-    if (source.startsWith(compositorHome) && alias.isEmpty()) {
+    // Reject alias with path traversal (whole ".." components only — names
+    // like "Foo..Bar" are valid)
+    if (pathHasDotDotComponent(alias)) {
+        qWarning() << "computeMountTarget: alias contains path traversal:" << alias;
+        return {};
+    }
+
+    QString target;
+    // Require the '/' boundary: /home/deck2/game must not be treated as
+    // home-relative to /home/deck (that produced /home/<player>2/game)
+    if (source.startsWith(compositorHome + QLatin1Char('/')) && alias.isEmpty()) {
+        // Prevent traversal via source containing ../ after compositorHome prefix
         QString relativePath = source.mid(compositorHome.length());
-        return userHome + relativePath;
+        if (pathHasDotDotComponent(relativePath)) {
+            qWarning() << "computeMountTarget: source relative path contains a '..' component:" << source;
+            return {};
+        }
+        target = userHome + relativePath;
     } else if (!alias.isEmpty()) {
         if (alias.startsWith(QLatin1Char('/'))) {
-            return userHome + alias;
+            target = userHome + alias;
+        } else {
+            target = userHome + QStringLiteral("/") + alias;
         }
-        return userHome + QStringLiteral("/") + alias;
     } else {
-        return userHome + QStringLiteral("/.couchplay/mounts") + source;
+        target = userHome + QStringLiteral("/.couchplay/mounts") + source;
     }
+
+    // Normalize, then require a strict descendant of the home: an alias or
+    // source that cleans to the home itself (".", "./", "/home/deck/.")
+    // would attach the shared source over the player's entire home
+    target = QDir::cleanPath(target);
+    if (!target.startsWith(userHome + QLatin1Char('/'))) {
+        qWarning() << "computeMountTarget: target is not a strict descendant of the user home:" << target;
+        return {};
+    }
+
+    return target;
 }
 
 int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories)
@@ -1590,13 +1790,14 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
     int successCount = 0;
 
     for (const QString &dirSpec : directories) {
-        QStringList parts = dirSpec.split(QLatin1Char('|'));
-        if (parts.isEmpty()) {
+        // Specs escape '|' and '\' inside the fields (paths like
+        // /mnt/Game|Saves must survive the wire); malformed specs are skipped
+        QString source;
+        QString alias;
+        if (!decodeMountSpec(dirSpec, source, alias)) {
+            qWarning() << "MountSharedDirectories: Malformed directory spec:" << dirSpec;
             continue;
         }
-
-        QString source = parts.at(0);
-        QString alias = parts.size() > 1 ? parts.at(1) : QString();
 
         if (!m_ops->fileExists(source)) {
             qWarning() << "MountSharedDirectories: Source path does not exist:" << source;
@@ -1608,35 +1809,70 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
             continue;
         }
 
+        if (!isPathWithinAllowedPrefix(source)) {
+            qWarning() << "MountSharedDirectories: Source path is outside allowed prefixes:" << source;
+            continue;
+        }
+
+        QString canonicalSource = m_ops->canonicalFilePath(source);
+        if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+            qWarning() << "MountSharedDirectories: Source path resolves outside allowed prefixes:" << source << "->"
+                       << canonicalSource;
+            continue;
+        }
+
         QString target = computeMountTarget(source, alias, userHome, compositorHome);
+        if (target.isEmpty()) {
+            qWarning() << "MountSharedDirectories: Invalid mount target computed";
+            continue;
+        }
+
+        if (pathHasSymlinkComponents(target, userHome)) {
+            qWarning() << "MountSharedDirectories: Target contains a symlinked component:" << target;
+            continue;
+        }
 
         if (!m_ops->fileExists(target)) {
-            if (!m_ops->mkpath(target)) {
+            if (!secureCreateUserDir(username, target)) {
                 qWarning() << "MountSharedDirectories: Failed to create target directory:" << target;
                 continue;
             }
-            uint userUid = getUserUid(username);
-            struct passwd *pw = m_ops->getpwuid(userUid);
-            if (pw) {
-                m_ops->chown(target, userUid, pw->pw_gid);
-            }
         }
 
-        QProcess *mountProcess = m_ops->createProcess();
-        m_ops->startProcess(mountProcess, QStringLiteral("/usr/bin/mount"), {QStringLiteral("--bind"), source, target});
-        m_ops->waitForFinished(mountProcess, 10000);
-
-        if (m_ops->processExitCode(mountProcess) != 0) {
-            qWarning() << "MountSharedDirectories: Failed to mount" << source << "to" << target << ":"
-                       << QString::fromLocal8Bit(m_ops->readStandardError(mountProcess));
-            delete mountProcess;
-            continue;
-        }
-        delete mountProcess;
+        const QString targetLeaf = target.mid(target.lastIndexOf(QLatin1Char('/')) + 1);
+        const QString targetParentPath = target.left(target.lastIndexOf(QLatin1Char('/')));
 
         MountInfo info;
         info.source = source;
         info.target = target;
+        info.mountType = QStringLiteral("bind");
+
+        // FD-anchored bind only — a mount(8) fallback would re-introduce the
+        // pathname race this design exists to close, so fail closed instead
+        // when the kernel mount API is unavailable
+        if (!SecureFs::mountApiAvailable()) {
+            qWarning() << "MountSharedDirectories: kernel mount API unavailable, refusing path-based mount";
+            continue;
+        }
+        // Pin the target parent (no-follow walk), clone the source with
+        // AT_SYMLINK_NOFOLLOW, attach with move_mount — no pathname
+        // re-resolution a player could race
+        int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
+        if (parentFd < 0) {
+            qWarning() << "MountSharedDirectories: Could not anchor target parent:" << targetParentPath;
+            continue;
+        }
+        int mountResult =
+            SecureFs::bindMountFd(canonicalSource.isEmpty() ? source : canonicalSource, parentFd, targetLeaf);
+        if (mountResult != 0) {
+            ::close(parentFd);
+            qWarning() << "MountSharedDirectories: FD bind mount failed for" << source << "->" << target << ":"
+                       << strerror(-mountResult);
+            continue;
+        }
+        info.targetParentFd = parentFd;
+        info.targetLeaf = targetLeaf;
+
         m_activeMounts[username].append(info);
 
         successCount++;
@@ -1645,6 +1881,219 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
     saveState();
 
     return successCount;
+}
+
+bool CouchPlayHelper::SetupOverlayMount(const QString &username,
+                                        uint compositorUid,
+                                        const QString &sourceDir,
+                                        const QString &targetAlias)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (!m_ops->fileExists(sourceDir)) {
+        qWarning() << "SetupOverlayMount: Source path does not exist:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path does not exist: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!m_ops->isDirectory(sourceDir)) {
+        qWarning() << "SetupOverlayMount: Source is not a directory:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source is not a directory: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(sourceDir)) {
+        qWarning() << "SetupOverlayMount: Source path is outside allowed prefixes:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
+    QString canonicalSource = m_ops->canonicalFilePath(sourceDir);
+    if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+        qWarning() << "SetupOverlayMount: Source path resolves outside allowed prefixes:" << sourceDir << "->"
+                   << canonicalSource;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path resolves outside allowed prefixes"));
+        return false;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
+        return false;
+    }
+
+    QString compositorHome = getUserHomeByUid(compositorUid);
+    if (compositorHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not determine home directory for compositor user"));
+        return false;
+    }
+
+    QString target = computeMountTarget(sourceDir, targetAlias, userHome, compositorHome);
+    if (target.isEmpty()) {
+        qWarning() << "SetupOverlayMount: Invalid mount target computed";
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid mount target"));
+        return false;
+    }
+
+    if (pathHasSymlinkComponents(target, userHome)) {
+        qWarning() << "SetupOverlayMount: Target contains a symlinked component:" << target;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Target contains a symlinked component"));
+        return false;
+    }
+
+    if (!m_ops->fileExists(target)) {
+        if (!secureCreateUserDir(username, target)) {
+            qWarning() << "SetupOverlayMount: Failed to create target directory:" << target;
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory: %1").arg(target));
+            return false;
+        }
+    }
+
+    QByteArray hashBytes =
+        QCryptographicHash::hash(sourceDir.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+    QString hash = QString::fromUtf8(hashBytes);
+
+    // Overlay layer storage lives under root-owned /var/lib/couchplay, NOT
+    // the player's home: with every ancestor root-owned (the helper runs as
+    // root, players have no write access to the chain), the player cannot
+    // swap a component for a symlink between secure creation and the
+    // pathname-based mount(8) — closing the re-resolution race. Only the
+    // upper/work leaves are chowned to the player (the kernel writes overlay
+    // data with the player's credentials through the mount).
+    QString overlayBase = QStringLiteral("/var/lib/couchplay/overlays/%1/%2").arg(username, hash);
+    QString upperDir = overlayBase + QStringLiteral("/upper");
+    QString workDir = overlayBase + QStringLiteral("/work");
+
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "SetupOverlayMount: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+
+    int varLibFd = SecureFs::openBaseDir(QStringLiteral("/var/lib"));
+    if (varLibFd < 0) {
+        qWarning() << "SetupOverlayMount: Could not open /var/lib:" << strerror(-varLibFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open overlay storage root"));
+        return false;
+    }
+    const QStringList baseParts =
+        QStringList{QStringLiteral("couchplay"), QStringLiteral("overlays"), username, hash};
+    int baseFd =
+        SecureFs::openDirBelow(varLibFd, baseParts, true, 0, 0, SecureFs::ChownMode::FinalOnly);
+    ::close(varLibFd);
+    if (baseFd < 0) {
+        qWarning() << "SetupOverlayMount: Could not create overlay storage under /var/lib/couchplay:"
+                   << strerror(-baseFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not create overlay storage"));
+        return false;
+    }
+    int upperFd = SecureFs::openDirBelow(baseFd, {QStringLiteral("upper")}, true, userUid, pw->pw_gid);
+    if (upperFd < 0) {
+        ::close(baseFd);
+        qWarning() << "SetupOverlayMount: Failed to securely create upper directory:" << upperDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay upper directory"));
+        return false;
+    }
+    ::close(upperFd);
+    int workFd = SecureFs::openDirBelow(baseFd, {QStringLiteral("work")}, true, userUid, pw->pw_gid);
+    ::close(baseFd);
+    if (workFd < 0) {
+        qWarning() << "SetupOverlayMount: Failed to securely create work directory:" << workDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay work directory"));
+        return false;
+    }
+    ::close(workFd);
+
+    // FD-anchored attach when the kernel supports it: the target parent is
+    // pinned with a no-follow walk and move_mount does not follow symlinks on
+    // the leaf, so a raced target swap fails the mount instead of redirecting
+    // it. upper/work live under root-owned storage (see above) and cannot be
+    // raced. The mount(8) fallback is only for pre-5.2 kernels.
+    const QString targetLeaf = target.mid(target.lastIndexOf(QLatin1Char('/')) + 1);
+    const QString targetParentPath = target.left(target.lastIndexOf(QLatin1Char('/')));
+
+    MountInfo info;
+    info.source = sourceDir;
+    info.target = target;
+    info.mountType = QStringLiteral("overlay");
+    info.upperDir = upperDir;
+    info.workDir = workDir;
+
+    // FD-anchored attach only — no path-based fallback: a failed FD mount
+    // must fail closed instead of retrying through a raceable pathname
+    if (!SecureFs::overlayMountApiAvailable()) {
+        qWarning() << "SetupOverlayMount: overlayfs mount API unavailable, refusing path-based mount";
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Overlay filesystem mount API unavailable"));
+        return false;
+    }
+
+    // Pin the validated source with a no-follow walk; overlayMountFd passes
+    // the lowerdir through /proc/self/fd so fsconfig resolution follows the
+    // pinned inode, not the (mutable) namespace path. The FD stays open until
+    // the mount is attached.
+    int sourceFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? sourceDir : canonicalSource);
+    if (sourceFd < 0) {
+        qWarning() << "SetupOverlayMount: Could not anchor source directory:" << sourceDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not anchor source directory"));
+        return false;
+    }
+
+    int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
+    if (parentFd < 0) {
+        ::close(sourceFd);
+        qWarning() << "SetupOverlayMount: Could not anchor target parent:" << targetParentPath;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not anchor target parent"));
+        return false;
+    }
+
+    int mountResult = SecureFs::overlayMountFd(sourceFd, upperDir, workDir, parentFd, targetLeaf);
+    ::close(sourceFd);
+    if (mountResult != 0) {
+        ::close(parentFd);
+        qWarning() << "SetupOverlayMount: FD overlay mount failed on" << target << ":" << strerror(-mountResult);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to mount overlay filesystem"));
+        return false;
+    }
+    info.targetParentFd = parentFd;
+    info.targetLeaf = targetLeaf;
+
+    m_activeMounts[username].append(info);
+
+    saveState();
+
+    return true;
+}
+
+bool CouchPlayHelper::unmountMountInfo(MountInfo &mount)
+{
+    // Prefer the FD-backed reference: /proc/self/fd/<pinned-parent>/leaf
+    // cannot be raced by a player swapping ancestors of the target path.
+    // The pinned FD is released only on success — a failed unmount (e.g.
+    // persistent EBUSY) must keep the entry AND its FD, so later teardown,
+    // restart reconciliation, or destruction can retry instead of orphaning
+    // a root mount nobody can clean up anymore.
+    if (mount.targetParentFd >= 0) {
+        int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
+        if (result != 0) {
+            qWarning() << "unmountMountInfo: FD umount failed for" << mount.target << ":" << strerror(-result);
+            return false;
+        }
+        ::close(mount.targetParentFd);
+        mount.targetParentFd = -1;
+        return true;
+    }
+
+    // No pinned FD (post-restart state): path-based umount with lazy fallback
+    if (!runCommand(QStringLiteral("/usr/bin/umount"), {mount.target}, 10000)) {
+        qWarning() << "unmountMountInfo: umount failed for" << mount.target << "- trying lazy unmount";
+        return runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 10000);
+    }
+    return true;
 }
 
 int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
@@ -1664,33 +2113,20 @@ int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
     }
 
     int successCount = 0;
-    QList<MountInfo> mounts = m_activeMounts[username];
+    QList<MountInfo> mounts = m_activeMounts.take(username);
+    QList<MountInfo> remaining;
 
     for (int i = mounts.size() - 1; i >= 0; --i) {
-        const MountInfo &mount = mounts.at(i);
-
-        QProcess *umountProc = m_ops->createProcess();
-        m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
-        m_ops->waitForFinished(umountProc, 10000);
-
-        if (m_ops->processExitCode(umountProc) != 0) {
-            qWarning() << "UnmountSharedDirectories: umount failed for" << mount.target << "- trying lazy unmount";
-            delete umountProc;
-
-            QProcess *lazyProc = m_ops->createProcess();
-            m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target});
-            m_ops->waitForFinished(lazyProc, 10000);
-            if (m_ops->processExitCode(lazyProc) == 0) {
-                successCount++;
-            }
-            delete lazyProc;
-        } else {
+        if (unmountMountInfo(mounts[i])) {
             successCount++;
-            delete umountProc;
+        } else {
+            remaining.prepend(mounts[i]);
         }
     }
 
-    m_activeMounts.remove(username);
+    if (!remaining.isEmpty()) {
+        m_activeMounts[username] = remaining;
+    }
     saveState();
     return successCount;
 }
@@ -1706,30 +2142,20 @@ int CouchPlayHelper::UnmountAllSharedDirectories()
     QStringList users = m_activeMounts.keys();
 
     for (const QString &username : users) {
-        QList<MountInfo> mounts = m_activeMounts[username];
+        QList<MountInfo> mounts = m_activeMounts.take(username);
+        QList<MountInfo> remaining;
 
         for (int i = mounts.size() - 1; i >= 0; --i) {
-            const MountInfo &mount = mounts.at(i);
-
-            QProcess *umountProc = m_ops->createProcess();
-            m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
-            m_ops->waitForFinished(umountProc, 10000);
-
-            bool unmounted = (m_ops->processExitCode(umountProc) == 0);
-            if (!unmounted) {
-                QProcess *lazyProc = m_ops->createProcess();
-                m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target});
-                m_ops->waitForFinished(lazyProc, 10000);
-                unmounted = (m_ops->processExitCode(lazyProc) == 0);
-                delete lazyProc;
-            }
-            delete umountProc;
-            if (unmounted) {
+            if (unmountMountInfo(mounts[i])) {
                 successCount++;
+            } else {
+                remaining.prepend(mounts[i]);
             }
         }
 
-        m_activeMounts.remove(username);
+        if (!remaining.isEmpty()) {
+            m_activeMounts[username] = remaining;
+        }
     }
 
     saveState();
@@ -1798,50 +2224,389 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
     return true;
 }
 
-bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username)
+// Remove an entry (recursively for directories) below an open parent FD,
+// never following symlinks: a leaf symlink is unlinked, not descended into
+static void removeEntryUnder(int parentFd, const char *name)
+{
+    struct stat st;
+    if (::fstatat(parentFd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+        return;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        int fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd >= 0) {
+            SecureFs::removeTreeAt(fd);
+            ::close(fd);
+        }
+        ::unlinkat(parentFd, name, AT_REMOVEDIR);
+    } else {
+        ::unlinkat(parentFd, name, 0);
+    }
+}
+
+bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
+                                          const QString &sourceDir,
+                                          const QString &targetRelativePath)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (targetRelativePath.startsWith(QLatin1Char('/'))) {
+        qWarning() << "CopyDirectoryToUser: targetRelativePath must be relative:" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must be relative"));
+        return false;
+    }
+
+    if (pathHasDotDotComponent(targetRelativePath)) {
+        qWarning() << "CopyDirectoryToUser: targetRelativePath contains '..':" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must not contain '..'"));
+        return false;
+    }
+
+    if (!m_ops->fileExists(sourceDir)) {
+        qWarning() << "CopyDirectoryToUser: Source directory does not exist:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source directory does not exist: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!m_ops->isDirectory(sourceDir)) {
+        qWarning() << "CopyDirectoryToUser: Source is not a directory:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source is not a directory: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(sourceDir)) {
+        qWarning() << "CopyDirectoryToUser: Source path is outside allowed prefixes:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
+    QString canonicalSource = m_ops->canonicalFilePath(sourceDir);
+    if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+        qWarning() << "CopyDirectoryToUser: Source path resolves outside allowed prefixes:" << sourceDir << "->"
+                   << canonicalSource;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path resolves outside allowed prefixes"));
+        return false;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
+        return false;
+    }
+
+    QString targetPath = userHome + QLatin1Char('/') + targetRelativePath;
+
+    uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "CopyDirectoryToUser: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+
+    QStringList dirsToChown;
+    if (!validateUserPath(targetPath, username, QStringLiteral("CopyDirectoryToUser"), dirsToChown)) {
+        return false;
+    }
+
+    // Mutation phase is FD-anchored (openat O_NOFOLLOW below the home FD,
+    // fchown on FDs): a player swapping an ancestor for a symlink between
+    // validation and use cannot redirect root operations outside the home
+    // Anchor the source by re-opening the freshly canonicalized path with a
+    // whole-chain O_NOFOLLOW walk from "/": openBaseDir alone would protect
+    // only the final component. If any ancestor changed into a symlink since
+    // canonicalization, the walk fails closed (ELOOP).
+    int srcFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? sourceDir : canonicalSource);
+    if (srcFd < 0) {
+        qWarning() << "CopyDirectoryToUser: Could not open source directory:" << sourceDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open source directory"));
+        return false;
+    }
+
+    int homeFd = SecureFs::openBaseDir(userHome);
+    if (homeFd < 0) {
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Could not open home directory:" << userHome;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+
+    const QString leafName = targetPath.mid(targetPath.lastIndexOf(QLatin1Char('/')) + 1);
+    const QString parentRelative = QDir(userHome).relativeFilePath(targetPath.left(targetPath.lastIndexOf(QLatin1Char('/'))));
+    const QStringList parentParts =
+        parentRelative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int parentFd = SecureFs::openDirBelow(homeFd, parentParts, true, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (parentFd < 0) {
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to securely create parent directory:" << parentRelative;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create parent directory"));
+        return false;
+    }
+
+    // Build the replacement in a hidden sibling of the target and swap it in
+    // with renames only after the copy fully succeeded: a mid-copy failure
+    // (full disk, special file) must leave the player's previous data intact,
+    // and a rename never nests into a stale destination nor follows a
+    // player-planted symlink at the leaf
+    const QByteArray leafNameUtf8 = leafName.toUtf8();
+    const QString tempName = QStringLiteral(".%1.cptmp-%2")
+                                 .arg(leafName, QString::number(QRandomGenerator::global()->generate(), 16));
+    const QByteArray tempNameUtf8 = tempName.toUtf8();
+    if (::mkdirat(parentFd, tempNameUtf8.constData(), 0755) != 0) {
+        int err = errno;
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to create temporary copy directory:" << targetPath
+                   << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create temporary copy directory"));
+        return false;
+    }
+    int dstFd = ::openat(parentFd, tempNameUtf8.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dstFd < 0) {
+        int err = errno;
+        ::unlinkat(parentFd, tempNameUtf8.constData(), AT_REMOVEDIR);
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Could not open temporary copy directory:" << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open temporary copy directory"));
+        return false;
+    }
+    ::fchown(dstFd, userUid, pw->pw_gid);
+
+    int copyResult = SecureFs::copyTreeContents(srcFd, dstFd, userUid, pw->pw_gid);
+    ::close(dstFd);
+    if (copyResult != 0) {
+        // The player's previous tree is untouched — discard only the partial copy
+        removeEntryUnder(parentFd, tempNameUtf8.constData());
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to copy tree:" << strerror(-copyResult);
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Failed to copy directory from %1 to %2").arg(sourceDir, targetPath));
+        return false;
+    }
+
+    // Swap: move any existing target aside, rename the fresh copy into place,
+    // then discard the old tree. If the swap fails, restore the old target.
+    struct stat existingSt;
+    const bool hadExisting =
+        ::fstatat(parentFd, leafNameUtf8.constData(), &existingSt, AT_SYMLINK_NOFOLLOW) == 0;
+    QString oldName;
+    bool asideMoved = false;
+    if (hadExisting) {
+        oldName = QStringLiteral(".%1.cpold-%2")
+                      .arg(leafName, QString::number(QRandomGenerator::global()->generate(), 16));
+        asideMoved = ::renameat(parentFd, leafNameUtf8.constData(), parentFd, oldName.toUtf8().constData()) == 0;
+    }
+    bool renamedIn = asideMoved || !hadExisting;
+    if (renamedIn) {
+        renamedIn = ::renameat(parentFd, tempNameUtf8.constData(), parentFd, leafNameUtf8.constData()) == 0;
+    }
+    if (!renamedIn) {
+        int err = errno;
+        if (asideMoved
+            && ::renameat(parentFd, oldName.toUtf8().constData(), parentFd, leafNameUtf8.constData()) != 0) {
+            qWarning() << "CopyDirectoryToUser: Could not restore previous target" << targetPath << strerror(errno);
+        }
+        removeEntryUnder(parentFd, tempNameUtf8.constData());
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to swap in copied directory:" << targetPath << strerror(err);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to replace target directory"));
+        return false;
+    }
+    if (hadExisting) {
+        removeEntryUnder(parentFd, oldName.toUtf8().constData());
+    }
+    ::close(parentFd);
+    ::close(srcFd);
+
+    qDebug() << "CopyDirectoryToUser: Copied" << sourceDir << "to" << targetPath << "for user" << username;
+    return true;
+}
+
+bool CouchPlayHelper::MirrorDirectoryContents(const QString &username,
+                                              const QString &sourceDir,
+                                              const QString &targetRelativePath)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (targetRelativePath.startsWith(QLatin1Char('/'))) {
+        qWarning() << "MirrorDirectoryContents: targetRelativePath must be relative:" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must be relative"));
+        return false;
+    }
+
+    if (pathHasDotDotComponent(targetRelativePath)) {
+        qWarning() << "MirrorDirectoryContents: targetRelativePath contains '..':" << targetRelativePath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("targetRelativePath must not contain '..'"));
+        return false;
+    }
+
+    if (!m_ops->fileExists(sourceDir)) {
+        qWarning() << "MirrorDirectoryContents: Source directory does not exist:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source directory does not exist: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!m_ops->isDirectory(sourceDir)) {
+        qWarning() << "MirrorDirectoryContents: Source is not a directory:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source is not a directory: %1").arg(sourceDir));
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(sourceDir)) {
+        qWarning() << "MirrorDirectoryContents: Source path is outside allowed prefixes:" << sourceDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
+        return false;
+    }
+
+    QString canonicalSource = m_ops->canonicalFilePath(sourceDir);
+    if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+        qWarning() << "MirrorDirectoryContents: Source path resolves outside allowed prefixes:" << sourceDir << "->"
+                   << canonicalSource;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path resolves outside allowed prefixes"));
+        return false;
+    }
+
+    QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
+        return false;
+    }
+
+    QString targetPath = userHome + QLatin1Char('/') + targetRelativePath;
+
+    if (!m_ops->fileExists(targetPath) || !m_ops->isDirectory(targetPath)) {
+        qWarning() << "MirrorDirectoryContents: Target directory does not exist:" << targetPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Target directory does not exist: %1").arg(targetPath));
+        return false;
+    }
+
+    QStringList dirsToChown;
+    if (!validateUserPath(targetPath, username, QStringLiteral("MirrorDirectoryContents"), dirsToChown)) {
         return false;
     }
 
     uint userUid = getUserUid(username);
     struct passwd *pw = m_ops->getpwuid(userUid);
     if (!pw) {
-        qWarning() << "WriteFileToUser: Could not get user info for" << username;
+        qWarning() << "MirrorDirectoryContents: Could not get user info for" << username;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
         return false;
     }
 
-    int lastSlash = targetPath.lastIndexOf(QLatin1Char('/'));
-    QString targetDir = (lastSlash >= 0) ? targetPath.left(lastSlash) : QStringLiteral(".");
-
-    QStringList dirsToChown;
-    if (!validateUserPath(targetDir, username, QStringLiteral("WriteFileToUser"), dirsToChown)) {
+    // Merge semantics: copy contents into the existing target ("src/.") with
+    // FD-anchored no-follow operations — through an overlay mount the writes
+    // land in the player's private upper layer, and a symlinked ancestor
+    // swapped between validation and use cannot redirect the mutation
+    // Same whole-chain no-follow anchoring as CopyDirectoryToUser
+    int srcFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? sourceDir : canonicalSource);
+    if (srcFd < 0) {
+        qWarning() << "MirrorDirectoryContents: Could not open source directory:" << sourceDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open source directory"));
         return false;
     }
 
-    if (!m_ops->mkpath(targetDir)) {
-        qWarning() << "WriteFileToUser: Failed to create directory:" << targetDir;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create directory: %1").arg(targetDir));
+    int homeFd = SecureFs::openBaseDir(userHome);
+    if (homeFd < 0) {
+        ::close(srcFd);
+        qWarning() << "MirrorDirectoryContents: Could not open home directory:" << userHome;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+    const QStringList targetParts =
+        QDir(userHome).relativeFilePath(targetPath).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    int dstFd = SecureFs::openDirBelow(homeFd, targetParts, false, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (dstFd < 0) {
+        ::close(srcFd);
+        qWarning() << "MirrorDirectoryContents: Target directory missing or unsafe:" << targetPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Target directory does not exist: %1").arg(targetPath));
         return false;
     }
 
-    for (const QString &dir : dirsToChown) {
-        m_ops->chown(dir, userUid, pw->pw_gid);
+    int copyResult = SecureFs::copyTreeContents(srcFd, dstFd, userUid, pw->pw_gid);
+    ::close(srcFd);
+    ::close(dstFd);
+    if (copyResult != 0) {
+        qWarning() << "MirrorDirectoryContents: Failed to merge" << sourceDir << "into" << targetPath
+                   << strerror(-copyResult);
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Failed to merge %1 into %2").arg(sourceDir, targetPath));
+        return false;
     }
 
-    if (!m_ops->writeFile(targetPath, content)) {
-        qWarning() << "WriteFileToUser: Failed to write to" << targetPath;
+    qDebug() << "MirrorDirectoryContents: Merged" << sourceDir << "into" << targetPath << "for user" << username;
+    return true;
+}
+
+bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    const uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        qWarning() << "WriteFileToUser: Could not get user info for" << username;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+    const gid_t userGid = pw->pw_gid;
+    const QString userHome = QString::fromLocal8Bit(pw->pw_dir);
+
+    const int lastSlash = targetPath.lastIndexOf(QLatin1Char('/'));
+    const QString targetDir = (lastSlash >= 0) ? targetPath.left(lastSlash) : QStringLiteral(".");
+    QStringList unusedDirsToChown;
+    if (!validateUserPath(targetDir, username, QStringLiteral("WriteFileToUser"), unusedDirsToChown)) {
+        return false;
+    }
+
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const QString safeHome = canonicalHome.isEmpty() ? userHome : canonicalHome;
+    const QString relativeTarget = QDir(userHome).relativeFilePath(targetPath);
+    QStringList targetParts = relativeTarget.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (relativeTarget.startsWith(QLatin1Char('/')) || targetParts.isEmpty()
+        || targetParts.contains(QStringLiteral(".."))) {
+        qWarning() << "WriteFileToUser: Invalid target path:" << targetPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid target path"));
+        return false;
+    }
+    const QString leafName = targetParts.takeLast();
+    if (leafName.isEmpty() || leafName == QStringLiteral(".") || leafName == QStringLiteral("..")) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid target filename"));
+        return false;
+    }
+
+    const int homeFd = SecureFs::openBaseDir(safeHome);
+    if (homeFd < 0) {
+        qWarning() << "WriteFileToUser: Could not securely open user home:" << safeHome;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+    const int parentFd = SecureFs::openDirBelow(homeFd, targetParts, true, userUid, userGid);
+    ::close(homeFd);
+    if (parentFd < 0) {
+        qWarning() << "WriteFileToUser: Failed to securely create target parent:" << targetDir;
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory"));
+        return false;
+    }
+
+    const int writeResult = SecureFs::writeFileAt(parentFd, leafName, content, userUid, userGid, 0644);
+    ::close(parentFd);
+    if (writeResult != 0) {
+        qWarning() << "WriteFileToUser: Failed to write to" << targetPath << ":" << strerror(-writeResult);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to write to file"));
         return false;
-    }
-
-    if (m_ops->chown(targetPath, userUid, pw->pw_gid) != 0) {
-        qWarning() << "WriteFileToUser: Failed to set ownership on" << targetPath;
-    }
-
-    if (m_ops->chmod(targetPath, 0644) != 0) {
-        qWarning() << "WriteFileToUser: Failed to set permissions on" << targetPath;
     }
 
     return true;
@@ -1877,9 +2642,152 @@ bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &us
     return true;
 }
 
+namespace
+{
+
+bool runSetfaclOnFd(SystemOps *ops, int objectFd, const QStringList &options, int timeoutMs, const QString &context)
+{
+    // QProcess does not provide a pathname that is anchored to an already
+    // opened object. Duplicate the verified FD and make it available to the
+    // child as fd 3; /proc/self/fd/3 then names that inode, even if a user
+    // renames or replaces any pathname component concurrently.
+    const int childFd = ::fcntl(objectFd, F_DUPFD_CLOEXEC, 10);
+    if (childFd < 0) {
+        qWarning() << "ACL:" << context << "failed to duplicate object FD:" << strerror(errno);
+        return false;
+    }
+
+    QProcess *process = ops->createProcess();
+    process->setChildProcessModifier([childFd]() {
+        if (::dup2(childFd, 3) < 0) {
+            ::_exit(127);
+        }
+    });
+
+    QStringList args = options;
+    args.append(QStringLiteral("/proc/self/fd/3"));
+    ops->startProcess(process, QStringLiteral("setfacl"), args);
+
+    const bool finished = ops->waitForFinished(process, timeoutMs);
+    bool success = finished && ops->processExitCode(process) == 0;
+    if (!finished) {
+        qWarning() << "ACL:" << context << "setfacl timed out";
+    } else if (!success) {
+        qWarning() << "ACL:" << context << "setfacl failed:"
+                   << QString::fromUtf8(ops->readStandardError(process));
+    }
+
+    ::close(childFd);
+    delete process;
+    return success;
+}
+
+int openAclEntry(int parentFd, const char *name, const struct stat &entryStat)
+{
+    int fd;
+    if (S_ISDIR(entryStat.st_mode)) {
+        fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    } else {
+        // O_PATH avoids blocking on a raced FIFO and pins the exact object for
+        // the ACL subprocess. Symlinks are rejected by the post-open fstat.
+        fd = ::openat(parentFd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    }
+    if (fd < 0) {
+        return -errno;
+    }
+
+    struct stat openedStat;
+    if (::fstat(fd, &openedStat) != 0) {
+        const int error = errno;
+        ::close(fd);
+        return -error;
+    }
+    if (S_ISLNK(openedStat.st_mode)) {
+        ::close(fd);
+        return -ELOOP;
+    }
+    return fd;
+}
+
+bool applyAclTree(SystemOps *ops, int dirFd, const QString &username, const QString &context)
+{
+    if (!runSetfaclOnFd(ops, dirFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000, context)) {
+        return false;
+    }
+
+    const int scanFd = ::fcntl(dirFd, F_DUPFD_CLOEXEC, 10);
+    if (scanFd < 0) {
+        qWarning() << "ACL:" << context << "failed to duplicate directory FD:" << strerror(errno);
+        return false;
+    }
+    DIR *directory = ::fdopendir(scanFd);
+    if (!directory) {
+        const int error = errno;
+        ::close(scanFd);
+        qWarning() << "ACL:" << context << "failed to enumerate directory:" << strerror(error);
+        return false;
+    }
+
+    bool success = true;
+    while (struct dirent *entry = ::readdir(directory)) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        struct stat entryStat;
+        if (::fstatat(dirFd, entry->d_name, &entryStat, AT_SYMLINK_NOFOLLOW) != 0) {
+            qWarning() << "ACL:" << context << "failed to inspect" << entry->d_name << ":" << strerror(errno);
+            success = false;
+            break;
+        }
+        if (S_ISLNK(entryStat.st_mode)) {
+            // Never follow a link while recursively applying permissions.
+            continue;
+        }
+
+        const int childFd = openAclEntry(dirFd, entry->d_name, entryStat);
+        if (childFd < 0) {
+            qWarning() << "ACL:" << context << "failed to open" << entry->d_name << ":" << strerror(-childFd);
+            success = false;
+            break;
+        }
+
+        struct stat openedStat;
+        if (::fstat(childFd, &openedStat) != 0) {
+            qWarning() << "ACL:" << context << "failed to stat" << entry->d_name << ":" << strerror(errno);
+            ::close(childFd);
+            success = false;
+            break;
+        }
+
+        const QString childContext = context + QLatin1Char('/') + QString::fromLocal8Bit(entry->d_name);
+        if (!runSetfaclOnFd(ops, childFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000,
+                             childContext)) {
+            success = false;
+        } else if (S_ISDIR(openedStat.st_mode) && !applyAclTree(ops, childFd, username, childContext)) {
+            success = false;
+        }
+        ::close(childFd);
+        if (!success) {
+            break;
+        }
+    }
+
+    ::closedir(directory);
+    return success;
+}
+
+} // namespace
+
 bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &username, bool recursive)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+
+    if (!isPathWithinAllowedPrefix(path)) {
+        qWarning() << "SetDirectoryAcl: Path is outside allowed prefixes:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is outside allowed prefixes"));
         return false;
     }
 
@@ -1888,32 +2796,35 @@ bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &userna
         return false;
     }
 
-    QStringList args;
-    if (recursive) {
-        args << QStringLiteral("-R");
+    const QString canonicalDir = m_ops->canonicalFilePath(path);
+    if (!canonicalDir.isEmpty() && !isPathWithinAllowedPrefix(canonicalDir)) {
+        qWarning() << "SetDirectoryAcl: Path resolves outside allowed prefixes:" << path << "->" << canonicalDir;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path resolves outside allowed prefixes"));
+        return false;
     }
-    args << QStringLiteral("-m");
-    args << QStringLiteral("u:%1:rx").arg(username);
-    args << path;
+    const QString safePath = canonicalDir.isEmpty() ? path : canonicalDir;
 
-    QProcess *setfacl = m_ops->createProcess();
-    m_ops->startProcess(setfacl, QStringLiteral("setfacl"), args);
-
-    if (!m_ops->waitForFinished(setfacl, 60000)) { // 60 second timeout for recursive operations
-        sendErrorReply(QDBusError::Failed, QStringLiteral("setfacl timed out for path: %1").arg(path));
-        delete setfacl;
+    // Keep the ACL operation anchored to a no-follow FD. The canonical
+    // pathname check above is only a fast rejection; it cannot close a
+    // rename/symlink race before setfacl resolves a path.
+    const int directoryFd = SecureFs::openExistingDirNoFollow(safePath);
+    if (directoryFd < 0) {
+        qWarning() << "SetDirectoryAcl: Refusing unsafe or non-directory path:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is not a safe directory"));
         return false;
     }
 
-    if (m_ops->processExitCode(setfacl) != 0) {
-        QString errorOutput = QString::fromUtf8(m_ops->readStandardError(setfacl));
-        sendErrorReply(QDBusError::Failed, QStringLiteral("setfacl failed for path %1: %2").arg(path, errorOutput));
-        delete setfacl;
-        return false;
-    }
-    delete setfacl;
+    const QString context = QStringLiteral("SetDirectoryAcl ") + path;
+    const bool success = recursive
+        ? applyAclTree(m_ops, directoryFd, username, context)
+        : runSetfaclOnFd(m_ops, directoryFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000,
+                         context);
+    ::close(directoryFd);
 
-    return true;
+    if (!success) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("setfacl failed for path: %1").arg(path));
+    }
+    return success;
 }
 
 bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
@@ -1922,8 +2833,25 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
         return false;
     }
 
+    if (!isPathWithinAllowedPrefix(path)) {
+        qWarning() << "SetPathAclWithParents: Path is outside allowed prefixes:" << path;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is outside allowed prefixes"));
+        return false;
+    }
+
     if (!m_ops->fileExists(path)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path does not exist: %1").arg(path));
+        return false;
+    }
+
+    // Keep the ACL operation anchored to no-follow directory FDs. The
+    // canonical check is retained as a fast rejection, but never substitutes
+    // for pinning the objects that setfacl will modify.
+    const QString canonicalPath = m_ops->canonicalFilePath(path);
+    if (!canonicalPath.isEmpty() && !isPathWithinAllowedPrefix(canonicalPath)) {
+        qWarning() << "SetPathAclWithParents: Path resolves outside allowed prefixes:" << path << "->"
+                   << canonicalPath;
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path resolves outside allowed prefixes"));
         return false;
     }
 
@@ -1938,7 +2866,7 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
     };
 
     QStringList pathsToSet;
-    QString current = path;
+    QString current = canonicalPath.isEmpty() ? path : canonicalPath;
 
     while (current.endsWith(QLatin1Char('/')) && current.length() > 1) {
         current.chop(1);
@@ -1957,13 +2885,7 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
             current = QStringLiteral("/");
         }
 
-        bool atBoundary = false;
-        for (const QString &boundary : stopBoundaries) {
-            if (current == boundary || current.length() < boundary.length()) {
-                atBoundary = true;
-                break;
-            }
-        }
+        const bool atBoundary = stopBoundaries.contains(current);
 
         if (atBoundary) {
             break;
@@ -1979,33 +2901,24 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
             continue;
         }
 
-        QProcess *removeProc = m_ops->createProcess();
-        m_ops->startProcess(removeProc,
-                            QStringLiteral("setfacl"),
-                            {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username), p});
-        m_ops->waitForFinished(removeProc, 5000);
-        delete removeProc;
-
-        QStringList args;
-        args << QStringLiteral("-m");
-        args << QStringLiteral("u:%1:rx").arg(username);
-        args << p;
-
-        QProcess *setfacl = m_ops->createProcess();
-        m_ops->startProcess(setfacl, QStringLiteral("setfacl"), args);
-
-        if (!m_ops->waitForFinished(setfacl, 5000)) {
-            qWarning() << "SetPathAclWithParents: setfacl timed out for:" << p;
+        const int directoryFd = SecureFs::openExistingDirNoFollow(p);
+        if (directoryFd < 0) {
+            qWarning() << "SetPathAclWithParents: Refusing unsafe or non-directory path:" << p;
             allSucceeded = false;
-            delete setfacl;
             continue;
         }
 
-        if (m_ops->processExitCode(setfacl) != 0) {
-            QString errorOutput = QString::fromUtf8(m_ops->readStandardError(setfacl));
-            qWarning() << "SetPathAclWithParents: setfacl failed for" << p << ":" << errorOutput;
+        // Remove a stale entry first, preserving the helper's existing
+        // remove-before-set behavior. Both commands target the pinned inode.
+        runSetfaclOnFd(m_ops, directoryFd, {QStringLiteral("-x"), QStringLiteral("u:%1").arg(username)}, 5000, p);
+        if (!runSetfaclOnFd(m_ops,
+                            directoryFd,
+                            {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)},
+                            5000,
+                            p)) {
+            allSucceeded = false;
         }
-        delete setfacl;
+        ::close(directoryFd);
     }
 
     return allSucceeded;
@@ -2023,28 +2936,22 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
         return QString();
     }
 
-    QString userHome = getUserHome(username);
-    if (userHome.isEmpty()) {
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (steamRoot.isEmpty()) {
         return QString();
     }
 
-    QStringList possibleRoots = {
-        userHome + QStringLiteral("/.steam/steam/userdata"),
-        userHome + QStringLiteral("/.local/share/Steam/userdata"),
-    };
+    const QString userDataBase = steamRoot + QStringLiteral("/userdata");
+    if (!m_ops->fileExists(userDataBase)) {
+        return QString();
+    }
 
-    for (const QString &userDataBase : possibleRoots) {
-        if (!m_ops->fileExists(userDataBase)) {
-            continue;
-        }
-
-        QStringList entries = m_ops->entryList(userDataBase, QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const QString &entry : entries) {
-            bool ok;
-            entry.toULongLong(&ok);
-            if (ok) {
-                return entry;
-            }
+    const QStringList entries = m_ops->entryList(userDataBase, QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &entry : entries) {
+        bool ok;
+        entry.toULongLong(&ok);
+        if (ok) {
+            return entry;
         }
     }
 
@@ -2058,23 +2965,15 @@ bool CouchPlayHelper::IsSteamBootstrapped(const QString &username)
         return false;
     }
 
-    QString userHome = getUserHome(username);
-    if (userHome.isEmpty()) {
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (steamRoot.isEmpty()) {
         return false;
     }
 
-    // Bootstrap complete when steam.sh or the ubuntu12_32 binary exists (userdata alone is insufficient).
-    const QStringList roots = {
-        userHome + QStringLiteral("/.local/share/Steam"),
-        userHome + QStringLiteral("/.steam/steam"),
-    };
-    for (const QString &root : roots) {
-        if (m_ops->fileExists(root + QStringLiteral("/steam.sh"))
-            || m_ops->fileExists(root + QStringLiteral("/ubuntu12_32/steam"))) {
-            return true;
-        }
-    }
-    return false;
+    // Bootstrap complete when steam.sh or the ubuntu12_32 binary exists
+    // (userdata alone is insufficient).
+    return m_ops->fileExists(steamRoot + QStringLiteral("/steam.sh"))
+        || m_ops->fileExists(steamRoot + QStringLiteral("/ubuntu12_32/steam"));
 }
 
 QString CouchPlayHelper::findGamescopePath()
@@ -2437,6 +3336,15 @@ void CouchPlayHelper::saveState()
             QJsonObject mountObj;
             mountObj[QStringLiteral("source")] = info.source;
             mountObj[QStringLiteral("target")] = info.target;
+            if (!info.mountType.isEmpty()) {
+                mountObj[QStringLiteral("mountType")] = info.mountType;
+            }
+            if (!info.upperDir.isEmpty()) {
+                mountObj[QStringLiteral("upperDir")] = info.upperDir;
+            }
+            if (!info.workDir.isEmpty()) {
+                mountObj[QStringLiteral("workDir")] = info.workDir;
+            }
             mountsArray.append(mountObj);
         }
         mountsObject[it.key()] = mountsArray;
@@ -2766,6 +3674,9 @@ void CouchPlayHelper::loadAndReconcileState()
                 MountInfo info;
                 info.source = mountObj.value(QStringLiteral("source")).toString();
                 info.target = target;
+                info.mountType = mountObj.value(QStringLiteral("mountType")).toString();
+                info.upperDir = mountObj.value(QStringLiteral("upperDir")).toString();
+                info.workDir = mountObj.value(QStringLiteral("workDir")).toString();
                 userMounts.append(info);
             } else {
                 qDebug() << "loadAndReconcileState: Removing inactive mount" << target;

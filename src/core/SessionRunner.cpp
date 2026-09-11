@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SessionRunner.h"
+#include "../../helper/MountSpec.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "DeviceManager.h"
 #include "GamescopeInstance.h"
@@ -280,15 +281,11 @@ bool SessionRunner::start()
         qWarning() << "Failed to set up device ownership - continuing anyway";
     }
 
-    if (!setupSharedDirectories()) {
-        qWarning() << "Failed to set up shared directories - continuing anyway";
+    if (!setupDataDirectories()) {
+        qWarning() << "Failed to set up data directories - continuing anyway";
     }
 
     buildBindPaths();
-
-    if (!setupLauncherAccess()) {
-        qWarning() << "Failed to set up launcher access - continuing anyway";
-    }
 
     // Sequential launch: fixes race condition with window positioning
     m_pendingInstanceConfigs.clear();
@@ -348,13 +345,13 @@ bool SessionRunner::start()
                 presetId = QStringLiteral("steam"); // Default
             }
             config[QStringLiteral("presetId")] = presetId;
+            config[QStringLiteral("launcherId")] = m_presetManager->getLauncherId(presetId);
             config[QStringLiteral("presetCommand")] = m_presetManager->getCommand(presetId);
             config[QStringLiteral("presetWorkingDirectory")] = m_presetManager->getWorkingDirectory(presetId);
-            config[QStringLiteral("steamIntegration")] = m_presetManager->getSteamIntegration(presetId);
         } else {
             config[QStringLiteral("presetId")] = QStringLiteral("steam");
+            config[QStringLiteral("launcherId")] = QStringLiteral("steam");
             config[QStringLiteral("presetCommand")] = PresetManager::defaultSteamCommand();
-            config[QStringLiteral("steamIntegration")] = true;
         }
 
         if (m_deviceManager) {
@@ -384,6 +381,9 @@ bool SessionRunner::start()
 void SessionRunner::stop()
 {
     if (!isRunning() && m_streamingInstances.isEmpty()) {
+        // Nothing to stop — but outstanding mounts from a session whose games
+        // already exited must not be bypassed by this early return
+        teardownSharingState();
         return;
     }
 
@@ -425,18 +425,8 @@ void SessionRunner::stop()
     }
 
     restoreDeviceOwnership();
-    teardownSharedDirectories();
+    teardownSharingState();
     teardownStreamingInstances();
-
-    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_sessionManager) {
-        const auto &profile = m_sessionManager->currentProfile();
-        for (int i = 0; i < profile.instances.size(); ++i) {
-            const QString &username = profile.instances[i].username;
-            if (!username.isEmpty()) {
-                m_steamConfigManager->cleanupLibrarySharing(username);
-            }
-        }
-    }
 
     cleanupInstances();
     cleanupOverrideDirs(overridePaths);
@@ -658,48 +648,232 @@ void SessionRunner::restoreDeviceOwnership()
     m_ownedDevicePaths.clear();
 }
 
-bool SessionRunner::setupSharedDirectories()
+bool SessionRunner::setupDataDirectories()
 {
-    if (!m_helperClient || !m_sessionManager) {
+    if (!m_helperClient || !m_sessionManager || !m_presetManager) {
         return true;
     }
 
     if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, skipping shared directory setup";
+        qWarning() << "SessionRunner: Helper not available, skipping data directory setup";
         return true;
     }
 
+    // Arm the sharing-state tracker: teardown must run when the session ends,
+    // including when the last game exits on its own
+    m_sharedStateActive = true;
+    m_steamSharedUsers.clear();
     uint compositorUid = static_cast<uint>(getuid());
+    // Helper-first resolution: the Flatpak sandbox's getpwuid(getuid()) cannot
+    // see host accounts, which would misroute home-relative copy/mount targets
+    QString compositorHome = resolveCompositorHome(m_helperClient);
 
     const auto &profile = m_sessionManager->currentProfile();
     bool allSucceeded = true;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
-        const QStringList &sharedDirs = profile.instances[i].sharedDirectories;
+        const QString &presetId = profile.instances[i].presetId;
 
         if (username.isEmpty()) {
             continue;
         }
 
-        if (sharedDirs.isEmpty()) {
-            qDebug() << "SessionRunner: No shared directories for instance" << i << "user" << username;
+        LaunchPreset preset = m_presetManager->getPreset(presetId.isEmpty() ? QStringLiteral("steam") : presetId);
+        const bool isSteamLauncher = preset.launcherId == QStringLiteral("steam");
+        const bool isHeroicLauncher = preset.launcherId == QStringLiteral("heroic");
+
+        // Steam shortcut sync: dispatched live at session start (not part of the
+        // preset snapshot, so toggling the setting applies to the next session)
+        if (isSteamLauncher && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
+            && m_steamConfigManager->syncShortcutsEnabled()) {
+            qCDebug(couchplaySteam) << "Syncing Steam shortcuts for user" << username;
+            m_steamConfigManager->loadShortcuts();
+            const QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
+            for (const QString &dir : shortcutDirs) {
+                if (QDir(dir).exists() && !m_helperClient->setPathAclWithParents(dir, username)) {
+                    qCWarning(couchplaySteam) << "Failed to set ACL on shortcut directory" << dir;
+                }
+            }
+            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
+                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
+                allSucceeded = false;
+            }
+        }
+
+        // Heroic: selective config sync (Flatpak-vs-native aware) plus optional
+        // shortcut sync — replaces the generic whole-directory copy of the
+        // config root, mirroring the pre-refactor setupLauncherAccess behavior
+        if (isHeroicLauncher && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
+            if (!m_heroicConfigManager->syncConfigToUser(username)) {
+                qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
+                allSucceeded = false;
+            }
+            if (m_heroicConfigManager->syncShortcutsEnabled()) {
+                qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
+                if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
+                    qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
+                    allSucceeded = false;
+                }
+            }
+        }
+
+        // Prefer the instance's persisted directories (snapshotted at preset
+        // selection and saved in the profile); fall back to the preset's
+        // current defaults only when no snapshot was ever taken. An explicitly
+        // empty snapshot must stay empty — it must not inherit later preset
+        // edits.
+        QList<DataDirectory> dataDirs = profile.instances[i].dataDirectories;
+        if (dataDirs.isEmpty() && !profile.instances[i].dataDirectoriesSnapshotted) {
+            dataDirs = preset.dataDirectories;
+        }
+        if (dataDirs.isEmpty()) {
+            qDebug() << "SessionRunner: No data directories for instance" << i << "user" << username;
             continue;
         }
 
-        qDebug() << "SessionRunner: Mounting" << sharedDirs.size() << "shared directories for user" << username;
+        qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
 
-        QStringList formattedDirs;
-        for (const QString &dir : sharedDirs) {
-            formattedDirs << dir + QLatin1Char('|');
-        }
+        for (const DataDirectory &dir : dataDirs) {
+            // Library sharing is opt-in: the steamRoot overlay entry is a
+            // marker handled entirely by prepareDataDir (libraries are
+            // alias-mounted under ~/.couchplay/steam-libs/<i> so the player's
+            // own Steam root, account state and userdata stay untouched) —
+            // never mount it at the home-relative path, which would shadow
+            // the player's installation
+            // The Steam-root overlay entry is a library-sharing marker, not a
+            // generic directory. Never let a stale Steam snapshot overlay the
+            // full compositor Steam root for a non-Steam launcher.
+            if (dir.mode == QStringLiteral("overlay") && m_steamConfigManager
+                && dir.path == m_steamConfigManager->steamPaths().steamRoot) {
+                if (!isSteamLauncher) {
+                    qCWarning(couchplaySteam) << "Ignoring Steam root data marker for non-Steam launcher" << username;
+                    continue;
+                }
+                if (!m_steamConfigManager->shareLibraryEnabled()) {
+                    qDebug() << "SessionRunner: Library sharing disabled, skipping Steam root entry for" << dir.path;
+                    continue;
+                }
+                // Finalization writes manifests and libraryfolders.vdf
+                // entries for the alias mounts — skip it when preparation
+                // failed, or it would advertise libraries that never mounted.
+                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
+                    allSucceeded = false;
+                    continue;
+                }
+                m_steamSharedUsers.insert(username);
+                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam library finalize failed for" << dir.path;
+                    allSucceeded = false;
+                }
+                continue;
+            }
 
-        int mountResult = m_helperClient->mountSharedDirectories(username, compositorUid, formattedDirs);
-        if (mountResult < 0) {
-            qWarning() << "SessionRunner: Failed to mount shared directories for user" << username;
-            allSucceeded = false;
-        } else {
-            qDebug() << "SessionRunner: Mounted" << mountResult << "directories for user" << username;
+            // Stale snapshots may carry the heroic config root as a copy dir;
+            // config sync above replaces the generic whole-directory copy
+            if (dir.mode == QStringLiteral("copy") && isHeroicLauncher && m_heroicConfigManager
+                && dir.path == m_heroicConfigManager->configPath()) {
+                qDebug() << "SessionRunner: Heroic config handled by config sync, skipping copy of" << dir.path;
+                continue;
+            }
+
+            if (isSteamLauncher && m_steamConfigManager) {
+                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam prepareDataDir failed for" << dir.path;
+                    allSucceeded = false;
+                }
+            }
+
+            QString playerViewRelative; // where the player sees this directory
+            if (dir.mode == QStringLiteral("copy")) {
+                QString relativePath;
+                if (dir.path.startsWith(compositorHome + QLatin1Char('/'))) {
+                    relativePath = dir.path.mid(compositorHome.length() + 1);
+                } else {
+                    // External sources have no home-relative location; map the
+                    // full normalized path under .couchplay/copies — a basename
+                    // alone would collide (/mnt/a/save vs /media/b/save) and
+                    // replacement semantics would delete the first copy
+                    relativePath = QStringLiteral(".couchplay/copies/")
+                        + dataDirectoryStagingSlug(dir.path, compositorHome);
+                }
+                if (!m_helperClient->copyDirectoryToUser(username, dir.path, relativePath)) {
+                    qWarning() << "SessionRunner: Failed to copy directory" << dir.path << "for user" << username;
+                    allSucceeded = false;
+                } else {
+                    playerViewRelative = relativePath;
+                }
+            } else if (dir.mode == QStringLiteral("overlay") || dir.mode == QStringLiteral("bind")) {
+                // Both mount at the player's home-relative equivalent path
+                // (external paths land under .couchplay/mounts), mirroring
+                // computeMountTarget's empty-alias mapping. The player view is
+                // only recorded on success: mirroring staged data into a
+                // failed mount's plain target directory would put files where
+                // a later successful mount would hide them.
+                QString relativePath;
+                if (dir.path.startsWith(compositorHome + QLatin1Char('/'))) {
+                    relativePath = dir.path.mid(compositorHome.length() + 1);
+                } else {
+                    relativePath = QStringLiteral(".couchplay/mounts") + dir.path;
+                }
+                bool mounted = false;
+                if (dir.mode == QStringLiteral("overlay")) {
+                    mounted = m_helperClient->setupOverlayMount(username, compositorUid, dir.path, QString());
+                    if (!mounted) {
+                        qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path
+                                   << "user" << username;
+                        allSucceeded = false;
+                    }
+                } else {
+                    // Escaped spec: paths containing '|' or '\' survive the
+                    // helper's source|alias wire format
+                    const QStringList dirSpec = {encodeMountSpec(dir.path, QString())};
+                    mounted = m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) >= 1;
+                    if (!mounted) {
+                        qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;
+                        allSucceeded = false;
+                    }
+                }
+                if (mounted) {
+                    playerViewRelative = relativePath;
+                }
+            } else if (dir.mode == QStringLiteral("acl")) {
+                const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
+                const bool contentsOk = m_helperClient->setDirectoryAcl(dir.path, username, true);
+                if (!parentsOk || !contentsOk) {
+                    qWarning() << "SessionRunner: Failed to set recursive ACL for" << dir.path << "user" << username;
+                    allSucceeded = false;
+                }
+            }
+
+            // Merge hand-staged per-player files into the player's view (after
+            // the mount/copy). Only copy and overlay qualify: both give the
+            // player a private tree, while bind mounts have no upper layer —
+            // mirroring into a bind mount would mutate and re-own the shared
+            // source itself.
+            if (!playerViewRelative.isEmpty()
+                && (dir.mode == QStringLiteral("copy") || dir.mode == QStringLiteral("overlay"))) {
+                const QString stagingDir = playerDataStagingRoot(presetId.isEmpty() ? QStringLiteral("steam") : presetId,
+                                                                 username)
+                    + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome);
+                const QDir staging(stagingDir);
+                if (staging.exists() && !staging.entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot).isEmpty()) {
+                    qCDebug(couchplaySharing) << "Mirroring staged data" << stagingDir << "for user" << username;
+                    if (!m_helperClient->mirrorDirectoryContents(username, stagingDir, playerViewRelative)) {
+                        qWarning() << "SessionRunner: Failed to mirror staged data" << stagingDir;
+                        allSucceeded = false;
+                    }
+                }
+            }
+
+            if (isSteamLauncher && m_steamConfigManager) {
+                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
+                    qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
+                    allSucceeded = false;
+                }
+            }
         }
     }
 
@@ -718,6 +892,31 @@ void SessionRunner::teardownSharedDirectories()
     }
 
     m_helperClient->unmountAllSharedDirectories();
+}
+
+void SessionRunner::teardownSharingState()
+{
+    // Release the privileged sharing state exactly once per session: shared
+    // mounts plus per-player Steam library sharing. Invoked from stop() and
+    // from the natural-exit path (last game exited on its own) — without the
+    // latter, mounts persist for the helper's lifetime and the next session
+    // stacks on top or fails reusing the same overlay work directory.
+    if (!m_sharedStateActive) {
+        return;
+    }
+    m_sharedStateActive = false;
+
+    teardownSharedDirectories();
+
+    if (m_steamConfigManager && !m_steamSharedUsers.isEmpty()) {
+        const QSet<QString> sharedUsers = m_steamSharedUsers;
+        m_steamSharedUsers.clear();
+        for (const QString &username : sharedUsers) {
+            if (!m_steamConfigManager->cleanupLibrarySharing(username)) {
+                qCWarning(couchplaySteam) << "Failed to clean up Steam sharing for" << username;
+            }
+        }
+    }
 }
 
 bool SessionRunner::buildBindPaths()
@@ -785,119 +984,6 @@ bool SessionRunner::buildBindPaths()
     }
 
     return true;
-}
-
-bool SessionRunner::setupLauncherAccess()
-{
-    if (!m_sessionManager || !m_presetManager || !m_helperClient) {
-        return true;
-    }
-
-    const auto &profile = m_sessionManager->currentProfile();
-    bool allSucceeded = true;
-
-    if (m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled() && m_steamConfigManager->isSteamDetected()) {
-        m_steamConfigManager->loadLibraryFolders();
-    }
-
-    for (int i = 0; i < profile.instances.size(); ++i) {
-        const QString &username = profile.instances[i].username;
-        const QString &presetId = profile.instances[i].presetId;
-
-        if (username.isEmpty()) {
-            qCDebug(couchplaySteam) << "Skipping instance" << i << "- no username";
-            continue;
-        }
-
-        LaunchPreset preset = m_presetManager->getPreset(presetId);
-
-        if (preset.launcherInfo.requiresAcls) {
-            for (const QString &dir : preset.launcherInfo.gameDirectories) {
-                if (dir.isEmpty()) {
-                    continue;
-                }
-                qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
-                if (!m_helperClient->setPathAclWithParents(dir, username)) {
-                    qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
-                }
-            }
-        }
-
-        if (preset.launcherId == QStringLiteral("heroic")) {
-            if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-                qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
-                if (!m_heroicConfigManager->syncConfigToUser(username)) {
-                    qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
-                    allSucceeded = false;
-                }
-
-                if (m_heroicConfigManager->syncShortcutsEnabled()) {
-                    qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
-                    if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
-                        qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
-                        allSucceeded = false;
-                    }
-                } else {
-                    qCDebug(couchplaySteam) << "Heroic shortcut sync disabled, skipping";
-                }
-            }
-        }
-
-        if (!m_steamConfigManager) {
-            continue;
-        }
-
-        if (!m_steamConfigManager->isSteamDetected()) {
-            m_steamConfigManager->detectSteamPaths();
-        }
-
-        if (!m_steamConfigManager->isSteamDetected()) {
-            qCDebug(couchplaySteam) << "Steam not detected, skipping config sync";
-            continue;
-        }
-
-        if (!(preset.steamIntegration || preset.launcherId == QStringLiteral("steam"))) {
-            qCDebug(couchplaySteam) << "Skipping instance" << i << "- preset" << presetId
-                                    << "does not use Steam integration";
-            continue;
-        }
-
-        if (m_steamConfigManager->syncShortcutsEnabled()) {
-            m_steamConfigManager->loadShortcuts();
-            QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
-            qCDebug(couchplaySteam) << "Found" << shortcutDirs.size() << "directories in shortcuts";
-
-            qCDebug(couchplaySteam) << "Setting up Steam shortcuts for user" << username;
-
-            for (const QString &dir : shortcutDirs) {
-                if (QDir(dir).exists()) {
-                    qCDebug(couchplaySteam) << "Setting ACL with parents on" << dir << "for" << username;
-                    if (!m_helperClient->setPathAclWithParents(dir, username)) {
-                        qCWarning(couchplaySteam) << "Failed to set ACL on" << dir;
-                    }
-                }
-            }
-
-            qCDebug(couchplaySteam) << "Calling syncShortcutsToUser for" << username;
-            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
-                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
-                allSucceeded = false;
-            }
-        } else {
-            qCDebug(couchplaySteam) << "Shortcut sync disabled, skipping";
-        }
-
-        // Share Steam library if enabled
-        if (m_steamConfigManager->shareLibraryEnabled()) {
-            qCDebug(couchplaySteam) << "Sharing Steam library for user" << username;
-            if (!m_steamConfigManager->shareLibraryToUser(username)) {
-                qCWarning(couchplaySteam) << "Failed to share Steam library to" << username;
-                allSucceeded = false;
-            }
-        }
-    }
-
-    return allSucceeded;
 }
 
 QRect SessionRunner::getScreenGeometry() const
@@ -1111,6 +1197,12 @@ void SessionRunner::onInstanceStopped()
             uninhibitScreenSaver();
             setStatus(QStringLiteral("Session ended"));
             restoreDeviceOwnership();
+            // Games exiting on their own must release the privileged sharing
+            // state too — otherwise mounts stay attached until helper shutdown
+            // and the next session stacks on top of them
+            if (m_streamingInstances.isEmpty()) {
+                teardownSharingState();
+            }
             Q_EMIT runningChanged();
             Q_EMIT sessionStopped();
         }

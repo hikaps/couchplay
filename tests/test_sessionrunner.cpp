@@ -14,13 +14,16 @@
 
 #define private public
 #include "SessionRunner.h"
+#include "PresetManager.h"
 #undef private
 #include "HeroicConfigManager.h"
-#include "PresetManager.h"
 #include "SessionManager.h"
 #include "SteamConfigManager.h"
 #define private public
 #include "CouchPlayHelperClient.h"
+
+#define private public
+#include "GamescopeInstance.h"
 #undef private
 #include "UserLookup.h"
 
@@ -36,16 +39,44 @@ public:
         QString username;
     };
 
+    struct DirectoryAclCall {
+        QString path;
+        QString username;
+        bool recursive;
+    };
+    struct OverlayCall {
+        QString username;
+        uint compositorUid;
+        QString sourceDir;
+        QString targetAlias;
+    };
+
+    struct CopyDirCall {
+        QString username;
+        QString sourceDir;
+        QString targetRelativePath;
+    };
+
     struct MountCall {
         QString username;
         uint compositorUid;
         QStringList directories;
     };
 
+    struct MirrorCall {
+        QString username;
+        QString sourceDir;
+        QString targetRelativePath;
+    };
+
     QList<AclCall> aclCalls;
+    QList<DirectoryAclCall> directoryAclCalls;
     QList<MountCall> mountCalls;
     struct DeviceOwnerCall { QString path; int uid; };
     QList<DeviceOwnerCall> deviceOwnerCalls;
+    QList<OverlayCall> overlayCalls;
+    QList<CopyDirCall> copyDirCalls;
+    QList<MirrorCall> mirrorCalls;
 
     explicit MockCouchPlayHelperClient(QObject *parent = nullptr)
         : CouchPlayHelperClient(parent)
@@ -58,12 +89,43 @@ public:
         aclCalls.append({path, username});
         return true;
     }
+    bool setDirectoryAcl(const QString &path, const QString &username, bool recursive) override
+    {
+        directoryAclCalls.append({path, username, recursive});
+        return true;
+    }
+
+    bool setupOverlayMount(const QString &username, uint compositorUid, const QString &sourceDir, const QString &targetAlias) override
+    {
+        overlayCalls.append({username, compositorUid, sourceDir, targetAlias});
+        return true;
+    }
+
+    bool copyDirectoryToUser(const QString &username, const QString &sourceDir, const QString &targetRelativePath) override
+    {
+        copyDirCalls.append({username, sourceDir, targetRelativePath});
+        return true;
+    }
+
+    bool mirrorDirectoryContents(const QString &username, const QString &sourceDir, const QString &targetRelativePath) override
+    {
+        mirrorCalls.append({username, sourceDir, targetRelativePath});
+        return true;
+    }
 
     int mountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories) override
     {
         mountCalls.append({username, compositorUid, directories});
         return directories.size();
     }
+
+    int unmountAllCalls = 0;
+    int unmountAllSharedDirectories() override
+    {
+        unmountAllCalls++;
+        return 0;
+    }
+
     bool setDeviceOwner(const QString &devicePath, int uid) override
     {
         deviceOwnerCalls.append({devicePath, uid});
@@ -76,9 +138,48 @@ public:
         if (username == QStringLiteral("player1")) {
             info.insert(QStringLiteral("uid"), 1001u);
             info.insert(QStringLiteral("gid"), 1001u);
-            info.insert(QStringLiteral("home"), QStringLiteral("/home/player1"));
+            info.insert(QStringLiteral("home"), player1Home);
         }
         return info;
+    }
+
+    QString player1Home = QStringLiteral("/home/player1");
+
+    // Mirrors the process-local getpwuid view by default so existing slug
+    // expectations stay identical; tests can override to simulate the
+    // helper-resolved host home
+    QString uidHomeOverride;
+    QString getUserHomeByUid(uint uid) override
+    {
+        if (!uidHomeOverride.isEmpty()) {
+            return uidHomeOverride;
+        }
+        struct passwd *pw = getpwuid(uid);
+        return pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+    }
+
+    QString getUserSteamId(const QString &username) override
+    {
+        return username == QStringLiteral("player1") ? QStringLiteral("12345") : QString();
+    }
+    QString player1SteamRoot;
+    QString getUserSteamRoot(const QString &username) override
+    {
+        return username == QStringLiteral("player1") ? player1SteamRoot : QString();
+    }
+
+    bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username) override
+    {
+        Q_UNUSED(username)
+        if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) {
+            return false;
+        }
+        QFile f(targetPath);
+        if (!f.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        f.write(content);
+        return true;
     }
 
     bool isInCouchPlayGroup(const QString &username) override
@@ -97,20 +198,26 @@ private Q_SLOTS:
     void init();
     void cleanup();
 
-    // Shared directories tests
-    void testSetupSharedDirectoriesFormatting();
-    void testSetupSharedDirectoriesMultipleInstances();
-    void testSetupSharedDirectoriesNoSharedDirs();
-    void testSetupSharedDirectoriesEmptyUsername();
-
     // Steam config tests
     void testSetupSteamConfigWithSteamLauncher();
     void testSetupSteamConfigWithNonSteamLauncher();
     void testSetupSteamConfigSteamIntegrationDisabled();
     void testSetupSteamConfigAppliesHeroicAcls();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
+    void testSetupDataDirectoriesUsesInstanceDirs();
+    void testSetupDataDirectoriesFallsBackToPresetDirs();
+    void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
+    void testSetupDataDirectoriesBindModeMounts();
+    void testSetupDataDirectoriesBindModeEscapesPipePath();
+    void testSetupDataDirectoriesMirrorsStagedData();
+    void testSetupDataDirectoriesLibrarySharingGate();
+    void testSetupDataDirectoriesSecondaryLibrariesMounted();
+    void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
+    void testNaturalExitTearsDownSharingState();
+    void testFinalizeDataDirResolvesIdentityViaHelper();
+    void testResolveCompositorHomeViaHelper();
 
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -202,74 +309,13 @@ void TestSessionRunner::createMockLegendaryConfig(const QString &basePath)
     QDir().mkpath(basePath + QStringLiteral("/Games/Heroic/EpicGame"));
 }
 
-void TestSessionRunner::testSetupSharedDirectoriesFormatting()
-{
-    m_sessionManager->setInstanceCount(1);
-    QStringList sharedDirs = {QStringLiteral("/home/compositor/Games"), QStringLiteral("/home/compositor/Saves")};
-    m_sessionManager->setInstanceSharedDirectories(0, sharedDirs);
-
-    QStringList expectedFormatted;
-    for (const QString &dir : sharedDirs) {
-        expectedFormatted << dir + QLatin1Char('|');
-    }
-
-    QCOMPARE(expectedFormatted[0], QStringLiteral("/home/compositor/Games|"));
-    QCOMPARE(expectedFormatted[1], QStringLiteral("/home/compositor/Saves|"));
-}
-
-void TestSessionRunner::testSetupSharedDirectoriesMultipleInstances()
-{
-    m_sessionManager->setInstanceCount(2);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
-
-    QStringList dirs1 = {QStringLiteral("/home/compositor/Games1")};
-    QStringList dirs2 = {QStringLiteral("/home/compositor/Games2"), QStringLiteral("/home/compositor/Saves2")};
-
-    m_sessionManager->setInstanceSharedDirectories(0, dirs1);
-    m_sessionManager->setInstanceSharedDirectories(1, dirs2);
-
-    QStringList expectedPlayer1 = {QStringLiteral("/home/compositor/Games1|")};
-    QStringList expectedPlayer2 = {QStringLiteral("/home/compositor/Games2|"),
-                                   QStringLiteral("/home/compositor/Saves2|")};
-
-    QCOMPARE(expectedPlayer1.size(), 1);
-    QCOMPARE(expectedPlayer2.size(), 2);
-    QCOMPARE(expectedPlayer1[0], QStringLiteral("/home/compositor/Games1|"));
-    QCOMPARE(expectedPlayer2[0], QStringLiteral("/home/compositor/Games2|"));
-    QCOMPARE(expectedPlayer2[1], QStringLiteral("/home/compositor/Saves2|"));
-}
-
-void TestSessionRunner::testSetupSharedDirectoriesNoSharedDirs()
-{
-    m_sessionManager->setInstanceCount(1);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-
-    m_sessionManager->setInstanceSharedDirectories(0, QStringList());
-
-    QStringList expectedFormatted;
-
-    QCOMPARE(expectedFormatted.size(), 0);
-}
-
-void TestSessionRunner::testSetupSharedDirectoriesEmptyUsername()
-{
-    m_sessionManager->setInstanceCount(1);
-
-    QStringList sharedDirs = {QStringLiteral("/home/compositor/Games")};
-    m_sessionManager->setInstanceSharedDirectories(0, sharedDirs);
-
-    QVERIFY(m_sessionManager->getInstanceConfig(0).value(QStringLiteral("username")).toString().isEmpty());
-}
-
 void TestSessionRunner::testSetupSteamConfigWithSteamLauncher()
 {
     LaunchPreset steamPreset = m_presetManager->getPreset(QStringLiteral("steam"));
 
     QVERIFY(steamPreset.launcherId == QStringLiteral("steam"));
-    QVERIFY(steamPreset.steamIntegration);
 
-    bool needsSteamSync = steamPreset.steamIntegration || steamPreset.launcherId == QStringLiteral("steam");
+    bool needsSteamSync = steamPreset.launcherId == QStringLiteral("steam");
     QVERIFY(needsSteamSync);
 }
 
@@ -278,9 +324,8 @@ void TestSessionRunner::testSetupSteamConfigWithNonSteamLauncher()
     LaunchPreset heroicPreset = m_presetManager->getPreset(QStringLiteral("heroic"));
 
     QVERIFY(heroicPreset.launcherId == QStringLiteral("heroic"));
-    QVERIFY(!heroicPreset.steamIntegration);
 
-    bool needsSteamSync = heroicPreset.steamIntegration || heroicPreset.launcherId == QStringLiteral("steam");
+    bool needsSteamSync = heroicPreset.launcherId == QStringLiteral("steam");
     QVERIFY(!needsSteamSync);
 }
 
@@ -303,19 +348,340 @@ void TestSessionRunner::testSetupSteamConfigAppliesHeroicAcls()
     HeroicConfigManager heroicManager;
     m_presetManager->setHeroicConfigManager(&heroicManager);
 
-    m_sessionManager->setInstanceCount(1);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    m_sessionManager->setInstancePreset(0, QStringLiteral("heroic"));
+    LaunchPreset heroicPreset = m_presetManager->getPreset(QStringLiteral("heroic"));
+    QVERIFY(heroicPreset.launcherId == QStringLiteral("heroic"));
 
-    m_runner->setupLauncherAccess();
+    QList<DataDirectory> dataDirs = heroicPreset.dataDirectories;
 
-    QString expectedPath = homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
-    QCOMPARE(m_helperClient->aclCalls.size(), 1);
-    QCOMPARE(m_helperClient->aclCalls[0].path, expectedPath);
-    QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+    QString expectedGamePath = homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
+    bool foundAclGameDir = false;
+    for (const DataDirectory &dir : dataDirs) {
+        if (dir.mode == QStringLiteral("acl") && dir.path == expectedGamePath) {
+            foundAclGameDir = true;
+            break;
+        }
+    }
+    QVERIFY2(foundAclGameDir, "Heroic preset should contain acl-mode DataDirectory for game path");
+
+    // Config sync is dispatched via syncConfigToUser at session start, not via
+    // a copy-mode DataDirectory that would bulk-copy the whole config root
+    bool foundCopyConfigDir = false;
+    for (const DataDirectory &dir : dataDirs) {
+        if (dir.mode == QStringLiteral("copy") && dir.path.contains(QStringLiteral("heroic"))) {
+            foundCopyConfigDir = true;
+            break;
+        }
+    }
+    QVERIFY2(!foundCopyConfigDir, "Heroic preset must not carry copy-mode DataDirectory for the config path");
 }
 
 void TestSessionRunner::testStartSessionHeroicPresetUsesAclsAndSharedConfig()
+{
+    QSKIP("Requires D-Bus (m_runner->start()). Will be rewritten in Commit 11 when setupDataDirectories() is implemented.");
+}
+
+void TestSessionRunner::testSetupDataDirectoriesUsesInstanceDirs()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Instance Dirs Game"),
+                                                        QStringLiteral("/usr/bin/game"));
+
+    QVariantMap presetDir;
+    presetDir[QStringLiteral("path")] = QStringLiteral("/preset/dir");
+    presetDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList presetDirs;
+    presetDirs.append(presetDir);
+    QVERIFY(m_presetManager->setDataDirectories(presetId, presetDirs));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    QVariantMap instanceDir;
+    instanceDir[QStringLiteral("path")] = QStringLiteral("/instance/dir");
+    instanceDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList instanceDirs;
+    instanceDirs.append(instanceDir);
+    m_sessionManager->setInstanceDataDirectories(0, instanceDirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    QCOMPARE(m_helperClient->aclCalls.size(), 1);
+    QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/instance/dir"));
+    QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+    QCOMPARE(m_helperClient->directoryAclCalls.size(), 1);
+    QCOMPARE(m_helperClient->directoryAclCalls[0].path, QStringLiteral("/instance/dir"));
+    QCOMPARE(m_helperClient->directoryAclCalls[0].username, QStringLiteral("player1"));
+    QVERIFY(m_helperClient->directoryAclCalls[0].recursive);
+}
+
+void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Fallback Dirs Game"),
+                                                        QStringLiteral("/usr/bin/game2"));
+
+    QVariantMap presetDir;
+    presetDir[QStringLiteral("path")] = QStringLiteral("/preset/dir");
+    presetDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList presetDirs;
+    presetDirs.append(presetDir);
+    QVERIFY(m_presetManager->setDataDirectories(presetId, presetDirs));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    // No instance directories set — must fall back to the preset's defaults
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    QCOMPARE(m_helperClient->aclCalls.size(), 1);
+    QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/preset/dir"));
+    QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesEmptySnapshotStaysEmpty()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Empty Snapshot Game"),
+                                                        QStringLiteral("/usr/bin/game4"));
+
+    QVariantMap presetDir;
+    presetDir[QStringLiteral("path")] = QStringLiteral("/preset/dir");
+    presetDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    QVariantList presetDirs;
+    presetDirs.append(presetDir);
+    QVERIFY(m_presetManager->setDataDirectories(presetId, presetDirs));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    // Explicitly empty snapshot (preset selected while it had no dirs)
+    m_sessionManager->setInstanceDataDirectories(0, QVariantList());
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    // Later preset additions must not leak into the intentionally-empty snapshot
+    QCOMPARE(m_helperClient->aclCalls.size(), 0);
+    QCOMPARE(m_helperClient->overlayCalls.size(), 0);
+    QCOMPARE(m_helperClient->copyDirCalls.size(), 0);
+    QCOMPARE(m_helperClient->mountCalls.size(), 0);
+}
+
+void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Bind Game"), QStringLiteral("/usr/bin/game3"));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    QVariantMap bindDir;
+    bindDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/.config/game");
+    bindDir[QStringLiteral("mode")] = QStringLiteral("bind");
+    QVariantList dirs;
+    dirs.append(bindDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    // Escaped mount spec — identical to the legacy form for plain paths
+    // (empty alias => home-relative target)
+    QCOMPARE(m_helperClient->mountCalls.size(), 1);
+    QCOMPARE(m_helperClient->mountCalls[0].username, QStringLiteral("player1"));
+    QCOMPARE(m_helperClient->mountCalls[0].directories,
+             (QStringList{QStringLiteral("/home/compositor/.config/game|")}));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesBindModeEscapesPipePath()
+{
+    // Legal paths containing '|' must survive the source|alias wire format
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Pipe Bind"), QStringLiteral("/usr/bin/game7"));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    QVariantMap bindDir;
+    bindDir[QStringLiteral("path")] = QStringLiteral("/mnt/Game|Saves");
+    bindDir[QStringLiteral("mode")] = QStringLiteral("bind");
+    QVariantList dirs;
+    dirs.append(bindDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    QCOMPARE(m_helperClient->mountCalls.size(), 1);
+    // Escaped pipe + trailing separator (empty alias)
+    QCOMPARE(m_helperClient->mountCalls[0].directories, (QStringList{QStringLiteral("/mnt/Game\\|Saves|")}));
+}
+
+void TestSessionRunner::testSetupDataDirectoriesMirrorsStagedData()
+{
+    QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Staged Game"), QStringLiteral("/usr/bin/game5"));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+
+    // External overlay dir with staged files, a bind dir WITH staged files
+    // (must be ignored: bind has no private layer — seeding would mutate the
+    // shared source), and an acl dir (staging never applies to acl)
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = QStringLiteral("/opt/games/game");
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantMap bindDir;
+    bindDir[QStringLiteral("path")] = QStringLiteral("/opt/other/lib");
+    bindDir[QStringLiteral("mode")] = QStringLiteral("bind");
+    QVariantMap aclDir;
+    aclDir[QStringLiteral("path")] = QStringLiteral("/opt/readonly");
+    aclDir[QStringLiteral("mode")] = QStringLiteral("acl");
+    dirs.append(overlayDir);
+    dirs.append(bindDir);
+    dirs.append(aclDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    struct passwd *pw = getpwuid(getuid());
+    QString compositorHome = pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+    QString stagingRoot = playerDataStagingRoot(presetId, QStringLiteral("player1"));
+    QString overlayStaging = stagingRoot + QLatin1Char('/')
+        + dataDirectoryStagingSlug(QStringLiteral("/opt/games/game"), compositorHome);
+    QVERIFY(QDir().mkpath(overlayStaging));
+    QFile seed(overlayStaging + QStringLiteral("/config.ini"));
+    QVERIFY(seed.open(QIODevice::WriteOnly));
+    seed.write("player=1\n");
+    seed.close();
+    QString bindStaging = stagingRoot + QLatin1Char('/')
+        + dataDirectoryStagingSlug(QStringLiteral("/opt/other/lib"), compositorHome);
+    QVERIFY(QDir().mkpath(bindStaging));
+    QFile bindSeed(bindStaging + QStringLiteral("/seed.ini"));
+    QVERIFY(bindSeed.open(QIODevice::WriteOnly));
+    bindSeed.write("must-not-mirror\n");
+    bindSeed.close();
+
+    QVERIFY(m_runner->setupDataDirectories());
+
+    // Only the overlay dir is mirrored, into the player's view of that dir
+    // (external path -> .couchplay/mounts mapping); the bind staging content
+    // must be ignored entirely
+    QCOMPARE(m_helperClient->mirrorCalls.size(), 1);
+    QCOMPARE(m_helperClient->mirrorCalls[0].username, QStringLiteral("player1"));
+    QCOMPARE(m_helperClient->mirrorCalls[0].sourceDir, overlayStaging);
+    QCOMPARE(m_helperClient->mirrorCalls[0].targetRelativePath, QStringLiteral(".couchplay/mounts/opt/games/game"));
+
+    QDir(stagingRoot).removeRecursively();
+}
+
+void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    // Mock a detected Steam installation
+    QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QDir().mkpath(steamRoot + QStringLiteral("/config"));
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n{\n}\n");
+    libraryVdf.close();
+
+    auto *steamManager = new SteamConfigManager(this);
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    QCOMPARE(steamManager->steamPaths().steamRoot, steamRoot);
+    QVERIFY(!steamManager->shareLibraryEnabled()); // default off
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = steamRoot;
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantList dirs;
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    // Library sharing disabled: the steamRoot entry must NOT be mounted — the
+    // player's own Steam root is never overlaid
+    m_runner->setupDataDirectories();
+    QCOMPARE(m_helperClient->overlayCalls.size(), 0);
+
+    // Library sharing enabled with no parseable libraries: still no mounts
+    // (nothing to share), and crucially no home-relative overlay of the
+    // player's Steam root
+    steamManager->setShareLibraryEnabled(true);
+    m_runner->setupDataDirectories();
+    QCOMPARE(m_helperClient->overlayCalls.size(), 0);
+    for (const auto &call : m_helperClient->overlayCalls) {
+        QVERIFY(!call.targetAlias.isEmpty()); // everything alias-mounted, never at the player's Steam root path
+        QVERIFY(call.sourceDir != steamRoot || call.targetAlias == QStringLiteral(".couchplay/steam-libs/0"));
+    }
+}
+
+void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QDir().mkpath(steamRoot + QStringLiteral("/config"));
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n"
+                     "{\n"
+                     "  \"0\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
+                     "  }\n"
+                     "  \"1\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"/mnt/steamlibrary\"\n"
+                     "  }\n"
+                     "}\n");
+    libraryVdf.close();
+
+    auto *steamManager = new SteamConfigManager(this);
+    steamManager->setHelperClient(m_helperClient); // prepareDataDir ACLs/mounts via the manager's own client
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    steamManager->setShareLibraryEnabled(true);
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = steamRoot;
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    QVariantList dirs;
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    m_runner->setupDataDirectories();
+
+    // Both libraries expose only steamapps/common under their player aliases;
+    // the player's Steam root and the compositor's account state stay private.
+    QCOMPARE(m_helperClient->overlayCalls.size(), 2);
+    bool foundPrimary = false;
+    bool foundSecondary = false;
+    for (const auto &call : m_helperClient->overlayCalls) {
+        QVERIFY(!call.targetAlias.isEmpty());
+        if (call.sourceDir == steamRoot + QStringLiteral("/steamapps/common")) {
+            foundPrimary = true;
+            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/0/steamapps/common"));
+        }
+        if (call.sourceDir == QStringLiteral("/mnt/steamlibrary/steamapps/common")) {
+            foundSecondary = true;
+            QCOMPARE(call.targetAlias, QStringLiteral(".couchplay/steam-libs/1/steamapps/common"));
+        }
+        QCOMPARE(call.username, QStringLiteral("player1"));
+    }
+    QVERIFY(foundPrimary);
+    QVERIFY(foundSecondary);
+}
+
+void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
 {
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
@@ -326,28 +692,27 @@ void TestSessionRunner::testStartSessionHeroicPresetUsesAclsAndSharedConfig()
 
     HeroicConfigManager heroicManager;
     m_presetManager->setHeroicConfigManager(&heroicManager);
-
-    struct passwd *pw = getpwuid(getuid());
-    QString sessionUser = pw ? QString::fromLocal8Bit(pw->pw_name) : QStringLiteral("compositor");
+    m_runner->setHeroicConfigManager(&heroicManager);
+    QVERIFY(heroicManager.isHeroicDetected());
 
     m_sessionManager->setInstanceCount(1);
-    m_sessionManager->setInstanceUser(0, sessionUser);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("ghostuser")); // unresolvable: sync bails early
     m_sessionManager->setInstancePreset(0, QStringLiteral("heroic"));
-    m_sessionManager->setInstanceSharedDirectories(0, {heroicManager.configPath()});
+    // No instance dirs — falls back to the preset's resolver defaults
 
-    QVERIFY(m_runner->start());
+    // False is expected: config sync fails for a nonexistent user. What
+    // matters here is the effect on the generic data-directory path.
+    QVERIFY(!m_runner->setupDataDirectories());
 
-    QCOMPARE(m_helperClient->mountCalls.size(), 1);
-    QCOMPARE(m_helperClient->mountCalls[0].username, sessionUser);
-    QCOMPARE(m_helperClient->mountCalls[0].compositorUid, static_cast<uint>(getuid()));
-    QCOMPARE(m_helperClient->mountCalls[0].directories.size(), 1);
-    QCOMPARE(m_helperClient->mountCalls[0].directories[0], heroicManager.configPath() + QLatin1Char('|'));
-    QVERIFY(!m_helperClient->mountCalls[0].directories.contains(heroicManager.defaultInstallPath() + QLatin1Char('|')));
+    // The config root must NOT be bulk-copied (selective sync replaces it)
+    QCOMPARE(m_helperClient->copyDirCalls.size(), 0);
 
-    QString expectedPath = homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
+    // Resolver defaults still apply: install-path overlay + game-dir ACL
+    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
+    QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, heroicManager.defaultInstallPath());
+    QCOMPARE(m_helperClient->overlayCalls[0].username, QStringLiteral("ghostuser"));
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
-    QCOMPARE(m_helperClient->aclCalls[0].path, expectedPath);
-    QCOMPARE(m_helperClient->aclCalls[0].username, sessionUser);
+    QCOMPARE(m_helperClient->aclCalls[0].path, homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame"));
 }
 
 void TestSessionRunner::testResolveUserIdentityViaHelper()
@@ -363,6 +728,125 @@ void TestSessionRunner::testResolveUserIdentityFallback()
 {
     const UserIdentity id = resolveUserIdentity(QStringLiteral("root"), nullptr);
     QVERIFY(id.valid);
+}
+
+void TestSessionRunner::testNaturalExitTearsDownSharingState()
+{
+    // A session whose games exit on their own must release the privileged
+    // sharing state; a later stop() must neither bypass nor double-run it
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+
+    QVariantList dirs;
+    QVariantMap overlayDir;
+    overlayDir[QStringLiteral("path")] = QStringLiteral("/home/compositor/Games/MyGame");
+    overlayDir[QStringLiteral("mode")] = QStringLiteral("overlay");
+    dirs.append(overlayDir);
+    m_sessionManager->setInstanceDataDirectories(0, dirs);
+
+    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->m_sharedStateActive);
+    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
+    QCOMPARE(m_helperClient->unmountAllCalls, 0);
+
+    // Last instance exits naturally (wired the way startNextInstance does)
+    auto *instance = new GamescopeInstance(m_runner);
+    instance->m_index = 0;
+    connect(instance, &GamescopeInstance::stopped, m_runner, &SessionRunner::onInstanceStopped);
+    m_runner->m_instances.append(instance);
+    QMetaObject::invokeMethod(instance, "stopped");
+
+    QVERIFY(!m_runner->m_sharedStateActive);
+    QCOMPARE(m_helperClient->unmountAllCalls, 1);
+
+    // stop() after natural exit takes the early return without re-tearing down
+    m_runner->stop();
+    QCOMPARE(m_helperClient->unmountAllCalls, 1);
+
+    // A new session re-arms the tracker and stop() cleans it up again
+    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->m_sharedStateActive);
+    m_runner->stop();
+    QCOMPARE(m_helperClient->unmountAllCalls, 2);
+}
+
+void TestSessionRunner::testResolveCompositorHomeViaHelper()
+{
+    // Under Flatpak the sandbox's getpwuid cannot see host accounts; the
+    // helper's host-side answer must win when present
+    m_helperClient->uidHomeOverride = QStringLiteral("/home/compositor-host");
+    QCOMPARE(resolveCompositorHome(m_helperClient), QStringLiteral("/home/compositor-host"));
+
+    // Fallback to the process-local view when the helper has no answer
+    m_helperClient->uidHomeOverride = QString();
+    QCOMPARE(resolveCompositorHome(m_helperClient), resolveCompositorHome(nullptr));
+}
+
+void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
+{
+    // finalizeDataDir must resolve the target home through the helper: a
+    // process-local getpwnam() cannot see CouchPlay host accounts under
+    // Flatpak and aborted finalization after preparation had mounted
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    const QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QVERIFY(QDir(steamRoot).mkpath(QStringLiteral("config")));
+
+    const QString externalLib = homeDir.path() + QStringLiteral("/extlib");
+    QVERIFY(QDir(externalLib).mkpath(QStringLiteral("steamapps")));
+    {
+        QFile manifest(externalLib + QStringLiteral("/steamapps/appmanifest_730.acf"));
+        QVERIFY(manifest.open(QIODevice::WriteOnly));
+        manifest.write("\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n}\n");
+    }
+
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n"
+                     "{\n"
+                     "  \"0\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
+                     "  }\n"
+                     "  \"1\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + externalLib.toUtf8() + "\"\n"
+                     "  }\n"
+                     "}\n");
+    libraryVdf.close();
+
+    // The helper-resolved home points at the temp dir; no passwd entry for
+    // player1 exists in the test environment
+    m_helperClient->player1Home = homeDir.path();
+
+    auto *steamManager = new SteamConfigManager(this);
+    steamManager->setHelperClient(m_helperClient);
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    steamManager->setShareLibraryEnabled(true);
+
+    DataDirectory dir;
+    dir.path = steamRoot;
+    dir.mode = QStringLiteral("overlay");
+
+    // Production sequence: prepare mounts the alias libraries (and loads
+    // them); finalize then writes manifests and libraryfolders.vdf
+    QVERIFY(steamManager->prepareDataDir(dir, QStringLiteral("player1")));
+    QVERIFY(steamManager->finalizeDataDir(dir, QStringLiteral("player1")));
+
+    // Manifests and libraryfolders.vdf landed under the helper-resolved home
+    // (each alias mount presents its library, so the manifest sits in the
+    // library's own steamapps/)
+    QVERIFY(QFile::exists(
+        homeDir.path() + QStringLiteral("/.couchplay/steam-libs/1/steamapps/appmanifest_730.acf")));
+    QVERIFY(QFile::exists(steamRoot + QStringLiteral("/config/libraryfolders.vdf")));
+    QFile vdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(vdf.open(QIODevice::ReadOnly));
+    const QByteArray vdfContent = vdf.readAll();
+    QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
+    QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
 }
 
 QTEST_MAIN(TestSessionRunner)

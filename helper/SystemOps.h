@@ -38,6 +38,8 @@ public:
     // Filesystem operations
     virtual bool fileExists(const QString &path) = 0;
     virtual bool isDirectory(const QString &path) = 0;
+    virtual bool isSymLink(const QString &path) = 0;
+    virtual QString canonicalFilePath(const QString &path) = 0;
     virtual bool mkpath(const QString &path) = 0;
     virtual bool removeFile(const QString &path) = 0;
     virtual bool copyFile(const QString &source, const QString &dest) = 0;
@@ -85,6 +87,8 @@ public:
 
     bool fileExists(const QString &path) override;
     bool isDirectory(const QString &path) override;
+    bool isSymLink(const QString &path) override;
+    QString canonicalFilePath(const QString &path) override;
     bool mkpath(const QString &path) override;
     bool removeFile(const QString &path) override;
     bool copyFile(const QString &source, const QString &dest) override;
