@@ -602,14 +602,6 @@ Kirigami.ScrollablePage {
                             }
                         }
 
-                        Components.GameSelector {
-                            objectName: "comboGame"
-                            presetManager: instanceCard.cardPresetManager
-                            sessionManager: instanceCard.cardSessionManager
-                            instanceIndex: instanceCard.index
-                            steamConfigManager: root.steamConfigManager
-                            heroicConfigManager: root.heroicConfigManager
-                        }
 
                         Controls.Button {
                             objectName: "btnPlayerDataFolder"
@@ -671,6 +663,14 @@ Kirigami.ScrollablePage {
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
+                        }
+                        Components.GameSelector {
+                            objectName: "comboGame"
+                            presetManager: instanceCard.cardPresetManager
+                            sessionManager: instanceCard.cardSessionManager
+                            instanceIndex: instanceCard.index
+                            steamConfigManager: root.steamConfigManager
+                            heroicConfigManager: root.heroicConfigManager
                         }
 
                         // Resolution is auto-calculated from monitor size and layout
