@@ -192,9 +192,10 @@ class TestSessionLifecycle(BaseTest):
             "streaming session did not issue a sunshine LaunchInstance"
         )
         # And the generated config path must be the per-instance sunshine.conf.
-        assert "/sunshine.conf" in sunshine_launches[0]["gameCommand"], (
+        command = " ".join(sunshine_launches[0]["gameCommand"])
+        assert "/sunshine.conf" in command, (
             "sunshine LaunchInstance did not reference a sunshine.conf config: "
-            + sunshine_launches[0]["gameCommand"]
+            + command
         )
 
     def test_device_assignment_page_with_helper(self, driver, mock_helper):
