@@ -9,10 +9,31 @@
 #include <QDesktopServices>
 #include <QDebug>
 #include <QDir>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <QStandardPaths>
+#include <QTemporaryFile>
 #include <QUrl>
-
 #include <unistd.h>
+
+
+namespace {
+QString gameSelectionToJson(const GameSelection &selection)
+{
+    return QString::fromUtf8(QJsonDocument::fromVariant(selection.toVariant()).toJson(QJsonDocument::Compact));
+}
+
+GameSelection gameSelectionFromJson(const QString &value)
+{
+    const QJsonDocument document = QJsonDocument::fromJson(value.toUtf8());
+    if (!document.isObject()) {
+        return {};
+    }
+    return GameSelection::fromVariant(document.object().toVariantMap());
+}
+}
 
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
@@ -74,6 +95,22 @@ QString SessionManager::profilePath(const QString &name) const
     return profilesDir() + QStringLiteral("/") + name + QStringLiteral(".conf");
 }
 
+bool SessionManager::isValidProfileName(const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty() || trimmed != name || trimmed == QStringLiteral(".") || trimmed == QStringLiteral("..")) {
+        return false;
+    }
+    for (const QChar character : trimmed) {
+        if (character == QLatin1Char('/') || character == QLatin1Char('\\')
+            || character.unicode() < 0x20 || character.unicode() == 0x7f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
 void SessionManager::newSession()
 {
     m_currentProfile = SessionProfile();
@@ -88,6 +125,8 @@ void SessionManager::newSession()
     }
 
     Q_EMIT currentProfileChanged();
+    Q_EMIT preSessionExecutableChanged();
+    Q_EMIT postSessionExecutableChanged();
     Q_EMIT currentLayoutChanged();
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
@@ -104,6 +143,9 @@ void SessionManager::refreshProfiles()
     for (const QString &fileName : dir.entryList(filters, QDir::Files)) {
         QString name = fileName;
         name.chop(5); // Remove ".conf"
+        if (!isValidProfileName(name)) {
+            continue;
+        }
 
         SessionProfile profile;
         profile.name = name;
@@ -122,19 +164,21 @@ void SessionManager::refreshProfiles()
 
 bool SessionManager::saveProfile(const QString &name)
 {
-    if (name.isEmpty()) {
-        Q_EMIT errorOccurred(QStringLiteral("Profile name cannot be empty"));
+    const QString profileName = name.trimmed();
+    if (!isValidProfileName(profileName)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
         return false;
     }
 
-    QString path = profilePath(name);
+    const QString path = profilePath(profileName);
     KConfig config(path);
 
-    // General section
     KConfigGroup general = config.group(QStringLiteral("General"));
-    general.writeEntry("name", name);
+    general.writeEntry("name", profileName);
     general.writeEntry("layout", m_currentProfile.layout);
     general.writeEntry("gridSubLayout", m_currentProfile.gridSubLayout);
+    general.writeEntry("preSessionExecutable", m_currentProfile.preSessionExecutable);
+    general.writeEntry("postSessionExecutable", m_currentProfile.postSessionExecutable);
     general.writeEntry("instanceCount", m_currentProfile.instances.size());
 
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
@@ -150,20 +194,20 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("refreshRate", inst.refreshRate);
         instGroup.writeEntry("scalingMode", inst.scalingMode);
         instGroup.writeEntry("filterMode", inst.filterMode);
-        instGroup.writeEntry("gameCommand", inst.gameCommand);
-        instGroup.writeEntry("steamAppId", inst.steamAppId);
+        if (inst.gameSelection.isEmpty()) {
+            instGroup.deleteEntry("gameSelection");
+        } else {
+            instGroup.writeEntry("gameSelection", gameSelectionToJson(inst.gameSelection));
+        }
         instGroup.writeEntry("presetId", inst.presetId);
-        // Only persist a snapshot when one was taken: writing an empty
-        // dataDirectories key for an unsnapshotted instance would turn
-        // "use preset defaults" into "explicitly no directories" after a
-        // save/load round-trip
         if (inst.dataDirectoriesSnapshotted) {
-            // JSON so paths containing '|' or newlines round-trip intact
             instGroup.writeEntry("dataDirectories", encodeDataDirectories(inst.dataDirectories));
         } else {
             instGroup.deleteEntry("dataDirectories");
             instGroup.deleteEntry("sharedDirectories");
         }
+        instGroup.deleteEntry("gameCommand");
+        instGroup.deleteEntry("steamAppId");
         instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
         instGroup.writeEntry("overrideFiles", inst.overrideFiles);
         instGroup.writeEntry("overridePatterns", inst.overridePatterns);
@@ -174,7 +218,6 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("streamCodec", inst.streamCodec);
         instGroup.writeEntry("sunshinePort", inst.sunshinePort);
 
-        // Convert devices to string list for backwards compatibility
         QStringList deviceStrings;
         for (int dev : inst.devices) {
             deviceStrings << QString::number(dev);
@@ -186,18 +229,22 @@ bool SessionManager::saveProfile(const QString &name)
 
     config.sync();
 
-    m_currentProfile.name = name;
+    m_currentProfile.name = profileName;
     m_currentProfile.filePath = path;
 
     Q_EMIT currentProfileChanged();
     refreshProfiles();
-
     return true;
 }
 
 bool SessionManager::loadProfile(const QString &name)
 {
-    QString path = profilePath(name);
+    const QString profileName = name.trimmed();
+    if (!isValidProfileName(profileName)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
+        return false;
+    }
+    QString path = profilePath(profileName);
 
     if (!QFile::exists(path)) {
         Q_EMIT errorOccurred(QStringLiteral("Profile not found: %1").arg(name));
@@ -207,10 +254,12 @@ bool SessionManager::loadProfile(const QString &name)
     KConfig config(path);
 
     KConfigGroup general = config.group(QStringLiteral("General"));
-    m_currentProfile.name = name;
+    m_currentProfile.name = profileName;
     m_currentProfile.filePath = path;
     m_currentProfile.layout = general.readEntry("layout", QStringLiteral("horizontal"));
     m_currentProfile.gridSubLayout = general.readEntry("gridSubLayout", QString());
+    m_currentProfile.preSessionExecutable = general.readEntry("preSessionExecutable", QString());
+    m_currentProfile.postSessionExecutable = general.readEntry("postSessionExecutable", QString());
     int instanceCount = general.readEntry("instanceCount", 2);
 
     m_currentProfile.instances.clear();
@@ -227,9 +276,17 @@ bool SessionManager::loadProfile(const QString &name)
         inst.refreshRate = instGroup.readEntry("refreshRate", 60);
         inst.scalingMode = instGroup.readEntry("scalingMode", QStringLiteral("fit"));
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
-        inst.gameCommand = instGroup.readEntry("gameCommand", QString());
-        inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
+        if (instGroup.hasKey("gameSelection")) {
+            inst.gameSelection = gameSelectionFromJson(instGroup.readEntry("gameSelection", QString()));
+        } else {
+            const QString legacySteamAppId = instGroup.readEntry("steamAppId", QString());
+            if (inst.presetId == QStringLiteral("steam") && !legacySteamAppId.isEmpty()) {
+                inst.gameSelection.launcherId = QStringLiteral("steam");
+                inst.gameSelection.backend = QStringLiteral("native");
+                inst.gameSelection.gameId = legacySteamAppId;
+            }
+        }
         if (instGroup.hasKey("dataDirectories")) {
             // JSON (new) with legacy "path|mode" line fallback. The key's
             // presence marks a taken snapshot — an explicitly empty list stays
@@ -286,6 +343,8 @@ bool SessionManager::loadProfile(const QString &name)
     }
 
     Q_EMIT currentProfileChanged();
+    Q_EMIT preSessionExecutableChanged();
+    Q_EMIT postSessionExecutableChanged();
     Q_EMIT currentLayoutChanged();
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
@@ -310,7 +369,12 @@ bool SessionManager::loadProfile(const QString &name)
 
 bool SessionManager::deleteProfile(const QString &name)
 {
-    QString path = profilePath(name);
+    const QString profileName = name.trimmed();
+    if (!isValidProfileName(profileName)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
+        return false;
+    }
+    QString path = profilePath(profileName);
 
     if (!QFile::exists(path)) {
         Q_EMIT errorOccurred(QStringLiteral("Profile not found: %1").arg(name));
@@ -322,7 +386,7 @@ bool SessionManager::deleteProfile(const QString &name)
         return false;
     }
 
-    if (m_currentProfile.name == name) {
+    if (m_currentProfile.name == profileName) {
         m_currentProfile.name = QString();
         m_currentProfile.filePath = QString();
         Q_EMIT currentProfileChanged();
@@ -332,6 +396,92 @@ bool SessionManager::deleteProfile(const QString &name)
     return true;
 }
 
+QString SessionManager::duplicateProfile(const QString &sourceName)
+{
+    const QString sourceNameTrimmed = sourceName.trimmed();
+    if (!isValidProfileName(sourceNameTrimmed)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
+        return {};
+    }
+
+    const QString sourcePath = profilePath(sourceNameTrimmed);
+    const QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.isFile()) {
+        Q_EMIT errorOccurred(QStringLiteral("Profile not found: %1").arg(sourceNameTrimmed));
+        return {};
+    }
+
+    QString destinationName = sourceNameTrimmed + QStringLiteral(" Copy");
+    int copyNumber = 2;
+    while (QFile::exists(profilePath(destinationName))) {
+        destinationName = sourceNameTrimmed + QStringLiteral(" Copy %1").arg(copyNumber++);
+    }
+
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly)) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to read profile: %1").arg(sourceNameTrimmed));
+        return {};
+    }
+    const QByteArray contents = source.readAll();
+    source.close();
+
+    QTemporaryFile temporary(QDir(profilesDir()).filePath(QStringLiteral(".profile-copy-XXXXXX")));
+    temporary.setAutoRemove(true);
+    if (!temporary.open() || temporary.write(contents) != contents.size()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to prepare profile copy"));
+        return {};
+    }
+    temporary.close();
+
+    KConfig copiedConfig(temporary.fileName(), KConfig::SimpleConfig);
+    copiedConfig.group(QStringLiteral("General")).writeEntry("name", destinationName);
+    copiedConfig.sync();
+
+    QFile rewritten(temporary.fileName());
+    if (!rewritten.open(QIODevice::ReadOnly)) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to finalize profile copy"));
+        return {};
+    }
+    const QByteArray rewrittenContents = rewritten.readAll();
+    rewritten.close();
+
+    QSaveFile destination(profilePath(destinationName));
+    if (!destination.open(QIODevice::WriteOnly) || destination.write(rewrittenContents) != rewrittenContents.size()
+        || !destination.commit()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to write profile copy: %1").arg(destinationName));
+        return {};
+    }
+
+    refreshProfiles();
+    return destinationName;
+}
+
+
+void SessionManager::setPreSessionExecutable(const QString &path)
+{
+    const QString normalized = path.trimmed();
+    if (m_currentProfile.preSessionExecutable == normalized) {
+        return;
+    }
+    m_currentProfile.preSessionExecutable = normalized;
+    Q_EMIT preSessionExecutableChanged();
+    if (!m_currentProfile.name.isEmpty()) {
+        saveProfile(m_currentProfile.name);
+    }
+}
+
+void SessionManager::setPostSessionExecutable(const QString &path)
+{
+    const QString normalized = path.trimmed();
+    if (m_currentProfile.postSessionExecutable == normalized) {
+        return;
+    }
+    m_currentProfile.postSessionExecutable = normalized;
+    Q_EMIT postSessionExecutableChanged();
+    if (!m_currentProfile.name.isEmpty()) {
+        saveProfile(m_currentProfile.name);
+    }
+}
 void SessionManager::setCurrentLayout(const QString &layout)
 {
     if (m_currentProfile.layout != layout) {
@@ -395,8 +545,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("refreshRate")] = inst.refreshRate;
     map[QStringLiteral("scalingMode")] = inst.scalingMode;
     map[QStringLiteral("filterMode")] = inst.filterMode;
-    map[QStringLiteral("gameCommand")] = inst.gameCommand;
-    map[QStringLiteral("steamAppId")] = inst.steamAppId;
+    map[QStringLiteral("gameSelection")] = inst.gameSelectionAsVariant();
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
     QVariantList dataDirsVariant;
@@ -462,10 +611,9 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.scalingMode = config[QStringLiteral("scalingMode")].toString();
     if (config.contains(QStringLiteral("filterMode")))
         inst.filterMode = config[QStringLiteral("filterMode")].toString();
-    if (config.contains(QStringLiteral("gameCommand")))
-        inst.gameCommand = config[QStringLiteral("gameCommand")].toString();
-    if (config.contains(QStringLiteral("steamAppId")))
-        inst.steamAppId = config[QStringLiteral("steamAppId")].toString();
+    if (config.contains(QStringLiteral("gameSelection"))) {
+        inst.gameSelection = GameSelection::fromVariant(config.value(QStringLiteral("gameSelection")).toMap());
+    }
     if (config.contains(QStringLiteral("presetId")))
         inst.presetId = config[QStringLiteral("presetId")].toString();
     if (config.contains(QStringLiteral("overridePatterns")))
@@ -562,10 +710,10 @@ void SessionManager::setInstanceDeviceStableIds(int index, const QStringList &st
     }
 }
 
-void SessionManager::setInstanceGame(int index, const QString &gameCommand)
+void SessionManager::setInstanceGame(int index, const QVariantMap &selection)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].gameCommand = gameCommand;
+        m_currentProfile.instances[index].gameSelection = GameSelection::fromVariant(selection);
         Q_EMIT instancesChanged();
 
         if (!m_currentProfile.name.isEmpty()) {
@@ -577,7 +725,12 @@ void SessionManager::setInstanceGame(int index, const QString &gameCommand)
 void SessionManager::setInstancePreset(int index, const QString &presetId)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].presetId = presetId;
+        const QString normalizedPresetId = presetId.isEmpty() ? QStringLiteral("steam") : presetId;
+        m_currentProfile.instances[index].presetId = normalizedPresetId;
+        if (!m_currentProfile.instances[index].gameSelection.isEmpty() && m_presetManager
+            && m_currentProfile.instances[index].gameSelection.launcherId != m_presetManager->getLauncherId(normalizedPresetId)) {
+            m_currentProfile.instances[index].gameSelection = {};
+        }
         Q_EMIT instancesChanged();
 
         if (!m_currentProfile.name.isEmpty()) {

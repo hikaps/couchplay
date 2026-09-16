@@ -5,12 +5,14 @@
 
 #include <QList>
 #include <QMap>
+#include <QProcess>
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QRect>
 #include <QSet>
 #include <QString>
 #include <QVariantMap>
+#include "LaunchTypes.h"
 
 #include "../dbus/CouchPlayHelperClient.h"
 #include "HeroicConfigManager.h"
@@ -41,6 +43,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(bool running READ isRunning NOTIFY runningChanged)
     Q_PROPERTY(int runningInstanceCount READ runningInstanceCount NOTIFY runningInstanceCountChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(bool active READ isActive NOTIFY activeChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
 
     // Dependencies
@@ -80,6 +83,10 @@ public:
      * @brief Check if any instance is running
      */
     bool isRunning() const;
+    bool isActive() const
+    {
+        return m_active;
+    }
 
     /**
      * @brief Get the number of currently running instances
@@ -181,6 +188,8 @@ Q_SIGNALS:
     void heroicConfigManagerChanged();
     void settingsManagerChanged();
     void errorOccurred(const QString &message);
+    void activeChanged();
+    void sessionStartFailed(const QString &message);
     void sessionStarted();
     void sessionStopped();
     void instanceStarted(int index);
@@ -194,10 +203,18 @@ private Q_SLOTS:
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
     void startNextInstance();
+    void onHookFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onHookError(QProcess::ProcessError error);
 
 private:
     void setStatus(const QString &status);
     void cleanupInstances();
+    void continueStart();
+    void runHook(const QString &path, bool postHook);
+    void beginFinalization(bool startupFailure, const QString &message = QString());
+    void finishFinalization();
+    void setActive(bool active);
+    bool prepareLaunchCommands();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
     bool setupDataDirectories();
@@ -240,6 +257,16 @@ private:
     QList<GamescopeInstance *> m_instances;
     QAction *m_stopAction = nullptr;
     QString m_status;
+    bool m_active = false;
+    bool m_finalizing = false;
+    bool m_startupFailure = false;
+    bool m_preHookCompleted = false;
+    bool m_postHookArmed = false;
+    bool m_hookIsPost = false;
+    bool m_postHookStarted = false;
+    QString m_finalizationMessage;
+    QProcess *m_hookProcess = nullptr;
+    QList<LaunchCommand> m_launchCommands;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
 

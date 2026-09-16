@@ -5,21 +5,16 @@
 
 #include "SunshineConfig.h"
 #include "UserLookup.h"
+#include "../dbus/CouchPlayHelperClient.h"
 
-#include <QDBusConnection>
-#include <QDBusInterface>
-#include <QDBusReply>
 #include <QDebug>
 #include <QDir>
 #include <QSet>
 #include <QTimer>
 
-#include <unistd.h>
 #include <pwd.h>
+#include <unistd.h>
 
-static const QString s_helperService = QStringLiteral("io.github.hikaps.CouchPlayHelper");
-static const QString s_helperPath = QStringLiteral("/io/github/hikaps/CouchPlayHelper");
-static const QString s_helperInterface = QStringLiteral("io.github.hikaps.CouchPlayHelper");
 static const QString s_sunshineBinary = QStringLiteral("sunshine");
 static constexpr int RESTART_DELAY_MS = 2000;
 
@@ -36,6 +31,22 @@ uid_t StreamManager::resolveCompositorUid(const QString &username) const
 StreamManager::StreamManager(QObject *parent)
     : QObject(parent)
 {
+}
+
+void StreamManager::setHelperClient(CouchPlayHelperClient *helper)
+{
+    if (m_helperClient == helper) {
+        return;
+    }
+    if (m_helperClient) {
+        disconnect(m_helperClient, &CouchPlayHelperClient::instanceStopped, this,
+                   &StreamManager::onHelperInstanceStopped);
+    }
+    m_helperClient = helper;
+    if (m_helperClient) {
+        connect(m_helperClient, &CouchPlayHelperClient::instanceStopped, this,
+                &StreamManager::onHelperInstanceStopped);
+    }
 }
 
 StreamManager::~StreamManager()
@@ -129,10 +140,7 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     setStreamState(instanceIndex, Waiting);
     Q_EMIT streamsChanged();
 
-    QDBusInterface helper(s_helperService, s_helperPath, s_helperInterface,
-                          QDBusConnection::systemBus());
-
-    if (!helper.isValid()) {
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
         qWarning() << "StreamManager: helper service not available";
         setStreamState(instanceIndex, Error);
         Q_EMIT streamError(instanceIndex, QStringLiteral("CouchPlay Helper service is not available"));
@@ -142,39 +150,23 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
         return false;
     }
 
-    const QString gameCommand = s_sunshineBinary + QLatin1Char(' ') + configPath;
+    const QStringList gameCommand{ s_sunshineBinary, configPath };
     const uid_t compositorUid = resolveCompositorUid(username);
     const QStringList gamescopeArgs;
     const QStringList envVars;
     const QStringList bindPaths;
 
-    QDBusReply<qint64> reply = helper.call(
-        QStringLiteral("LaunchInstance"),
-        username,
-        static_cast<uint>(compositorUid),
-        gamescopeArgs,
-        gameCommand,
-        envVars,
-        bindPaths
-    );
-
-    if (!reply.isValid()) {
-        const QString errorMsg = reply.error().message();
-        qWarning() << "StreamManager: LaunchInstance failed:" << errorMsg;
-
+    const qint64 pid = m_helperClient->launchInstance(username,
+                                                       static_cast<uint>(compositorUid),
+                                                       gamescopeArgs,
+                                                       gameCommand,
+                                                       QString(),
+                                                       envVars,
+                                                       bindPaths);
+    if (pid <= 0) {
+        qWarning() << "StreamManager: LaunchInstance failed";
         setStreamState(instanceIndex, Error);
-        Q_EMIT streamError(instanceIndex, QStringLiteral("Failed to launch Sunshine: %1").arg(errorMsg));
-        cleanupConfigDir(instanceIndex);
-        m_streams.remove(instanceIndex);
-        Q_EMIT streamsChanged();
-        return false;
-    }
-
-    const qint64 pid = reply.value();
-    if (pid == 0) {
-        qWarning() << "StreamManager: helper returned PID 0";
-        setStreamState(instanceIndex, Error);
-        Q_EMIT streamError(instanceIndex, QStringLiteral("Helper returned invalid PID"));
+        Q_EMIT streamError(instanceIndex, QStringLiteral("Failed to launch Sunshine"));
         cleanupConfigDir(instanceIndex);
         m_streams.remove(instanceIndex);
         Q_EMIT streamsChanged();
@@ -182,13 +174,6 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     }
 
     m_streams[instanceIndex].pid = pid;
-    setStreamState(instanceIndex, Waiting);
-
-    QDBusConnection::systemBus().connect(
-        s_helperService, s_helperPath, s_helperInterface,
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-    );
 
     QTimer *timer = new QTimer(this);
     timer->setSingleShot(true);
@@ -228,14 +213,10 @@ bool StreamManager::stopStream(int instanceIndex)
         return true;
     }
 
-    QDBusInterface helper(s_helperService, s_helperPath, s_helperInterface,
-                          QDBusConnection::systemBus());
-
-    if (helper.isValid()) {
-        QDBusReply<bool> reply = helper.call(QStringLiteral("StopInstance"), entry.pid);
-        if (!reply.isValid() || !reply.value()) {
+    if (m_helperClient) {
+        if (!m_helperClient->stopInstance(entry.pid)) {
             qWarning() << "StreamManager: StopInstance failed for PID" << entry.pid << ", trying KillInstance";
-            helper.call(QStringLiteral("KillInstance"), entry.pid);
+            m_helperClient->killInstance(entry.pid);
         }
     }
 
@@ -421,10 +402,7 @@ void StreamManager::attemptRestart(int instanceIndex)
 
     entry.configDir = configDir;
 
-    QDBusInterface helper(s_helperService, s_helperPath, s_helperInterface,
-                          QDBusConnection::systemBus());
-
-    if (!helper.isValid()) {
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
         qWarning() << "StreamManager: restart failed — helper not available for instance" << instanceIndex;
         setStreamState(instanceIndex, Error);
         Q_EMIT streamError(instanceIndex, QStringLiteral("Auto-restart failed: helper service not available"));
@@ -434,26 +412,21 @@ void StreamManager::attemptRestart(int instanceIndex)
         return;
     }
 
-    const QString gameCommand = s_sunshineBinary + QLatin1Char(' ') + configPath;
+    const QStringList gameCommand{ s_sunshineBinary, configPath };
     const uid_t compositorUid = resolveCompositorUid(entry.username);
     const QStringList gamescopeArgs;
     const QStringList envVars;
     const QStringList bindPaths;
 
-    QDBusReply<qint64> reply = helper.call(
-        QStringLiteral("LaunchInstance"),
-        entry.username,
-        static_cast<uint>(compositorUid),
-        gamescopeArgs,
-        gameCommand,
-        envVars,
-        bindPaths
-    );
-
-    if (!reply.isValid() || reply.value() <= 0) {
-        const QString detail = reply.isValid()
-            ? QStringLiteral("invalid PID returned")
-            : reply.error().message();
+    const qint64 pid = m_helperClient->launchInstance(entry.username,
+                                                       static_cast<uint>(compositorUid),
+                                                       gamescopeArgs,
+                                                       gameCommand,
+                                                       QString(),
+                                                       envVars,
+                                                       bindPaths);
+    if (pid <= 0) {
+        const QString detail = QStringLiteral("helper launch failed");
         qWarning() << "StreamManager: restart LaunchInstance failed for instance" << instanceIndex << ":" << detail;
 
         if (entry.restartAttempts >= StreamEntry::MAX_RESTART_ATTEMPTS) {
@@ -481,14 +454,8 @@ void StreamManager::attemptRestart(int instanceIndex)
         return;
     }
 
-    entry.pid = reply.value();
+    entry.pid = pid;
     setStreamState(instanceIndex, Waiting);
-
-    QDBusConnection::systemBus().connect(
-        s_helperService, s_helperPath, s_helperInterface,
-        QStringLiteral("instanceStopped"),
-        this, SLOT(onHelperInstanceStopped(QString, qint64, QString))
-    );
 
     QTimer *timer = new QTimer(this);
     timer->setSingleShot(true);

@@ -240,7 +240,8 @@ QString CouchPlayHelperClient::getUserSteamRoot(const QString &username)
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              uint compositorUid,
                                              const QStringList &gamescopeArgs,
-                                             const QString &gameCommand,
+                                             const QStringList &gameCommand,
+                                             const QString &workingDirectory,
                                              const QStringList &environment,
                                              const QStringList &bindPaths)
 {
@@ -254,11 +255,19 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                                  compositorUid,
                                                  gamescopeArgs,
                                                  gameCommand,
+                                                 workingDirectory,
                                                  environment,
                                                  bindPaths);
 
     if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
+        const QString errorText = reply.error().message();
+        if (reply.error().name() == QStringLiteral("org.freedesktop.DBus.Error.UnknownMethod")
+            || (reply.error().name() == QStringLiteral("org.freedesktop.DBus.Error.InvalidArgs")
+                && errorText.contains(QStringLiteral("signature"), Qt::CaseInsensitive))) {
+            Q_EMIT errorOccurred(QStringLiteral("CouchPlay Helper is outdated; reinstall the helper"));
+        } else {
+            Q_EMIT errorOccurred(errorText);
+        }
         return 0;
     }
 

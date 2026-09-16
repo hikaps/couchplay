@@ -101,6 +101,16 @@ Kirigami.ScrollablePage {
                         }
                     }
 
+                    onDuplicateProfile: {
+                        if (modelData && sessionManager) {
+                            const copyName = sessionManager.duplicateProfile(modelData.name)
+                            if (copyName) {
+                                applicationWindow().showPassiveNotification(
+                                    i18nc("@info", "Duplicated profile: %1", copyName))
+                            }
+                        }
+                    }
+
                     onDeleteProfile: {
                         if (modelData) {
                             deleteDialog.profileName = modelData.name
@@ -141,6 +151,7 @@ Kirigami.ScrollablePage {
         property bool isCurrentProfile: false
 
         signal loadProfile()
+        signal duplicateProfile()
         signal launchProfile()
         signal deleteProfile()
 
@@ -250,6 +261,17 @@ Kirigami.ScrollablePage {
                     onClicked: profileCard.launchProfile()
                 }
 
+
+                Controls.Button {
+                    objectName: "btnDuplicateProfile"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Duplicate")
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Duplicate")
+                    icon.name: "edit-copy"
+                    flat: true
+                    onClicked: profileCard.duplicateProfile()
+                }
                 Controls.Button {
                     objectName: "btnEditProfile"
                     Accessible.role: Accessible.Button

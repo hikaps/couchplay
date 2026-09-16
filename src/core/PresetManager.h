@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QString>
+#include "LaunchTypes.h"
 #include <QList>
 #include <QStringList>
 #include <QVariantList>
@@ -146,6 +147,8 @@ public:
     static QString defaultSteamCommand();
     Q_INVOKABLE QString getWorkingDirectory(const QString &id) const;
     Q_INVOKABLE QString getLauncherId(const QString &id) const;
+    Q_INVOKABLE QVariantList gamesForPreset(const QString &id) const;
+    LaunchCommand buildLaunchCommand(const QString &id, const GameSelection &selection) const;
 
     /**
      * @brief Get data directories for a preset
@@ -160,7 +163,7 @@ public:
      * document-portal paths that the privileged host helper cannot resolve;
      * this maps those paths through the Documents portal before persistence.
      */
-    Q_INVOKABLE QString resolveDirectoryPath(const QString &path) const;
+    Q_INVOKABLE QString resolveHostPath(const QString &path) const;
 
     /**
      * @brief Set data directories for a preset and persist

@@ -98,7 +98,7 @@ Kirigami.Dialog {
                         elide: Text.ElideMiddle
                     }
 
-                    Kirigami.ComboBox {
+                    Controls.ComboBox {
                         model: [
                             { value: "acl", text: i18nc("@item:inlistbox", "Shared (ACL)") },
                             { value: "copy", text: i18nc("@item:inlistbox", "Copy files") },
@@ -150,7 +150,7 @@ Kirigami.Dialog {
             let path = selectedFolder.toString()
             if (path.startsWith("file://")) path = path.substring(7)
             path = decodeURIComponent(path)
-            const resolvedPath = root.presetManager.resolveDirectoryPath(path)
+            const resolvedPath = root.presetManager.resolveHostPath(path)
             if (resolvedPath === "") {
                 applicationWindow().showPassiveNotification(
                     i18nc("@info", "Could not resolve the selected directory for the host helper"), "long")

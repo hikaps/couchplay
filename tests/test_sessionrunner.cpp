@@ -84,6 +84,38 @@ public:
         m_available = true;
     }
 
+    QList<QStringList> launchCommands;
+    qint64 nextPid = 1000;
+    qint64 launchInstance(const QString &username,
+                          uint compositorUid,
+                          const QStringList &gamescopeArgs,
+                          const QStringList &gameCommand,
+                          const QString &workingDirectory,
+                          const QStringList &environment,
+                          const QStringList &bindPaths) override
+    {
+        Q_UNUSED(username)
+        Q_UNUSED(compositorUid)
+        Q_UNUSED(gamescopeArgs)
+        Q_UNUSED(workingDirectory)
+        Q_UNUSED(environment)
+        Q_UNUSED(bindPaths)
+        launchCommands.append(gameCommand);
+        return nextPid++;
+    }
+
+    bool stopInstance(qint64 pid) override
+    {
+        Q_UNUSED(pid)
+        return true;
+    }
+
+    bool killInstance(qint64 pid) override
+    {
+        Q_UNUSED(pid)
+        return true;
+    }
+
     bool setPathAclWithParents(const QString &path, const QString &username) override
     {
         aclCalls.append({path, username});
@@ -218,6 +250,8 @@ private Q_SLOTS:
     void testNaturalExitTearsDownSharingState();
     void testFinalizeDataDirResolvesIdentityViaHelper();
     void testResolveCompositorHomeViaHelper();
+    void testPreSessionFailurePreventsLaunch();
+    void testPostSessionRunsOnceAfterStop();
 
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -768,6 +802,46 @@ void TestSessionRunner::testNaturalExitTearsDownSharingState()
     QVERIFY(m_runner->m_sharedStateActive);
     m_runner->stop();
     QCOMPARE(m_helperClient->unmountAllCalls, 2);
+}
+
+void TestSessionRunner::testPreSessionFailurePreventsLaunch()
+{
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setPreSessionExecutable(QStringLiteral("/usr/bin/false"));
+    QSignalSpy failureSpy(m_runner, &SessionRunner::sessionStartFailed);
+
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(failureSpy.count(), 1, 2000);
+    QCOMPARE(m_helperClient->launchCommands.size(), 0);
+    QVERIFY(!m_runner->isActive());
+}
+
+void TestSessionRunner::testPostSessionRunsOnceAfterStop()
+{
+    QTemporaryDir scriptDir;
+    QVERIFY(scriptDir.isValid());
+    const QString markerPath = scriptDir.filePath(QStringLiteral("post.log"));
+    const QString scriptPath = scriptDir.filePath(QStringLiteral("post.sh"));
+    QFile script(scriptPath);
+    QVERIFY(script.open(QIODevice::WriteOnly | QIODevice::Text));
+    script.write("#!/bin/sh\necho post >> \"" + markerPath.toUtf8() + "\"\n");
+    script.close();
+    QVERIFY(script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setPostSessionExecutable(scriptPath);
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+
+    QVERIFY(m_runner->start());
+    QVERIFY(m_runner->isActive());
+    QCOMPARE(m_helperClient->launchCommands.size(), 2);
+    m_runner->stop();
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 2000);
+    QVERIFY(!m_runner->isActive());
+
+    QFile marker(markerPath);
+    QVERIFY(marker.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(marker.readAll(), QByteArray("post\n"));
 }
 
 void TestSessionRunner::testResolveCompositorHomeViaHelper()

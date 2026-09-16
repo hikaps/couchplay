@@ -23,6 +23,7 @@ target_link_libraries(couchplay_core PUBLIC
     KF6::ConfigCore
     KF6::ConfigGui
     KF6::IconThemes
+    KF6::DBusAddons
     KF6::GlobalAccel
 )
 
@@ -55,6 +56,7 @@ ecm_add_qml_module(couchplay
         qml/pages/DeviceAssignmentPage.qml
         qml/pages/ProfilesPage.qml
         qml/pages/UsersPage.qml
+        qml/components/GameSelector.qml
         qml/pages/SettingsPage.qml
         qml/components/PresetSelector.qml
         qml/components/SelectableCard.qml
@@ -74,7 +76,11 @@ target_sources(couchplay PRIVATE
     core/DeviceManager.cpp
     core/DeviceManager.h
     core/SessionManager.cpp
+    core/CommandLineOptions.cpp
+    core/CommandLineOptions.h
+    core/CommandLineBridge.h
     core/SessionManager.h
+    core/LaunchTypes.h
     core/SessionRunner.cpp
     core/SessionRunner.h
     core/GamescopeInstance.cpp

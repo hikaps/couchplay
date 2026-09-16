@@ -148,16 +148,16 @@ class MockHelper(dbus.service.Object):
     def ResetAllDevices(self):
         return 0
 
-    # NOTE: signature must match helper/CouchPlayHelper.h LaunchInstance —
-    # 6 args: username(s) compositorUid(u) gamescopeArgs(as) gameCommand(s)
-    # environment(as) bindPaths(as) -> pid(x).
+    # LaunchInstance mirrors helper/CouchPlayHelper.h: username(s),
+    # compositorUid(u), gamescopeArgs(as), gameCommand(as), workingDirectory(s),
+    # environment(as), bindPaths(as) -> pid(x).
     @dbus.service.method(
         INTERFACE_NAME,
-        in_signature="suassasas",
+        in_signature="suasassasas",
         out_signature="x",
     )
     def LaunchInstance(
-        self, username, compositorUid, gamescopeArgs, gameCommand, environment, bindPaths
+        self, username, compositorUid, gamescopeArgs, gameCommand, workingDirectory, environment, bindPaths
     ):
         pid = self._next_pid
         self._next_pid += 1
@@ -167,7 +167,8 @@ class MockHelper(dbus.service.Object):
             username=str(username),
             compositorUid=int(compositorUid),
             gamescopeArgs=[str(a) for a in gamescopeArgs],
-            gameCommand=str(gameCommand),
+            gameCommand=[str(a) for a in gameCommand],
+            workingDirectory=str(workingDirectory),
             environment=[str(e) for e in environment],
             bindPaths=[str(b) for b in bindPaths],
         )

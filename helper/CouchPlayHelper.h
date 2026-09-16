@@ -204,7 +204,8 @@ public Q_SLOTS:
      * @param username User to run as
      * @param compositorUid UID of compositor user (for runtime access setup)
      * @param gamescopeArgs Gamescope command-line arguments
-     * @param gameCommand Command to run inside gamescope (e.g., "steam -bigpicture")
+     * @param gameCommand Structured child command: executable followed by arguments
+     * @param workingDirectory Optional absolute working directory
      * @param environment Additional environment variables (VAR=value format)
      * @param bindPaths Paths to bind-mount into the unit via --property=BindPaths=
      * @return MainPID of launched process, or 0 on failure
@@ -212,7 +213,8 @@ public Q_SLOTS:
     qint64 LaunchInstance(const QString &username,
                           uint compositorUid,
                           const QStringList &gamescopeArgs,
-                          const QString &gameCommand,
+                          const QStringList &gameCommand,
+                          const QString &workingDirectory,
                           const QStringList &environment,
                           const QStringList &bindPaths);
 
@@ -492,7 +494,8 @@ private:
     qint64 startTransientUnit(const QString &username,
                               uint compositorUid,
                               const QStringList &gamescopeArgs,
-                              const QString &gameCommand,
+                              const QStringList &gameCommand,
+                              const QString &workingDirectory,
                               const QStringList &environment,
                               const QStringList &bindPaths);
     void stopServiceInstance(const QString &serviceName);

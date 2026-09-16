@@ -35,6 +35,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       kf6-kirigami-devel kf6-ki18n-devel kf6-kcoreaddons-devel kf6-kconfig-devel \
       kf6-kiconthemes-devel kf6-qqc2-desktop-style kf6-kglobalaccel-devel \
       kf6-kwindowsystem-devel kwayland-devel kpipewire-devel \
+      kf6-kdbusaddons-devel \
       plasma-wayland-protocols-devel pipewire-devel polkit-devel \
       polkit-qt6-1-devel dbus-daemon \
  && dnf clean all

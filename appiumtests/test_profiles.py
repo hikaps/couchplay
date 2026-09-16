@@ -3,6 +3,7 @@
 
 from appium.webdriver.common.appiumby import AppiumBy
 from helpers.base_test import BaseTest
+import uuid
 
 
 class TestProfiles(BaseTest):
@@ -26,3 +27,16 @@ class TestProfiles(BaseTest):
         self.click_by_name(driver, "New Profile")
         title = self.wait_for_element(driver, AppiumBy.NAME, "New Session")
         assert title.is_displayed()
+
+    def test_duplicate_profile_creates_copy(self, driver):
+        profile_name = "Automation Profile " + uuid.uuid4().hex[:8]
+        self.navigate_to_session_setup(driver)
+        self.click_by_name(driver, "Save Profile")
+        field = self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "fieldProfileName")
+        field.send_keys(profile_name)
+        self.click_by_name(driver, "Save")
+
+        self.navigate_to_profiles(driver)
+        self.wait_for_element(driver, AppiumBy.NAME, profile_name)
+        self.click_by_object_name(driver, "btnDuplicateProfile")
+        self.wait_for_element(driver, AppiumBy.NAME, profile_name + " Copy")

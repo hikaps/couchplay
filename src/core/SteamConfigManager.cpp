@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SteamConfigManager.h"
+#include <algorithm>
 #include "PresetManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
@@ -13,6 +14,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
+#include <utility>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 #include <KConfigGroup>
@@ -230,6 +233,101 @@ void SteamConfigManager::loadShortcuts()
     qCDebug(couchplaySteam) << "Loaded" << m_shortcuts.size() << "shortcuts from" << sourceFile;
 
     Q_EMIT shortcutsLoaded();
+}
+
+QList<SteamGame> SteamConfigManager::parseInstalledGames() const
+{
+    QList<SteamGame> games;
+    static const QRegularExpression appIdPattern(QStringLiteral("\"appid\"\\s+\"(\\d+)\""));
+    static const QRegularExpression namePattern(QStringLiteral("\"name\"\\s+\"([^\"]*)\""));
+    static const QRegularExpression installDirPattern(QStringLiteral("\"installdir\"\\s+\"([^\"]*)\""));
+
+    for (const SteamLibraryFolder &library : m_libraries) {
+        for (const quint32 appId : library.appIds) {
+            if (appId == 0) {
+                continue;
+            }
+            const QString manifestPath = QDir(library.path).filePath(
+                QStringLiteral("steamapps/appmanifest_%1.acf").arg(appId));
+            QFile manifest(manifestPath);
+            if (!manifest.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                continue;
+            }
+            const QString content = QString::fromUtf8(manifest.readAll());
+            manifest.close();
+
+            const auto appIdMatch = appIdPattern.match(content);
+            const auto nameMatch = namePattern.match(content);
+            const auto installDirMatch = installDirPattern.match(content);
+            if (!appIdMatch.hasMatch() || !nameMatch.hasMatch() || !installDirMatch.hasMatch()) {
+                continue;
+            }
+            bool ok = false;
+            const quint32 parsedId = appIdMatch.captured(1).toUInt(&ok);
+            if (!ok || parsedId == 0 || parsedId != appId) {
+                continue;
+            }
+
+            SteamGame game;
+            game.id = QString::number(parsedId);
+            game.title = nameMatch.captured(1);
+            game.installPath = QDir(library.path).filePath(
+                QStringLiteral("steamapps/common/%1").arg(installDirMatch.captured(1)));
+            game.source = QStringLiteral("native");
+            games.append(game);
+        }
+    }
+    return games;
+}
+
+void SteamConfigManager::loadGames()
+{
+    m_games.clear();
+    if (!m_steamPaths.valid) {
+        Q_EMIT gamesLoaded();
+        return;
+    }
+
+    loadLibraryFolders();
+    loadShortcuts();
+    m_games = parseInstalledGames();
+
+    QSet<QString> keys;
+    for (const SteamShortcut &shortcut : std::as_const(m_shortcuts)) {
+        if (shortcut.appId == 0 || shortcut.appName.isEmpty()) {
+            continue;
+        }
+        const quint64 shortcutId = (static_cast<quint64>(shortcut.appId) << 32) | 0x02000000ULL;
+        SteamGame game;
+        game.id = QString::number(shortcutId);
+        game.title = shortcut.appName;
+        game.installPath = shortcut.startDir;
+        game.source = QStringLiteral("shortcut");
+        const QString key = game.source + QLatin1Char(':') + game.id;
+        if (!keys.contains(key)) {
+            keys.insert(key);
+            m_games.append(game);
+        }
+    }
+
+    std::sort(m_games.begin(), m_games.end(), [](const SteamGame &left, const SteamGame &right) {
+        return QString::compare(left.title, right.title, Qt::CaseInsensitive) < 0;
+    });
+    Q_EMIT gamesLoaded();
+}
+
+QVariantList SteamConfigManager::gamesAsVariant() const
+{
+    QVariantList list;
+    for (const SteamGame &game : m_games) {
+        list.append(QVariantMap{{QStringLiteral("launcherId"), QStringLiteral("steam")},
+                                {QStringLiteral("backend"), game.source},
+                                {QStringLiteral("gameId"), game.id},
+                                {QStringLiteral("title"), game.title},
+                                {QStringLiteral("installPath"), game.installPath},
+                                {QStringLiteral("source"), game.source}});
+    }
+    return list;
 }
 
 QVariantList SteamConfigManager::shortcutsAsVariant() const

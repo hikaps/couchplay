@@ -1305,11 +1305,21 @@ bool CouchPlayHelper::isValidDevicePath(const QString &path)
 qint64 CouchPlayHelper::LaunchInstance(const QString &username,
                                        uint compositorUid,
                                        const QStringList &gamescopeArgs,
-                                       const QString &gameCommand,
+                                       const QStringList &gameCommand,
+                                       const QString &workingDirectory,
                                        const QStringList &environment,
                                        const QStringList &bindPaths)
 {
     if (!validateUserAndAuth(username, ACTION_LAUNCH_INSTANCE)) {
+        return 0;
+    }
+    if (gameCommand.isEmpty() || gameCommand.constFirst().isEmpty()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Child launch command cannot be empty"));
+        return 0;
+    }
+    if (!workingDirectory.isEmpty()
+        && (!QDir::isAbsolutePath(workingDirectory) || !m_ops->fileExists(workingDirectory))) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Working directory must be an existing absolute path"));
         return 0;
     }
 
@@ -1326,7 +1336,13 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username,
         }
     }
 
-    qint64 pid = startTransientUnit(username, compositorUid, gamescopeArgs, gameCommand, environment, bindPaths);
+    const qint64 pid = startTransientUnit(username,
+                                          compositorUid,
+                                          gamescopeArgs,
+                                          gameCommand,
+                                          workingDirectory,
+                                          environment,
+                                          bindPaths);
     if (pid <= 0) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to launch instance for user '%1'").arg(username));
         return 0;
@@ -1421,7 +1437,8 @@ QString CouchPlayHelper::generateServiceName(const QString &username)
 qint64 CouchPlayHelper::startTransientUnit(const QString &username,
                                            uint compositorUid,
                                            const QStringList &gamescopeArgs,
-                                           const QString &gameCommand,
+                                           const QStringList &gameCommand,
+                                           const QString &workingDirectory,
                                            const QStringList &environment,
                                            const QStringList &bindPaths)
 {
@@ -1450,6 +1467,9 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username,
     systemdRunArgs << QStringLiteral("--property=Type=simple");
     systemdRunArgs << QStringLiteral("--property=Delegate=yes");
     systemdRunArgs << QStringLiteral("--property=MemoryDenyWriteExecute=false");
+    if (!workingDirectory.isEmpty()) {
+        systemdRunArgs << QStringLiteral("--property=WorkingDirectory=%1").arg(workingDirectory);
+    }
 
     // -E flag avoids escaping issues with --property=Environment=
     auto addEnv = [&](const QString &assignment) {
@@ -1493,7 +1513,7 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username,
 
     QStringList cmdArgs;
     cmdArgs << gamescopePath << gamescopeArgs;
-    cmdArgs << QStringLiteral("--") << QStringLiteral("/bin/bash") << QStringLiteral("-c") << gameCommand;
+    cmdArgs << QStringLiteral("--") << gameCommand;
     systemdRunArgs << QStringLiteral("--") << cmdArgs;
 
     QProcess *proc = m_ops->createProcess();
