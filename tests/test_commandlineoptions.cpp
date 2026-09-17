@@ -43,6 +43,15 @@ private Q_SLOTS:
         QVERIFY(request.start);
     }
 
+    void testShortProfileOption()
+    {
+        QString error;
+        const CommandLineRequest request = CommandLineOptions::parse(
+            {QStringLiteral("couchplay"), QStringLiteral("-p"), QStringLiteral("Short")}, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(request.profileName, QStringLiteral("Short"));
+    }
+
     void testInvalidCombinations()
     {
         QString error;

@@ -23,6 +23,10 @@ Controls.ComboBox {
         target: root.heroicConfigManager
         function onGamesLoaded() { root.catalogRevision++ }
     }
+    Connections {
+        target: root.sessionManager
+        function onInstancesChanged() { root.catalogRevision++ }
+    }
     required property int instanceIndex
     property int catalogRevision: 0
 

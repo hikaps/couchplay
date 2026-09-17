@@ -459,7 +459,7 @@ QString SessionManager::duplicateProfile(const QString &sourceName)
 
 void SessionManager::setPreSessionExecutable(const QString &path)
 {
-    const QString normalized = path.trimmed();
+    const QString normalized = path;
     if (m_currentProfile.preSessionExecutable == normalized) {
         return;
     }
@@ -472,7 +472,7 @@ void SessionManager::setPreSessionExecutable(const QString &path)
 
 void SessionManager::setPostSessionExecutable(const QString &path)
 {
-    const QString normalized = path.trimmed();
+    const QString normalized = path;
     if (m_currentProfile.postSessionExecutable == normalized) {
         return;
     }

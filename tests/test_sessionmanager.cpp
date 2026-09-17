@@ -80,6 +80,7 @@ private Q_SLOTS:
     void testSavedProfiles();
     void testRefreshProfiles();
     void testProfileHooksAndGameSelectionRoundtrip();
+    void testProfileHookPathsPreserveWhitespace();
     void testDuplicateProfilePreservesData();
     void testProfileNameValidation();
 
@@ -647,6 +648,16 @@ void TestSessionManager::testProfileHooksAndGameSelectionRoundtrip()
     QCOMPARE(selection.value(QStringLiteral("backend")).toString(), QStringLiteral("legendary"));
     QCOMPARE(selection.value(QStringLiteral("gameId")).toString(), QStringLiteral("EpicGame"));
     m_sessionManager->deleteProfile(QStringLiteral("HookRoundtrip"));
+}
+
+void TestSessionManager::testProfileHookPathsPreserveWhitespace()
+{
+    const QString prePath = QStringLiteral(" /tmp/pre-session ");
+    const QString postPath = QStringLiteral(" /tmp/post-session ");
+    m_sessionManager->setPreSessionExecutable(prePath);
+    m_sessionManager->setPostSessionExecutable(postPath);
+    QCOMPARE(m_sessionManager->preSessionExecutable(), prePath);
+    QCOMPARE(m_sessionManager->postSessionExecutable(), postPath);
 }
 
 void TestSessionManager::testDuplicateProfilePreservesData()

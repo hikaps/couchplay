@@ -149,8 +149,9 @@ int main(int argc, char *argv[])
                          if (!request.requested()) {
                              return;
                          }
+                         commandLineBridge.setRequestAccepted(false);
                          Q_EMIT commandLineBridge.launchRequested(request.profileName, request.start, request.exitAfterSession);
-                         service.setExitValue(0);
+                         service.setExitValue(commandLineBridge.requestAccepted() ? 0 : 2);
                      },
                      Qt::DirectConnection);
 

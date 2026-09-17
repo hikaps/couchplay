@@ -22,7 +22,7 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
     }
     for (; index < arguments.size(); ++index) {
         const QString argument = arguments.at(index);
-        if (argument == QStringLiteral("--profile")) {
+        if (argument == QStringLiteral("--profile") || argument == QStringLiteral("-p")) {
             if (!request.profileName.isEmpty() || index + 1 >= arguments.size()
                 || arguments.at(index + 1).startsWith(QLatin1Char('-'))) {
                 fail(QStringLiteral("--profile requires exactly one profile name"));

@@ -63,7 +63,7 @@ Kirigami.ApplicationWindow {
     Connections {
         target: commandLineBridge
         function onLaunchRequested(profileName, start, exitAfterSession) {
-            root.handleLaunchRequest(profileName, start, exitAfterSession)
+            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession))
         }
     }
 

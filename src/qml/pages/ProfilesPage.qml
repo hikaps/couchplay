@@ -93,6 +93,11 @@ Kirigami.ScrollablePage {
                     }
 
                     onLaunchProfile: {
+                        if (sessionRunner?.active) {
+                            applicationWindow().showPassiveNotification(
+                                i18nc("@info", "Stop the active session before launching another profile"))
+                            return
+                        }
                         if (modelData && sessionManager?.loadProfile(modelData.name)) {
                             if (sessionRunner?.start()) {
                                 applicationWindow().showPassiveNotification(
