@@ -126,6 +126,7 @@ void SessionRunner::runHook(const QString &path, bool postHook)
         const QString message = QStringLiteral("%1-session script is not executable: %2")
             .arg(postHook ? QStringLiteral("Post") : QStringLiteral("Pre"), path);
         if (postHook) {
+            Q_EMIT errorOccurred(message);
             finishFinalization();
         } else {
             beginFinalization(true, message);

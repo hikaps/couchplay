@@ -253,6 +253,7 @@ private Q_SLOTS:
     void testResolveCompositorHomeViaHelper();
     void testPreSessionFailurePreventsLaunch();
     void testPreHookUsesStartingProfileSnapshot();
+    void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
 
 private:
@@ -865,6 +866,20 @@ void TestSessionRunner::testPreHookUsesStartingProfileSnapshot()
     QVERIFY(originalMarkerFile.open(QIODevice::ReadOnly | QIODevice::Text));
     QCOMPARE(originalMarkerFile.readAll(), QByteArray("original\n"));
     QVERIFY(!QFile::exists(changedMarker));
+}
+
+void TestSessionRunner::testInvalidPostSessionReportsError()
+{
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setPostSessionExecutable(QStringLiteral("relative/post.sh"));
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+
+    QVERIFY(m_runner->start());
+    m_runner->stop();
+    QTRY_VERIFY_WITH_TIMEOUT(!errorSpy.isEmpty(), 2000);
+    QVERIFY(errorSpy.first().at(0).toString().contains(QStringLiteral("Post-session script is not executable")));
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 2000);
 }
 
 void TestSessionRunner::testPostSessionRunsOnceAfterStop()
