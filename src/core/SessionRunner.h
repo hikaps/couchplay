@@ -13,6 +13,7 @@
 #include <QString>
 #include <QVariantMap>
 #include "LaunchTypes.h"
+#include "SessionManager.h"
 
 #include "../dbus/CouchPlayHelperClient.h"
 #include "HeroicConfigManager.h"
@@ -214,6 +215,7 @@ private:
     void beginFinalization(bool startupFailure, const QString &message = QString());
     void finishFinalization();
     void setActive(bool active);
+    const SessionProfile &activeProfile() const;
     bool prepareLaunchCommands();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
@@ -246,6 +248,8 @@ private:
     QList<qint64> getGamescopePids() const;
 
     SessionManager *m_sessionManager = nullptr;
+    SessionProfile m_startingProfile;
+    bool m_hasStartingProfile = false;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
     PresetManager *m_presetManager = nullptr;

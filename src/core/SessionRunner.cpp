@@ -103,6 +103,11 @@ void SessionRunner::setActive(bool active)
     m_active = active;
     Q_EMIT activeChanged();
 }
+const SessionProfile &SessionRunner::activeProfile() const
+{
+    return m_hasStartingProfile ? m_startingProfile : m_sessionManager->currentProfile();
+}
+
 
 void SessionRunner::runHook(const QString &path, bool postHook)
 {
@@ -292,7 +297,7 @@ bool SessionRunner::start()
     m_finalizationMessage.clear();
     m_launchCommands.clear();
 
-    const SessionProfile &profile = m_sessionManager->currentProfile();
+    const SessionProfile profile = m_sessionManager->currentProfile();
     const int instanceCount = profile.instances.size();
     if (instanceCount < 1) {
         Q_EMIT errorOccurred(QStringLiteral("No instances configured"));
@@ -359,6 +364,8 @@ bool SessionRunner::start()
         }
         m_launchCommands.append(command);
     }
+    m_startingProfile = profile;
+    m_hasStartingProfile = true;
 
     setActive(true);
     setStatus(QStringLiteral("Starting session..."));
@@ -378,7 +385,7 @@ void SessionRunner::continueStart()
         return;
     }
 
-    const SessionProfile &profile = m_sessionManager->currentProfile();
+    const SessionProfile &profile = activeProfile();
     const int instanceCount = profile.instances.size();
     m_postHookArmed = true;
     inhibitScreenSaver();
@@ -540,7 +547,7 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
 
     QStringList overridePaths;
     if (m_sessionManager) {
-        const auto &profile = m_sessionManager->currentProfile();
+        const auto &profile = activeProfile();
         for (const auto &instConfig : profile.instances) {
             if (instConfig.overridePatterns.isEmpty() || instConfig.overrideGamePath.isEmpty()) {
                 continue;
@@ -568,7 +575,7 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
     cleanupInstances();
     cleanupOverrideDirs(overridePaths);
 
-    const QString postHook = m_sessionManager ? m_sessionManager->currentProfile().postSessionExecutable : QString();
+    const QString postHook = m_sessionManager ? activeProfile().postSessionExecutable : QString();
     if (m_postHookArmed && m_preHookCompleted && !postHook.isEmpty()) {
         m_postHookStarted = true;
         runHook(postHook, true);
@@ -604,6 +611,8 @@ void SessionRunner::finishFinalization()
     m_postHookStarted = false;
     m_hookIsPost = false;
     m_finalizationMessage.clear();
+    m_hasStartingProfile = false;
+    m_startingProfile = SessionProfile{};
 }
 
 void SessionRunner::stop()
@@ -758,7 +767,7 @@ bool SessionRunner::setupDeviceOwnership()
         return true;
     }
 
-    const auto &profile = m_sessionManager->currentProfile();
+    const auto &profile = activeProfile();
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
@@ -849,7 +858,7 @@ bool SessionRunner::setupDataDirectories()
     // see host accounts, which would misroute home-relative copy/mount targets
     QString compositorHome = resolveCompositorHome(m_helperClient);
 
-    const auto &profile = m_sessionManager->currentProfile();
+    const auto &profile = activeProfile();
     bool allSucceeded = true;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
@@ -1114,7 +1123,7 @@ bool SessionRunner::buildBindPaths()
         return true;
     }
 
-    const auto &profile = m_sessionManager->currentProfile();
+    const auto &profile = activeProfile();
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const auto &instConfig = profile.instances[i];
@@ -1467,7 +1476,7 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
         return;
     }
 
-    const auto &profile = m_sessionManager->currentProfile();
+    const auto &profile = activeProfile();
     if (instanceIndex < 0 || instanceIndex >= profile.instances.size()) {
         qWarning() << "SessionRunner: Invalid instance index" << instanceIndex << "for reconnected device";
         return;

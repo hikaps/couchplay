@@ -10,6 +10,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 #include <unistd.h>
 
 #define private public
@@ -251,6 +252,7 @@ private Q_SLOTS:
     void testFinalizeDataDirResolvesIdentityViaHelper();
     void testResolveCompositorHomeViaHelper();
     void testPreSessionFailurePreventsLaunch();
+    void testPreHookUsesStartingProfileSnapshot();
     void testPostSessionRunsOnceAfterStop();
 
 private:
@@ -814,6 +816,55 @@ void TestSessionRunner::testPreSessionFailurePreventsLaunch()
     QTRY_COMPARE_WITH_TIMEOUT(failureSpy.count(), 1, 2000);
     QCOMPARE(m_helperClient->launchCommands.size(), 0);
     QVERIFY(!m_runner->isActive());
+}
+
+void TestSessionRunner::testPreHookUsesStartingProfileSnapshot()
+{
+    QTemporaryDir scriptDir;
+    QVERIFY(scriptDir.isValid());
+    const QString prePath = scriptDir.filePath(QStringLiteral("pre.sh"));
+    const QString originalPostPath = scriptDir.filePath(QStringLiteral("post-original.sh"));
+    const QString changedPostPath = scriptDir.filePath(QStringLiteral("post-changed.sh"));
+    const QString originalMarker = scriptDir.filePath(QStringLiteral("original.log"));
+    const QString changedMarker = scriptDir.filePath(QStringLiteral("changed.log"));
+
+    QFile preScript(prePath);
+    QVERIFY(preScript.open(QIODevice::WriteOnly | QIODevice::Text));
+    preScript.write("#!/bin/sh\nsleep 0.2\n");
+    preScript.close();
+    QVERIFY(preScript.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    QFile originalPost(originalPostPath);
+    QVERIFY(originalPost.open(QIODevice::WriteOnly | QIODevice::Text));
+    originalPost.write("#!/bin/sh\necho original >> \"" + originalMarker.toUtf8() + "\"\n");
+    originalPost.close();
+    QVERIFY(originalPost.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    QFile changedPost(changedPostPath);
+    QVERIFY(changedPost.open(QIODevice::WriteOnly | QIODevice::Text));
+    changedPost.write("#!/bin/sh\necho changed >> \"" + changedMarker.toUtf8() + "\"\n");
+    changedPost.close();
+    QVERIFY(changedPost.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setPreSessionExecutable(prePath);
+    m_sessionManager->setPostSessionExecutable(originalPostPath);
+    QTimer::singleShot(50, this, [this, changedPostPath]() {
+        m_sessionManager->setPostSessionExecutable(changedPostPath);
+    });
+
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 3000);
+    QCOMPARE(m_helperClient->launchCommands.size(), 2);
+    m_runner->stop();
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 3000);
+
+    QFile originalMarkerFile(originalMarker);
+    QVERIFY(originalMarkerFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(originalMarkerFile.readAll(), QByteArray("original\n"));
+    QVERIFY(!QFile::exists(changedMarker));
 }
 
 void TestSessionRunner::testPostSessionRunsOnceAfterStop()
