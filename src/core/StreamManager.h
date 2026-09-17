@@ -58,7 +58,7 @@ public:
 
     StreamState streamState(int instanceIndex) const;
     bool isStreaming(int instanceIndex) const;
-    void setHelperClient(CouchPlayHelperClient *helper) { m_helperClient = helper; }
+    void setHelperClient(CouchPlayHelperClient *helper);
 
 Q_SIGNALS:
     void streamStarted(int instanceIndex);

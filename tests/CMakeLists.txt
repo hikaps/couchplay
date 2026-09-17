@@ -24,6 +24,9 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SessionManager.h
     ../src/core/SessionRunner.cpp
     ../src/core/SessionRunner.h
+    ../src/core/LaunchTypes.h
+    ../src/core/CommandLineOptions.cpp
+    ../src/core/CommandLineOptions.h
     ../src/core/GamescopeInstance.cpp
     ../src/core/GamescopeInstance.h
     ../src/core/UserManager.cpp
@@ -85,6 +88,7 @@ function(add_couchplay_test TEST_NAME)
         KF6::CoreAddons
         KF6::ConfigCore
         KF6::ConfigGui
+        KF6::DBusAddons
         KF6::IconThemes
         KF6::GlobalAccel
     )
@@ -149,7 +153,9 @@ target_include_directories(sunshine_config_generator PRIVATE
 )
 set_target_properties(sunshine_config_generator PROPERTIES AUTOMOC ON)
 
+add_couchplay_test(test_commandlineoptions)
 # Add test executables
+add_couchplay_test(test_steamconfigmanager)
 add_couchplay_test(test_audiomanager)
 add_couchplay_test(test_commandverifier)
 add_couchplay_test(test_devicemanager)

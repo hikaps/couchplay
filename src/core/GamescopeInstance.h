@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QVariantMap>
 
+class CouchPlayHelperClient;
 struct InstanceConfig;
 
 /**
@@ -66,6 +67,7 @@ public:
     }
     QString virtualDisplaySocket() const { return m_virtualDisplaySocket; }
     void setVirtualDisplaySocket(const QString &socket);
+    void setHelperClient(CouchPlayHelperClient *client);
 
     static QStringList buildGamescopeArgs(const QVariantMap &config);
 
@@ -92,5 +94,6 @@ private:
     QString m_virtualDisplaySocket;
     QRect m_windowGeometry;
     qint64 m_helperPid = 0;
+    CouchPlayHelperClient *m_helperClient = nullptr;
     qint64 m_gamescopePid = 0;
 };

@@ -85,31 +85,33 @@ public:
      * @param username User to run as
      * @param compositorUid UID of compositor user (for Wayland socket access)
      * @param gamescopeArgs Gamescope command-line arguments
-     * @param gameCommand Command to run inside gamescope
+     * @param gameCommand Structured child command: executable followed by arguments
+     * @param workingDirectory Optional absolute working directory
      * @param environment Additional environment variables (VAR=value format)
      * @param bindPaths Bind mount entries for per-instance config overrides (source:target format)
      * @return PID of launched process, or 0 on failure
      */
-    Q_INVOKABLE qint64 launchInstance(const QString &username,
-                                      uint compositorUid,
-                                      const QStringList &gamescopeArgs,
-                                      const QString &gameCommand,
-                                      const QStringList &environment,
-                                      const QStringList &bindPaths);
+    Q_INVOKABLE virtual qint64 launchInstance(const QString &username,
+                                               uint compositorUid,
+                                               const QStringList &gamescopeArgs,
+                                               const QStringList &gameCommand,
+                                               const QString &workingDirectory,
+                                               const QStringList &environment,
+                                               const QStringList &bindPaths);
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)
      * @param pid Process ID to stop
      * @return true if successfully signaled
      */
-    Q_INVOKABLE bool stopInstance(qint64 pid);
+    Q_INVOKABLE virtual bool stopInstance(qint64 pid);
 
     /**
      * @brief Kill a launched instance forcefully (SIGKILL)
      * @param pid Process ID to kill
      * @return true if successfully signaled
      */
-    Q_INVOKABLE bool killInstance(qint64 pid);
+    Q_INVOKABLE virtual bool killInstance(qint64 pid);
 
     Q_INVOKABLE void checkAvailability();
 

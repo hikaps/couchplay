@@ -79,6 +79,10 @@ private Q_SLOTS:
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
+    void testProfileHooksAndGameSelectionRoundtrip();
+    void testProfileHookPathsPreserveWhitespace();
+    void testDuplicateProfilePreservesData();
+    void testProfileNameValidation();
 
     // Signal tests
     void testInstanceCountChangedSignal();
@@ -621,6 +625,80 @@ void TestSessionManager::testRefreshProfiles()
 
     m_sessionManager->refreshProfiles();
     QCOMPARE(spy.count(), 1);
+}
+
+void TestSessionManager::testProfileHooksAndGameSelectionRoundtrip()
+{
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setPreSessionExecutable(QStringLiteral("/usr/local/bin/pre-session"));
+    m_sessionManager->setPostSessionExecutable(QStringLiteral("/usr/local/bin/post-session"));
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstanceGame(0, QVariantMap{{QStringLiteral("launcherId"), QStringLiteral("heroic")},
+                                                     {QStringLiteral("backend"), QStringLiteral("legendary")},
+                                                     {QStringLiteral("gameId"), QStringLiteral("EpicGame")},
+                                                     {QStringLiteral("title"), QStringLiteral("Test Game")}});
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("HookRoundtrip")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("HookRoundtrip")));
+    QCOMPARE(m_sessionManager->preSessionExecutable(), QStringLiteral("/usr/local/bin/pre-session"));
+    QCOMPARE(m_sessionManager->postSessionExecutable(), QStringLiteral("/usr/local/bin/post-session"));
+    const QVariantMap selection = m_sessionManager->getInstanceConfig(0).value(QStringLiteral("gameSelection")).toMap();
+    QCOMPARE(selection.value(QStringLiteral("launcherId")).toString(), QStringLiteral("heroic"));
+    QCOMPARE(selection.value(QStringLiteral("backend")).toString(), QStringLiteral("legendary"));
+    QCOMPARE(selection.value(QStringLiteral("gameId")).toString(), QStringLiteral("EpicGame"));
+    m_sessionManager->deleteProfile(QStringLiteral("HookRoundtrip"));
+}
+
+void TestSessionManager::testProfileHookPathsPreserveWhitespace()
+{
+    const QString prePath = QStringLiteral(" /tmp/pre-session ");
+    const QString postPath = QStringLiteral(" /tmp/post-session ");
+    m_sessionManager->setPreSessionExecutable(prePath);
+    m_sessionManager->setPostSessionExecutable(postPath);
+    QCOMPARE(m_sessionManager->preSessionExecutable(), prePath);
+    QCOMPARE(m_sessionManager->postSessionExecutable(), postPath);
+}
+
+void TestSessionManager::testDuplicateProfilePreservesData()
+{
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setPreSessionExecutable(QStringLiteral("/usr/local/bin/pre-session"));
+    m_sessionManager->setInstanceGame(0, QVariantMap{{QStringLiteral("launcherId"), QStringLiteral("steam")},
+                                                     {QStringLiteral("backend"), QStringLiteral("native")},
+                                                     {QStringLiteral("gameId"), QStringLiteral("123")},
+                                                     {QStringLiteral("title"), QStringLiteral("Game")}});
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("DuplicateProfile")));
+
+    const QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles/DuplicateProfile.conf");
+    KConfig source(path, KConfig::SimpleConfig);
+    source.group(QStringLiteral("Future")).writeEntry(QStringLiteral("value"), QStringLiteral("preserved"));
+    source.sync();
+
+    const QString copyName = m_sessionManager->duplicateProfile(QStringLiteral("DuplicateProfile"));
+    QCOMPARE(copyName, QStringLiteral("DuplicateProfile Copy"));
+    QCOMPARE(m_sessionManager->currentProfileName(), QStringLiteral("DuplicateProfile"));
+
+    KConfig copy(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                     + QStringLiteral("/profiles/DuplicateProfile Copy.conf"),
+                 KConfig::SimpleConfig);
+    QCOMPARE(copy.group(QStringLiteral("General")).readEntry("name", QString()), copyName);
+    QCOMPARE(copy.group(QStringLiteral("Future")).readEntry("value", QString()), QStringLiteral("preserved"));
+
+    QVERIFY(m_sessionManager->duplicateProfile(QStringLiteral("DuplicateProfile")) != QString());
+    m_sessionManager->deleteProfile(QStringLiteral("DuplicateProfile"));
+    m_sessionManager->deleteProfile(QStringLiteral("DuplicateProfile Copy"));
+    m_sessionManager->deleteProfile(QStringLiteral("DuplicateProfile Copy 2"));
+}
+
+void TestSessionManager::testProfileNameValidation()
+{
+    QVERIFY(SessionManager::isValidProfileName(QStringLiteral("Family Night")));
+    QVERIFY(!SessionManager::isValidProfileName(QStringLiteral("")));
+    QVERIFY(!SessionManager::isValidProfileName(QStringLiteral("../escape")));
+    QVERIFY(!SessionManager::isValidProfileName(QStringLiteral("bad/name")));
+    QVERIFY(!SessionManager::isValidProfileName(QStringLiteral(" trailing")));
 }
 
 void TestSessionManager::testInstanceCountChangedSignal()

@@ -1997,7 +1997,8 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
                                                      QStringLiteral("player1"),
                                                      1000u,
                                                      QStringList{QStringLiteral("-W"), QStringLiteral("960")},
-                                                     QStringLiteral("steam -bigpicture"),
+                                                     QStringList{QStringLiteral("steam"), QStringLiteral("-bigpicture")},
+                                                     QString(),
                                                      QStringList{QStringLiteral("ENABLE_GAMESCOPE_WSI=1")},
                                                      QStringList());
 
@@ -2017,9 +2018,10 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
             QVERIFY(inv.args.contains(QStringLiteral("/usr/bin/gamescope")));
             QVERIFY(inv.args.contains(QStringLiteral("-W")));
             QVERIFY(inv.args.contains(QStringLiteral("960")));
-            QVERIFY(inv.args.contains(QStringLiteral("steam -bigpicture")));
-            QVERIFY(inv.args.contains(QStringLiteral("-c")));
-            QVERIFY(inv.args.contains(QStringLiteral("/bin/bash")));
+            QVERIFY(inv.args.contains(QStringLiteral("steam")));
+            QVERIFY(inv.args.contains(QStringLiteral("-bigpicture")));
+            QVERIFY(!inv.args.contains(QStringLiteral("-c")));
+            QVERIFY(!inv.args.contains(QStringLiteral("/bin/bash")));
             break;
         }
     }
@@ -2057,7 +2059,8 @@ void TestCouchPlayHelper::testLaunchInstance_withBindPaths()
                                                      QStringLiteral("player1"),
                                                      1000u,
                                                      QStringList{},
-                                                     QStringLiteral("steam"),
+                                                     QStringList{QStringLiteral("steam")},
+                                                     QString(),
                                                      QStringList{},
                                                      bindPaths);
 
@@ -2087,7 +2090,8 @@ void TestCouchPlayHelper::testLaunchInstance_validationEmptyUsername()
                                                      QString(),
                                                      1000u,
                                                      QStringList{},
-                                                     QStringLiteral("steam"),
+                                                     QStringList{QStringLiteral("steam")},
+                                                     QString(),
                                                      QStringList{},
                                                      QStringList());
 
@@ -2104,7 +2108,8 @@ void TestCouchPlayHelper::testLaunchInstance_validationNonexistentUser()
                                                      QStringLiteral("nonexistent"),
                                                      1000u,
                                                      QStringList{},
-                                                     QStringLiteral("steam"),
+                                                     QStringList{QStringLiteral("steam")},
+                                                     QString(),
                                                      QStringList{},
                                                      QStringList{});
 
@@ -2129,7 +2134,8 @@ void TestCouchPlayHelper::testStopInstance_serviceStop()
                                                            QStringLiteral("player1"),
                                                            1000u,
                                                            QStringList{},
-                                                           QStringLiteral("steam"),
+                                                           QStringList{QStringLiteral("steam")},
+                                                           QString(),
                                                            QStringList{},
                                                            QStringList{});
     QVERIFY(launchReply.isValid());
@@ -2176,7 +2182,8 @@ void TestCouchPlayHelper::testKillInstance_serviceKill()
                                                            QStringLiteral("player1"),
                                                            1000u,
                                                            QStringList{},
-                                                           QStringLiteral("steam"),
+                                                           QStringList{QStringLiteral("steam")},
+                                                           QString(),
                                                            QStringList{},
                                                            QStringList{});
     QVERIFY(launchReply.isValid());
@@ -2234,7 +2241,8 @@ void TestCouchPlayHelper::testLaunchInstance_staleUnitRecovery()
                                                      QStringLiteral("player1"),
                                                      1000u,
                                                      QStringList{},
-                                                     QStringLiteral("steam"),
+                                                     QStringList{QStringLiteral("steam")},
+                                                     QString(),
                                                      QStringList{},
                                                      QStringList{});
 

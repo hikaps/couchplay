@@ -16,9 +16,57 @@ Kirigami.ApplicationWindow {
     minimumWidth: Kirigami.Units.gridUnit * 40
     minimumHeight: Kirigami.Units.gridUnit * 30
 
+    property string startupProfileName: ""
+    property bool startupStart: false
+    property bool startupExitAfterSession: false
+    property bool initialRequestPending: false
+    property bool exitOnStartupFailure: false
+    property bool exitAfterActiveSession: false
+    signal startupFailed(int exitCode)
+
+    function handleLaunchRequest(profileName, start, exitAfterSession) {
+        if (!profileName || profileName === "" || sessionRunner.active) {
+            return false
+        }
+        if (!sessionManager.loadProfile(profileName)) {
+            if (initialRequestPending) startupFailed(1)
+            return false
+        }
+        if (!start) {
+            pushSessionSetupPage()
+            return true
+        }
+        exitOnStartupFailure = initialRequestPending
+        exitAfterActiveSession = exitAfterSession
+        if (!sessionRunner.start()) {
+            exitOnStartupFailure = false
+            exitAfterActiveSession = false
+            if (initialRequestPending) startupFailed(1)
+            return false
+        }
+        return true
+    }
+
+    Component.onCompleted: {
+        if (startupProfileName !== "") {
+            initialRequestPending = true
+            Qt.callLater(function() {
+                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession)
+                initialRequestPending = false
+            })
+        }
+    }
+
     SettingsManager {
         id: settingsManager
     }
+    Connections {
+        target: commandLineBridge
+        function onLaunchRequested(profileName, start, exitAfterSession) {
+            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession))
+        }
+    }
+
 
     DeviceManager {
         id: deviceManager
@@ -66,6 +114,9 @@ Kirigami.ApplicationWindow {
                 }
             }
         }
+        onErrorOccurred: function(message) {
+            applicationWindow().showPassiveNotification(message, "long")
+        }
     }
 
     SessionRunner {
@@ -88,6 +139,16 @@ Kirigami.ApplicationWindow {
         onSessionStopped: {
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Session stopped"))
+            if (root.exitAfterActiveSession) {
+                root.exitAfterActiveSession = false
+                Qt.callLater(function() { Qt.quit() })
+            }
+        }
+        onSessionStartFailed: function(message) {
+            if (root.exitOnStartupFailure) {
+                root.exitOnStartupFailure = false
+                root.startupFailed(1)
+            }
         }
     }
 
@@ -114,6 +175,10 @@ Kirigami.ApplicationWindow {
     }
 
     HeroicConfigManager {
+        Component.onCompleted: {
+            detectHeroicPaths()
+            loadGames()
+        }
         id: heroicConfigManager
         helperClient: helperClient
     }
@@ -124,6 +189,7 @@ Kirigami.ApplicationWindow {
         
         Component.onCompleted: {
             detectSteamPaths()
+            loadGames()
         }
     }
 
@@ -242,6 +308,8 @@ Kirigami.ApplicationWindow {
             deviceManager: deviceManager,
             monitorManager: monitorManager,
             userManager: userManager,
+            steamConfigManager: steamConfigManager,
+            heroicConfigManager: heroicConfigManager,
             presetManager: presetManager
         })
     }

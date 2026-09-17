@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import QtQuick.Dialogs
 
 import "../components" as Components
 
@@ -19,9 +20,18 @@ Kirigami.ScrollablePage {
     required property var monitorManager
     required property var userManager
     required property var presetManager
+    required property var steamConfigManager
+    required property var heroicConfigManager
 
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
+
+    function selectedHostFile(fileUrl) {
+        let path = fileUrl.toString()
+        if (path.startsWith("file://")) path = path.substring(7)
+        path = decodeURIComponent(path)
+        return presetManager ? presetManager.resolveHostPath(path) : path
+    }
     property string gridSubLayout: sessionManager ? sessionManager.currentGridSubLayout : ""
 
     property int instancesRevision: 0
@@ -98,16 +108,16 @@ Kirigami.ScrollablePage {
         Kirigami.Action {
             objectName: "actionStartSession"
             Accessible.role: Accessible.Button
-            Accessible.name: sessionRunner && sessionRunner.running
+            Accessible.name: sessionRunner && sessionRunner.active
                 ? i18nc("@action:button", "Stop Session")
                 : i18nc("@action:button", "Start Session")
             Accessible.onPressAction: triggered()
             icon.name: "media-playback-start"
-            text: sessionRunner && sessionRunner.running 
+            text: sessionRunner && sessionRunner.active
                 ? i18nc("@action:button", "Stop Session")
                 : i18nc("@action:button", "Start Session")
             onTriggered: {
-                if (sessionRunner.running) {
+                if (sessionRunner.active) {
                     sessionRunner.stop()
                 } else {
                     sessionRunner.start()
@@ -171,8 +181,104 @@ Kirigami.ScrollablePage {
         }
     }
 
+    FileDialog {
+        id: preSessionScriptDialog
+        objectName: "dialogPreSessionScript"
+        title: i18nc("@title:dialog", "Select Pre-session Script")
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            const path = root.selectedHostFile(selectedFile)
+            if (path && sessionManager) sessionManager.preSessionExecutable = path
+        }
+    }
+
+    FileDialog {
+        id: postSessionScriptDialog
+        objectName: "dialogPostSessionScript"
+        title: i18nc("@title:dialog", "Select Post-session Script")
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            const path = root.selectedHostFile(selectedFile)
+            if (path && sessionManager) sessionManager.postSessionExecutable = path
+        }
+    }
+
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
+
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+
+            Kirigami.Heading {
+                text: i18nc("@title", "Automation")
+                level: 2
+                Kirigami.FormData.label: i18nc("@title", "Automation")
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPreSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Pre-session script")
+                    readOnly: true
+                    text: sessionManager?.preSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePreSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: preSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPreSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPostSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Post-session script")
+                    readOnly: true
+                    text: sessionManager?.postSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePostSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: postSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPostSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
+                }
+            }
+        }
 
         Kirigami.InlineMessage {
             Layout.fillWidth: true
@@ -378,6 +484,7 @@ Kirigami.ScrollablePage {
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
+                readonly property string labelGame: i18nc("@label", "Game:")
                 readonly property string labelDevices: i18nc("@label", "Devices:")
 
                 readonly property string labelOverlay: i18nc("@label", "Config Overrides:")
@@ -495,6 +602,7 @@ Kirigami.ScrollablePage {
                             }
                         }
 
+
                         Controls.Button {
                             objectName: "btnPlayerDataFolder"
                             icon.name: "folder-open"
@@ -555,6 +663,14 @@ Kirigami.ScrollablePage {
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
+                        }
+                        Components.GameSelector {
+                            objectName: "comboGame"
+                            presetManager: instanceCard.cardPresetManager
+                            sessionManager: instanceCard.cardSessionManager
+                            instanceIndex: instanceCard.index
+                            steamConfigManager: root.steamConfigManager
+                            heroicConfigManager: root.heroicConfigManager
                         }
 
                         // Resolution is auto-calculated from monitor size and layout
@@ -952,7 +1068,7 @@ Kirigami.ScrollablePage {
                     // Streaming status indicator
                     Kirigami.InlineMessage {
                         Layout.fillWidth: true
-                        visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.running
+                        visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.active
                         type: Kirigami.MessageType.Information
                         text: i18nc("@info", "Sunshine streaming is active on port %1",
                                     root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).sunshinePort : 47989)
