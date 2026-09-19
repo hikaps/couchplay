@@ -47,6 +47,7 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     IconThemes
     QQC2DesktopStyle
     GlobalAccel
+    DBusAddons
 )
 
 # PolkitQt6-1 is required for user management authorization.

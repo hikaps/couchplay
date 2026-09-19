@@ -57,6 +57,7 @@ class TestSessionSetup(BaseTest):
             driver, AppiumBy.NAME, "Enter a name for this session profile"
         )
         assert dialog.is_displayed()
+        self.click_by_name(driver, "Cancel")
 
     def test_navigate_to_device_assignment(self, driver):
         self.navigate_to_session_setup(driver)
@@ -69,4 +70,10 @@ class TestSessionSetup(BaseTest):
         self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "comboUser")
         self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "comboLauncher")
         # comboScaling does not expose its objectName -> NAME (its label)
+
+    def test_game_and_hook_controls_visible(self, driver):
+        self.navigate_to_session_setup(driver)
+        self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "comboGame")
+        self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "fieldPreSessionScript")
+        self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "fieldPostSessionScript")
         self.wait_for_element(driver, AppiumBy.NAME, "Scaling:")

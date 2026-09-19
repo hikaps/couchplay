@@ -31,6 +31,7 @@ private Q_SLOTS:
     void testBuiltinPresetsExist();
     void testGetCommand();
     void testStaleFlatpakCacheIgnored();
+    void testBuildLaunchCommand();
     void testGetWorkingDirectory();
     void testGetLauncherId();
 
@@ -156,6 +157,34 @@ void TestPresetManager::testGetCommand()
 
     QString lutrisCommand = manager.getCommand(QStringLiteral("lutris"));
     QCOMPARE(lutrisCommand, QStringLiteral("lutris"));
+}
+
+void TestPresetManager::testBuildLaunchCommand()
+{
+    PresetManager manager;
+
+    GameSelection steam;
+    steam.launcherId = QStringLiteral("steam");
+    steam.backend = QStringLiteral("native");
+    steam.gameId = QStringLiteral("123");
+    LaunchCommand steamCommand = manager.buildLaunchCommand(QStringLiteral("steam"), steam);
+    QVERIFY2(steamCommand.isValid(), qPrintable(steamCommand.errorMessage));
+    QCOMPARE(steamCommand.program, QStringLiteral("steam"));
+    QCOMPARE(steamCommand.arguments, QStringList({QStringLiteral("-applaunch"), QStringLiteral("123")}));
+
+    GameSelection heroic;
+    heroic.launcherId = QStringLiteral("heroic");
+    heroic.backend = QStringLiteral("legendary");
+    heroic.gameId = QStringLiteral("Game With Space");
+    LaunchCommand heroicCommand = manager.buildLaunchCommand(QStringLiteral("heroic"), heroic);
+    QVERIFY2(heroicCommand.isValid(), qPrintable(heroicCommand.errorMessage));
+    QCOMPARE(heroicCommand.program, QStringLiteral("heroic"));
+    QCOMPARE(heroicCommand.arguments,
+             QStringList({QStringLiteral("--no-gui"), QStringLiteral("heroic://launch/legendary/Game%20With%20Space")}));
+
+    GameSelection invalid = steam;
+    invalid.gameId = QStringLiteral("not-a-number");
+    QVERIFY(!manager.buildLaunchCommand(QStringLiteral("steam"), invalid).isValid());
 }
 
 void TestPresetManager::testStaleFlatpakCacheIgnored()

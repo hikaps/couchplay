@@ -23,6 +23,8 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QProcess>
+#include <QUrl>
 #include <QUuid>
 
 #include <functional>
@@ -493,6 +495,90 @@ QString PresetManager::getLauncherId(const QString &id) const
     return getPreset(id).launcherId;
 }
 
+QVariantList PresetManager::gamesForPreset(const QString &id) const
+{
+    const LaunchPreset preset = getPreset(id);
+    QVariantList games;
+    if (preset.launcherId == QStringLiteral("steam") && m_steamConfigManager) {
+        return m_steamConfigManager->gamesAsVariant();
+    }
+    if (preset.launcherId == QStringLiteral("heroic") && m_heroicConfigManager) {
+        for (const HeroicGame &game : m_heroicConfigManager->installedGames()) {
+            games.append(QVariantMap{{QStringLiteral("launcherId"), QStringLiteral("heroic")},
+                                     {QStringLiteral("backend"), game.runner},
+                                     {QStringLiteral("gameId"), game.appName},
+                                     {QStringLiteral("title"), game.title},
+                                     {QStringLiteral("installPath"), game.installPath},
+                                     {QStringLiteral("source"), game.runner}});
+        }
+    }
+    return games;
+}
+
+LaunchCommand PresetManager::buildLaunchCommand(const QString &id, const GameSelection &selection) const
+{
+    LaunchCommand result;
+    const LaunchPreset preset = getPreset(id);
+    const QStringList tokens = QProcess::splitCommand(preset.command);
+    if (tokens.isEmpty()) {
+        result.errorMessage = QStringLiteral("Launcher command is empty");
+        return result;
+    }
+    result.program = tokens.constFirst();
+    result.arguments = tokens.mid(1);
+    result.workingDirectory = preset.workingDirectory;
+    if (!result.workingDirectory.isEmpty() && !QDir::isAbsolutePath(result.workingDirectory)) {
+        result.errorMessage = QStringLiteral("Launcher working directory is not absolute");
+        return result;
+    }
+
+    if (selection.isEmpty()) {
+        return result;
+    }
+    if (selection.launcherId != preset.launcherId) {
+        result = {};
+        result.errorMessage = QStringLiteral("Selected game does not belong to this launcher");
+        return result;
+    }
+
+    if (preset.launcherId == QStringLiteral("steam")) {
+        static const QRegularExpression decimalId(QStringLiteral("^[0-9]+$"));
+        bool ok = false;
+        const quint64 idValue = selection.gameId.toULongLong(&ok);
+        if (!ok || idValue == 0 || !decimalId.match(selection.gameId).hasMatch()
+            || (selection.backend != QStringLiteral("native") && selection.backend != QStringLiteral("shortcut"))) {
+            result = {};
+            result.errorMessage = QStringLiteral("Invalid Steam game selection");
+            return result;
+        }
+        result.arguments.removeAll(QStringLiteral("-bigpicture"));
+        if (selection.backend == QStringLiteral("native")) {
+            result.arguments << QStringLiteral("-applaunch") << QString::number(idValue);
+        } else {
+            result.arguments << QStringLiteral("steam://rungameid/%1").arg(idValue);
+        }
+        return result;
+    }
+
+    if (preset.launcherId == QStringLiteral("heroic")) {
+        static const QSet<QString> runners = {QStringLiteral("legendary"), QStringLiteral("gog"),
+                                               QStringLiteral("nile"), QStringLiteral("sideload")};
+        if (selection.gameId.isEmpty() || !runners.contains(selection.backend)) {
+            result = {};
+            result.errorMessage = QStringLiteral("Invalid Heroic game selection");
+            return result;
+        }
+        const QString runner = QString::fromUtf8(QUrl::toPercentEncoding(selection.backend));
+        const QString gameId = QString::fromUtf8(QUrl::toPercentEncoding(selection.gameId));
+        result.arguments << QStringLiteral("--no-gui") << QStringLiteral("heroic://launch/%1/%2").arg(runner, gameId);
+        return result;
+    }
+
+    result = {};
+    result.errorMessage = QStringLiteral("This launcher does not support direct game selection");
+    return result;
+}
+
 QVariantList PresetManager::getDataDirectories(const QString &id) const
 {
     QVariantList result;
@@ -502,7 +588,7 @@ QVariantList PresetManager::getDataDirectories(const QString &id) const
     }
     return result;
 }
-QString PresetManager::resolveDirectoryPath(const QString &path) const
+QString PresetManager::resolveHostPath(const QString &path) const
 {
     if (!qEnvironmentVariableIsSet("FLATPAK_ID")) {
         return path;
