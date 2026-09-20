@@ -4,6 +4,7 @@
 import pytest
 from appium.webdriver.common.appiumby import AppiumBy
 from helpers.base_test import BaseTest
+from conftest import stop_session_if_running
 
 import json
 import os
@@ -19,6 +20,16 @@ LONG_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_LONG_TIMEOUT") or "20")
 
 
 class TestSessionLifecycle(BaseTest):
+    @pytest.fixture(autouse=True)
+    def _stop_session_after(self, driver):
+        # sessionRunner is global and persists across tests. Without stopping
+        # a session here, a test that starts one (e.g. test_two_instances_launch)
+        # leaves the toolbar action on "Stop Session", so the next test's wait
+        # for "Start Session" times out. Scoped to this class so the other ~43
+        # tests pay no overhead.
+        yield
+        stop_session_if_running(driver)
+
     def test_session_setup_with_helper(self, driver, mock_helper, test_users):
         self.navigate_to_session_setup(driver)
         title = self.wait_for_element(
