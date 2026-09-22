@@ -301,15 +301,19 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Target path is not under user's home directory"));
         return false;
     }
+    bool allSucceeded = true;
 
-    auto copyFile = [this, &targetUsername, &targetHeroicRoot](const QString &sourcePath,
+    auto copyFile = [this, &targetUsername, &targetHeroicRoot, &allSucceeded](const QString &sourcePath,
                                                                const QString &relTargetPath) {
         if (!QFile::exists(sourcePath)) {
             return;
         }
         QString targetPath = targetHeroicRoot + QLatin1Char('/') + relTargetPath;
         qDebug() << "HeroicConfigManager: Copying" << relTargetPath;
-        m_helperClient->copyFileToUser(sourcePath, targetPath, targetUsername);
+        if (!m_helperClient->copyFileToUser(sourcePath, targetPath, targetUsername)) {
+            qWarning() << "HeroicConfigManager: Failed to copy" << relTargetPath;
+            allSucceeded = false;
+        }
     };
 
     copyFile(m_heroicPaths.sideloadLibrary, QStringLiteral("sideload_apps/library.json"));
@@ -322,7 +326,7 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
     copyFile(m_heroicPaths.nileInstalled, QStringLiteral("nile_config/installed.json"));
 
     qDebug() << "HeroicConfigManager: Library sync completed for" << targetUsername;
-    return true;
+    return allSucceeded;
 }
 
 QString HeroicConfigManager::heroicCommand() const

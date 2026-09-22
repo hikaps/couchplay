@@ -84,6 +84,8 @@ struct LaunchPreset {
     Q_PROPERTY(bool isBuiltin MEMBER isBuiltin)
 
     Q_PROPERTY(QString launcherId MEMBER launcherId)
+    Q_PROPERTY(QStringList requiredIntegrations MEMBER requiredIntegrations)
+    Q_PROPERTY(bool sandboxed MEMBER sandboxed)
     Q_PROPERTY(LauncherInfo launcherInfo MEMBER launcherInfo)
     Q_PROPERTY(QList<DataDirectory> dataDirectories MEMBER dataDirectories)
     Q_PROPERTY(QString flatpakAppId MEMBER flatpakAppId)
@@ -99,6 +101,8 @@ public:
     bool isBuiltin = false;         // true for Steam/Heroic/Lutris
 
     QString launcherId;             // "steam", "heroic", "lutris", "custom" (empty for non-launcher presets)
+    QStringList requiredIntegrations; // Explicit integration resources needed by this preset
+    bool sandboxed = false;            // True when the top-level command is a Flatpak launcher
     LauncherInfo launcherInfo;      // Populated by detection for launcher presets
     QList<DataDirectory> dataDirectories; // Per-preset data directories with mode (copy/overlay/acl)
     QString flatpakAppId;           // e.g., "com.valvesoftware.Steam" (empty = no Flatpak alternative)
@@ -147,6 +151,9 @@ public:
     static QString defaultSteamCommand();
     Q_INVOKABLE QString getWorkingDirectory(const QString &id) const;
     Q_INVOKABLE QString getLauncherId(const QString &id) const;
+    Q_INVOKABLE QStringList getRequiredIntegrations(const QString &id) const;
+    Q_INVOKABLE bool setRequiredIntegrations(const QString &id, const QStringList &integrations);
+    Q_INVOKABLE QVariantList availableIntegrations() const;
     Q_INVOKABLE QVariantList gamesForPreset(const QString &id) const;
     LaunchCommand buildLaunchCommand(const QString &id, const GameSelection &selection) const;
 

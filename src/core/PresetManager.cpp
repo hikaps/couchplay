@@ -332,6 +332,7 @@ void PresetManager::initBuiltinPresets()
     steam.iconName = QStringLiteral("steam");
     steam.isBuiltin = true;
     steam.launcherId = QStringLiteral("steam");
+    steam.requiredIntegrations = {QStringLiteral("steam")};
 
     if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
         steam.launcherInfo.configPath = m_steamConfigManager->steamPaths().steamRoot;
@@ -346,6 +347,7 @@ void PresetManager::initBuiltinPresets()
     heroic.iconName = QStringLiteral("com.heroicgameslauncher.hgl");
     heroic.isBuiltin = true;
     heroic.launcherId = QStringLiteral("heroic");
+    heroic.requiredIntegrations = {QStringLiteral("heroic")};
     heroic.flatpakAppId = QStringLiteral("com.heroicgameslauncher.hgl");
 
     if (m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
@@ -386,6 +388,15 @@ void PresetManager::initBuiltinPresets()
     // re-resolving detected defaults and wiping in-memory edits — reapply the
     // persisted user overrides so built-in preset edits survive restarts
     applyBuiltinDataDirectoryOverrides();
+    KSharedConfig::Ptr integrationConfig = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+    KConfigGroup integrationGroup = integrationConfig->group(QStringLiteral("Builtin Required Integrations"));
+    for (LaunchPreset &preset : m_builtinPresets) {
+        const bool hasSaved = integrationGroup.hasKey(preset.id);
+        const QStringList saved = integrationGroup.readEntry(preset.id, QStringList());
+        if (hasSaved) {
+            preset.requiredIntegrations = saved;
+        }
+    }
 }
 
 QList<LaunchPreset> PresetManager::presets() const
@@ -398,7 +409,8 @@ QList<LaunchPreset> PresetManager::presets() const
 QVariantList PresetManager::presetsAsVariant() const
 {
     QVariantList result;
-    for (const LaunchPreset &preset : presets()) {
+    for (LaunchPreset preset : presets()) {
+        populateLauncherInfo(preset);
         QVariantMap map;
         map[QStringLiteral("id")] = preset.id;
         map[QStringLiteral("name")] = preset.name;
@@ -408,6 +420,8 @@ QVariantList PresetManager::presetsAsVariant() const
         map[QStringLiteral("desktopFilePath")] = preset.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = preset.isBuiltin;
         map[QStringLiteral("launcherId")] = preset.launcherId;
+        map[QStringLiteral("requiredIntegrations")] = preset.requiredIntegrations;
+        map[QStringLiteral("sandboxed")] = preset.sandboxed;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(preset.launcherInfo);
 
         QVariantList dataDirsVariant;
@@ -436,6 +450,8 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
         map[QStringLiteral("desktopFilePath")] = app.desktopFilePath;
         map[QStringLiteral("isBuiltin")] = app.isBuiltin;
         map[QStringLiteral("launcherId")] = app.launcherId;
+        map[QStringLiteral("requiredIntegrations")] = app.requiredIntegrations;
+        map[QStringLiteral("sandboxed")] = app.sandboxed;
         map[QStringLiteral("launcherInfo")] = QVariant::fromValue(app.launcherInfo);
         map[QStringLiteral("flatpakAppId")] = app.flatpakAppId;
         map[QStringLiteral("flatpakArgs")] = app.flatpakArgs;
@@ -447,6 +463,7 @@ QVariantList PresetManager::availableApplicationsAsVariant() const
 void PresetManager::populateLauncherInfo(LaunchPreset &preset) const
 {
     preset.launcherInfo = LauncherInfo();
+    preset.sandboxed = CommandVerifier::isFlatpakCommand(preset.command);
 
     if (preset.launcherId == QStringLiteral("steam")) {
         if (m_steamConfigManager && m_steamConfigManager->isSteamDetected()) {
@@ -464,7 +481,9 @@ LaunchPreset PresetManager::getPreset(const QString &id) const
 {
     for (const LaunchPreset &preset : m_builtinPresets) {
         if (preset.id == id) {
-            return preset;
+            LaunchPreset copy = preset;
+            populateLauncherInfo(copy);
+            return copy;
         }
     }
     for (const LaunchPreset &preset : m_customPresets) {
@@ -493,6 +512,62 @@ QString PresetManager::getWorkingDirectory(const QString &id) const
 QString PresetManager::getLauncherId(const QString &id) const
 {
     return getPreset(id).launcherId;
+}
+QStringList PresetManager::getRequiredIntegrations(const QString &id) const
+{
+    return getPreset(id).requiredIntegrations;
+}
+
+bool PresetManager::setRequiredIntegrations(const QString &id, const QStringList &integrations)
+{
+    static const QStringList validIds = {QStringLiteral("steam"), QStringLiteral("heroic")};
+    QStringList normalized;
+    for (const QString &integration : integrations) {
+        if (!validIds.contains(integration)) {
+            return false;
+        }
+        if (!normalized.contains(integration)) {
+            normalized.append(integration);
+        }
+    }
+
+    for (LaunchPreset &preset : m_builtinPresets) {
+        if (preset.id == id) {
+            preset.requiredIntegrations = normalized;
+            KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+            KConfigGroup group = config->group(QStringLiteral("Builtin Required Integrations"));
+            group.writeEntry(id, normalized);
+            config->sync();
+            Q_EMIT presetsChanged();
+            return true;
+        }
+    }
+    for (LaunchPreset &preset : m_customPresets) {
+        if (preset.id == id) {
+            preset.requiredIntegrations = normalized;
+            saveCustomPresets();
+            Q_EMIT presetsChanged();
+            return true;
+        }
+    }
+    return false;
+}
+
+QVariantList PresetManager::availableIntegrations() const
+{
+    QVariantList result;
+    QVariantMap steam;
+    steam.insert(QStringLiteral("id"), QStringLiteral("steam"));
+    steam.insert(QStringLiteral("name"), QStringLiteral("Steam"));
+    steam.insert(QStringLiteral("available"), m_steamConfigManager && m_steamConfigManager->isSteamDetected());
+    result.append(steam);
+
+    QVariantMap heroic;
+    heroic.insert(QStringLiteral("id"), QStringLiteral("heroic"));
+    heroic.insert(QStringLiteral("name"), QStringLiteral("Heroic Games Launcher"));
+    heroic.insert(QStringLiteral("available"), m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected());
+    result.append(heroic);
+    return result;
 }
 
 QVariantList PresetManager::gamesForPreset(const QString &id) const
@@ -702,6 +777,10 @@ QString PresetManager::addCustomPreset(const QString &name,
     preset.workingDirectory = workingDirectory;
     preset.iconName = iconName.isEmpty() ? QStringLiteral("application-x-executable") : iconName;
     preset.isBuiltin = false;
+    preset.launcherId = detectLauncherId(preset.command);
+    if (preset.launcherId == QStringLiteral("steam") || preset.launcherId == QStringLiteral("heroic")) {
+        preset.requiredIntegrations = {preset.launcherId};
+    }
 
     m_customPresets.append(preset);
     saveCustomPresets();
@@ -719,6 +798,9 @@ QString PresetManager::addPresetFromDesktopFile(const QString &desktopFilePath)
     }
 
     preset.launcherId = detectLauncherId(preset.command);
+    if (preset.launcherId == QStringLiteral("steam") || preset.launcherId == QStringLiteral("heroic")) {
+        preset.requiredIntegrations = {preset.launcherId};
+    }
 
     for (const LaunchPreset &existing : m_customPresets) {
         if (existing.desktopFilePath == desktopFilePath) {
@@ -747,6 +829,7 @@ bool PresetManager::updateCustomPreset(const QString &id,
             m_customPresets[i].name = name;
             m_customPresets[i].command = command;
             m_customPresets[i].workingDirectory = workingDirectory;
+            m_customPresets[i].launcherId = detectLauncherId(command);
             m_customPresets[i].iconName = iconName;
 
             saveCustomPresets();
@@ -863,6 +946,9 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
     preset.iconName = desktop.value(QStringLiteral("Icon")).toString();
     preset.desktopFilePath = filePath;
     preset.launcherId = detectLauncherId(preset.command);
+    if (preset.launcherId == QStringLiteral("steam") || preset.launcherId == QStringLiteral("heroic")) {
+        preset.requiredIntegrations = {preset.launcherId};
+    }
 
     // QString categories = desktop.value(QStringLiteral("Categories")).toString();
 
@@ -1014,6 +1100,12 @@ void PresetManager::loadCustomPresets()
         preset.flatpakAppId = group.readEntry(QStringLiteral("flatpakAppId"), QString());
         preset.flatpakArgs = group.readEntry(QStringLiteral("flatpakArgs"), QString());
         preset.launcherId = group.readEntry(QStringLiteral("launcherId"), QString());
+        const bool hasRequiredIntegrations = group.hasKey(QStringLiteral("requiredIntegrations"));
+        preset.requiredIntegrations = group.readEntry(QStringLiteral("requiredIntegrations"), QStringList());
+        if (!hasRequiredIntegrations && (preset.launcherId == QStringLiteral("steam")
+                                         || preset.launcherId == QStringLiteral("heroic"))) {
+            preset.requiredIntegrations = {preset.launcherId};
+        }
 
         // JSON (new) with legacy "path|mode" line fallback; migrate legacy
         // sharedDirectories (plain path list) to bind-mode entries
@@ -1075,6 +1167,7 @@ void PresetManager::saveCustomPresets()
         group.writeEntry(QStringLiteral("flatpakAppId"), preset.flatpakAppId);
         group.writeEntry(QStringLiteral("flatpakArgs"), preset.flatpakArgs);
         group.writeEntry(QStringLiteral("launcherId"), preset.launcherId);
+        group.writeEntry(QStringLiteral("requiredIntegrations"), preset.requiredIntegrations);
 
         // JSON so paths containing '|' or newlines round-trip intact
         group.writeEntry(QStringLiteral("dataDirectories"), encodeDataDirectories(preset.dataDirectories));

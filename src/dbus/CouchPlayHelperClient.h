@@ -88,14 +88,16 @@ public:
      * @param gameCommand Structured child command: executable followed by arguments
      * @param workingDirectory Optional absolute working directory
      * @param environment Additional environment variables (VAR=value format)
+     * @param sharedRoots Explicit source roots available to the target user
      * @param bindPaths Bind mount entries for per-instance config overrides (source:target format)
      * @return PID of launched process, or 0 on failure
      */
     Q_INVOKABLE virtual qint64 launchInstance(const QString &username,
-                                               uint compositorUid,
+                                               const QString &displayContext,
                                                const QStringList &gamescopeArgs,
                                                const QStringList &gameCommand,
                                                const QString &workingDirectory,
+                                               const QStringList &sharedRoots,
                                                const QStringList &environment,
                                                const QStringList &bindPaths);
 
@@ -123,7 +125,7 @@ public:
      * @return Number of successful mounts, or -1 on error
      */
     Q_INVOKABLE virtual int
-    mountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories);
+    mountSharedDirectories(const QString &username, const QStringList &directories);
 
     /**
      * @brief Unmount shared directories for a user
@@ -218,7 +220,7 @@ public:
      * @return true if successful
      */
     Q_INVOKABLE virtual bool
-    setupOverlayMount(const QString &username, uint compositorUid, const QString &sourceDir, const QString &targetAlias);
+    setupOverlayMount(const QString &username, const QString &sourceDir, const QString &targetAlias);
 
     /**
      * @brief Copy a directory tree to a user's home with proper ownership

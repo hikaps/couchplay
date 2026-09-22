@@ -34,6 +34,8 @@ private Q_SLOTS:
     void testBuildLaunchCommand();
     void testGetWorkingDirectory();
     void testGetLauncherId();
+    void testRequiredIntegrations();
+    void testSandboxedPresetMetadata();
 
     void testAddCustomPreset();
     void testRemoveCustomPreset();
@@ -229,6 +231,34 @@ void TestPresetManager::testGetLauncherId()
     QCOMPARE(manager.getLauncherId(QStringLiteral("steam")), QStringLiteral("steam"));
     QCOMPARE(manager.getLauncherId(QStringLiteral("heroic")), QStringLiteral("heroic"));
     QCOMPARE(manager.getLauncherId(QStringLiteral("lutris")), QStringLiteral("lutris"));
+}
+void TestPresetManager::testRequiredIntegrations()
+{
+    PresetManager manager;
+    QCOMPARE(manager.getRequiredIntegrations(QStringLiteral("steam")), QStringList{QStringLiteral("steam")});
+    QCOMPARE(manager.getRequiredIntegrations(QStringLiteral("heroic")), QStringList{QStringLiteral("heroic")});
+
+    const QString id = manager.addCustomPreset(QStringLiteral("Nested launcher"), QStringLiteral("/usr/bin/nautilus"));
+    QVERIFY(!id.isEmpty());
+    QVERIFY(manager.setRequiredIntegrations(id, {QStringLiteral("steam"), QStringLiteral("heroic"), QStringLiteral("steam")}));
+    QCOMPARE(manager.getRequiredIntegrations(id), QStringList({QStringLiteral("steam"), QStringLiteral("heroic")}));
+    QVERIFY(!manager.setRequiredIntegrations(id, {QStringLiteral("lutris")}));
+    QCOMPARE(manager.getRequiredIntegrations(id), QStringList({QStringLiteral("steam"), QStringLiteral("heroic")}));
+
+    const QVariantList integrations = manager.availableIntegrations();
+    QCOMPARE(integrations.size(), 2);
+    QCOMPARE(integrations.at(0).toMap().value(QStringLiteral("id")).toString(), QStringLiteral("steam"));
+    QCOMPARE(integrations.at(1).toMap().value(QStringLiteral("id")).toString(), QStringLiteral("heroic"));
+}
+
+void TestPresetManager::testSandboxedPresetMetadata()
+{
+    PresetManager manager;
+    const QString flatpakId = manager.addCustomPreset(QStringLiteral("Flatpak app"),
+                                                       QStringLiteral("flatpak run com.example.App"));
+    const QString nativeId = manager.addCustomPreset(QStringLiteral("Native app"), QStringLiteral("/usr/bin/nautilus"));
+    QVERIFY(manager.getPreset(flatpakId).sandboxed);
+    QVERIFY(!manager.getPreset(nativeId).sandboxed);
 }
 
 void TestPresetManager::testAddCustomPreset()

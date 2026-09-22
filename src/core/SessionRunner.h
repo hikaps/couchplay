@@ -219,10 +219,10 @@ private:
     bool prepareLaunchCommands();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
-    bool setupDataDirectories();
+    bool setupSessionResources();
     void teardownSharedDirectories();
     void teardownSharingState();
-    bool buildBindPaths();
+    bool buildOverrideBinds();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
@@ -235,13 +235,14 @@ private:
 
     struct StreamingInstanceInfo {
         QString username;
-        QString waylandSocket;
+        QString displayContext;
         QString sinkName;
         bool virtualDisplayCreated = false;
         bool nullSinkCreated = false;
     };
 
     QMap<int, QStringList> m_instanceBindPaths;
+    QMap<int, QStringList> m_instanceSharedRoots;
     uint m_screenSaverCookie = 0;
 
 

@@ -124,12 +124,12 @@ class MockHelper(dbus.service.Object):
         )
         return "yes" in result.stdout
 
-    @dbus.service.method(INTERFACE_NAME, in_signature="u", out_signature="b")
-    def SetupRuntimeAccess(self, compositorUid):
+    @dbus.service.method(INTERFACE_NAME, in_signature="", out_signature="b")
+    def SetupRuntimeAccess(self):
         return True
 
-    @dbus.service.method(INTERFACE_NAME, in_signature="u", out_signature="b")
-    def RemoveRuntimeAccess(self, compositorUid):
+    @dbus.service.method(INTERFACE_NAME, in_signature="", out_signature="b")
+    def RemoveRuntimeAccess(self):
         return True
 
     @dbus.service.method(INTERFACE_NAME, in_signature="su", out_signature="b")
@@ -149,15 +149,15 @@ class MockHelper(dbus.service.Object):
         return 0
 
     # LaunchInstance mirrors helper/CouchPlayHelper.h: username(s),
-    # compositorUid(u), gamescopeArgs(as), gameCommand(as), workingDirectory(s),
+    # displayContext(s), gamescopeArgs(as), gameCommand(as), workingDirectory(s),
     # environment(as), bindPaths(as) -> pid(x).
     @dbus.service.method(
         INTERFACE_NAME,
-        in_signature="suasassasas",
+        in_signature="ssasassasasas",
         out_signature="x",
     )
     def LaunchInstance(
-        self, username, compositorUid, gamescopeArgs, gameCommand, workingDirectory, environment, bindPaths
+        self, username, displayContext, gamescopeArgs, gameCommand, workingDirectory, sharedRoots, environment, bindPaths
     ):
         pid = self._next_pid
         self._next_pid += 1
@@ -165,10 +165,11 @@ class MockHelper(dbus.service.Object):
         _record_launch(
             pid=pid,
             username=str(username),
-            compositorUid=int(compositorUid),
+            displayContext=str(displayContext),
             gamescopeArgs=[str(a) for a in gamescopeArgs],
             gameCommand=[str(a) for a in gameCommand],
             workingDirectory=str(workingDirectory),
+            sharedRoots=[str(p) for p in sharedRoots],
             environment=[str(e) for e in environment],
             bindPaths=[str(b) for b in bindPaths],
         )
@@ -187,8 +188,9 @@ class MockHelper(dbus.service.Object):
     def _stop(self, pid):
         self._launched_pids.discard(int(pid))
 
-    @dbus.service.method(INTERFACE_NAME, in_signature="suas", out_signature="i")
-    def MountSharedDirectories(self, username, compositorUid, directories):
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="sas", out_signature="i")
+    def MountSharedDirectories(self, username, directories):
         return len(directories)
 
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="i")
@@ -211,8 +213,9 @@ class MockHelper(dbus.service.Object):
     def CopyDirectoryToUser(self, username, sourceDir, targetRelativePath):
         return True
 
-    @dbus.service.method(INTERFACE_NAME, in_signature="suss", out_signature="b")
-    def SetupOverlayMount(self, username, compositorUid, sourceDir, targetAlias):
+
+    @dbus.service.method(INTERFACE_NAME, in_signature="sss", out_signature="b")
+    def SetupOverlayMount(self, username, sourceDir, targetAlias):
         return True
 
     @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="b")

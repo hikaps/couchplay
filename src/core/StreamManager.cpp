@@ -19,14 +19,14 @@ static const QString s_sunshineBinary = QStringLiteral("sunshine");
 static constexpr int RESTART_DELAY_MS = 2000;
 
 // The compositor for a streaming instance is the per-instance virtual gamescope
-// output, which the helper runs as the streaming user -- so its Wayland socket
-// lives in /run/user/<streamingUserUid>, NOT the GUI user's runtime dir. Resolve
-// the streaming user's uid; fall back to the GUI uid only if the lookup fails.
-uid_t StreamManager::resolveCompositorUid(const QString &username) const
-{
-    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
-    return id.valid ? static_cast<uid_t>(id.uid) : ::getuid();
-}
+// Streaming display ownership is represented by the helper-issued display context.
+
+
+
+
+
+
+
 
 StreamManager::StreamManager(QObject *parent)
     : QObject(parent)
@@ -132,6 +132,7 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     entry.instanceIndex = instanceIndex;
     entry.configDir = configDir;
     entry.username = username;
+    entry.displayContext = config.value(QStringLiteral("displayContext")).toString();
     entry.lastConfig = config;
     entry.restartAttempts = 0;
     entry.state = NotStarted;
@@ -151,16 +152,17 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     }
 
     const QStringList gameCommand{ s_sunshineBinary, configPath };
-    const uid_t compositorUid = resolveCompositorUid(username);
+    const QString displayContext = entry.displayContext;
     const QStringList gamescopeArgs;
     const QStringList envVars;
     const QStringList bindPaths;
 
     const qint64 pid = m_helperClient->launchInstance(username,
-                                                       static_cast<uint>(compositorUid),
+                                                       displayContext,
                                                        gamescopeArgs,
                                                        gameCommand,
                                                        QString(),
+                                                       QStringList(),
                                                        envVars,
                                                        bindPaths);
     if (pid <= 0) {
@@ -413,16 +415,17 @@ void StreamManager::attemptRestart(int instanceIndex)
     }
 
     const QStringList gameCommand{ s_sunshineBinary, configPath };
-    const uid_t compositorUid = resolveCompositorUid(entry.username);
+    const QString displayContext = entry.displayContext;
     const QStringList gamescopeArgs;
     const QStringList envVars;
     const QStringList bindPaths;
 
     const qint64 pid = m_helperClient->launchInstance(entry.username,
-                                                       static_cast<uint>(compositorUid),
+                                                       displayContext,
                                                        gamescopeArgs,
                                                        gameCommand,
                                                        QString(),
+                                                       QStringList(),
                                                        envVars,
                                                        bindPaths);
     if (pid <= 0) {
