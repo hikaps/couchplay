@@ -47,7 +47,7 @@ public:
     };
     struct OverlayCall {
         QString username;
-        uint compositorUid;
+
         QString sourceDir;
         QString targetAlias;
     };
@@ -60,7 +60,7 @@ public:
 
     struct MountCall {
         QString username;
-        uint compositorUid;
+
         QStringList directories;
     };
 
@@ -88,17 +88,19 @@ public:
     QList<QStringList> launchCommands;
     qint64 nextPid = 1000;
     qint64 launchInstance(const QString &username,
-                          uint compositorUid,
+                          const QString &displayContext,
                           const QStringList &gamescopeArgs,
                           const QStringList &gameCommand,
                           const QString &workingDirectory,
+                          const QStringList &sharedRoots,
                           const QStringList &environment,
                           const QStringList &bindPaths) override
     {
         Q_UNUSED(username)
-        Q_UNUSED(compositorUid)
+        Q_UNUSED(displayContext)
         Q_UNUSED(gamescopeArgs)
         Q_UNUSED(workingDirectory)
+        Q_UNUSED(sharedRoots)
         Q_UNUSED(environment)
         Q_UNUSED(bindPaths)
         launchCommands.append(gameCommand);
@@ -128,9 +130,9 @@ public:
         return true;
     }
 
-    bool setupOverlayMount(const QString &username, uint compositorUid, const QString &sourceDir, const QString &targetAlias) override
+    bool setupOverlayMount(const QString &username, const QString &sourceDir, const QString &targetAlias) override
     {
-        overlayCalls.append({username, compositorUid, sourceDir, targetAlias});
+        overlayCalls.append({username, sourceDir, targetAlias});
         return true;
     }
 
@@ -146,9 +148,9 @@ public:
         return true;
     }
 
-    int mountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories) override
+    int mountSharedDirectories(const QString &username, const QStringList &directories) override
     {
-        mountCalls.append({username, compositorUid, directories});
+        mountCalls.append({username, directories});
         return directories.size();
     }
 
@@ -284,6 +286,7 @@ void TestSessionRunner::init()
 {
     m_sessionManager = new SessionManager(this);
     m_presetManager = new PresetManager(this);
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {}));
     m_steamConfigManager = new SteamConfigManager(this);
     m_helperClient = new MockCouchPlayHelperClient(this);
 
@@ -414,7 +417,7 @@ void TestSessionRunner::testSetupSteamConfigAppliesHeroicAcls()
 
 void TestSessionRunner::testStartSessionHeroicPresetUsesAclsAndSharedConfig()
 {
-    QSKIP("Requires D-Bus (m_runner->start()). Will be rewritten in Commit 11 when setupDataDirectories() is implemented.");
+    QSKIP("Requires D-Bus (m_runner->start()).");
 }
 
 void TestSessionRunner::testSetupDataDirectoriesUsesInstanceDirs()
@@ -440,7 +443,7 @@ void TestSessionRunner::testSetupDataDirectoriesUsesInstanceDirs()
     instanceDirs.append(instanceDir);
     m_sessionManager->setInstanceDataDirectories(0, instanceDirs);
 
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
 
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/instance/dir"));
@@ -468,7 +471,7 @@ void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
     m_sessionManager->setInstancePreset(0, presetId);
     // No instance directories set — must fall back to the preset's defaults
 
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
 
     QCOMPARE(m_helperClient->aclCalls.size(), 1);
     QCOMPARE(m_helperClient->aclCalls[0].path, QStringLiteral("/preset/dir"));
@@ -493,7 +496,7 @@ void TestSessionRunner::testSetupDataDirectoriesEmptySnapshotStaysEmpty()
     // Explicitly empty snapshot (preset selected while it had no dirs)
     m_sessionManager->setInstanceDataDirectories(0, QVariantList());
 
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
 
     // Later preset additions must not leak into the intentionally-empty snapshot
     QCOMPARE(m_helperClient->aclCalls.size(), 0);
@@ -517,7 +520,7 @@ void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()
     dirs.append(bindDir);
     m_sessionManager->setInstanceDataDirectories(0, dirs);
 
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
 
     // Escaped mount spec — identical to the legacy form for plain paths
     // (empty alias => home-relative target)
@@ -543,7 +546,7 @@ void TestSessionRunner::testSetupDataDirectoriesBindModeEscapesPipePath()
     dirs.append(bindDir);
     m_sessionManager->setInstanceDataDirectories(0, dirs);
 
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
 
     QCOMPARE(m_helperClient->mountCalls.size(), 1);
     // Escaped pipe + trailing separator (empty alias)
@@ -594,7 +597,7 @@ void TestSessionRunner::testSetupDataDirectoriesMirrorsStagedData()
     bindSeed.write("must-not-mirror\n");
     bindSeed.close();
 
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
 
     // Only the overlay dir is mirrored, into the player's view of that dir
     // (external path -> .couchplay/mounts mapping); the bind staging content
@@ -640,14 +643,14 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
 
     // Library sharing disabled: the steamRoot entry must NOT be mounted — the
     // player's own Steam root is never overlaid
-    m_runner->setupDataDirectories();
+    m_runner->setupSessionResources();
     QCOMPARE(m_helperClient->overlayCalls.size(), 0);
 
     // Library sharing enabled with no parseable libraries: still no mounts
     // (nothing to share), and crucially no home-relative overlay of the
     // player's Steam root
     steamManager->setShareLibraryEnabled(true);
-    m_runner->setupDataDirectories();
+    m_runner->setupSessionResources();
     QCOMPARE(m_helperClient->overlayCalls.size(), 0);
     for (const auto &call : m_helperClient->overlayCalls) {
         QVERIFY(!call.targetAlias.isEmpty()); // everything alias-mounted, never at the player's Steam root path
@@ -695,7 +698,8 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
     dirs.append(overlayDir);
     m_sessionManager->setInstanceDataDirectories(0, dirs);
 
-    m_runner->setupDataDirectories();
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
+    QVERIFY(m_runner->setupSessionResources());
 
     // Both libraries expose only steamapps/common under their player aliases;
     // the player's Steam root and the compositor's account state stay private.
@@ -739,7 +743,7 @@ void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
 
     // False is expected: config sync fails for a nonexistent user. What
     // matters here is the effect on the generic data-directory path.
-    QVERIFY(!m_runner->setupDataDirectories());
+    QVERIFY(!m_runner->setupSessionResources());
 
     // The config root must NOT be bulk-copied (selective sync replaces it)
     QCOMPARE(m_helperClient->copyDirCalls.size(), 0);
@@ -781,7 +785,7 @@ void TestSessionRunner::testNaturalExitTearsDownSharingState()
     dirs.append(overlayDir);
     m_sessionManager->setInstanceDataDirectories(0, dirs);
 
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
     QVERIFY(m_runner->m_sharedStateActive);
     QCOMPARE(m_helperClient->overlayCalls.size(), 1);
     QCOMPARE(m_helperClient->unmountAllCalls, 0);
@@ -801,7 +805,7 @@ void TestSessionRunner::testNaturalExitTearsDownSharingState()
     QCOMPARE(m_helperClient->unmountAllCalls, 1);
 
     // A new session re-arms the tracker and stop() cleans it up again
-    QVERIFY(m_runner->setupDataDirectories());
+    QVERIFY(m_runner->setupSessionResources());
     QVERIFY(m_runner->m_sharedStateActive);
     m_runner->stop();
     QCOMPARE(m_helperClient->unmountAllCalls, 2);

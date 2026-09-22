@@ -428,13 +428,19 @@ void SessionRunner::continueStart()
         : QList<QRect>();
 
     if (!setupDeviceOwnership()) {
-        qWarning() << "Failed to set up device ownership - continuing anyway";
+        beginFinalization(true, QStringLiteral("Failed to set up device ownership"));
+        return;
     }
-    if (!setupDataDirectories()) {
+
+
+    if (!setupSessionResources()) {
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
         return;
     }
-    buildBindPaths();
+    if (!buildOverrideBinds()) {
+        beginFinalization(true, QStringLiteral("Failed to prepare override binds"));
+        return;
+    }
 
     m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
@@ -460,7 +466,7 @@ void SessionRunner::continueStart()
             config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
             config[QStringLiteral("sunshinePort")] = instConfig.sunshinePort;
             if (m_streamingInstances.contains(i)) {
-                config[QStringLiteral("virtualDisplaySocket")] = m_streamingInstances[i].waylandSocket;
+                config[QStringLiteral("displayContext")] = m_streamingInstances[i].displayContext;
                 if (!m_streamingInstances[i].sinkName.isEmpty()) {
                     config[QStringLiteral("sink")] = m_streamingInstances[i].sinkName;
                 }
@@ -495,8 +501,14 @@ void SessionRunner::continueStart()
             config[QStringLiteral("devicePaths")] = pathList;
         }
         if (m_instanceBindPaths.contains(i)) {
-            config[QStringLiteral("bindPaths")] = m_instanceBindPaths.value(i);
+            config[QStringLiteral("overrideBinds")] = m_instanceBindPaths.value(i);
         }
+        QStringList sharedRoots = m_instanceSharedRoots.value(i);
+        if (!command.workingDirectory.isEmpty() && !sharedRoots.contains(command.workingDirectory)) {
+            sharedRoots.append(command.workingDirectory);
+            m_instanceSharedRoots[i] = sharedRoots;
+        }
+        config[QStringLiteral("sharedRoots")] = sharedRoots;
         m_pendingInstanceConfigs.append(config);
     }
 
@@ -769,6 +781,7 @@ bool SessionRunner::setupDeviceOwnership()
     }
 
     const auto &profile = activeProfile();
+    bool allSucceeded = true;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
@@ -785,6 +798,7 @@ bool SessionRunner::setupDeviceOwnership()
             }
             continue;
         }
+
 
         const UserIdentity id = resolveUserIdentity(username, m_helperClient);
         if (!id.valid) {
@@ -803,6 +817,7 @@ bool SessionRunner::setupDeviceOwnership()
             } else {
                 qWarning() << "SessionRunner: Failed to set ownership of" << path;
                 Q_EMIT errorOccurred(QStringLiteral("Failed to set device ownership for %1").arg(path));
+                allSucceeded = false;
             }
         }
 
@@ -813,13 +828,16 @@ bool SessionRunner::setupDeviceOwnership()
                     m_ownedDevicePaths.append(hidrawPath);
                 }
                 qDebug() << "SessionRunner: Set hidraw ownership" << hidrawPath << "for user" << username;
+
             } else {
                 qWarning() << "SessionRunner: Failed to set hidraw ownership" << hidrawPath;
+                allSucceeded = false;
             }
         }
     }
 
-    return true;
+    return allSucceeded;
+
 }
 
 void SessionRunner::restoreDeviceOwnership()
@@ -839,22 +857,25 @@ void SessionRunner::restoreDeviceOwnership()
     m_ownedDevicePaths.clear();
 }
 
-bool SessionRunner::setupDataDirectories()
+bool SessionRunner::setupSessionResources()
 {
     if (!m_helperClient || !m_sessionManager || !m_presetManager) {
-        return true;
+        return false;
     }
 
+
+
     if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, skipping data directory setup";
-        return true;
+        qWarning() << "SessionRunner: Helper not available for session resource setup";
+        return false;
     }
 
     // Arm the sharing-state tracker: teardown must run when the session ends,
     // including when the last game exits on its own
     m_sharedStateActive = true;
     m_steamSharedUsers.clear();
-    uint compositorUid = static_cast<uint>(getuid());
+    m_instanceSharedRoots.clear();
+
     // Helper-first resolution: the Flatpak sandbox's getpwuid(getuid()) cannot
     // see host accounts, which would misroute home-relative copy/mount targets
     QString compositorHome = resolveCompositorHome(m_helperClient);
@@ -871,18 +892,22 @@ bool SessionRunner::setupDataDirectories()
         }
 
         LaunchPreset preset = m_presetManager->getPreset(presetId.isEmpty() ? QStringLiteral("steam") : presetId);
-        const bool isSteamLauncher = preset.launcherId == QStringLiteral("steam");
-        const bool isHeroicLauncher = preset.launcherId == QStringLiteral("heroic");
+        const QStringList requiredIntegrations = preset.requiredIntegrations;
+        const bool selectedSteamShortcut = profile.instances[i].gameSelection.launcherId == QStringLiteral("steam")
+            && profile.instances[i].gameSelection.backend == QStringLiteral("shortcut");
+        const bool requiresSteam = requiredIntegrations.contains(QStringLiteral("steam")) || selectedSteamShortcut;
+        const bool requiresHeroic = requiredIntegrations.contains(QStringLiteral("heroic"));
+
 
         // Steam shortcut sync: dispatched live at session start (not part of the
         // preset snapshot, so toggling the setting applies to the next session)
-        const bool selectedSteamShortcut = profile.instances[i].gameSelection.launcherId == QStringLiteral("steam")
-            && profile.instances[i].gameSelection.backend == QStringLiteral("shortcut");
-        if (selectedSteamShortcut && (!m_steamConfigManager || !m_steamConfigManager->isSteamDetected())) {
-            qCWarning(couchplaySteam) << "Selected Steam shortcut cannot be synchronized because Steam was not detected";
+
+
+        if (requiresSteam && (!m_steamConfigManager || !m_steamConfigManager->isSteamDetected())) {
+            qCWarning(couchplaySteam) << "Required integration is unavailable: steam";
             allSucceeded = false;
         }
-        if (isSteamLauncher && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
+        if (requiresSteam && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
             && (m_steamConfigManager->syncShortcutsEnabled() || selectedSteamShortcut)) {
             qCDebug(couchplaySteam) << "Syncing Steam shortcuts for user" << username;
             m_steamConfigManager->loadShortcuts();
@@ -901,7 +926,11 @@ bool SessionRunner::setupDataDirectories()
         // Heroic: selective config sync (Flatpak-vs-native aware) plus optional
         // shortcut sync — replaces the generic whole-directory copy of the
         // config root, mirroring the pre-refactor setupLauncherAccess behavior
-        if (isHeroicLauncher && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+        if (requiresHeroic && (!m_heroicConfigManager || !m_heroicConfigManager->isHeroicDetected())) {
+            qCWarning(couchplaySteam) << "Required integration is unavailable: heroic";
+            allSucceeded = false;
+        }
+        if (requiresHeroic && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
             qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
             if (!m_heroicConfigManager->syncConfigToUser(username)) {
                 qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
@@ -926,9 +955,23 @@ bool SessionRunner::setupDataDirectories()
             dataDirs = preset.dataDirectories;
         }
         if (dataDirs.isEmpty()) {
+
+
+
+
+
+
+
             qDebug() << "SessionRunner: No data directories for instance" << i << "user" << username;
             continue;
         }
+        QStringList sharedRoots;
+        for (const DataDirectory &sharedDir : dataDirs) {
+            if (!sharedDir.path.isEmpty() && !sharedRoots.contains(sharedDir.path)) {
+                sharedRoots.append(sharedDir.path);
+            }
+        }
+        m_instanceSharedRoots[i] = sharedRoots;
 
         qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
 
@@ -944,7 +987,7 @@ bool SessionRunner::setupDataDirectories()
             // full compositor Steam root for a non-Steam launcher.
             if (dir.mode == QStringLiteral("overlay") && m_steamConfigManager
                 && dir.path == m_steamConfigManager->steamPaths().steamRoot) {
-                if (!isSteamLauncher) {
+                if (!requiresSteam) {
                     qCWarning(couchplaySteam) << "Ignoring Steam root data marker for non-Steam launcher" << username;
                     continue;
                 }
@@ -970,13 +1013,13 @@ bool SessionRunner::setupDataDirectories()
 
             // Stale snapshots may carry the heroic config root as a copy dir;
             // config sync above replaces the generic whole-directory copy
-            if (dir.mode == QStringLiteral("copy") && isHeroicLauncher && m_heroicConfigManager
+            if (dir.mode == QStringLiteral("copy") && requiresHeroic && m_heroicConfigManager
                 && dir.path == m_heroicConfigManager->configPath()) {
                 qDebug() << "SessionRunner: Heroic config handled by config sync, skipping copy of" << dir.path;
                 continue;
             }
 
-            if (isSteamLauncher && m_steamConfigManager) {
+            if (requiresSteam && m_steamConfigManager) {
                 if (!m_steamConfigManager->prepareDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam prepareDataDir failed for" << dir.path;
                     allSucceeded = false;
@@ -1017,7 +1060,7 @@ bool SessionRunner::setupDataDirectories()
                 }
                 bool mounted = false;
                 if (dir.mode == QStringLiteral("overlay")) {
-                    mounted = m_helperClient->setupOverlayMount(username, compositorUid, dir.path, QString());
+                    mounted = m_helperClient->setupOverlayMount(username, dir.path, QString());
                     if (!mounted) {
                         qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path
                                    << "user" << username;
@@ -1027,7 +1070,7 @@ bool SessionRunner::setupDataDirectories()
                     // Escaped spec: paths containing '|' or '\' survive the
                     // helper's source|alias wire format
                     const QStringList dirSpec = {encodeMountSpec(dir.path, QString())};
-                    mounted = m_helperClient->mountSharedDirectories(username, compositorUid, dirSpec) >= 1;
+                    mounted = m_helperClient->mountSharedDirectories(username, dirSpec) >= 1;
                     if (!mounted) {
                         qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;
                         allSucceeded = false;
@@ -1065,7 +1108,7 @@ bool SessionRunner::setupDataDirectories()
                 }
             }
 
-            if (isSteamLauncher && m_steamConfigManager) {
+            if (requiresSteam && m_steamConfigManager) {
                 if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
                     allSucceeded = false;
@@ -1116,7 +1159,7 @@ void SessionRunner::teardownSharingState()
     }
 }
 
-bool SessionRunner::buildBindPaths()
+bool SessionRunner::buildOverrideBinds()
 {
     m_instanceBindPaths.clear();
 
@@ -1166,6 +1209,14 @@ bool SessionRunner::buildBindPaths()
 
         // Bind format: "<stagingDir>/<relativeFile>:<gamePath>/<relativeFile>"
         QStringList bindPaths;
+        QStringList sharedRoots = m_instanceSharedRoots.value(i);
+        if (!sharedRoots.contains(gamePath)) {
+            sharedRoots.append(gamePath);
+        }
+        if (!sharedRoots.contains(overridesRoot)) {
+            sharedRoots.append(overridesRoot);
+        }
+        m_instanceSharedRoots[i] = sharedRoots;
         for (const QString &relativePath : matchedFiles) {
             QString bindEntry =
                 overridesRoot + relativePath + QLatin1Char(':') + gamePath + QLatin1Char('/') + relativePath;
@@ -1620,8 +1671,8 @@ bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap 
     int height = resolution.size() >= 2 ? resolution[1].toInt() : 1080;
     int refreshRate = config.value(QStringLiteral("refreshRate")).toInt();
 
-    QString waylandSocket = m_helperClient->createVirtualOutput(username, width, height, refreshRate);
-    if (waylandSocket.isEmpty()) {
+    QString displayContext = m_helperClient->createVirtualOutput(username, width, height, refreshRate);
+    if (displayContext.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Failed to create virtual output for streaming instance %1").arg(instanceIndex));
         return false;
     }
@@ -1634,7 +1685,8 @@ bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap 
 
     StreamingInstanceInfo info;
     info.username = username;
-    info.waylandSocket = waylandSocket;
+    info.displayContext = displayContext;
+
     info.sinkName = createdSinkName;
     info.virtualDisplayCreated = true;
     info.nullSinkCreated = !createdSinkName.isEmpty();
@@ -1665,9 +1717,9 @@ void SessionRunner::cleanupStreamingInstance(int index)
                 qWarning() << "SessionRunner: Failed to destroy null sink" << info.sinkName;
             }
         }
-        if (info.virtualDisplayCreated && !info.waylandSocket.isEmpty()) {
-            if (!m_helperClient->destroyVirtualOutput(info.username, info.waylandSocket)) {
-                qWarning() << "SessionRunner: Failed to destroy virtual output" << info.waylandSocket;
+        if (info.virtualDisplayCreated && !info.displayContext.isEmpty()) {
+            if (!m_helperClient->destroyVirtualOutput(info.username, info.displayContext)) {
+                qWarning() << "SessionRunner: Failed to destroy virtual output" << info.displayContext;
             }
         }
     }

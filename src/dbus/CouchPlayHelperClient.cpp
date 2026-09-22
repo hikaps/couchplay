@@ -238,10 +238,11 @@ QString CouchPlayHelperClient::getUserSteamRoot(const QString &username)
 }
 
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
-                                             uint compositorUid,
+                                             const QString &displayContext,
                                              const QStringList &gamescopeArgs,
                                              const QStringList &gameCommand,
                                              const QString &workingDirectory,
+                                             const QStringList &sharedRoots,
                                              const QStringList &environment,
                                              const QStringList &bindPaths)
 {
@@ -252,10 +253,11 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username,
 
     QDBusReply<qint64> reply = m_interface->call(QStringLiteral("LaunchInstance"),
                                                  username,
-                                                 compositorUid,
+                                                 displayContext,
                                                  gamescopeArgs,
                                                  gameCommand,
                                                  workingDirectory,
+                                                 sharedRoots,
                                                  environment,
                                                  bindPaths);
 
@@ -309,8 +311,8 @@ bool CouchPlayHelperClient::killInstance(qint64 pid)
 }
 
 int CouchPlayHelperClient::mountSharedDirectories(const QString &username,
-                                                  uint compositorUid,
                                                   const QStringList &directories)
+
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -322,7 +324,7 @@ int CouchPlayHelperClient::mountSharedDirectories(const QString &username,
     }
 
     QDBusReply<int> reply =
-        m_interface->call(QStringLiteral("MountSharedDirectories"), username, compositorUid, directories);
+        m_interface->call(QStringLiteral("MountSharedDirectories"), username, directories);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -574,9 +576,9 @@ bool CouchPlayHelperClient::destroyVirtualOutput(const QString &username, const 
 }
 
 bool CouchPlayHelperClient::setupOverlayMount(const QString &username,
-                                               uint compositorUid,
                                                const QString &sourceDir,
                                                const QString &targetAlias)
+
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -584,7 +586,7 @@ bool CouchPlayHelperClient::setupOverlayMount(const QString &username,
     }
 
     QDBusReply<bool> reply =
-        m_interface->call(QStringLiteral("SetupOverlayMount"), username, compositorUid, sourceDir, targetAlias);
+        m_interface->call(QStringLiteral("SetupOverlayMount"), username, sourceDir, targetAlias);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());

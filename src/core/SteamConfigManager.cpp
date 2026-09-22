@@ -1019,7 +1019,7 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
 
         qCDebug(couchplaySteam) << "Mounting library content" << sourceCommon << "at" << targetAlias
                                 << "for" << targetUsername;
-        if (!m_helperClient->setupOverlayMount(targetUsername, static_cast<uint>(getuid()), sourceCommon, targetAlias)) {
+        if (!m_helperClient->setupOverlayMount(targetUsername, sourceCommon, targetAlias)) {
             qCWarning(couchplaySteam) << "Failed to mount library content" << sourceCommon;
             anyFailure = true;
         }
@@ -1138,7 +1138,7 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
             const QString alias =
                 QStringLiteral(".couchplay/steam-libs/%1/steamapps/common").arg(QString::number(i));
             qCDebug(couchplaySteam) << "prepareDataDir: Overlaying" << sourceCommon << "at" << alias << "for" << username;
-            if (!m_helperClient->setupOverlayMount(username, static_cast<uint>(getuid()), sourceCommon, alias)) {
+            if (!m_helperClient->setupOverlayMount(username, sourceCommon, alias)) {
                 qCWarning(couchplaySteam) << "prepareDataDir: Failed to mount library content" << sourceCommon;
                 anyFailure = true;
             }

@@ -12,6 +12,8 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusVariant>
+#include <QDBusInterface>
+#include <QDBusReply>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -40,6 +42,7 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <limits>
 #ifndef O_PATH
 #define O_PATH 010000000
 #endif
@@ -108,6 +111,7 @@ public Q_SLOTS:
 
         m_helper->m_usernameToUnitName.remove(m_username);
         m_helper->m_pidToUsername.remove(m_pid);
+        m_helper->m_pidOwnerUid.remove(m_pid);
         m_helper->cleanupTcpListenerIfLast(m_username);
 
         m_helper->saveState();
@@ -170,6 +174,7 @@ static const QString ACTION_MANAGE_VIRTUAL_DISPLAY = QStringLiteral("io.github.h
 static const QString ACTION_MANAGE_AUDIO_SINK = QStringLiteral("io.github.hikaps.couchplay.manage-audio-sink");
 
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
+static constexpr uint INVALID_CALLER_UID = std::numeric_limits<uint>::max();
 
 CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     : QObject(parent)
@@ -282,6 +287,7 @@ CouchPlayHelper::~CouchPlayHelper()
     }
     m_usernameToUnitName.clear();
     m_pidToUsername.clear();
+    m_pidOwnerUid.clear();
 
     qDeleteAll(m_monitors);
     m_monitors.clear();
@@ -289,7 +295,7 @@ CouchPlayHelper::~CouchPlayHelper()
     stopWatchingAllDevices();
 
     if (!m_modifiedDevices.isEmpty() || !m_modifiedHidDevices.isEmpty()) {
-        ResetAllDevices();
+        resetAllDevicesInternal();
     }
     removeUinputAccess();
 }
@@ -536,6 +542,15 @@ bool CouchPlayHelper::WatchDevice(const QString &devicePath)
 
 
 int CouchPlayHelper::ResetAllDevices()
+{
+    if (!checkAuthorization(ACTION_DEVICE_OWNER)) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to reset devices"));
+        return 0;
+    }
+    return resetAllDevicesInternal();
+}
+
+int CouchPlayHelper::resetAllDevicesInternal()
 {
     stopWatchingAllDevices();
 
@@ -968,10 +983,15 @@ bool CouchPlayHelper::IsLingerEnabled(const QString &username)
     return m_ops->fileExists(lingerFile);
 }
 
-bool CouchPlayHelper::SetupRuntimeAccess(uint compositorUid)
+bool CouchPlayHelper::SetupRuntimeAccess()
 {
     if (!checkAuthorization(ACTION_WAYLAND_ACCESS)) {
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to set up runtime access"));
+        return false;
+    }
+    const uint compositorUid = callerUid();
+    if (compositorUid == INVALID_CALLER_UID) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
         return false;
     }
 
@@ -1065,10 +1085,15 @@ bool CouchPlayHelper::SetupRuntimeAccess(uint compositorUid)
     return success;
 }
 
-bool CouchPlayHelper::RemoveRuntimeAccess(uint compositorUid)
+bool CouchPlayHelper::RemoveRuntimeAccess()
 {
     if (!checkAuthorization(ACTION_WAYLAND_ACCESS)) {
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to remove runtime access"));
+        return false;
+    }
+    const uint compositorUid = callerUid();
+    if (compositorUid == INVALID_CALLER_UID) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
         return false;
     }
 
@@ -1238,11 +1263,18 @@ void CouchPlayHelper::restartUserPipeWirePulse(uint compositorUid)
     delete proc;
 }
 
+uint CouchPlayHelper::callerUid() const
+{
+    const uid_t uid = m_ops->connectionUnixUser(message().service());
+    if (uid == static_cast<uid_t>(-1)) {
+        return INVALID_CALLER_UID;
+    }
+    return static_cast<uint>(uid);
+}
 bool CouchPlayHelper::checkAuthorization(const QString &action)
 {
     return m_ops->checkAuthorization(action, message().service());
 }
-
 bool CouchPlayHelper::validateUserAndAuth(const QString &username, const QString &action)
 {
     if (!s_validUsername.match(username).hasMatch()) {
@@ -1255,6 +1287,17 @@ bool CouchPlayHelper::validateUserAndAuth(const QString &username, const QString
     }
     if (!userExists(username)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("User '%1' does not exist").arg(username));
+        return false;
+    }
+    const uint targetUid = getUserUid(username);
+    const uint requestUid = callerUid();
+    if (requestUid == INVALID_CALLER_UID) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
+        return false;
+    }
+    if ((action == ACTION_LAUNCH_INSTANCE || action == ACTION_MANAGE_VIRTUAL_DISPLAY)
+        && targetUid != requestUid && !IsInCouchPlayGroup(username)) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Target user is not a CouchPlay-managed user"));
         return false;
     }
     return true;
@@ -1303,10 +1346,11 @@ bool CouchPlayHelper::isValidDevicePath(const QString &path)
 }
 
 qint64 CouchPlayHelper::LaunchInstance(const QString &username,
-                                       uint compositorUid,
+                                       const QString &displayContext,
                                        const QStringList &gamescopeArgs,
                                        const QStringList &gameCommand,
                                        const QString &workingDirectory,
+                                       const QStringList &sharedRoots,
                                        const QStringList &environment,
                                        const QStringList &bindPaths)
 {
@@ -1322,25 +1366,47 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username,
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Working directory must be an existing absolute path"));
         return 0;
     }
-
-    struct passwd *pw = m_ops->getpwuid(compositorUid);
-    if (!pw) {
-        sendErrorReply(QDBusError::InvalidArgs,
-                       QStringLiteral("Compositor user with UID %1 does not exist").arg(compositorUid));
-        return 0;
+    if (!workingDirectory.isEmpty()) {
+        const QString targetHome = getUserHome(username);
+        bool allowed = !targetHome.isEmpty()
+            && (workingDirectory == targetHome || workingDirectory.startsWith(targetHome + QLatin1Char('/')));
+        for (const QString &root : sharedRoots) {
+            if (workingDirectory == root || workingDirectory.startsWith(root + QLatin1Char('/'))) {
+                allowed = true;
+                break;
+            }
+        }
+        if (!allowed) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid launch working directory"));
+            return 0;
+        }
     }
 
+
+
+
+
+
+
+
+    const uint compositorUid = callerUid();
+    if (compositorUid == INVALID_CALLER_UID) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
+        return 0;
+    }
     if (!m_runtimeAccessSetForUid.contains(compositorUid)) {
-        if (!SetupRuntimeAccess(compositorUid)) {
+        if (!SetupRuntimeAccess()) {
             qWarning() << "Failed to set up runtime access for compositor" << compositorUid;
         }
     }
 
+
     const qint64 pid = startTransientUnit(username,
-                                          compositorUid,
+                                          displayContext,
                                           gamescopeArgs,
                                           gameCommand,
                                           workingDirectory,
+                                          sharedRoots,
                                           environment,
                                           bindPaths);
     if (pid <= 0) {
@@ -1356,34 +1422,34 @@ bool CouchPlayHelper::StopInstance(qint64 pid)
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to stop instances"));
         return false;
     }
-
-    if (pid <= 0) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid PID"));
+    if (!m_pidToUsername.contains(pid) || !m_pidOwnerUid.contains(pid)) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Unknown or untracked instance PID"));
         return false;
     }
-
-    if (m_pidToUsername.contains(pid)) {
-        QString username = m_pidToUsername.value(pid);
-        QString serviceName = m_usernameToUnitName.value(username);
-        if (!serviceName.isEmpty()) {
-            m_stoppingUnits.insert(serviceName);
-            delete m_monitors.take(serviceName);
-            stopServiceInstance(serviceName);
-            m_usernameToUnitName.remove(username);
-            m_pidToUsername.remove(pid);
-            cleanupTcpListenerIfLast(username);
-            m_stoppingUnits.remove(serviceName);
-            saveState();
-            return true;
-        }
+    if (m_pidOwnerUid.value(pid) != callerUid()) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized for this instance"));
+        return false;
     }
-
-    if (m_ops->killProcess(static_cast<pid_t>(pid), SIGTERM)) {
-        return true;
+    const QString username = m_pidToUsername.value(pid);
+    const QString serviceName = m_usernameToUnitName.value(username);
+    if (serviceName.isEmpty()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Instance unit is not tracked"));
+        return false;
     }
-
-    sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to stop process %1").arg(pid));
-    return false;
+    m_stoppingUnits.insert(serviceName);
+    if (!stopServiceInstance(serviceName)) {
+        m_stoppingUnits.remove(serviceName);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to stop instance unit"));
+        return false;
+    }
+    delete m_monitors.take(serviceName);
+    m_usernameToUnitName.remove(username);
+    m_pidToUsername.remove(pid);
+    m_pidOwnerUid.remove(pid);
+    m_stoppingUnits.remove(serviceName);
+    cleanupTcpListenerIfLast(username);
+    saveState();
+    return true;
 }
 
 bool CouchPlayHelper::KillInstance(qint64 pid)
@@ -1392,42 +1458,52 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to kill instances"));
         return false;
     }
-
-    if (pid <= 0) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid PID"));
+    if (!m_pidToUsername.contains(pid) || !m_pidOwnerUid.contains(pid)) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Unknown or untracked instance PID"));
         return false;
     }
-
-    if (m_pidToUsername.contains(pid)) {
-        QString username = m_pidToUsername.value(pid);
-        QString serviceName = m_usernameToUnitName.value(username);
-        if (!serviceName.isEmpty()) {
-            m_stoppingUnits.insert(serviceName);
-            delete m_monitors.take(serviceName);
-            QProcess *killProc = m_ops->createProcess();
-            m_ops->startProcess(killProc,
-                                QStringLiteral("systemctl"),
-                                {QStringLiteral("kill"), serviceName, QStringLiteral("--signal=SIGKILL")});
-            m_ops->waitForFinished(killProc, 10000);
-            delete killProc;
-
-            stopServiceInstance(serviceName);
-            m_usernameToUnitName.remove(username);
-            m_pidToUsername.remove(pid);
-            cleanupTcpListenerIfLast(username);
-            m_stoppingUnits.remove(serviceName);
-            saveState();
-            return true;
-        }
+    if (m_pidOwnerUid.value(pid) != callerUid()) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized for this instance"));
+        return false;
     }
-
-    if (m_ops->killProcess(static_cast<pid_t>(pid), SIGKILL)) {
-        return true;
+    const QString username = m_pidToUsername.value(pid);
+    const QString serviceName = m_usernameToUnitName.value(username);
+    if (serviceName.isEmpty()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Instance unit is not tracked"));
+        return false;
     }
+    m_stoppingUnits.insert(serviceName);
+    QProcess *killProc = m_ops->createProcess();
+    m_ops->startProcess(killProc,
+                        QStringLiteral("systemctl"),
+                        {QStringLiteral("kill"), serviceName, QStringLiteral("--kill-who=all"),
+                         QStringLiteral("--signal=SIGKILL")});
+    const bool killFinished = m_ops->waitForFinished(killProc, 10000);
+    const bool killed = killFinished && m_ops->processExitCode(killProc) == 0;
+    delete killProc;
+    const bool stopped = killed && stopServiceInstance(serviceName);
+    if (!stopped) {
+        m_stoppingUnits.remove(serviceName);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to kill instance unit"));
+        return false;
+    }
+    delete m_monitors.take(serviceName);
+    m_usernameToUnitName.remove(username);
+    m_pidToUsername.remove(pid);
+    m_stoppingUnits.remove(serviceName);
+    m_pidOwnerUid.remove(pid);
 
-    sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to kill process %1").arg(pid));
-    return false;
+    cleanupTcpListenerIfLast(username);
+    saveState();
+    return true;
 }
+
+
+
+
+
+
+
 
 QString CouchPlayHelper::generateServiceName(const QString &username)
 {
@@ -1435,13 +1511,16 @@ QString CouchPlayHelper::generateServiceName(const QString &username)
 }
 
 qint64 CouchPlayHelper::startTransientUnit(const QString &username,
-                                           uint compositorUid,
+                                           const QString &displayContext,
                                            const QStringList &gamescopeArgs,
                                            const QStringList &gameCommand,
                                            const QString &workingDirectory,
+                                           const QStringList &sharedRoots,
                                            const QStringList &environment,
                                            const QStringList &bindPaths)
+
 {
+    Q_UNUSED(sharedRoots);
     QString serviceName = generateServiceName(username);
 
     struct passwd *pwd = m_ops->getpwnam(username.toLocal8Bit().constData());
@@ -1449,51 +1528,153 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username,
         qWarning() << "startTransientUnit: failed to resolve UID for user" << username;
         return 0;
     }
-    QString userUid = QString::number(pwd->pw_uid);
-    QString compositorRuntimeDir = QStringLiteral("/run/user/%1").arg(compositorUid);
-    QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
+    const uint requestUid = callerUid();
+    if (requestUid == INVALID_CALLER_UID) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
+        return 0;
+    }
+    uint runtimeUid = requestUid;
+    QString waylandSocket = QStringLiteral("wayland-0");
+    if (!displayContext.isEmpty()) {
+        bool foundContext = false;
+        for (const VirtualDisplayInfo &info : m_virtualDisplays) {
+            if (info.displayContext == displayContext) {
+                if (info.targetUsername != username || info.ownerUid != requestUid) {
+                    sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Invalid display context owner"));
+                    return 0;
+                }
+                runtimeUid = info.runtimeUid;
+                waylandSocket = info.waylandSocket;
+                foundContext = true;
+                break;
+            }
+        }
+        if (!foundContext) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Unknown display context"));
+            return 0;
+        }
+    }
+    const QString userUid = QString::number(pwd->pw_uid);
+    const QString compositorRuntimeDir = QStringLiteral("/run/user/%1").arg(runtimeUid);
+    const QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
 
     // Runtime directory must exist (requires linger) — without it, PipeWire
     // and gamescope lockfiles fail silently
-    if (!m_ops->fileExists(userRuntimeDir)) {
-        qInfo() << "Creating missing runtime directory" << userRuntimeDir << "for" << username;
-        m_ops->mkpath(userRuntimeDir);
-        m_ops->chown(userRuntimeDir, pwd->pw_uid, pwd->pw_gid);
+    if (!m_ops->fileExists(userRuntimeDir) || !m_ops->fileExists(userRuntimeDir + QStringLiteral("/bus"))) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Target user session bus is unavailable"));
+        return 0;
     }
+
+
+
+
 
     QStringList systemdRunArgs;
     systemdRunArgs << QStringLiteral("--unit") << serviceName;
     systemdRunArgs << QStringLiteral("--uid") << username;
     systemdRunArgs << QStringLiteral("--property=Type=simple");
+    systemdRunArgs << QStringLiteral("--property=KillMode=control-group");
+    systemdRunArgs << QStringLiteral("--property=TimeoutStopSec=10s");
+    systemdRunArgs << QStringLiteral("--property=SendSIGKILL=yes");
     systemdRunArgs << QStringLiteral("--property=Delegate=yes");
     systemdRunArgs << QStringLiteral("--property=MemoryDenyWriteExecute=false");
-    if (!workingDirectory.isEmpty()) {
-        systemdRunArgs << QStringLiteral("--property=WorkingDirectory=%1").arg(workingDirectory);
-    }
+    const QString effectiveWorkingDirectory =
+        workingDirectory.isEmpty() ? QString::fromLocal8Bit(pwd->pw_dir) : workingDirectory;
+    systemdRunArgs << QStringLiteral("--property=WorkingDirectory=%1").arg(effectiveWorkingDirectory);
+
+
 
     // -E flag avoids escaping issues with --property=Environment=
     auto addEnv = [&](const QString &assignment) {
         systemdRunArgs << QStringLiteral("-E") << assignment;
     };
     addEnv(QStringLiteral("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%1/bus").arg(userUid));
-    addEnv(QStringLiteral("WAYLAND_DISPLAY=%1/wayland-0").arg(compositorRuntimeDir));
+    addEnv(QStringLiteral("WAYLAND_DISPLAY=%1/%2").arg(compositorRuntimeDir, waylandSocket));
     addEnv(QStringLiteral("XDG_RUNTIME_DIR=/run/user/%1").arg(userUid));
     addEnv(QStringLiteral("PIPEWIRE_RUNTIME_DIR=%1").arg(compositorRuntimeDir));
     // Use TCP PulseAudio listener for cross-user audio routing.
     // The unix socket rejects cross-UID connections, but TCP on localhost works.
     // The TCP listener is configured by setupPulseTcpListener() during SetupRuntimeAccess().
     addEnv(QStringLiteral("PULSE_SERVER=tcp:127.0.0.1:4713"));
+    addEnv(QStringLiteral("HOME=%1").arg(QString::fromLocal8Bit(pwd->pw_dir)));
+    addEnv(QStringLiteral("USER=%1").arg(QString::fromLocal8Bit(pwd->pw_name)));
+    addEnv(QStringLiteral("LOGNAME=%1").arg(QString::fromLocal8Bit(pwd->pw_name)));
+    addEnv(QStringLiteral("SHELL=%1").arg(QString::fromLocal8Bit(pwd->pw_shell)));
+    addEnv(QStringLiteral("PATH=%1/.local/bin:/usr/local/bin:/usr/bin:/bin").arg(QString::fromLocal8Bit(pwd->pw_dir)));
+    addEnv(QStringLiteral("PWD=%1").arg(workingDirectory.isEmpty()
+                                               ? QString::fromLocal8Bit(pwd->pw_dir)
+                                               : workingDirectory));
+    addEnv(QStringLiteral("XDG_CONFIG_HOME=%1/.config").arg(QString::fromLocal8Bit(pwd->pw_dir)));
+    addEnv(QStringLiteral("XDG_DATA_HOME=%1/.local/share").arg(QString::fromLocal8Bit(pwd->pw_dir)));
+    addEnv(QStringLiteral("XDG_STATE_HOME=%1/.local/state").arg(QString::fromLocal8Bit(pwd->pw_dir)));
+    addEnv(QStringLiteral("XDG_CACHE_HOME=%1/.cache").arg(QString::fromLocal8Bit(pwd->pw_dir)));
+    const QStringList protectedEnvironmentNames = {
+        QStringLiteral("HOME"), QStringLiteral("USER"), QStringLiteral("LOGNAME"), QStringLiteral("SHELL"),
+        QStringLiteral("PATH"), QStringLiteral("PWD"), QStringLiteral("XDG_CONFIG_HOME"),
+        QStringLiteral("XDG_DATA_HOME"), QStringLiteral("XDG_STATE_HOME"), QStringLiteral("XDG_CACHE_HOME"),
+        QStringLiteral("XDG_RUNTIME_DIR"), QStringLiteral("DBUS_SESSION_BUS_ADDRESS"),
+        QStringLiteral("WAYLAND_DISPLAY"), QStringLiteral("PIPEWIRE_RUNTIME_DIR"), QStringLiteral("PULSE_SERVER")};
+    QStringList environmentNames;
     for (const QString &var : environment) {
         int eqPos = var.indexOf(QLatin1Char('='));
-        if (eqPos > 0) {
-            addEnv(var);
+        if (eqPos <= 0) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid environment assignment"));
+            return 0;
         }
+        const QString name = var.left(eqPos);
+        const QString value = var.mid(eqPos + 1);
+        if (!QRegularExpression(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$")).match(name).hasMatch()
+            || value.contains(QChar::Null) || value.contains(QChar::LineFeed) || value.contains(QChar::CarriageReturn)
+            || protectedEnvironmentNames.contains(name) || environmentNames.contains(name)) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid or reserved environment variable: %1").arg(name));
+            return 0;
+        }
+        environmentNames.append(name);
+        addEnv(var);
+
+
     }
 
-    systemdRunArgs << QStringLiteral("--property=BindReadOnlyPaths=%1").arg(compositorRuntimeDir);
+    if (runtimeUid != pwd->pw_uid) {
+        systemdRunArgs << QStringLiteral("--property=BindReadOnlyPaths=%1").arg(compositorRuntimeDir);
+    }
+    const QString targetHome = getUserHome(username);
 
+    QStringList validatedBindPaths;
     for (const QString &bp : bindPaths) {
-        systemdRunArgs << QStringLiteral("--property=BindPaths=%1").arg(bp);
+        const int separator = bp.indexOf(QLatin1Char(':'));
+        if (separator <= 0 || separator == bp.size() - 1) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Malformed launch bind path"));
+            return 0;
+        }
+        const QString source = bp.left(separator);
+        const QString target = bp.mid(separator + 1);
+        bool targetAllowed = !targetHome.isEmpty()
+            && (target == targetHome || target.startsWith(targetHome + QLatin1Char('/')));
+        for (const QString &root : sharedRoots) {
+            if (target == root || target.startsWith(root + QLatin1Char('/'))) {
+                targetAllowed = true;
+                break;
+            }
+        }
+        if (!targetAllowed) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Launch bind target is not a declared shared root"));
+            return 0;
+        }
+        if (!QDir::isAbsolutePath(source) || !QDir::isAbsolutePath(target)
+            || !isPathWithinAllowedPrefix(source) || !isPathWithinAllowedPrefix(target)) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Launch bind path is outside allowed prefixes"));
+            return 0;
+        }
+        const QString canonicalSource = m_ops->canonicalFilePath(source);
+        if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
+            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Launch bind source resolves outside allowed prefixes"));
+            return 0;
+        }
+        validatedBindPaths.append(bp);
+    }
+    for (const QString &bp : validatedBindPaths) {
+        systemdRunArgs << QStringLiteral("--property=BindReadOnlyPaths=%1").arg(bp);
     }
 
     // On immutable distros, gamescope may not be at /usr/bin/gamescope
@@ -1588,7 +1769,8 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username,
 
     m_usernameToUnitName[username] = serviceName;
     m_pidToUsername[mainPid] = username;
-    m_compositorUidForUsername[username] = compositorUid;
+    m_pidOwnerUid[mainPid] = requestUid;
+    m_compositorUidForUsername[username] = requestUid;
 
     saveState();
 
@@ -1620,18 +1802,20 @@ void CouchPlayHelper::cleanupTcpListenerIfLast(const QString &username)
     }
 }
 
-void CouchPlayHelper::stopServiceInstance(const QString &serviceName)
+bool CouchPlayHelper::stopServiceInstance(const QString &serviceName)
 {
     QProcess *stopProc = m_ops->createProcess();
     m_ops->startProcess(stopProc, QStringLiteral("systemctl"), {QStringLiteral("stop"), serviceName});
-    m_ops->waitForFinished(stopProc, 10000);
+    const bool stopped = m_ops->waitForFinished(stopProc, 10000) && m_ops->processExitCode(stopProc) == 0;
     delete stopProc;
 
     QProcess *resetProc = m_ops->createProcess();
     m_ops->startProcess(resetProc, QStringLiteral("systemctl"), {QStringLiteral("reset-failed"), serviceName});
     m_ops->waitForFinished(resetProc, 5000);
     delete resetProc;
+    return stopped;
 }
+
 
 void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString &username, qint64 mainPid)
 {
@@ -1788,7 +1972,7 @@ QString CouchPlayHelper::computeMountTarget(const QString &source,
     return target;
 }
 
-int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories)
+int CouchPlayHelper::MountSharedDirectories(const QString &username, const QStringList &directories)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return 0;
@@ -1801,6 +1985,7 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
         return 0;
     }
 
+    const uint compositorUid = callerUid();
     QString compositorHome = getUserHomeByUid(compositorUid);
     if (compositorHome.isEmpty()) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not determine home directory for compositor user"));
@@ -1904,8 +2089,8 @@ int CouchPlayHelper::MountSharedDirectories(const QString &username, uint compos
 }
 
 bool CouchPlayHelper::SetupOverlayMount(const QString &username,
-                                        uint compositorUid,
                                         const QString &sourceDir,
+
                                         const QString &targetAlias)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
@@ -1945,6 +2130,7 @@ bool CouchPlayHelper::SetupOverlayMount(const QString &username,
         return false;
     }
 
+    const uint compositorUid = callerUid();
     QString compositorHome = getUserHomeByUid(compositorUid);
     if (compositorHome.isEmpty()) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not determine home directory for compositor user"));
@@ -2188,6 +2374,30 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return false;
     }
+    const uint sourceOwnerUid = callerUid();
+    if (sourceOwnerUid == INVALID_CALLER_UID) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
+        return false;
+    }
+    const QString sourceHome = getUserHomeByUid(sourceOwnerUid);
+    const QString canonicalSource = m_ops->canonicalFilePath(sourcePath);
+    const bool sourceInCallerHome = !sourceHome.isEmpty()
+        && (sourcePath == sourceHome || sourcePath.startsWith(sourceHome + QLatin1Char('/')));
+    const bool sourceInTemporaryStorage = sourcePath == QStringLiteral("/tmp")
+        || sourcePath.startsWith(QStringLiteral("/tmp/"));
+    if ((!sourceInCallerHome && !sourceInTemporaryStorage) || !isPathWithinAllowedPrefix(sourcePath)
+        || canonicalSource.isEmpty() || !isPathWithinAllowedPrefix(canonicalSource)
+        || m_ops->isSymLink(sourcePath)
+        || (sourceInCallerHome && pathHasSymlinkComponents(sourcePath, sourceHome))) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source file is outside the caller's shared roots"));
+        return false;
+    }
+    struct stat sourceStat {};
+    if (!m_ops->statPath(sourcePath, &sourceStat) || !S_ISREG(sourceStat.st_mode)
+        || sourceStat.st_uid != sourceOwnerUid || !(sourceStat.st_mode & S_IRUSR)) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source file is not owned by the caller"));
+        return false;
+    }
 
     if (!m_ops->fileExists(sourcePath)) {
         qWarning() << "CopyFileToUser: Source file does not exist:" << sourcePath;
@@ -2211,36 +2421,17 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
         return false;
     }
 
-    if (!m_ops->mkpath(targetDir)) {
+    if (!m_ops->createDirectorySecure(targetDir, userUid, pw->pw_gid)) {
         qWarning() << "CopyFileToUser: Failed to create directory:" << targetDir;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create directory: %1").arg(targetDir));
         return false;
     }
-
-    for (const QString &dir : dirsToChown) {
-        m_ops->chown(dir, userUid, pw->pw_gid);
-    }
-
-    // Remove target first if it exists (copyFile won't overwrite)
-    if (m_ops->fileExists(targetPath)) {
-        m_ops->removeFile(targetPath);
-    }
-
-    if (!m_ops->copyFile(sourcePath, targetPath)) {
+    if (!m_ops->copyFileSecure(sourcePath, targetPath, sourceOwnerUid, userUid, pw->pw_gid)) {
         qWarning() << "CopyFileToUser: Failed to copy" << sourcePath << "to" << targetPath;
         sendErrorReply(QDBusError::Failed,
                        QStringLiteral("Failed to copy file from %1 to %2").arg(sourcePath, targetPath));
         return false;
     }
-
-    if (m_ops->chown(targetPath, userUid, pw->pw_gid) != 0) {
-        qWarning() << "CopyFileToUser: Failed to set ownership on" << targetPath;
-    }
-
-    if (m_ops->chmod(targetPath, 0644) != 0) {
-        qWarning() << "CopyFileToUser: Failed to set permissions on" << targetPath;
-    }
-
     return true;
 }
 
@@ -2650,13 +2841,9 @@ bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &us
         return false;
     }
 
-    if (!m_ops->mkpath(path)) {
+    if (!m_ops->createDirectorySecure(path, userUid, pw->pw_gid)) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create directory: %1").arg(path));
         return false;
-    }
-
-    for (const QString &dir : dirsToChown) {
-        m_ops->chown(dir, userUid, pw->pw_gid);
     }
 
     return true;
@@ -3155,6 +3342,11 @@ QString CouchPlayHelper::CreateVirtualOutput(const QString &username, int width,
 
     VirtualDisplayInfo info;
     info.pid = mainPid;
+    info.displayContext = QStringLiteral("couchplay-display-%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    info.ownerUid = callerUid();
+    info.runtimeUid = getUserUid(username);
+    info.targetUsername = username;
     info.waylandSocket = socketName;
     info.serviceName = serviceName;
     m_virtualDisplays[username] = info;
@@ -3163,7 +3355,7 @@ QString CouchPlayHelper::CreateVirtualOutput(const QString &username, int width,
     qInfo() << "Created virtual display for" << username
             << "socket:" << socketName << "PID:" << mainPid;
 
-    return socketName;
+    return info.displayContext;
 }
 
 bool CouchPlayHelper::DestroyVirtualOutput(const QString &username, const QString &waylandSocketName)
@@ -3179,11 +3371,15 @@ bool CouchPlayHelper::DestroyVirtualOutput(const QString &username, const QStrin
     }
 
     VirtualDisplayInfo info = m_virtualDisplays[username];
+    if (info.ownerUid != callerUid()) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized for display context"));
+        return false;
+    }
 
-    if (!waylandSocketName.isEmpty() && info.waylandSocket != waylandSocketName) {
+    if (!waylandSocketName.isEmpty() && info.displayContext != waylandSocketName) {
         sendErrorReply(QDBusError::InvalidArgs,
             QStringLiteral("Socket name mismatch: expected '%1', got '%2'")
-                .arg(info.waylandSocket, waylandSocketName));
+                .arg(info.displayContext, waylandSocketName));
         return false;
     }
 
@@ -3376,12 +3572,30 @@ void CouchPlayHelper::saveState()
         unitsObject[it.key()] = it.value();
     }
     root[QStringLiteral("activeUnits")] = unitsObject;
+    QJsonObject virtualDisplaysObject;
+    for (auto it = m_virtualDisplays.constBegin(); it != m_virtualDisplays.constEnd(); ++it) {
+        QJsonObject display;
+        display[QStringLiteral("pid")] = it.value().pid;
+        display[QStringLiteral("context")] = it.value().displayContext;
+        display[QStringLiteral("ownerUid")] = static_cast<qint64>(it.value().ownerUid);
+        display[QStringLiteral("runtimeUid")] = static_cast<qint64>(it.value().runtimeUid);
+        display[QStringLiteral("targetUsername")] = it.value().targetUsername;
+        display[QStringLiteral("waylandSocket")] = it.value().waylandSocket;
+        display[QStringLiteral("serviceName")] = it.value().serviceName;
+        virtualDisplaysObject[it.key()] = display;
+    }
+    root[QStringLiteral("virtualDisplays")] = virtualDisplaysObject;
 
     QJsonObject pidObject;
     for (auto it = m_pidToUsername.constBegin(); it != m_pidToUsername.constEnd(); ++it) {
         pidObject[QString::number(it.key())] = it.value();
     }
     root[QStringLiteral("pidToUsername")] = pidObject;
+    QJsonObject ownerObject;
+    for (auto it = m_pidOwnerUid.constBegin(); it != m_pidOwnerUid.constEnd(); ++it) {
+        ownerObject[QString::number(it.key())] = static_cast<qint64>(it.value());
+    }
+    root[QStringLiteral("pidOwnerUid")] = ownerObject;
 
     QJsonArray runtimeUids;
     for (uint uid : m_runtimeAccessSetForUid) {
@@ -3394,15 +3608,6 @@ void CouchPlayHelper::saveState()
         compositorUidObject[it.key()] = static_cast<qint64>(it.value());
     }
     root[QStringLiteral("compositorUidForUsername")] = compositorUidObject;
-    QJsonObject vdisplayObject;
-    for (auto it = m_virtualDisplays.constBegin(); it != m_virtualDisplays.constEnd(); ++it) {
-        QJsonObject infoObj;
-        infoObj[QStringLiteral("pid")] = static_cast<qint64>(it.value().pid);
-        infoObj[QStringLiteral("waylandSocket")] = it.value().waylandSocket;
-        infoObj[QStringLiteral("serviceName")] = it.value().serviceName;
-        vdisplayObject[it.key()] = infoObj;
-    }
-    root[QStringLiteral("virtualDisplays")] = vdisplayObject;
 
     QJsonObject nullSinksObject;
     for (auto it = m_nullSinks.constBegin(); it != m_nullSinks.constEnd(); ++it) {
@@ -3596,6 +3801,51 @@ void CouchPlayHelper::loadAndReconcileState()
             }
         }
     }
+    m_virtualDisplays.clear();
+    const QJsonObject virtualDisplaysObject = root.value(QStringLiteral("virtualDisplays")).toObject();
+    for (auto it = virtualDisplaysObject.constBegin(); it != virtualDisplaysObject.constEnd(); ++it) {
+        const QJsonObject display = it.value().toObject();
+        const QString serviceName = display.value(QStringLiteral("serviceName")).toString();
+        const QString targetUsername = display.value(QStringLiteral("targetUsername")).toString();
+        const bool active = !serviceName.isEmpty() && activeSystemdUnits.contains(serviceName);
+        const bool complete = !targetUsername.isEmpty() && display.contains(QStringLiteral("context"))
+            && display.contains(QStringLiteral("ownerUid")) && display.contains(QStringLiteral("runtimeUid"))
+            && !display.value(QStringLiteral("context")).toString().isEmpty()
+            && !display.value(QStringLiteral("waylandSocket")).toString().isEmpty();
+        if (!active) {
+            changed = true;
+            continue;
+        }
+        if (!complete) {
+            m_stoppingUnits.insert(serviceName);
+            const bool stopped = stopServiceInstance(serviceName);
+            m_stoppingUnits.remove(serviceName);
+            if (!stopped) {
+                VirtualDisplayInfo legacy;
+                legacy.pid = display.value(QStringLiteral("pid")).toInteger();
+                legacy.waylandSocket = display.value(QStringLiteral("waylandSocket")).toString();
+                legacy.serviceName = serviceName;
+                m_virtualDisplays[it.key()] = legacy;
+                continue;
+            }
+            changed = true;
+            continue;
+        }
+        VirtualDisplayInfo info;
+        info.pid = display.value(QStringLiteral("pid")).toInteger();
+        info.displayContext = display.value(QStringLiteral("context")).toString();
+        info.ownerUid = static_cast<uint>(display.value(QStringLiteral("ownerUid")).toInteger());
+        info.runtimeUid = static_cast<uint>(display.value(QStringLiteral("runtimeUid")).toInteger());
+        info.targetUsername = targetUsername;
+        info.waylandSocket = display.value(QStringLiteral("waylandSocket")).toString();
+        info.serviceName = serviceName;
+        if (info.displayContext.isEmpty() || !display.contains(QStringLiteral("ownerUid"))
+            || !display.contains(QStringLiteral("runtimeUid")) || info.waylandSocket.isEmpty()) {
+            changed = true;
+            continue;
+        }
+        m_virtualDisplays[it.key()] = info;
+    }
 
     QJsonObject unitsObject = root.value(QStringLiteral("activeUnits")).toObject();
     QMap<QString, QString> loadedUsernameToUnit;
@@ -3632,7 +3882,38 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
     m_pidToUsername = loadedPidToUsername;
+    m_pidOwnerUid.clear();
+    const QJsonObject ownerObject = root.value(QStringLiteral("pidOwnerUid")).toObject();
+    for (auto it = m_pidToUsername.constBegin(); it != m_pidToUsername.constEnd();) {
+        if (ownerObject.contains(QString::number(it.key()))) {
+            m_pidOwnerUid[it.key()] = static_cast<uint>(ownerObject.value(QString::number(it.key())).toInteger());
+            ++it;
+        } else {
+            const QString ownerlessUsername = it.value();
+            const QString ownerlessService = m_usernameToUnitName.value(ownerlessUsername);
+            bool stopped = true;
+            if (!ownerlessService.isEmpty()) {
+                m_stoppingUnits.insert(ownerlessService);
+                stopped = stopServiceInstance(ownerlessService);
+                m_stoppingUnits.remove(ownerlessService);
+            }
+            if (!stopped) {
+                ++it;
+                continue;
+            }
+            m_usernameToUnitName.remove(ownerlessUsername);
+            activeUsernames.remove(ownerlessUsername);
+            it = m_pidToUsername.erase(it);
+            changed = true;
+        }
+    }
 
+    for (auto it = m_usernameToUnitName.constBegin(); it != m_usernameToUnitName.constEnd(); ++it) {
+        const qint64 pid = m_pidToUsername.key(it.key(), 0);
+        if (pid > 0) {
+            monitorUnitState(it.value(), it.key(), pid);
+        }
+    }
     QJsonArray devicesArray = root.value(QStringLiteral("modifiedDevices")).toArray();
     QStringList loadedDevices;
     for (const QJsonValue &val : devicesArray) {
@@ -3739,23 +4020,6 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
     m_compositorUidForUsername = loadedCompositorUid;
-    // Restore virtual displays - reconcile against active systemd units
-    QJsonObject vdisplayObject = root.value(QStringLiteral("virtualDisplays")).toObject();
-    for (auto it = vdisplayObject.constBegin(); it != vdisplayObject.constEnd(); ++it) {
-        QJsonObject infoObj = it.value().toObject();
-        QString serviceName = infoObj.value(QStringLiteral("serviceName")).toString();
-        if (activeSystemdUnits.contains(serviceName)) {
-            VirtualDisplayInfo info;
-            info.pid = static_cast<qint64>(infoObj.value(QStringLiteral("pid")).toVariant().toLongLong());
-            info.waylandSocket = infoObj.value(QStringLiteral("waylandSocket")).toString();
-            info.serviceName = serviceName;
-            m_virtualDisplays[it.key()] = info;
-        } else {
-            qDebug() << "loadAndReconcileState: Removing stale virtual display" << serviceName << "for user" << it.key();
-            changed = true;
-        }
-    }
-
     // Restore null sinks - restore unconditionally (PipeWire modules are per-user-session;
     // if the session is gone, the module is gone too, but tracking allows destructor cleanup)
     QJsonObject nullSinksObject = root.value(QStringLiteral("nullSinks")).toObject();

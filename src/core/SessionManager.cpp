@@ -806,13 +806,17 @@ QString SessionManager::playerDataFolderPath(int index)
     // The Steam-root overlay entry is a library-sharing marker handled
     // entirely by session setup (libraries are alias-mounted) — it never
     // receives staged data, so don't create a misleading folder for it.
-    // Match the runtime predicate exactly (SessionRunner::setupDataDirectories):
-    // the instance runs the Steam launcher, the entry is overlay-mode, and the
-    // path is the detected Steam root. Anything else — the same path in copy
-    // mode, or on another launcher's preset — is an ordinary private directory
-    // that session setup stages data for, so it keeps its folder.
+    // Match the runtime predicate exactly (SessionRunner::setupSessionResources):
+    // the instance explicitly requires Steam, the entry is overlay-mode, and the
+    // path is the detected Steam root. Copy-mode entries and other paths remain
+    // ordinary private directories that session setup stages for the player.
+
+
+
+
     QString steamMarkerPath;
-    if (m_presetManager && m_presetManager->getPreset(presetId).launcherId == QStringLiteral("steam")) {
+    if (m_presetManager
+        && m_presetManager->getPreset(presetId).requiredIntegrations.contains(QStringLiteral("steam"))) {
         steamMarkerPath = m_presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
     }
 

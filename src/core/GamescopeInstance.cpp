@@ -61,7 +61,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     const int outputW = config.value(QStringLiteral("outputWidth"), 960).toInt();
     const int outputH = config.value(QStringLiteral("outputHeight"), 1080).toInt();
     m_windowGeometry = QRect(posX, posY, outputW, outputH);
-    m_virtualDisplaySocket = config.value(QStringLiteral("virtualDisplaySocket")).toString();
+    m_virtualDisplaySocket = config.value(QStringLiteral("displayContext")).toString();
     Q_EMIT configChanged();
 
     if (!m_helperClient || !m_helperClient->isAvailable()) {
@@ -81,19 +81,21 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
         gameCommand = QProcess::splitCommand(PresetManager::defaultSteamCommand());
     }
 
-    const uid_t compositorUid = getuid();
+    const QString displayContext = config.value(QStringLiteral("displayContext")).toString();
     const QString workingDirectory = config.value(QStringLiteral("workingDirectory")).toString();
-    const QStringList bindPaths = config.value(QStringLiteral("bindPaths")).toStringList();
+    const QStringList bindPaths = config.value(QStringLiteral("overrideBinds")).toStringList();
+    const QStringList sharedRoots = config.value(QStringLiteral("sharedRoots")).toStringList();
     QString helperError;
     const QMetaObject::Connection helperErrorConnection = connect(
         m_helperClient, &CouchPlayHelperClient::errorOccurred, this, [&helperError](const QString &message) {
             helperError = message;
         });
     const qint64 pid = m_helperClient->launchInstance(m_username,
-                                                       static_cast<uint>(compositorUid),
+                                                       displayContext,
                                                        gamescopeArgs,
                                                        gameCommand,
                                                        workingDirectory,
+                                                       sharedRoots,
                                                        envVars,
                                                        bindPaths);
     disconnect(helperErrorConnection);
@@ -260,12 +262,6 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     // Set desktop environment for XDG portal integration (native file dialogs in Steam etc.)
     envVars << QStringLiteral("XDG_CURRENT_DESKTOP=KDE");
     envVars << QStringLiteral("GTK_USE_PORTAL=1");
-
-    // For streaming instances, redirect to virtual Wayland display
-    QString virtualSocket = config.value(QStringLiteral("virtualDisplaySocket")).toString();
-    if (!virtualSocket.isEmpty()) {
-        envVars << QStringLiteral("WAYLAND_DISPLAY=%1").arg(virtualSocket);
-    }
 
     // Route game audio to the per-instance null sink for Sunshine capture
     QString sinkName = config.value(QStringLiteral("sink")).toString();

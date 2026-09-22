@@ -76,7 +76,7 @@ private:
     void setStreamState(int instanceIndex, StreamState state);
     void cleanupConfigDir(int instanceIndex);
     void attemptRestart(int instanceIndex);
-    uid_t resolveCompositorUid(const QString &username) const;
+
 
     CouchPlayHelperClient *m_helperClient = nullptr;
 
@@ -84,6 +84,7 @@ private:
         StreamState state = NotStarted;
         qint64 pid = 0;
         QString configDir;
+        QString displayContext;
         QString username;
         int instanceIndex = -1;
         QVariantMap lastConfig;

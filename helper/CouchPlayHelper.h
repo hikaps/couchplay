@@ -134,7 +134,7 @@ public Q_SLOTS:
      * @param compositorUid UID of the compositor user
      * @return true if successful
      */
-    bool SetupRuntimeAccess(uint compositorUid);
+    bool SetupRuntimeAccess();
 
     /**
      * Remove runtime directory access for the couchplay group
@@ -145,7 +145,7 @@ public Q_SLOTS:
      * @param compositorUid UID of the compositor user
      * @return true if successful
      */
-    bool RemoveRuntimeAccess(uint compositorUid);
+    bool RemoveRuntimeAccess();
 
     /**
      * Change ownership of a device to a specific user
@@ -206,15 +206,17 @@ public Q_SLOTS:
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Structured child command: executable followed by arguments
      * @param workingDirectory Optional absolute working directory
+     * @param sharedRoots Explicit source roots available to the target user
      * @param environment Additional environment variables (VAR=value format)
      * @param bindPaths Paths to bind-mount into the unit via --property=BindPaths=
      * @return MainPID of launched process, or 0 on failure
      */
     qint64 LaunchInstance(const QString &username,
-                          uint compositorUid,
+                          const QString &displayContext,
                           const QStringList &gamescopeArgs,
                           const QStringList &gameCommand,
                           const QString &workingDirectory,
+                          const QStringList &sharedRoots,
                           const QStringList &environment,
                           const QStringList &bindPaths);
 
@@ -247,7 +249,7 @@ public Q_SLOTS:
      * @param directories List of "source|alias" strings (alias empty for home-relative)
      * @return Number of successful mounts
      */
-    int MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories);
+    int MountSharedDirectories(const QString &username, const QStringList &directories);
 
     /**
      * Set up an OverlayFS mount for a user
@@ -263,8 +265,8 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool SetupOverlayMount(const QString &username,
-                           uint compositorUid,
                            const QString &sourceDir,
+
                            const QString &targetAlias);
 
     /**
@@ -490,15 +492,18 @@ private:
     QString getUserHome(const QString &username);
     QString getUserHomeByUid(uint uid);
     bool unmountMountInfo(MountInfo &mount);
+    int resetAllDevicesInternal();
     QString generateServiceName(const QString &username);
+    uint callerUid() const;
     qint64 startTransientUnit(const QString &username,
-                              uint compositorUid,
+                              const QString &displayContext,
                               const QStringList &gamescopeArgs,
                               const QStringList &gameCommand,
                               const QString &workingDirectory,
+                              const QStringList &sharedRoots,
                               const QStringList &environment,
                               const QStringList &bindPaths);
-    void stopServiceInstance(const QString &serviceName);
+    bool stopServiceInstance(const QString &serviceName);
     void monitorUnitState(const QString &serviceName, const QString &username, qint64 mainPid);
     QString computeMountTarget(const QString &source,
                                const QString &alias,
@@ -516,9 +521,16 @@ private:
     QStringList m_modifiedHidDevices;
 
     struct VirtualDisplayInfo {
-        qint64 pid;
+        qint64 pid = 0;
+        QString displayContext;
+        uint ownerUid = 0;
+        uint runtimeUid = 0;
+        QString targetUsername;
         QString waylandSocket;
         QString serviceName;
+
+
+
     };
     QMap<QString, VirtualDisplayInfo> m_virtualDisplays;
 
@@ -546,6 +558,7 @@ private:
     // Track launched transient units
     QMap<QString, QString> m_usernameToUnitName; // username -> service name
     QMap<qint64, QString> m_pidToUsername; // PID -> username (reverse lookup for Stop/Kill)
+    QHash<qint64, uint> m_pidOwnerUid;
     QHash<QString, uint> m_compositorUidForUsername; // username -> compositor UID
 
     // Units being explicitly stopped (suppresses crash detection)

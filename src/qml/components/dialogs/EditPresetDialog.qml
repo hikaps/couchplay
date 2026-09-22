@@ -51,6 +51,36 @@ Kirigami.Dialog {
         }
         return arr
     }
+    function integrationSelected(integrationId) {
+        if (!root.presetManager) return false
+        return root.presetManager.getRequiredIntegrations(root.presetId).indexOf(integrationId) >= 0
+    }
+
+    function setIntegration(integrationId, enabled) {
+        if (!root.presetManager) return
+        let integrations = root.presetManager.getRequiredIntegrations(root.presetId)
+        let position = integrations.indexOf(integrationId)
+        if (enabled && position < 0) {
+            integrations.push(integrationId)
+            root.presetManager.setRequiredIntegrations(root.presetId, integrations)
+            let defaults = root.presetManager.getDataDirectories(integrationId) || []
+            for (let i = 0; i < defaults.length; ++i) {
+                let exists = false
+                for (let j = 0; j < directoriesModel.count; ++j) {
+                    let current = directoriesModel.get(j)
+                    if (current.path === defaults[i].path && current.mode === defaults[i].mode) {
+                        exists = true
+                        break
+                    }
+                }
+                if (!exists) directoriesModel.append({ path: defaults[i].path, mode: defaults[i].mode })
+            }
+            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
+        } else if (!enabled && position >= 0) {
+            integrations.splice(position, 1)
+            root.presetManager.setRequiredIntegrations(root.presetId, integrations)
+        }
+    }
 
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
@@ -66,6 +96,25 @@ Kirigami.Dialog {
             text: i18nc("@info", "Choose how to share data: 'Shared (ACL)' shares a single folder among all users, 'Copy' duplicates it for each user, 'Overlay' creates a per-user copy-on-write overlay, and 'Bind mount' exposes the folder at the same path inside each player's home.")
             type: Kirigami.MessageType.Information
             visible: true
+        }
+        Kirigami.Heading {
+            level: 3
+            text: i18nc("@title", "Required integrations")
+            Layout.fillWidth: true
+        }
+
+        Repeater {
+            model: root.presetManager ? root.presetManager.availableIntegrations() : []
+            delegate: Controls.CheckBox {
+                objectName: "integration_" + modelData.id
+                text: modelData.id === "steam"
+                      ? i18nc("@option:check", "Steam")
+                      : i18nc("@option:check", "Heroic Games Launcher")
+                checked: root.integrationSelected(modelData.id)
+                enabled: modelData.available || checked
+                Accessible.name: text
+                onToggled: root.setIntegration(modelData.id, checked)
+            }
         }
 
         Controls.ScrollView {

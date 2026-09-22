@@ -34,6 +34,7 @@ public:
     virtual struct passwd *getpwnam(const char *name) = 0;
     virtual struct passwd *getpwuid(uid_t uid) = 0;
     virtual struct group *getgrnam(const char *name) = 0;
+    virtual uid_t connectionUnixUser(const QString &busName) = 0;
 
     // Filesystem operations
     virtual bool fileExists(const QString &path) = 0;
@@ -41,6 +42,12 @@ public:
     virtual bool isSymLink(const QString &path) = 0;
     virtual QString canonicalFilePath(const QString &path) = 0;
     virtual bool mkpath(const QString &path) = 0;
+    virtual bool copyFileSecure(const QString &source,
+                                 const QString &dest,
+                                 uid_t sourceOwner,
+                                 uid_t destOwner,
+                                 gid_t destGroup) = 0;
+    virtual bool createDirectorySecure(const QString &path, uid_t owner, gid_t group) = 0;
     virtual bool removeFile(const QString &path) = 0;
     virtual bool copyFile(const QString &source, const QString &dest) = 0;
     virtual bool writeFile(const QString &path, const QByteArray &content) = 0;
@@ -84,6 +91,7 @@ public:
     struct passwd *getpwnam(const char *name) override;
     struct passwd *getpwuid(uid_t uid) override;
     struct group *getgrnam(const char *name) override;
+    uid_t connectionUnixUser(const QString &busName) override;
 
     bool fileExists(const QString &path) override;
     bool isDirectory(const QString &path) override;
@@ -92,6 +100,12 @@ public:
     bool mkpath(const QString &path) override;
     bool removeFile(const QString &path) override;
     bool copyFile(const QString &source, const QString &dest) override;
+    bool copyFileSecure(const QString &source,
+                        const QString &dest,
+                        uid_t sourceOwner,
+                        uid_t destOwner,
+                        gid_t destGroup) override;
+    bool createDirectorySecure(const QString &path, uid_t owner, gid_t group) override;
     bool writeFile(const QString &path, const QByteArray &content) override;
 
     bool statPath(const QString &path, struct stat *buf) override;
