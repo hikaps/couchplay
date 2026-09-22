@@ -68,6 +68,7 @@ ecm_add_qml_module(couchplay
         qml/components/dialogs/EditPresetDialog.qml
         qml/components/dialogs/DeletePresetDialog.qml
         qml/components/dialogs/AddPresetDialog.qml
+        qml/components/dialogs/AddToSteamDialog.qml
 )
 
 # C++ sources for main executable (includes QML_ELEMENT classes)
@@ -79,6 +80,9 @@ target_sources(couchplay PRIVATE
     core/CommandLineOptions.cpp
     core/CommandLineOptions.h
     core/CommandLineBridge.h
+    core/CommandLineBridge.cpp
+    core/SessionLaunchClient.cpp
+    core/SessionLaunchClient.h
     core/SessionManager.h
     core/LaunchTypes.h
     core/SessionRunner.cpp
@@ -99,6 +103,10 @@ target_sources(couchplay PRIVATE
      core/HeroicConfigManager.cpp
      core/HeroicConfigManager.h
      core/SteamConfigManager.cpp
+     core/SteamShortcutManager.cpp
+     core/SteamShortcutManager.h
+     core/SteamShortcutsVdf.cpp
+     core/SteamShortcutsVdf.h
      core/SteamConfigManager.h
     core/SettingsManager.cpp
     core/SettingsManager.h
@@ -106,6 +114,7 @@ target_sources(couchplay PRIVATE
     core/SunshineConfig.h
     core/StreamManager.cpp
     core/StreamManager.h
+    steam-integration.qrc
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )

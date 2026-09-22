@@ -23,13 +23,22 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
     for (; index < arguments.size(); ++index) {
         const QString argument = arguments.at(index);
         if (argument == QStringLiteral("--profile") || argument == QStringLiteral("-p")) {
-            if (!request.profileName.isEmpty() || index + 1 >= arguments.size()
-                || arguments.at(index + 1).isEmpty()
+            if (!request.profileName.isEmpty() || index + 1 >= arguments.size() || arguments.at(index + 1).isEmpty()
                 || arguments.at(index + 1).startsWith(QLatin1Char('-'))) {
                 fail(QStringLiteral("--profile requires exactly one profile name"));
                 return {};
             }
             request.profileName = arguments.at(++index);
+        } else if (argument.startsWith(QStringLiteral("--profile="))) {
+            if (!request.profileName.isEmpty()) {
+                fail(QStringLiteral("--profile requires exactly one profile name"));
+                return {};
+            }
+            request.profileName = argument.mid(QStringLiteral("--profile=").size());
+            if (request.profileName.isEmpty()) {
+                fail(QStringLiteral("--profile requires exactly one profile name"));
+                return {};
+            }
         } else if (argument == QStringLiteral("--start")) {
             if (request.start) {
                 fail(QStringLiteral("--start was specified more than once"));

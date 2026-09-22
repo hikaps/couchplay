@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import "../components/dialogs" as Dialogs
 
 Kirigami.ScrollablePage {
     id: root
@@ -12,10 +13,32 @@ Kirigami.ScrollablePage {
 
     required property var sessionManager
     required property var sessionRunner
+    required property var steamShortcutManager
+    property string profileToAdd: ""
 
     Component.onCompleted: {
         if (sessionManager) {
             sessionManager.refreshProfiles()
+        }
+    }
+    Dialogs.AddToSteamDialog {
+        id: addToSteamDialog
+        manager: root.steamShortcutManager
+        profileName: root.profileToAdd
+    }
+
+    Connections {
+        target: root.steamShortcutManager
+        function onPrepared() {
+            addToSteamDialog.restartConfirmed = false
+            addToSteamDialog.completed = false
+            addToSteamDialog.errorText = ""
+            addToSteamDialog.open()
+        }
+        function onErrorOccurred(message) {
+            if (!addToSteamDialog.visible) {
+                applicationWindow().showPassiveNotification(message, "long")
+            }
         }
     }
 
@@ -122,6 +145,12 @@ Kirigami.ScrollablePage {
                             deleteDialog.open()
                         }
                     }
+                    onAddToSteam: {
+                        if (modelData && steamShortcutManager) {
+                            root.profileToAdd = modelData.name
+                            steamShortcutManager.prepare(modelData.name)
+                        }
+                    }
                 }
             }
         }
@@ -156,6 +185,7 @@ Kirigami.ScrollablePage {
         property bool isCurrentProfile: false
 
         signal loadProfile()
+        signal addToSteam()
         signal duplicateProfile()
         signal launchProfile()
         signal deleteProfile()
@@ -264,6 +294,16 @@ Kirigami.ScrollablePage {
                     icon.name: "media-playback-start"
                     highlighted: true
                     onClicked: profileCard.launchProfile()
+                }
+                Controls.Button {
+                    objectName: "btnAddProfileToSteam"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Add to Steam…")
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Add to Steam…")
+                    icon.name: "steam"
+                    flat: true
+                    onClicked: profileCard.addToSteam()
                 }
 
 

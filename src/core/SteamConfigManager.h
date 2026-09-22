@@ -194,7 +194,6 @@ Q_SIGNALS:
     void errorOccurred(const QString &message);
 
 private:
-    QList<SteamShortcut> parseShortcutsVdf(const QString &path);
     QList<SteamLibraryFolder> parseLibraryFoldersVdf(const QString &path);
     QList<SteamGame> parseInstalledGames() const;
     QString generateLibraryFoldersVdf(const QList<SteamLibraryFolder> &libraries);

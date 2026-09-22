@@ -11,7 +11,7 @@ class CommandLineBridge : public QObject
     Q_OBJECT
 
 public:
-    using QObject::QObject;
+    explicit CommandLineBridge(QObject *parent = nullptr);
 
     bool requestAccepted() const
     {
@@ -23,9 +23,24 @@ public:
         m_requestAccepted = accepted;
     }
 
+    bool launchProfile(const QString &profileName,
+                       const QString &requestId,
+                       const QString &display,
+                       const QString &sender);
+    bool stopSession(const QString &requestId, const QString &sender);
+
+    Q_INVOKABLE void requestStop();
+public Q_SLOTS:
+    void finishRequest(int exitCode);
+
 Q_SIGNALS:
     void launchRequested(const QString &profileName, bool start, bool exitAfterSession);
+    void stopRequested();
+    void launchFinished(const QString &requestId, int exitCode);
 
 private:
     bool m_requestAccepted = false;
+    QString m_activeRequestId;
+    QString m_activeSender;
+    QString m_activeDisplay;
 };

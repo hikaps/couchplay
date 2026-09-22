@@ -32,6 +32,15 @@ private Q_SLOTS:
         QVERIFY(request.start);
         QVERIFY(request.exitAfterSession);
     }
+    void testEqualsProfileOptionAllowsLeadingHyphen()
+    {
+        QString error;
+        const CommandLineRequest request = CommandLineOptions::parse(
+            {QStringLiteral("couchplay"), QStringLiteral("--profile=-Family Night"), QStringLiteral("--start")}, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(request.profileName, QStringLiteral("-Family Night"));
+        QVERIFY(request.start);
+    }
 
     void testForwardedArgumentList()
     {

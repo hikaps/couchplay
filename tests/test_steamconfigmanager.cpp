@@ -8,6 +8,7 @@
 #include <QTest>
 
 #include "SteamConfigManager.h"
+#include "SteamShortcutsVdf.h"
 
 namespace {
 void appendString(QByteArray &data, const QByteArray &key, const QByteArray &value)
@@ -18,6 +19,44 @@ void appendString(QByteArray &data, const QByteArray &key, const QByteArray &val
     data.append(value);
     data.append(char('\0'));
 }
+
+void appendInt32(QByteArray &data, const QByteArray &key, quint32 value)
+{
+    data.append(char(0x02));
+    data.append(key);
+    data.append(char('\0'));
+    data.append(char(value & 0xff));
+    data.append(char((value >> 8) & 0xff));
+    data.append(char((value >> 16) & 0xff));
+    data.append(char((value >> 24) & 0xff));
+}
+
+QByteArray foreignEntry()
+{
+    QByteArray entry;
+    entry.append(char(0x00));
+    entry.append("0");
+    entry.append(char('\0'));
+    appendInt32(entry, "appid", 123);
+    appendString(entry, "AppName", "Foreign Game");
+    appendString(entry, "exe", "/usr/bin/foreign");
+    appendString(entry, "icon", "/tmp/foreign.png");
+    entry.append(char(0x00));
+    entry.append("tags");
+    entry.append(char('\0'));
+    appendString(entry, "0", "Foreign");
+    entry.append(char(0x08));
+    entry.append(char(0x08));
+    return entry;
+}
+
+QByteArray documentWithForeignEntry()
+{
+    QByteArray document = SteamShortcutsVdf::emptyDocument();
+    document.insert(document.size() - 2, foreignEntry());
+    return document;
+}
+
 }
 
 class TestSteamConfigManager : public QObject
@@ -25,6 +64,60 @@ class TestSteamConfigManager : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void testCodecUpsertPreservesForeignBytes()
+    {
+        SteamShortcut shortcut;
+        shortcut.appId = 0x80000042u;
+        shortcut.appName = QStringLiteral("CouchPlay - Family Night");
+        shortcut.exe = QStringLiteral("/tmp/couchplay-profile.sh");
+        shortcut.startDir = QStringLiteral("/tmp");
+        shortcut.icon = QStringLiteral("/tmp/couchplay.png");
+        shortcut.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('a'));
+        shortcut.tags = {QStringLiteral("CouchPlay")};
+
+        QString error;
+        QByteArray combined;
+        QVERIFY2(SteamShortcutsVdf::upsert(documentWithForeignEntry(), shortcut, &combined, &error), qPrintable(error));
+
+        QList<SteamShortcut> decoded;
+        QVERIFY2(SteamShortcutsVdf::decode(combined, &decoded, &error), qPrintable(error));
+        QCOMPARE(decoded.size(), 2);
+
+        SteamShortcut changed = shortcut;
+        changed.appName = QStringLiteral("CouchPlay - Changed");
+        changed.launchOptions = QStringLiteral("--profile=Family");
+        QByteArray updated;
+        QVERIFY2(SteamShortcutsVdf::upsert(combined, changed, &updated, &error), qPrintable(error));
+        QVERIFY(updated != combined);
+        QVERIFY(updated.contains("Foreign Game"));
+        QVERIFY(updated.contains("/tmp/foreign.png"));
+        QVERIFY(updated.contains("CouchPlay - Changed"));
+
+        QByteArray repeated;
+        QVERIFY2(SteamShortcutsVdf::upsert(updated, changed, &repeated, &error), qPrintable(error));
+        QCOMPARE(repeated, updated);
+
+        QByteArray stripped;
+        QVERIFY2(SteamShortcutsVdf::withoutProfiles(updated, &stripped, &error), qPrintable(error));
+        QVERIFY(stripped.contains("Foreign Game"));
+        QVERIFY(!stripped.contains("CouchPlay - Changed"));
+    }
+
+    void testCodecRejectsMalformedInput()
+    {
+        QList<SteamShortcut> shortcuts;
+        QString error;
+        QByteArray malformed = SteamShortcutsVdf::emptyDocument();
+        malformed.chop(2);
+        QVERIFY(!SteamShortcutsVdf::decode(malformed, &shortcuts, &error));
+        QVERIFY(!error.isEmpty());
+
+        QByteArray unsupported = SteamShortcutsVdf::emptyDocument();
+        unsupported.insert(unsupported.size() - 2, char(0x09));
+        unsupported.insert(unsupported.size() - 1, "bad", 3);
+        QVERIFY(!SteamShortcutsVdf::decode(unsupported, &shortcuts, &error));
+    }
+
     void testLoadGamesMergesNativeAndShortcut()
     {
         QTemporaryDir home;

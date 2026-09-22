@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/couchplay">
+        <file alias="steam-host.sh">../scripts/couchplay-steam-host.sh</file>
+        <file alias="gamemode.sh">../scripts/couchplay-gamemode.sh</file>
+        <file alias="icon.png">../data/icons/io.github.hikaps.couchplay.png</file>
+    </qresource>
+</RCC>

@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include <QApplication>
+#include <QDBusConnectionInterface>
+#include <QDBusConnection>
 #include <QCommandLineParser>
 #include <QIcon>
 #include <QQmlApplicationEngine>
@@ -25,6 +27,7 @@
 #include "core/UserManager.h"
 #include "dbus/CouchPlayHelperClient.h"
 #include "core/CommandLineBridge.h"
+#include "core/SessionLaunchClient.h"
 #include "core/CommandLineOptions.h"
 
 #include <QFile>
@@ -99,6 +102,14 @@ int main(int argc, char *argv[])
         qCritical().noquote() << parseError;
         return 2;
     }
+    const bool waitingLaunch = initialRequest.start && initialRequest.exitAfterSession;
+    bool serviceAlreadyRunning = false;
+    if (auto *sessionBusInterface = QDBusConnection::sessionBus().interface()) {
+        serviceAlreadyRunning = sessionBusInterface->isServiceRegistered(QStringLiteral("com.github.CouchPlay"));
+    }
+    if (waitingLaunch && serviceAlreadyRunning) {
+        return SessionLaunchClient::run(app, initialRequest, QStringLiteral("com.github.CouchPlay"));
+    }
     KDBusService service(KDBusService::Unique);
     if (!service.isRegistered()) {
         qWarning() << "CouchPlay singleton unavailable:" << service.errorMessage();
@@ -123,6 +134,16 @@ int main(int argc, char *argv[])
         qCritical() << "CouchPlay QML root failed to load";
         return -1;
     }
+    if (!QDBusConnection::sessionBus().registerObject(QStringLiteral("/SessionLauncher"),
+                                                       &commandLineBridge,
+                                                       QDBusConnection::ExportAdaptors)) {
+        qWarning() << "Failed to register session launch bridge:"
+                   << QDBusConnection::sessionBus().lastError().message();
+    }
+    auto *terminationNotifier = SessionLaunchClient::watchTermination(&app, [&commandLineBridge] {
+        commandLineBridge.requestStop();
+    });
+    Q_UNUSED(terminationNotifier);
 
     QObject *root = engine.rootObjects().constFirst();
     QObject::connect(root, SIGNAL(startupFailed(int)), &app, SLOT(exit(int)));

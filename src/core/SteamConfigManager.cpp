@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SteamConfigManager.h"
+#include "SteamShortcutsVdf.h"
 #include <algorithm>
 #include "PresetManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
@@ -228,8 +229,20 @@ void SteamConfigManager::loadShortcuts()
             return;
         }
     }
-
-    m_shortcuts = parseShortcutsVdf(sourceFile);
+    QFile shortcutFile(sourceFile);
+    if (!shortcutFile.open(QIODevice::ReadOnly)) {
+        qCWarning(couchplaySteam) << "Failed to read shortcuts:" << sourceFile;
+        Q_EMIT shortcutsLoaded();
+        return;
+    }
+    const QByteArray shortcutBytes = shortcutFile.readAll();
+    QString parseError;
+    if (!SteamShortcutsVdf::decode(shortcutBytes, &m_shortcuts, &parseError)) {
+        qCWarning(couchplaySteam) << "Failed to parse shortcuts:" << parseError;
+        m_shortcuts.clear();
+        Q_EMIT shortcutsLoaded();
+        return;
+    }
     qCDebug(couchplaySteam) << "Loaded" << m_shortcuts.size() << "shortcuts from" << sourceFile;
 
     Q_EMIT shortcutsLoaded();
@@ -294,7 +307,7 @@ void SteamConfigManager::loadGames()
 
     QSet<QString> keys;
     for (const SteamShortcut &shortcut : std::as_const(m_shortcuts)) {
-        if (shortcut.appId == 0 || shortcut.appName.isEmpty()) {
+        if (SteamShortcutsVdf::isProfileShortcut(shortcut) || shortcut.appId == 0 || shortcut.appName.isEmpty()) {
             continue;
         }
         const quint64 shortcutId = (static_cast<quint64>(shortcut.appId) << 32) | 0x02000000ULL;
@@ -351,7 +364,9 @@ QStringList SteamConfigManager::extractShortcutDirectories() const
     QSet<QString> dirs;
 
     for (const SteamShortcut &sc : m_shortcuts) {
-        // Extract exe directory
+        if (SteamShortcutsVdf::isProfileShortcut(sc)) {
+            continue;
+        }
         if (!sc.exe.isEmpty()) {
             QString exePath = sc.exe;
             // Remove quotes if present
@@ -456,6 +471,15 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
 
     QByteArray vdfData = sourceFileHandle.readAll();
     sourceFileHandle.close();
+
+    QByteArray filteredVdfData;
+    QString filterError;
+    if (!SteamShortcutsVdf::withoutProfiles(vdfData, &filteredVdfData, &filterError)) {
+        qCWarning(couchplaySteam) << "Failed to filter CouchPlay shortcuts:" << filterError;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Invalid source shortcuts.vdf"));
+        return false;
+    }
+    vdfData = filteredVdfData;
 
     qCDebug(couchplaySteam) << "Read" << vdfData.size() << "bytes from source, writing directly to" << targetVdf;
 
@@ -567,174 +591,6 @@ SteamPaths SteamConfigManager::getTargetSteamPaths(const QString &username) cons
     return paths;
 }
 
-// ============================================================================
-// Binary VDF Parsing
-// ============================================================================
-
-// Binary VDF type markers
-constexpr char VDF_TYPE_OBJECT = 0x00;
-constexpr char VDF_TYPE_STRING = 0x01;
-constexpr char VDF_TYPE_INT32 = 0x02;
-constexpr char VDF_TYPE_END = 0x08;
-
-QList<SteamShortcut> SteamConfigManager::parseShortcutsVdf(const QString &path)
-{
-    QList<SteamShortcut> result;
-
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        qWarning() << "SteamConfigManager: Failed to open" << path;
-        return result;
-    }
-
-    QByteArray data = file.readAll();
-    file.close();
-
-    if (data.isEmpty()) {
-        return result;
-    }
-
-    // Parse binary VDF
-    int pos = 0;
-
-    // Read root object marker and "shortcuts" key
-    if (pos >= data.size() || data[pos] != VDF_TYPE_OBJECT) {
-        qWarning() << "SteamConfigManager: Invalid VDF format - expected object marker";
-        return result;
-    }
-    pos++;
-
-    // Read "shortcuts" string
-    QString rootKey;
-    while (pos < data.size() && data[pos] != '\0') {
-        rootKey += QChar::fromLatin1(data[pos]);
-        pos++;
-    }
-    pos++; // Skip null terminator
-
-    if (rootKey != QStringLiteral("shortcuts")) {
-        qWarning() << "SteamConfigManager: Unexpected root key:" << rootKey;
-        return result;
-    }
-
-    // Now parse each shortcut (numbered 0, 1, 2, ...)
-    while (pos < data.size()) {
-        if (data[pos] == VDF_TYPE_END) {
-            break; // End of shortcuts object
-        }
-
-        if (data[pos] != VDF_TYPE_OBJECT) {
-            break; // Unexpected type
-        }
-        pos++;
-
-        // Read shortcut index key
-        QString indexKey;
-        while (pos < data.size() && data[pos] != '\0') {
-            indexKey += QChar::fromLatin1(data[pos]);
-            pos++;
-        }
-        pos++; // Skip null terminator
-
-        SteamShortcut shortcut;
-
-        // Parse shortcut properties
-        while (pos < data.size()) {
-            char type = data[pos];
-            if (type == VDF_TYPE_END) {
-                pos++;
-                break; // End of this shortcut
-            }
-            pos++;
-
-            // Read key
-            QString key;
-            while (pos < data.size() && data[pos] != '\0') {
-                key += QChar::fromLatin1(data[pos]);
-                pos++;
-            }
-            pos++; // Skip null terminator
-
-            if (type == VDF_TYPE_STRING) {
-                QString value;
-                while (pos < data.size() && data[pos] != '\0') {
-                    value += QChar::fromLatin1(data[pos]);
-                    pos++;
-                }
-                pos++; // Skip null terminator
-
-                if (key == QStringLiteral("AppName")) {
-                    shortcut.appName = value;
-                } else if (key == QStringLiteral("exe") || key == QStringLiteral("Exe")) {
-                    shortcut.exe = value;
-                } else if (key == QStringLiteral("StartDir")) {
-                    shortcut.startDir = value;
-                } else if (key == QStringLiteral("icon")) {
-                    shortcut.icon = value;
-                } else if (key == QStringLiteral("ShortcutPath")) {
-                    shortcut.shortcutPath = value;
-                } else if (key == QStringLiteral("LaunchOptions")) {
-                    shortcut.launchOptions = value;
-                } else if (key == QStringLiteral("DevkitGameID")) {
-                    shortcut.devkitGameId = value;
-                } else if (key == QStringLiteral("FlatpakAppID")) {
-                    shortcut.flatpakAppId = value;
-                } else if (key == QStringLiteral("sortas")) {
-                    shortcut.sortAs = value;
-                }
-            } else if (type == VDF_TYPE_INT32) {
-                if (pos + 4 > data.size())
-                    break;
-                quint32 value = 0;
-                value |= static_cast<quint8>(data[pos++]);
-                value |= static_cast<quint8>(data[pos++]) << 8;
-                value |= static_cast<quint8>(data[pos++]) << 16;
-                value |= static_cast<quint8>(data[pos++]) << 24;
-
-                if (key == QStringLiteral("appid") || key == QStringLiteral("AppId")) {
-                    shortcut.appId = value;
-                } else if (key == QStringLiteral("IsHidden")) {
-                    shortcut.isHidden = (value != 0);
-                } else if (key == QStringLiteral("AllowDesktopConfig")) {
-                    shortcut.allowDesktopConfig = (value != 0);
-                } else if (key == QStringLiteral("AllowOverlay")) {
-                    shortcut.allowOverlay = (value != 0);
-                } else if (key == QStringLiteral("OpenVR")) {
-                    shortcut.openVR = (value != 0);
-                } else if (key == QStringLiteral("Devkit")) {
-                    shortcut.devkit = (value != 0);
-                } else if (key == QStringLiteral("DevkitOverrideAppID")) {
-                    shortcut.devkitOverrideAppId = value;
-                } else if (key == QStringLiteral("LastPlayTime")) {
-                    shortcut.lastPlayTime = value;
-                }
-            } else if (type == VDF_TYPE_OBJECT) {
-                // Handle nested objects like "tags"
-                if (key == QStringLiteral("tags")) {
-                    // Skip tags for now - just consume until end marker
-                    while (pos < data.size() && data[pos] != VDF_TYPE_END) {
-                        // Skip type marker
-                        pos++;
-                        // Skip key
-                        while (pos < data.size() && data[pos] != '\0')
-                            pos++;
-                        pos++;
-                        // Skip value based on type (assume string)
-                        while (pos < data.size() && data[pos] != '\0')
-                            pos++;
-                        pos++;
-                    }
-                    if (pos < data.size())
-                        pos++; // Skip end marker
-                }
-            }
-        }
-
-        result.append(shortcut);
-    }
-
-    return result;
-}
 
 void SteamConfigManager::loadLibraryFolders()
 {

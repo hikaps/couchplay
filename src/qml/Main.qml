@@ -65,6 +65,14 @@ Kirigami.ApplicationWindow {
         function onLaunchRequested(profileName, start, exitAfterSession) {
             commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession))
         }
+        function onStopRequested() {
+            root.exitAfterActiveSession = true
+            if (sessionRunner && sessionRunner.active) {
+                sessionRunner.stop()
+            } else {
+                Qt.quit()
+            }
+        }
     }
 
 
@@ -137,6 +145,7 @@ Kirigami.ApplicationWindow {
                 i18nc("@info", "Session started with %1 instances", runningInstanceCount))
         }
         onSessionStopped: {
+            commandLineBridge.finishRequest(0)
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Session stopped"))
             if (root.exitAfterActiveSession) {
@@ -145,6 +154,7 @@ Kirigami.ApplicationWindow {
             }
         }
         onSessionStartFailed: function(message) {
+            commandLineBridge.finishRequest(1)
             if (root.exitOnStartupFailure) {
                 root.exitOnStartupFailure = false
                 root.startupFailed(1)
@@ -190,6 +200,18 @@ Kirigami.ApplicationWindow {
         Component.onCompleted: {
             detectSteamPaths()
             loadGames()
+        }
+    }
+    SteamShortcutManager {
+        id: steamShortcutManager
+        sessionManager: sessionManager
+        sessionRunner: sessionRunner
+    }
+
+    Connections {
+        target: steamShortcutManager
+        function onRegistrationFinished() {
+            steamConfigManager.loadGames()
         }
     }
 
@@ -326,7 +348,8 @@ Kirigami.ApplicationWindow {
         pageStack.clear()
         pageStack.push(profilesPage, {
             sessionManager: sessionManager,
-            sessionRunner: sessionRunner
+            sessionRunner: sessionRunner,
+            steamShortcutManager: steamShortcutManager
         })
     }
 
