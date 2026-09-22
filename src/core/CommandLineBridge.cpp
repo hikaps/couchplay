@@ -86,9 +86,13 @@ bool CommandLineBridge::launchProfile(const QString &profileName,
                                              QDBusConnection::sessionBus(),
                                              QDBusServiceWatcher::WatchForUnregistration,
                                              this);
+    m_senderWatcher = watcher;
     connect(watcher, &QDBusServiceWatcher::serviceUnregistered, this, [this, watcher](const QString &service) {
         if (service == m_activeSender && !m_activeRequestId.isEmpty()) {
             Q_EMIT stopRequested();
+        }
+        if (m_senderWatcher == watcher) {
+            m_senderWatcher = nullptr;
         }
         watcher->deleteLater();
     });
@@ -117,6 +121,10 @@ void CommandLineBridge::finishRequest(int exitCode)
     m_activeRequestId.clear();
     m_activeSender.clear();
     m_activeDisplay.clear();
+    if (m_senderWatcher) {
+        m_senderWatcher->deleteLater();
+        m_senderWatcher = nullptr;
+    }
     Q_EMIT launchFinished(requestId, exitCode);
 }
 

@@ -68,8 +68,9 @@ account_valid() {
     local root=$1 account=$2
     [[ "$account" =~ ^[1-9][0-9]*$ ]] || return 1
     root_valid "$root" || return 1
-    local account_dir="$root/userdata/$account"
-    [[ -d "$account_dir" && -d "$account_dir/config" ]]
+    local userdata="$root/userdata" account_dir="$root/userdata/$account" config="$root/userdata/$account/config"
+    [[ ! -L "$userdata" && ! -L "$account_dir" && ! -L "$config" ]] || return 1
+    [[ -d "$config" && "$(realpath -e -- "$config")" == "$config" ]]
 }
 
 steam_binary() {
@@ -88,6 +89,12 @@ steam_running() {
     local root=$1 kind pid exe commandline binary
     kind=$(root_kind "$root")
     binary=$(steam_binary "$root" 2>/dev/null || true)
+    if [[ "$kind" == flatpak ]] && command -v flatpak >/dev/null 2>&1; then
+        while IFS= read -r pid; do
+            [[ -r "/proc/$pid/status" ]] || continue
+            [[ "$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" == "$(id -u)" ]] && return 0
+        done < <(flatpak ps --columns=application,pid 2>/dev/null | awk -v app="$STEAM_APP_ID" '$1 == app {print $2}')
+    fi
     for pid in /proc/[0-9]*; do
         pid=${pid##*/}
         [[ -r "/proc/$pid/status" ]] || continue
@@ -172,6 +179,7 @@ commit_shortcuts() {
     lock="$config/shortcuts.vdf.couchplay.lock"
     exec 9>"$lock"
     flock -n 9 || fail 4 "shortcuts-busy"
+    account_valid "$root" "$account" || fail 4 "unsafe-account-path"
     steam_running "$root" && fail 4 "steam-still-running"
     assert_expected "$path" "$expected"
     temp=$(mktemp "$config/.shortcuts.vdf.couchplay.XXXXXX")
@@ -187,6 +195,7 @@ commit_shortcuts() {
         mv -f -- "$backup_temp" "$config/shortcuts.vdf.couchplay-backup"
         chmod "$mode" "$temp"
     fi
+    account_valid "$root" "$account" || fail 4 "unsafe-account-path"
     steam_running "$root" && fail 4 "steam-started-during-write"
     mv -f -- "$temp" "$path"
     trap - RETURN

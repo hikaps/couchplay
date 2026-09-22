@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QString>
 
+class QDBusServiceWatcher;
 class CommandLineBridge : public QObject
 {
     Q_OBJECT
@@ -43,4 +44,5 @@ private:
     QString m_activeRequestId;
     QString m_activeSender;
     QString m_activeDisplay;
+    QDBusServiceWatcher *m_senderWatcher = nullptr;
 };

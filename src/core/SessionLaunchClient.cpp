@@ -49,8 +49,10 @@ public:
             }
             s_readFd = pipeFds[0];
             s_writeFd = pipeFds[1];
-            const int flags = ::fcntl(s_writeFd, F_GETFL, 0);
-            ::fcntl(s_writeFd, F_SETFL, flags | O_NONBLOCK);
+            const int readFlags = ::fcntl(s_readFd, F_GETFL, 0);
+            ::fcntl(s_readFd, F_SETFL, readFlags | O_NONBLOCK);
+            const int writeFlags = ::fcntl(s_writeFd, F_GETFL, 0);
+            ::fcntl(s_writeFd, F_SETFL, writeFlags | O_NONBLOCK);
             std::signal(SIGTERM, &TerminationNotifier::signalHandler);
             std::signal(SIGINT, &TerminationNotifier::signalHandler);
         }

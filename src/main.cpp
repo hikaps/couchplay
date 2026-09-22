@@ -110,6 +110,13 @@ int main(int argc, char *argv[])
     if (waitingLaunch && serviceAlreadyRunning) {
         return SessionLaunchClient::run(app, initialRequest, QStringLiteral("com.github.CouchPlay"));
     }
+    CommandLineBridge commandLineBridge;
+    if (!QDBusConnection::sessionBus().registerObject(QStringLiteral("/SessionLauncher"),
+                                                       &commandLineBridge,
+                                                       QDBusConnection::ExportAdaptors)) {
+        qWarning() << "Failed to register session launch bridge:"
+                   << QDBusConnection::sessionBus().lastError().message();
+    }
     KDBusService service(KDBusService::Unique);
     if (!service.isRegistered()) {
         qWarning() << "CouchPlay singleton unavailable:" << service.errorMessage();
@@ -121,7 +128,6 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
-    CommandLineBridge commandLineBridge;
     engine.rootContext()->setContextProperty(QStringLiteral("commandLineBridge"), &commandLineBridge);
     engine.setInitialProperties({
         {QStringLiteral("startupProfileName"), initialRequest.profileName},
@@ -133,12 +139,6 @@ int main(int argc, char *argv[])
     if (engine.rootObjects().isEmpty()) {
         qCritical() << "CouchPlay QML root failed to load";
         return -1;
-    }
-    if (!QDBusConnection::sessionBus().registerObject(QStringLiteral("/SessionLauncher"),
-                                                       &commandLineBridge,
-                                                       QDBusConnection::ExportAdaptors)) {
-        qWarning() << "Failed to register session launch bridge:"
-                   << QDBusConnection::sessionBus().lastError().message();
     }
     auto *terminationNotifier = SessionLaunchClient::watchTermination(&app, [&commandLineBridge] {
         commandLineBridge.requestStop();

@@ -99,8 +99,7 @@ private Q_SLOTS:
 
         QByteArray stripped;
         QVERIFY2(SteamShortcutsVdf::withoutProfiles(updated, &stripped, &error), qPrintable(error));
-        QVERIFY(stripped.contains("Foreign Game"));
-        QVERIFY(!stripped.contains("CouchPlay - Changed"));
+        QCOMPARE(stripped, documentWithForeignEntry());
     }
 
     void testCodecRejectsMalformedInput()

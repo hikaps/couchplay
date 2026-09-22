@@ -32,8 +32,11 @@ Kirigami.Dialog {
         target: root.manager
         function onRegistrationFinished(name, updated, steamReopened) {
             if (name !== root.profileName) return
+            const account = root.manager && root.comboSteamAccount.currentIndex >= 0
+                ? root.manager.accounts[root.comboSteamAccount.currentIndex]
+                : null
             root.completed = true
-            root.errorText = steamReopened || !root.manager.accounts[root.comboSteamAccount.currentIndex].running
+            root.errorText = steamReopened || !account || !account.running
                 ? i18nc("@info", "Profile added to Steam.")
                 : i18nc("@info", "Profile saved, but Steam could not be reopened.")
         }
