@@ -381,6 +381,7 @@ QByteArray canonicalEntry(const SteamShortcut &shortcut, const QString &indexKey
     return result;
 }
 
+// Steam users can customize artwork, tags, and launch flags; only these application-owned fields are refreshed.
 bool isReplacedField(const QString &key)
 {
     return key == QStringLiteral("AppName") || key == QStringLiteral("exe") || key == QStringLiteral("Exe")
@@ -425,7 +426,8 @@ bool validShortcutForWrite(const SteamShortcut &shortcut, QString *errorMessage)
     const QList<QString> values = {shortcut.appName, shortcut.exe, shortcut.startDir, shortcut.icon,
                                    shortcut.shortcutPath, shortcut.launchOptions, shortcut.devkitGameId,
                                    shortcut.flatpakAppId, shortcut.sortAs};
-    if (std::any_of(values.cbegin(), values.cend(), [](const QString &value) { return !validString(value); })) {
+    if (std::any_of(values.cbegin(), values.cend(), [](const QString &value) { return !validString(value); })
+        || std::any_of(shortcut.tags.cbegin(), shortcut.tags.cend(), [](const QString &tag) { return !validString(tag); })) {
         setError(errorMessage, QStringLiteral("Shortcut contains a NUL character"));
         return false;
     }
@@ -560,19 +562,99 @@ bool withoutProfiles(const QByteArray &bytes, QByteArray *result, QString *error
         markers.insert(shortcut.shortcutPath);
     }
 
-    *result = bytes.left(document.entriesStart);
+    QByteArray filtered = bytes.left(document.entriesStart);
     for (const Entry &entry : document.entries) {
         if (!isProfileShortcut(toShortcut(entry))) {
-            result->append(bytes.mid(entry.start, entry.end - entry.start));
+            filtered.append(bytes.mid(entry.start, entry.end - entry.start));
         }
     }
-    result->append(bytes.mid(document.rootEnd));
+    filtered.append(bytes.mid(document.rootEnd));
+    *result = filtered;
+    return true;
+}
+bool mergePreservingProfiles(const QByteArray &source,
+                            const QByteArray &target,
+                            QByteArray *result,
+                            QString *errorMessage)
+{
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+    if (!result) {
+        setError(errorMessage, QStringLiteral("Shortcut result is null"));
+        return false;
+    }
+
+    QByteArray filteredSource;
+    if (!withoutProfiles(source, &filteredSource, errorMessage)) {
+        return false;
+    }
+
+    Document sourceDocument;
+    Document targetDocument;
+    if (!parseDocument(filteredSource, &sourceDocument, errorMessage)
+        || !parseDocument(target, &targetDocument, errorMessage)) {
+        return false;
+    }
+
+    QSet<QString> usedIndices;
+    for (const Entry &entry : sourceDocument.entries) {
+        usedIndices.insert(entry.indexKey);
+    }
+
+    QSet<QString> profileMarkers;
+    QByteArray merged = filteredSource.left(sourceDocument.rootEnd);
+    for (const Entry &entry : targetDocument.entries) {
+        const SteamShortcut shortcut = toShortcut(entry);
+        if (!isProfileShortcut(shortcut)) {
+            continue;
+        }
+        if (profileMarkers.contains(shortcut.shortcutPath)) {
+            setError(errorMessage, QStringLiteral("Duplicate CouchPlay profile shortcut marker"));
+            return false;
+        }
+        profileMarkers.insert(shortcut.shortcutPath);
+
+        QString indexKey = entry.indexKey;
+        if (usedIndices.contains(indexKey)) {
+            int index = 0;
+            while (usedIndices.contains(QString::number(index))) {
+                if (index == std::numeric_limits<int>::max()) {
+                    setError(errorMessage, QStringLiteral("No shortcut index is available"));
+                    return false;
+                }
+                ++index;
+            }
+            indexKey = QString::number(index);
+        }
+        usedIndices.insert(indexKey);
+
+        const QByteArray originalEntry = target.mid(entry.start, entry.end - entry.start);
+        if (indexKey == entry.indexKey) {
+            merged.append(originalEntry);
+        } else {
+            merged.append(char(VdfObject));
+            merged.append(indexKey.toUtf8());
+            merged.append('\0');
+            merged.append(originalEntry.mid(entry.indexKey.toUtf8().size() + 2));
+        }
+        if (merged.size() > MaxDocumentSize) {
+            setError(errorMessage, QStringLiteral("Merged shortcuts.vdf exceeds the size limit"));
+            return false;
+        }
+    }
+    merged.append(filteredSource.mid(sourceDocument.rootEnd));
+    if (merged.size() > MaxDocumentSize) {
+        setError(errorMessage, QStringLiteral("Merged shortcuts.vdf exceeds the size limit"));
+        return false;
+    }
+    *result = merged;
     return true;
 }
 
 bool isProfileShortcut(const SteamShortcut &shortcut)
 {
-    static const QRegularExpression marker(QStringLiteral("^couchplay://profile/[0-9a-f]{64}$"));
+    static const QRegularExpression marker(QStringLiteral("^couchplay://profile/[0-9a-f]{64}\\z"));
     return marker.match(shortcut.shortcutPath).hasMatch();
 }
 

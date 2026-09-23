@@ -236,6 +236,21 @@ QString CouchPlayHelperClient::getUserSteamRoot(const QString &username)
     }
     return reply.value();
 }
+bool CouchPlayHelperClient::readSteamShortcutsForUser(const QString &username, QByteArray *content)
+{
+    if (!m_available || !content) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper unavailable or invalid shortcuts result"));
+        return false;
+    }
+
+    QDBusReply<QByteArray> reply = m_interface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+    *content = reply.value();
+    return true;
+}
 
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              const QString &displayContext,

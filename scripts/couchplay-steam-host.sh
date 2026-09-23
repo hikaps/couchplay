@@ -86,27 +86,36 @@ steam_binary() {
 }
 
 steam_running() {
-    local root=$1 kind pid exe commandline binary
+    local root=$1 kind pid exe candidate canonical uid
+    local -a native_binaries=()
     kind=$(root_kind "$root")
-    binary=$(steam_binary "$root" 2>/dev/null || true)
-    if [[ "$kind" == flatpak ]] && command -v flatpak >/dev/null 2>&1; then
+    uid=$(id -u)
+    if [[ "$kind" == flatpak ]]; then
+        if ! command -v flatpak >/dev/null 2>&1; then
+            return 1
+        fi
         while IFS= read -r pid; do
             [[ -r "/proc/$pid/status" ]] || continue
-            [[ "$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" == "$(id -u)" ]] && return 0
+            [[ "$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" == "$uid" ]] && return 0
         done < <(flatpak ps --columns=application,pid 2>/dev/null | awk -v app="$STEAM_APP_ID" '$1 == app {print $2}')
+        return 1
     fi
+
+    for candidate in "$root/ubuntu12_64/steam" "$root/ubuntu12_32/steam"; do
+        [[ -x "$candidate" ]] || continue
+        canonical=$(readlink -f -- "$candidate" 2>/dev/null || true)
+        [[ -n "$canonical" ]] && native_binaries+=("$canonical")
+    done
+    ((${#native_binaries[@]})) || return 1
+
     for pid in /proc/[0-9]*; do
         pid=${pid##*/}
         [[ -r "/proc/$pid/status" ]] || continue
-        [[ "$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" == "$(id -u)" ]] || continue
-        if [[ "$kind" == native && -n "$binary" ]]; then
-            exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-            commandline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
-            [[ "$exe" == "$binary" || ( "$binary" == */steam.sh && "$commandline" == *"$root"* ) ]] && return 0
-        elif [[ "$kind" == flatpak ]]; then
-            commandline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
-            [[ "$commandline" == *"$STEAM_APP_ID"* ]] && return 0
-        fi
+        [[ "$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" == "$uid" ]] || continue
+        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+        for candidate in "${native_binaries[@]}"; do
+            [[ "$exe" == "$candidate" ]] && return 0
+        done
     done
     return 1
 }
@@ -168,7 +177,7 @@ assert_expected() {
 
 commit_shortcuts() {
     require_user
-    local root=$1 account=$2 expected=$3 path config lock temp backup_temp mode
+    local root=$1 account=$2 expected=$3 path config lock temp backup_temp mode lock_fd_identity lock_path_identity
     account_valid "$root" "$account" || fail 3 "invalid-account"
     path="$root/userdata/$account/config/shortcuts.vdf"
     config=$(dirname -- "$path")
@@ -177,7 +186,12 @@ commit_shortcuts() {
     fi
     mkdir -p -- "$config"
     lock="$config/shortcuts.vdf.couchplay.lock"
-    exec 9>"$lock"
+    [[ ! -L "$lock" ]] || fail 4 "unsafe-lock-file"
+    exec 9>>"$lock"
+    [[ ! -L "$lock" && -f "$lock" ]] || fail 4 "unsafe-lock-file"
+    lock_fd_identity=$(stat -Lc '%d:%i' "/proc/$BASHPID/fd/9") || fail 4 "unsafe-lock-file"
+    lock_path_identity=$(stat -c '%d:%i' -- "$lock") || fail 4 "unsafe-lock-file"
+    [[ "$lock_fd_identity" == "$lock_path_identity" ]] || fail 4 "unsafe-lock-file"
     flock -n 9 || fail 4 "shortcuts-busy"
     account_valid "$root" "$account" || fail 4 "unsafe-account-path"
     steam_running "$root" && fail 4 "steam-still-running"
@@ -192,19 +206,19 @@ commit_shortcuts() {
         backup_temp=$(mktemp "$config/.shortcuts.vdf.couchplay-backup.XXXXXX")
         cp -- "$path" "$backup_temp"
         chmod 600 "$backup_temp"
-        mv -f -- "$backup_temp" "$config/shortcuts.vdf.couchplay-backup"
+        mv -fT -- "$backup_temp" "$config/shortcuts.vdf.couchplay-backup"
         chmod "$mode" "$temp"
     fi
     account_valid "$root" "$account" || fail 4 "unsafe-account-path"
     steam_running "$root" && fail 4 "steam-started-during-write"
-    mv -f -- "$temp" "$path"
+    mv -fT -- "$temp" "$path"
     trap - RETURN
     printf '%s\n' committed
 }
 
 export_payload() {
     require_user
-    local identity=$1 kind=$2 home data_dir output_dir output
+    local identity=$1 kind=$2 home data_dir output_dir output target
     [[ "$identity" =~ ^[0-9a-f]{64}$ ]] || fail 2 "invalid-profile-identity"
     case "$kind" in
         launcher) output="$identity.sh" ;;
@@ -218,15 +232,18 @@ export_payload() {
     output_dir="$data_dir/couchplay/steam-shortcuts"
     mkdir -p -- "$output_dir"
     chmod 700 "$data_dir/couchplay" "$output_dir"
+    target="$output_dir/$output"
+    if [[ -e "$target" || -L "$target" ]]; then
+        [[ -f "$target" && ! -L "$target" ]] || fail 3 "unsafe-export-target"
+    fi
     local temp
     temp=$(mktemp "$output_dir/.export.XXXXXX")
-    trap 'rm -f -- "${temp:-}"' RETURN
+    trap 'rm -f -- "$temp"' RETURN
     cat >"$temp"
     if [[ "$kind" == icon ]]; then chmod 600 "$temp"; else chmod 700 "$temp"; fi
-    [[ ! -e "$output_dir/$output" || ! -L "$output_dir/$output" ]] || fail 3 "export-target-symlink"
-    mv -f -- "$temp" "$output_dir/$output"
+    mv -fT -- "$temp" "$target"
     trap - RETURN
-    printf '%s\n' "$output_dir/$output"
+    printf '%s\n' "$target"
 }
 
 shutdown_steam() {
@@ -245,6 +262,7 @@ shutdown_steam() {
 start_steam() {
     require_user
     local root=$1 binary
+    is_game_mode && fail 2 "game-mode-restart-refused"
     root_valid "$root" || fail 3 "invalid-steam-root"
     if [[ "$(root_kind "$root")" == native ]]; then
         binary=$(steam_binary "$root") || fail 3 "steam-binary-not-found"

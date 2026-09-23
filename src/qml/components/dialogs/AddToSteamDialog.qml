@@ -13,7 +13,8 @@ Kirigami.Dialog {
     Accessible.name: title
     title: i18nc("@title:dialog", "Add Profile to Steam")
     preferredWidth: Kirigami.Units.gridUnit * 32
-    standardButtons: Kirigami.Dialog.Cancel
+    standardButtons: manager?.busy && !manager?.cancellable ? 0 : Kirigami.Dialog.Cancel
+    closePolicy: manager?.busy && !manager?.cancellable ? Controls.Popup.NoAutoClose : Controls.Popup.CloseOnEscape | Controls.Popup.CloseOnPressOutside
 
     required property var manager
     property string profileName: ""
@@ -21,10 +22,15 @@ Kirigami.Dialog {
     property bool completed: false
     property string errorText: ""
 
+    function selectedAccount() {
+        const accounts = root.manager ? root.manager.accounts : []
+        const index = comboSteamAccount.currentIndex
+        return index >= 0 && index < accounts.length ? accounts[index] : null
+    }
+
     onRejected: {
-        if (manager && manager.busy) {
-            manager.cancel()
-        }
+        if (manager?.busy && !manager.cancellable) return
+        if (manager?.busy) manager.cancel()
         close()
     }
 
@@ -32,13 +38,11 @@ Kirigami.Dialog {
         target: root.manager
         function onRegistrationFinished(name, updated, steamReopened) {
             if (name !== root.profileName) return
-            const account = root.manager && root.comboSteamAccount.currentIndex >= 0
-                ? root.manager.accounts[root.comboSteamAccount.currentIndex]
-                : null
+            const account = root.selectedAccount()
             root.completed = true
-            root.errorText = steamReopened || !account || !account.running
-                ? i18nc("@info", "Profile added to Steam.")
-                : i18nc("@info", "Profile saved, but Steam could not be reopened.")
+            root.errorText = !account || (account.running && !steamReopened)
+                ? i18nc("@info", "Profile saved, but Steam could not be reopened.")
+                : i18nc("@info", "Profile added to Steam.")
         }
         function onErrorOccurred(message) {
             root.errorText = message
@@ -70,10 +74,12 @@ Kirigami.Dialog {
         Controls.ComboBox {
             id: comboSteamAccount
             objectName: "comboSteamAccount"
+            Accessible.name: i18nc("@label", "Steam account")
             Layout.fillWidth: true
             visible: !(root.manager?.gameMode ?? false)
             model: root.manager ? root.manager.accounts : []
             textRole: "label"
+            onCurrentIndexChanged: root.restartConfirmed = false
             enabled: !root.manager?.busy && !root.completed
         }
 
@@ -107,18 +113,19 @@ Kirigami.Dialog {
                 id: btnConfirmAddToSteam
                 objectName: "btnConfirmAddToSteam"
                 Layout.fillWidth: true
-                enabled: !root.manager?.busy && !root.completed && comboSteamAccount.currentIndex >= 0
+                enabled: !root.manager?.busy && !root.completed && root.selectedAccount() !== null
                 text: {
                     if (root.restartConfirmed) return i18nc("@action:button", "Close Steam, Add, and Reopen")
-                    if (comboSteamAccount.currentIndex >= 0
-                        && root.manager.accounts[comboSteamAccount.currentIndex].running) {
+                    const account = root.selectedAccount()
+                    if (account && account.running) {
                         return i18nc("@action:button", "Continue")
                     }
                     return i18nc("@action:button", "Add to Steam")
                 }
                 onClicked: {
-                    const running = root.manager.accounts[comboSteamAccount.currentIndex].running
-                    if (running && !root.restartConfirmed) {
+                    const account = root.selectedAccount()
+                    if (!account) return
+                    if (account.running && !root.restartConfirmed) {
                         root.restartConfirmed = true
                     } else {
                         root.manager.addToSteam(comboSteamAccount.currentIndex, root.restartConfirmed)
@@ -130,8 +137,11 @@ Kirigami.Dialog {
                 id: btnOpenSteam
                 objectName: "btnOpenSteam"
                 visible: root.completed
+                enabled: root.selectedAccount() !== null && !root.manager?.busy
                 text: i18nc("@action:button", "Open Steam")
-                onClicked: root.manager.openSteam(comboSteamAccount.currentIndex)
+                onClicked: {
+                    if (root.selectedAccount()) root.manager.openSteam(comboSteamAccount.currentIndex)
+                }
             }
         }
     }

@@ -147,8 +147,9 @@ Kirigami.ScrollablePage {
                     }
                     onAddToSteam: {
                         if (modelData && steamShortcutManager) {
-                            root.profileToAdd = modelData.name
-                            steamShortcutManager.prepare(modelData.name)
+                            if (steamShortcutManager.prepare(modelData.name)) {
+                                root.profileToAdd = modelData.name
+                            }
                         }
                     }
                 }
@@ -281,7 +282,7 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            RowLayout {
+            Flow {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
 
@@ -328,7 +329,6 @@ Kirigami.ScrollablePage {
                     onClicked: profileCard.loadProfile()
                 }
 
-                Item { Layout.fillWidth: true }
 
                 Controls.Button {
                     objectName: "btnDeleteProfile"

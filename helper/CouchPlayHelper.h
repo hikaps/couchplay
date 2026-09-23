@@ -4,6 +4,7 @@
 #pragma once
 
 #include <QDBusContext>
+#include <QByteArray>
 #include <QMap>
 #include <QObject>
 #include <QProcess>
@@ -405,6 +406,12 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
+    /**
+     * Read the target user's Steam shortcuts file for profile sync.
+     * The helper resolves Steam paths itself and refuses symlinks.
+     * Returns empty when the file is absent; an empty file is rejected.
+     */
+    QByteArray ReadSteamShortcutsForUser(const QString &username);
 
     /**
      * Create a virtual Wayland output for streaming capture

@@ -5,6 +5,7 @@
 
 #include <QDBusAbstractAdaptor>
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDBusContext>
 #include <QDBusMessage>
 #include <QDBusServiceWatcher>
@@ -12,7 +13,7 @@
 
 namespace {
 
-class SessionLauncherAdaptor final : public QDBusAbstractAdaptor, protected QDBusContext
+class SessionLauncherAdaptor final : public QDBusAbstractAdaptor
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
@@ -26,14 +27,18 @@ public:
     }
 
 public Q_SLOTS:
+    bool IsReady() const
+    {
+        return m_bridge->isReady();
+    }
     bool LaunchProfile(const QString &profileName, const QString &requestId, const QString &display)
     {
-        return m_bridge->launchProfile(profileName, requestId, display, message().service());
+        return m_bridge->launchProfile(profileName, requestId, display, m_bridge->currentDbusSender());
     }
 
     bool StopSession(const QString &requestId)
     {
-        return m_bridge->stopSession(requestId, message().service());
+        return m_bridge->stopSession(requestId, m_bridge->currentDbusSender());
     }
 
 Q_SIGNALS:
@@ -59,14 +64,20 @@ CommandLineBridge::CommandLineBridge(QObject *parent)
 {
     new SessionLauncherAdaptor(this);
 }
+QString CommandLineBridge::currentDbusSender() const
+{
+    return calledFromDBus() ? message().service() : QString();
+}
 
 bool CommandLineBridge::launchProfile(const QString &profileName,
                                       const QString &requestId,
                                       const QString &display,
                                       const QString &sender)
 {
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    auto *busInterface = bus.interface();
     if (profileName.isEmpty() || requestId.isEmpty() || sender.isEmpty() || !displayMatches(display)
-        || !m_activeRequestId.isEmpty()) {
+        || !m_ready || !m_activeRequestId.isEmpty() || !busInterface || !busInterface->isServiceRegistered(sender)) {
         return false;
     }
 
@@ -74,21 +85,13 @@ bool CommandLineBridge::launchProfile(const QString &profileName,
     m_activeSender = sender;
     m_activeDisplay = display;
     m_requestAccepted = false;
-    Q_EMIT launchRequested(profileName, true, true);
-    if (!m_requestAccepted) {
-        m_activeRequestId.clear();
-        m_activeSender.clear();
-        m_activeDisplay.clear();
-        return false;
-    }
+    m_senderGone = false;
 
-    auto *watcher = new QDBusServiceWatcher(sender,
-                                             QDBusConnection::sessionBus(),
-                                             QDBusServiceWatcher::WatchForUnregistration,
-                                             this);
+    auto *watcher = new QDBusServiceWatcher(sender, bus, QDBusServiceWatcher::WatchForUnregistration, this);
     m_senderWatcher = watcher;
     connect(watcher, &QDBusServiceWatcher::serviceUnregistered, this, [this, watcher](const QString &service) {
-        if (service == m_activeSender && !m_activeRequestId.isEmpty()) {
+        if (service == m_activeSender && !m_activeRequestId.isEmpty() && !m_senderGone) {
+            m_senderGone = true;
             Q_EMIT stopRequested();
         }
         if (m_senderWatcher == watcher) {
@@ -96,7 +99,32 @@ bool CommandLineBridge::launchProfile(const QString &profileName,
         }
         watcher->deleteLater();
     });
-    return true;
+
+    auto clearPendingRequest = [this, watcher] {
+        if (m_senderWatcher == watcher) {
+            m_senderWatcher = nullptr;
+        }
+        watcher->deleteLater();
+        m_activeRequestId.clear();
+        m_activeSender.clear();
+        m_activeDisplay.clear();
+        m_senderGone = false;
+    };
+    if (!busInterface->isServiceRegistered(sender)) {
+        clearPendingRequest();
+        return false;
+    }
+
+    Q_EMIT launchRequested(profileName, true, true);
+    if (!m_requestAccepted) {
+        clearPendingRequest();
+        return false;
+    }
+    if (!busInterface->isServiceRegistered(sender) && !m_senderGone) {
+        m_senderGone = true;
+        Q_EMIT stopRequested();
+    }
+    return !m_senderGone;
 }
 
 bool CommandLineBridge::stopSession(const QString &requestId, const QString &sender)
@@ -121,6 +149,7 @@ void CommandLineBridge::finishRequest(int exitCode)
     m_activeRequestId.clear();
     m_activeSender.clear();
     m_activeDisplay.clear();
+    m_senderGone = false;
     if (m_senderWatcher) {
         m_senderWatcher->deleteLater();
         m_senderWatcher = nullptr;

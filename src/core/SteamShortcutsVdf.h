@@ -19,6 +19,10 @@ bool upsert(const QByteArray &bytes,
             QByteArray *result,
             QString *errorMessage = nullptr);
 bool withoutProfiles(const QByteArray &bytes, QByteArray *result, QString *errorMessage = nullptr);
+bool mergePreservingProfiles(const QByteArray &source,
+                            const QByteArray &target,
+                            QByteArray *result,
+                            QString *errorMessage = nullptr);
 bool isProfileShortcut(const SteamShortcut &shortcut);
 
 QByteArray emptyDocument();

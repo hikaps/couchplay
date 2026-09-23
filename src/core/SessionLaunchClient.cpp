@@ -5,11 +5,13 @@
 
 #include <QApplication>
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDBusInterface>
 #include <QDBusServiceWatcher>
 #include <QDBusReply>
 #include <QEventLoop>
 #include <QSocketNotifier>
+#include <QThread>
 #include <QUuid>
 
 #include <cerrno>
@@ -113,6 +115,30 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
         display = qEnvironmentVariable("DISPLAY");
     }
 
+    QDBusConnectionInterface *busInterface = bus.interface();
+    if (!busInterface) {
+        return 1;
+    }
+    bool launcherReady = false;
+    for (int attempt = 0; attempt < 100 && !launcherReady; ++attempt) {
+        if (busInterface->isServiceRegistered(serviceName)) {
+            const QDBusMessage readyCall = QDBusMessage::createMethodCall(
+                serviceName,
+                QStringLiteral("/SessionLauncher"),
+                QStringLiteral("com.github.CouchPlay.SessionLauncher"),
+                QStringLiteral("IsReady"));
+            const QDBusMessage readyReply = bus.call(readyCall, QDBus::Block, 250);
+            launcherReady = readyReply.type() == QDBusMessage::ReplyMessage
+                && readyReply.arguments().value(0).toBool();
+        }
+        if (!launcherReady) {
+            QThread::msleep(50);
+        }
+    }
+    if (!launcherReady) {
+        return 1;
+    }
+
     QDBusInterface interface(serviceName,
                              QStringLiteral("/SessionLauncher"),
                              QStringLiteral("com.github.CouchPlay.SessionLauncher"),
@@ -124,6 +150,7 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
     QEventLoop loop;
     int result = 1;
     bool completed = false;
+    bool serviceLost = false;
     bool stopSent = false;
     DbusSignalReceiver receiver;
     QDBusServiceWatcher watcher(serviceName, bus, QDBusServiceWatcher::WatchForUnregistration);
@@ -139,6 +166,7 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
     });
     QObject::connect(&watcher, &QDBusServiceWatcher::serviceUnregistered, &loop, [&](const QString &service) {
         if (service == serviceName && !completed) {
+            serviceLost = true;
             result = 1;
             loop.quit();
         }
@@ -175,8 +203,9 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
                        SLOT(onLaunchFinished(QString, int)));
         return 2;
     }
-
-    loop.exec();
+    if (!completed && !serviceLost) {
+        loop.exec();
+    }
     bus.disconnect(serviceName,
                    QStringLiteral("/SessionLauncher"),
                    QStringLiteral("com.github.CouchPlay.SessionLauncher"),

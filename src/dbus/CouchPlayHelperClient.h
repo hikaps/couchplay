@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QDBusInterface>
 #include <QObject>
 #include <qqmlintegration.h>
@@ -79,6 +80,8 @@ public:
      * when Steam has not been bootstrapped for that user.
      */
     Q_INVOKABLE virtual QString getUserSteamRoot(const QString &username);
+    /** Empty content means the target user has no shortcuts.vdf. */
+    virtual bool readSteamShortcutsForUser(const QString &username, QByteArray *content);
 
     /**
      * @brief Launch a gamescope instance as a specified user

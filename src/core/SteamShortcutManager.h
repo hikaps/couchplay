@@ -23,6 +23,7 @@ class SteamShortcutManager : public QObject
     QML_ELEMENT
     Q_PROPERTY(QVariantList accounts READ accounts NOTIFY accountsChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(bool cancellable READ cancellable NOTIFY cancellableChanged)
     Q_PROPERTY(bool gameMode READ gameMode NOTIFY gameModeChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(SessionManager *sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
@@ -34,6 +35,7 @@ public:
 
     QVariantList accounts() const;
     bool busy() const { return m_busy; }
+    bool cancellable() const;
     bool gameMode() const { return m_gameMode; }
     QString status() const { return m_status; }
 
@@ -42,7 +44,7 @@ public:
     SessionRunner *sessionRunner() const { return m_sessionRunner; }
     void setSessionRunner(SessionRunner *runner);
 
-    Q_INVOKABLE void prepare(const QString &profileName);
+    Q_INVOKABLE bool prepare(const QString &profileName);
     Q_INVOKABLE void addToSteam(int accountIndex, bool allowRestart);
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void openSteam(int accountIndex);
@@ -50,6 +52,7 @@ public:
 Q_SIGNALS:
     void accountsChanged();
     void busyChanged();
+    void cancellableChanged();
     void gameModeChanged();
     void statusChanged();
     void sessionManagerChanged();
@@ -73,11 +76,13 @@ private:
     void setGameMode(bool gameMode);
     void setStatus(const QString &status);
     void fail(const QString &message);
+    void finishCancelled();
     void runHost(const QString &operation,
                  const QStringList &arguments,
                  const QByteArray &input,
                  std::function<void(int, const QByteArray &, const QString &)> callback);
     void parseProbe(const QByteArray &output);
+    bool selectedAccountRunning() const;
     void beginWrite();
     void readShortcuts();
     void exportGameMode();
@@ -116,6 +121,8 @@ private:
     bool m_gameMode = false;
     bool m_wasRunning = false;
     bool m_reopenAttempted = false;
+    bool m_shutdownConfirmed = false;
+    int m_pollAttempts = 0;
     bool m_cancelled = false;
     QString m_status;
 };

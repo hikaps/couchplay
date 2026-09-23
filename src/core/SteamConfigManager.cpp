@@ -460,8 +460,6 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
     }
     const QString targetVdf = targetPaths.shortcutsVdf;
 
-    // Direct byte copy - preserves exact Steam format including all end markers
-    // This is the preferred approach as it avoids any serialization differences
     QFile sourceFileHandle(sourceFile);
     if (!sourceFileHandle.open(QIODevice::ReadOnly)) {
         qCWarning(couchplaySteam) << "Failed to open source file:" << sourceFile;
@@ -469,17 +467,26 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
         return false;
     }
 
-    QByteArray vdfData = sourceFileHandle.readAll();
+    const QByteArray sourceVdfData = sourceFileHandle.readAll();
     sourceFileHandle.close();
 
-    QByteArray filteredVdfData;
-    QString filterError;
-    if (!SteamShortcutsVdf::withoutProfiles(vdfData, &filteredVdfData, &filterError)) {
-        qCWarning(couchplaySteam) << "Failed to filter CouchPlay shortcuts:" << filterError;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Invalid source shortcuts.vdf"));
+    QByteArray targetVdfData;
+    if (!m_helperClient->readSteamShortcutsForUser(targetUsername, &targetVdfData)) {
+        qCWarning(couchplaySteam) << "Failed to read target user's shortcuts.vdf";
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to read target shortcuts.vdf"));
         return false;
     }
-    vdfData = filteredVdfData;
+    if (targetVdfData.isEmpty()) {
+        targetVdfData = SteamShortcutsVdf::emptyDocument();
+    }
+
+    QByteArray vdfData;
+    QString mergeError;
+    if (!SteamShortcutsVdf::mergePreservingProfiles(sourceVdfData, targetVdfData, &vdfData, &mergeError)) {
+        qCWarning(couchplaySteam) << "Failed to preserve target CouchPlay shortcuts:" << mergeError;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Invalid source or target shortcuts.vdf"));
+        return false;
+    }
 
     qCDebug(couchplaySteam) << "Read" << vdfData.size() << "bytes from source, writing directly to" << targetVdf;
 

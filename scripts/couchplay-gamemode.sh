@@ -85,7 +85,7 @@ fi
 
 if [[ "$ROUTE" == flatpak && -z "$(command -v kwin_wayland 2>/dev/null || true)" ]]; then
     if command -v flatpak-spawn >/dev/null 2>&1; then
-        KWIN_COMMAND=(flatpak-spawn --host kwin_wayland)
+        KWIN_COMMAND=(flatpak-spawn --host --watch-bus kwin_wayland)
         COUCHPLAY_HOST_SPAWN=1
     else
         echo "Error: kwin_wayland is unavailable in the Flatpak and flatpak-spawn is unavailable." >&2

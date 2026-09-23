@@ -2822,6 +2822,95 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
 
     return true;
 }
+QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return {};
+    }
+
+    const uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return {};
+    }
+    const gid_t userGid = pw->pw_gid;
+    const QString userHome = QString::fromLocal8Bit(pw->pw_dir);
+    const QString steamRoot = GetUserSteamRoot(username);
+    const QString steamId = GetUserSteamId(username);
+    if (steamRoot.isEmpty() || steamId.isEmpty()) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam is not initialized for '%1'").arg(username));
+        return {};
+    }
+
+    const QString targetPath = steamRoot + QStringLiteral("/userdata/") + steamId
+        + QStringLiteral("/config/shortcuts.vdf");
+    const QString relativeTarget = QDir(userHome).relativeFilePath(targetPath);
+    QStringList targetParts = relativeTarget.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (relativeTarget.startsWith(QLatin1Char('/')) || targetParts.size() < 2
+        || targetParts.contains(QStringLiteral(".."))) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid Steam shortcuts path"));
+        return {};
+    }
+    const QString leafName = targetParts.takeLast();
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const QString safeHome = canonicalHome.isEmpty() ? userHome : canonicalHome;
+    const int homeFd = SecureFs::openBaseDir(safeHome);
+    if (homeFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return {};
+    }
+    const int parentFd = SecureFs::openDirBelow(homeFd, targetParts, false, userUid, userGid);
+    ::close(homeFd);
+    if (parentFd < 0) {
+        if (parentFd == -ENOENT) {
+            return {};
+        }
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely open Steam shortcuts directory"));
+        return {};
+    }
+
+    const int fileFd = ::openat(parentFd,
+                                 leafName.toLocal8Bit().constData(),
+                                 O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    ::close(parentFd);
+    if (fileFd < 0) {
+        if (errno == ENOENT) {
+            return {};
+        }
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely open Steam shortcuts file"));
+        return {};
+    }
+
+    struct stat st;
+    if (::fstat(fileFd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != userUid || st.st_nlink != 1
+        || st.st_size <= 0 || st.st_size > 16 * 1024 * 1024) {
+        ::close(fileFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file is unsafe, empty, or too large"));
+        return {};
+    }
+
+    QByteArray content;
+    content.reserve(static_cast<qsizetype>(st.st_size));
+    char buffer[64 * 1024];
+    while (true) {
+        const ssize_t bytesRead = ::read(fileFd, buffer, sizeof(buffer));
+        if (bytesRead == 0) {
+            break;
+        }
+        if (bytesRead < 0 && errno == EINTR) {
+            continue;
+        }
+        if (bytesRead < 0 || content.size() + bytesRead > 16 * 1024 * 1024) {
+            ::close(fileFd);
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Could not read Steam shortcuts file"));
+            return {};
+        }
+        content.append(buffer, static_cast<qsizetype>(bytesRead));
+    }
+    ::close(fileFd);
+    return content;
+}
 
 bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &username)
 {

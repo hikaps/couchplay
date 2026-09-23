@@ -103,23 +103,20 @@ int main(int argc, char *argv[])
         return 2;
     }
     const bool waitingLaunch = initialRequest.start && initialRequest.exitAfterSession;
-    bool serviceAlreadyRunning = false;
-    if (auto *sessionBusInterface = QDBusConnection::sessionBus().interface()) {
-        serviceAlreadyRunning = sessionBusInterface->isServiceRegistered(QStringLiteral("com.github.CouchPlay"));
-    }
-    if (waitingLaunch && serviceAlreadyRunning) {
-        return SessionLaunchClient::run(app, initialRequest, QStringLiteral("com.github.CouchPlay"));
-    }
     CommandLineBridge commandLineBridge;
     if (!QDBusConnection::sessionBus().registerObject(QStringLiteral("/SessionLauncher"),
                                                        &commandLineBridge,
                                                        QDBusConnection::ExportAdaptors)) {
         qWarning() << "Failed to register session launch bridge:"
                    << QDBusConnection::sessionBus().lastError().message();
+        return 1;
     }
-    KDBusService service(KDBusService::Unique);
+    KDBusService service(KDBusService::Unique | KDBusService::NoExitOnFailure);
     if (!service.isRegistered()) {
-        qWarning() << "CouchPlay singleton unavailable:" << service.errorMessage();
+        if (waitingLaunch) {
+            return SessionLaunchClient::run(app, initialRequest, QStringLiteral("com.github.CouchPlay"));
+        }
+        return 0;
     }
 
     QApplication::setStyle(QStringLiteral("breeze"));
@@ -170,11 +167,15 @@ int main(int argc, char *argv[])
                          if (!request.requested()) {
                              return;
                          }
+                         if (request.start && request.exitAfterSession) {
+                             return;
+                         }
                          commandLineBridge.setRequestAccepted(false);
                          Q_EMIT commandLineBridge.launchRequested(request.profileName, request.start, request.exitAfterSession);
                          service.setExitValue(commandLineBridge.requestAccepted() ? 0 : 2);
                      },
                      Qt::DirectConnection);
 
+    commandLineBridge.setReady(true);
     return app.exec();
 }
