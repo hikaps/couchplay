@@ -167,10 +167,62 @@ read_shortcuts() {
     local root=$1 account=$2 path
     account_valid "$root" "$account" || fail 3 "invalid-account"
     path="$root/userdata/$account/config/shortcuts.vdf"
-    [[ -e "$path" ]] || return 3
-    [[ -f "$path" && ! -L "$path" && "$(stat -c '%u' -- "$path")" == "$(id -u)" ]] || fail 3 "unsafe-shortcuts-file"
-    [[ "$(stat -c '%s' -- "$path")" -le "$MAX_DOCUMENT_SIZE" ]] || fail 3 "shortcuts-file-too-large"
-    cat -- "$path"
+
+    python3 - "$path" "$MAX_DOCUMENT_SIZE" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+max_size = int(sys.argv[2])
+flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+try:
+    fd = os.open(path, flags)
+except FileNotFoundError:
+    sys.exit(3)
+except OSError:
+    print("unsafe-shortcuts-file", file=sys.stderr)
+    sys.exit(3)
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(3)
+
+def snapshot(info):
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+try:
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1:
+        fail("unsafe-shortcuts-file")
+    if before.st_size > max_size:
+        fail("shortcuts-file-too-large")
+
+    contents = bytearray()
+    read_limit = max_size + 1
+    while len(contents) < read_limit:
+        block = os.read(fd, min(65536, read_limit - len(contents)))
+        if not block:
+            break
+        contents.extend(block)
+
+    after = os.fstat(fd)
+    try:
+        current_path = os.stat(path, follow_symlinks=False)
+    except OSError:
+        fail("shortcuts-file-changed")
+    if (snapshot(before) != snapshot(after)
+            or (current_path.st_dev, current_path.st_ino) != (after.st_dev, after.st_ino)):
+        fail("shortcuts-file-changed")
+    if len(contents) > max_size:
+        fail("shortcuts-file-too-large")
+    if len(contents) != after.st_size:
+        fail("shortcuts-file-changed")
+    sys.stdout.buffer.write(contents)
+finally:
+    os.close(fd)
+PY
 }
 
 assert_expected() {

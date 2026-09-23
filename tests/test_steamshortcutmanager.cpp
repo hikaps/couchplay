@@ -5,6 +5,7 @@
 #include <QCryptographicHash>
 #include <QDeadlineTimer>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QList>
@@ -331,6 +332,318 @@ private Q_SLOTS:
         QCOMPARE(finished.size(), 1);
         QVERIFY(!finished.constFirst().at(2).toBool());
         QVERIFY(!manager.busy());
+    }
+
+    void testCancellationKillsDescendantsAfterProcessLeaderExits()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("process-group cleanup requires Linux procfs");
+        }
+
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        const QString childPidPath = home.path() + QStringLiteral("/child.pid");
+        QProcess process;
+        process.setProgram(QStringLiteral("/bin/bash"));
+        process.setArguments({QStringLiteral("-c"),
+                              QStringLiteral("(trap '' TERM; echo $BASHPID > \"$1\"; exec /bin/sleep 30 >/dev/null 2>&1) & wait"),
+                              QStringLiteral("test-process"), childPidPath});
+        process.setChildProcessModifier([] {
+            if (::setpgid(0, 0) != 0) {
+                ::_exit(127);
+            }
+        });
+        process.start();
+        QVERIFY(process.waitForStarted(3000));
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(childPidPath), 3000);
+
+        bool ok = false;
+        QFile childPidFile(childPidPath);
+        QVERIFY(childPidFile.open(QIODevice::ReadOnly));
+        const pid_t childPid = static_cast<pid_t>(childPidFile.readAll().trimmed().toLongLong(&ok));
+        QVERIFY(ok && childPid > 0);
+
+        SteamShortcutManager manager;
+        manager.m_process = &process;
+        manager.m_hostProcessGroupId = process.processId();
+        manager.m_phase = SteamShortcutManager::Phase::Probing;
+        manager.m_busy = true;
+        manager.cancel();
+
+        QVERIFY(process.waitForFinished(3000));
+        manager.m_process = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
+    }
+
+    void testHostReadRejectsHardlinksAndOpensWithoutFollowingSymlinkRaces()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host operations require Linux procfs");
+        }
+        // HostTestHome drops the host-script child to an unprivileged account.
+        HostTestHome home;
+        QVERIFY(home.ready);
+
+        const QString hardlinkSource = home.configDir + QStringLiteral("/shortcuts-source.vdf");
+        QVERIFY(writeFile(hardlinkSource, "shortcuts"));
+        const QByteArray sourcePath = hardlinkSource.toLocal8Bit();
+        const QByteArray shortcutsPath = home.shortcutsPath.toLocal8Bit();
+        QCOMPARE(::link(sourcePath.constData(), shortcutsPath.constData()), 0);
+        QVERIFY(home.makeShortcutHostOwned());
+
+        QProcess hardlinkRead;
+        home.configure(hardlinkRead, QStringLiteral("read"), {home.steamRoot, QStringLiteral("123")});
+        hardlinkRead.start();
+        QVERIFY(hardlinkRead.waitForStarted(3000));
+        QVERIFY(hardlinkRead.waitForFinished(5000));
+        QCOMPARE(hardlinkRead.exitCode(), 3);
+        QVERIFY(hardlinkRead.readAllStandardError().contains("unsafe-shortcuts-file"));
+        QCOMPARE(hardlinkRead.readAllStandardOutput(), QByteArray());
+
+        QVERIFY(QFile::remove(home.shortcutsPath));
+        QVERIFY(writeFile(home.shortcutsPath, "trusted shortcuts"));
+        QVERIFY(home.makeShortcutHostOwned());
+        const QString outsidePath = home.home.path() + QStringLiteral("/outside.vdf");
+        QVERIFY(writeFile(outsidePath, "secret outside file"));
+        const QString binDir = home.home.path() + QStringLiteral("/bin");
+        QVERIFY(QDir().mkpath(binDir));
+        const QString pythonShim = binDir + QStringLiteral("/python3");
+        QVERIFY(writeFile(pythonShim,
+                          "#!/bin/sh\nrm -f -- \"$COUCHPLAY_RACE_PATH\"\n"
+                          "ln -s -- \"$COUCHPLAY_RACE_TARGET\" \"$COUCHPLAY_RACE_PATH\" || exit 98\n"
+                          "exec \"$COUCHPLAY_REAL_PYTHON\" \"$@\"\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                              | QFileDevice::ReadGroup | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                              | QFileDevice::ExeOther));
+        QProcess symlinkRaceRead;
+        home.configure(symlinkRaceRead, QStringLiteral("read"), {home.steamRoot, QStringLiteral("123")});
+        QProcessEnvironment environment = symlinkRaceRead.processEnvironment();
+        environment.insert(QStringLiteral("PATH"), binDir + QLatin1Char(':') + qEnvironmentVariable("PATH"));
+        const QString realPython = QStandardPaths::findExecutable(QStringLiteral("python3"));
+        QVERIFY(!realPython.isEmpty());
+        environment.insert(QStringLiteral("COUCHPLAY_REAL_PYTHON"), realPython);
+        environment.insert(QStringLiteral("COUCHPLAY_RACE_PATH"), home.shortcutsPath);
+        environment.insert(QStringLiteral("COUCHPLAY_RACE_TARGET"), outsidePath);
+        symlinkRaceRead.setProcessEnvironment(environment);
+        symlinkRaceRead.start();
+        QVERIFY(symlinkRaceRead.waitForStarted(3000));
+        QVERIFY(symlinkRaceRead.waitForFinished(5000));
+        QCOMPARE(symlinkRaceRead.exitCode(), 3);
+        QVERIFY(symlinkRaceRead.readAllStandardError().contains("unsafe-shortcuts-file"));
+        QCOMPARE(symlinkRaceRead.readAllStandardOutput(), QByteArray());
+        QVERIFY(QFileInfo(home.shortcutsPath).isSymLink());
+    }
+
+    void testHostReadBoundsDescriptorReadsAtMaximumDocumentSize()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host operations require Linux procfs");
+        }
+        // HostTestHome drops the host-script child to an unprivileged account.
+        HostTestHome home;
+        QVERIFY(home.ready);
+
+        const QByteArray maximum(MaxHostDocumentSize, 'x');
+        QVERIFY(writeFile(home.shortcutsPath, maximum));
+        QVERIFY(home.makeShortcutHostOwned());
+        QProcess maximumRead;
+        home.configure(maximumRead, QStringLiteral("read"), {home.steamRoot, QStringLiteral("123")});
+        maximumRead.start();
+        QVERIFY(maximumRead.waitForStarted(3000));
+        QVERIFY(maximumRead.waitForFinished(10000));
+        QCOMPARE(maximumRead.exitCode(), 0);
+        QCOMPARE(maximumRead.readAllStandardOutput(), maximum);
+
+        QVERIFY(writeFile(home.shortcutsPath, maximum + QByteArray(1, 'x')));
+        QVERIFY(home.makeShortcutHostOwned());
+        QProcess oversizedRead;
+        home.configure(oversizedRead, QStringLiteral("read"), {home.steamRoot, QStringLiteral("123")});
+        oversizedRead.start();
+        QVERIFY(oversizedRead.waitForStarted(3000));
+        QVERIFY(oversizedRead.waitForFinished(5000));
+        QCOMPARE(oversizedRead.exitCode(), 3);
+        QVERIFY(oversizedRead.readAllStandardError().contains("shortcuts-file-too-large"));
+        QVERIFY(oversizedRead.readAllStandardOutput().size() <= MaxHostDocumentSize + 1);
+    }
+
+    void testHostReadDetectsConcurrentMutationAndCapsDescriptorReads()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host operations require Linux procfs");
+        }
+        // HostTestHome drops the host-script child to an unprivileged account.
+        HostTestHome home;
+        QVERIFY(home.ready);
+        QVERIFY(writeFile(home.shortcutsPath, "x"));
+        QVERIFY(home.makeShortcutHostOwned());
+
+        const QString hookDir = home.home.path() + QStringLiteral("/python-hook");
+        QVERIFY(QDir().mkpath(hookDir));
+        const QByteArray hook =
+            "import atexit, os\n"
+            "_count = 0\n_open_count = 0\n_done = False\n_original_read = os.read\n_original_open = os.open\n"
+            "def _save_count():\n"
+            "    with open(os.environ[\"COUCHPLAY_READ_COUNT\"], \"w\") as output: output.write(f\"{_open_count}:{_count}\")\n"
+            "atexit.register(_save_count)\n"
+            "def _open(path, flags, *args, **kwargs):\n"
+            "    global _open_count\n"
+            "    if os.fspath(path) == os.environ[\"COUCHPLAY_READ_PATH\"]: _open_count += 1\n"
+            "    return _original_open(path, flags, *args, **kwargs)\n"
+            "os.open = _open\n"
+            "def _read(fd, size):\n"
+            "    global _count, _done\n"
+            "    if not _done:\n"
+            "        _done = True\n"
+            "        with open(os.environ[\"COUCHPLAY_READ_PATH\"], \"r+b\", buffering=0) as target:\n"
+            "            target.truncate(0)\n"
+            "            target.write(b\"x\" * (int(os.environ[\"COUCHPLAY_READ_LIMIT\"]) + 100))\n"
+            "    data = _original_read(fd, size)\n"
+            "    _count += len(data)\n"
+            "    return data\n"
+            "os.read = _read\n";
+        QVERIFY(writeFile(hookDir + QStringLiteral("/sitecustomize.py"), hook));
+        const QString readCountPath = home.home.path() + QStringLiteral("/read-count");
+
+        QProcess process;
+        home.configure(process, QStringLiteral("read"), {home.steamRoot, QStringLiteral("123")});
+        QProcessEnvironment environment = process.processEnvironment();
+        environment.insert(QStringLiteral("PYTHONPATH"), hookDir);
+        environment.insert(QStringLiteral("COUCHPLAY_READ_PATH"), home.shortcutsPath);
+        environment.insert(QStringLiteral("COUCHPLAY_READ_COUNT"), readCountPath);
+        environment.insert(QStringLiteral("COUCHPLAY_READ_LIMIT"), QString::number(MaxHostDocumentSize));
+        process.setProcessEnvironment(environment);
+        process.start();
+        QVERIFY(process.waitForStarted(3000));
+        QVERIFY(process.waitForFinished(10000));
+        QCOMPARE(process.exitCode(), 3);
+        QVERIFY(process.readAllStandardError().contains("shortcuts-file-changed"));
+        QCOMPARE(process.readAllStandardOutput(), QByteArray());
+
+        QFile readCount(readCountPath);
+        QVERIFY(readCount.open(QIODevice::ReadOnly));
+        QCOMPARE(readCount.readAll().trimmed(), QByteArray("1:") + QByteArray::number(qint64(MaxHostDocumentSize + 1)));
+    }
+
+    void testHostSupervisorKillsTermIgnoringDescendantsOnTimeout()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host process supervision requires Linux procfs");
+        }
+        if (::geteuid() == 0) {
+            QSKIP("host Steam script refuses to run as root");
+        }
+        HostTestHome home;
+        QVERIFY(home.ready);
+        const QString binDir = home.home.path() + QStringLiteral("/bin");
+        QVERIFY(QDir().mkpath(binDir));
+        const QString realpathShim = binDir + QStringLiteral("/realpath");
+        QVERIFY(writeFile(realpathShim,
+                          "#!/bin/bash\n( trap '' TERM; echo $BASHPID > \"$HOME/ignored.pid\"; exec /bin/sleep 30 >/dev/null 2>&1 ) &\n"
+                          "/usr/bin/realpath \"$@\"\n/bin/sleep 30\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", (binDir + QLatin1Char(':') + QString::fromLocal8Bit(oldPath)).toLocal8Bit());
+        struct RestorePath {
+            QByteArray value;
+            ~RestorePath()
+            {
+                if (value.isNull()) {
+                    qunsetenv("PATH");
+                } else {
+                    qputenv("PATH", value);
+                }
+            }
+        } restorePath{oldPath};
+
+        SteamShortcutManager manager;
+        manager.m_busy = true;
+        manager.m_phase = SteamShortcutManager::Phase::Probing;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        bool completed = false;
+        int exitCode = 0;
+        qint64 completionTimeMs = 0;
+        QString error;
+        manager.runHost(QStringLiteral("probe"), {}, QByteArray(),
+                        [&](int code, const QByteArray &, const QString &message) {
+                            completed = true;
+                            completionTimeMs = elapsed.elapsed();
+                            exitCode = code;
+                            error = message;
+                        },
+                        1000);
+
+        const QString childPidPath = home.home.path() + QStringLiteral("/ignored.pid");
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(childPidPath), 3000);
+        QFile childPidFile(childPidPath);
+        QVERIFY(childPidFile.open(QIODevice::ReadOnly));
+        bool ok = false;
+        const pid_t childPid = static_cast<pid_t>(childPidFile.readAll().trimmed().toLongLong(&ok));
+        QVERIFY(ok && childPid > 0);
+        QTRY_VERIFY_WITH_TIMEOUT(completed, 5000);
+        QCOMPARE(exitCode, -1);
+        QVERIFY(completionTimeMs >= 1400);
+        QVERIFY(error.contains(QStringLiteral("timed out")));
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
+    }
+
+    void testHostSupervisorHandlesFlatpakWatchBusInterrupt()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host process supervision requires Linux procfs");
+        }
+        if (::geteuid() == 0) {
+            QSKIP("host Steam script refuses to run as root");
+        }
+        HostTestHome home;
+        QVERIFY(home.ready);
+        const QString binDir = home.home.path() + QStringLiteral("/bin");
+        QVERIFY(QDir().mkpath(binDir));
+        const QString realpathShim = binDir + QStringLiteral("/realpath");
+        QVERIFY(writeFile(realpathShim,
+                          "#!/bin/bash\n( trap '' TERM; echo $BASHPID > \"$HOME/interrupted.pid\"; exec /bin/sleep 30 >/dev/null 2>&1 ) &\n"
+                          "/usr/bin/realpath \"$@\"\n/bin/sleep 30\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", (binDir + QLatin1Char(':') + QString::fromLocal8Bit(oldPath)).toLocal8Bit());
+        struct RestorePath {
+            QByteArray value;
+            ~RestorePath()
+            {
+                if (value.isNull()) {
+                    qunsetenv("PATH");
+                } else {
+                    qputenv("PATH", value);
+                }
+            }
+        } restorePath{oldPath};
+
+        SteamShortcutManager manager;
+        manager.m_busy = true;
+        manager.m_phase = SteamShortcutManager::Phase::Probing;
+        bool completed = false;
+        int exitCode = -1;
+        manager.runHost(QStringLiteral("probe"), {}, QByteArray(),
+                        [&](int code, const QByteArray &, const QString &) {
+                            completed = true;
+                            exitCode = code;
+                        },
+                        10000);
+
+        const QString childPidPath = home.home.path() + QStringLiteral("/interrupted.pid");
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(childPidPath), 3000);
+        const pid_t processGroupId = static_cast<pid_t>(manager.m_process->processId());
+        QVERIFY(processGroupId > 0);
+        QCOMPARE(::kill(-processGroupId, SIGINT), 0);
+
+        QFile childPidFile(childPidPath);
+        QVERIFY(childPidFile.open(QIODevice::ReadOnly));
+        bool ok = false;
+        const pid_t childPid = static_cast<pid_t>(childPidFile.readAll().trimmed().toLongLong(&ok));
+        QVERIFY(ok && childPid > 0);
+        QTRY_VERIFY_WITH_TIMEOUT(completed, 5000);
+        QCOMPARE(exitCode, 143);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
     }
 
     void testHostRejectsOversizedCommitAndExportInput()

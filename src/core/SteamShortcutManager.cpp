@@ -14,6 +14,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QProcess>
+#include <QPointer>
 #include <QTimer>
 #include <QVariantMap>
 
@@ -26,6 +27,37 @@
 namespace {
 
 constexpr int HostTerminationGraceMs = 1000;
+constexpr char HostSupervisorScript[] = R"SUPERVISOR(
+set -u
+child=
+termination_requested=0
+terminate_host_child() {
+    if [[ -z "$child" ]]; then
+        termination_requested=1
+        return
+    fi
+    trap '' TERM HUP INT QUIT
+    kill -TERM -- "-$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null || true
+    for ((attempt = 0; attempt < 15; ++attempt)); do
+        kill -0 -- "-$child" 2>/dev/null || break
+        sleep 0.05
+    done
+    kill -KILL -- "-$child" 2>/dev/null || kill -KILL "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    exit 143
+}
+# Flatpak HostCommand WATCH_BUS sends SIGINT to the host command process group.
+trap terminate_host_child TERM HUP INT QUIT
+setsid /bin/bash -c "$1" couchplay-steam-host "${@:2}" &
+child=$!
+if ((termination_requested)); then
+    terminate_host_child
+fi
+wait "$child"
+status=$?
+exit "$status"
+)SUPERVISOR";
+
 QString shellQuote(const QString &value)
 {
     QString quoted(QStringLiteral("'"));
@@ -64,7 +96,10 @@ SteamShortcutManager::SteamShortcutManager(QObject *parent)
 
 SteamShortcutManager::~SteamShortcutManager()
 {
-    if (m_process) {
+    if (m_hostProcessGroupId > 0) {
+        ::kill(-static_cast<pid_t>(m_hostProcessGroupId), SIGKILL);
+        m_hostProcessGroupId = 0;
+    } else if (m_process) {
         m_process->kill();
     }
 }
@@ -211,6 +246,7 @@ void SteamShortcutManager::runHost(const QString &operation,
     const QString script = QString::fromUtf8(scriptFile.readAll());
     auto *process = new QProcess(this);
     m_process = process;
+    m_hostProcessGroupId = 0;
     m_hostCallback = std::move(callback);
     auto completed = std::make_shared<bool>(false);
     auto timedOut = std::make_shared<bool>(false);
@@ -224,6 +260,9 @@ void SteamShortcutManager::runHost(const QString &operation,
         }
         if (m_process == process) {
             m_process = nullptr;
+        }
+        if (!*timedOut && (!m_cancelled || m_phase == Phase::ClosingSteam || m_phase == Phase::ReopeningSteam)) {
+            m_hostProcessGroupId = 0;
         }
         auto callback = std::move(m_hostCallback);
         process->deleteLater();
@@ -240,6 +279,27 @@ void SteamShortcutManager::runHost(const QString &operation,
         }
     };
 
+    connect(process, &QProcess::started, this, [this, process, timedOut] {
+        m_hostProcessGroupId = process->processId();
+        if (!*timedOut && (!m_cancelled || m_phase == Phase::ClosingSteam || m_phase == Phase::ReopeningSteam)) {
+            return;
+        }
+
+        const pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
+        if (processGroupId <= 0 || ::kill(-processGroupId, SIGTERM) != 0) {
+            process->terminate();
+        }
+        const QPointer<QProcess> guardedProcess(process);
+        QTimer::singleShot(HostTerminationGraceMs, this, [this, processGroupId, guardedProcess] {
+            const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGKILL) == 0;
+            if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
+                guardedProcess->kill();
+            }
+            if (m_hostProcessGroupId == processGroupId) {
+                m_hostProcessGroupId = 0;
+            }
+        });
+    });
     connect(process, &QProcess::finished, this, [finish, process](int exitCode, QProcess::ExitStatus status) {
         finish(status == QProcess::NormalExit ? exitCode : -1,
                process->readAllStandardOutput(),
@@ -256,30 +316,40 @@ void SteamShortcutManager::runHost(const QString &operation,
         m_timeout->setSingleShot(true);
     }
     m_timeout->disconnect();
-    connect(m_timeout, &QTimer::timeout, this, [process, completed, timedOut] {
+    connect(m_timeout, &QTimer::timeout, this, [this, process, timedOut] {
         *timedOut = true;
-        const pid_t processId = static_cast<pid_t>(process->processId());
-        if (processId <= 0 || ::kill(-processId, SIGTERM) != 0) {
+        pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
+        if (processGroupId <= 0) {
+            processGroupId = static_cast<pid_t>(process->processId());
+        }
+        if (processGroupId > 0) {
+            m_hostProcessGroupId = processGroupId;
+        }
+        if (processGroupId <= 0 || ::kill(-processGroupId, SIGTERM) != 0) {
             process->terminate();
         }
-        QTimer::singleShot(HostTerminationGraceMs, process, [process, completed] {
-            if (!*completed && process->state() != QProcess::NotRunning) {
-                const pid_t processId = static_cast<pid_t>(process->processId());
-                if (processId <= 0 || ::kill(-processId, SIGKILL) != 0) {
-                    process->kill();
-                }
+
+        const QPointer<QProcess> guardedProcess(process);
+        QTimer::singleShot(HostTerminationGraceMs, this, [this, processGroupId, guardedProcess] {
+            const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGKILL) == 0;
+            if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
+                guardedProcess->kill();
+            }
+            if (m_hostProcessGroupId == processGroupId) {
+                m_hostProcessGroupId = 0;
             }
         });
     });
 
+    const QString hostSupervisor = QString::fromLatin1(HostSupervisorScript);
     QStringList processArguments;
     if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
         process->setProgram(QStringLiteral("/usr/bin/flatpak-spawn"));
         processArguments = {QStringLiteral("--host"), QStringLiteral("--watch-bus"), QStringLiteral("/bin/bash"),
-                            QStringLiteral("-c"), script, QStringLiteral("couchplay-steam-host"), operation};
+                            QStringLiteral("-c"), hostSupervisor, QStringLiteral("couchplay-supervisor"), script, operation};
     } else {
         process->setProgram(QStringLiteral("/bin/bash"));
-        processArguments = {QStringLiteral("-c"), script, QStringLiteral("couchplay-steam-host"), operation};
+        processArguments = {QStringLiteral("-c"), hostSupervisor, QStringLiteral("couchplay-supervisor"), script, operation};
     }
     processArguments.append(arguments);
     process->setArguments(processArguments);
@@ -767,11 +837,32 @@ void SteamShortcutManager::cancel()
         }
         return;
     }
-    if (m_process) {
-        m_process->kill();
-    } else {
+    if (!m_process) {
         finishCancelled();
+        return;
     }
+
+    pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
+    if (processGroupId <= 0) {
+        processGroupId = static_cast<pid_t>(m_process->processId());
+    }
+    if (processGroupId > 0) {
+        m_hostProcessGroupId = processGroupId;
+    }
+    if (processGroupId <= 0 || ::kill(-processGroupId, SIGTERM) != 0) {
+        m_process->terminate();
+    }
+
+    const QPointer<QProcess> guardedProcess(m_process);
+    QTimer::singleShot(HostTerminationGraceMs, this, [this, processGroupId, guardedProcess] {
+        const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGKILL) == 0;
+        if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
+            guardedProcess->kill();
+        }
+        if (m_hostProcessGroupId == processGroupId) {
+            m_hostProcessGroupId = 0;
+        }
+    });
 }
 
 void SteamShortcutManager::openSteam(int accountIndex)

@@ -133,7 +133,10 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
                 QStringLiteral("com.github.CouchPlay.SessionLauncher"),
                 QStringLiteral("IsReady"));
             const QDBusMessage readyReply = bus.call(readyCall, QDBus::Block, 250);
-            if (readyReply.type() == QDBusMessage::ReplyMessage && readyReply.arguments().value(0).toBool()) {
+            const QVariantList readyArguments = readyReply.arguments();
+            if (readyReply.type() == QDBusMessage::ReplyMessage && readyArguments.size() == 1
+                && readyArguments.constFirst().metaType().id() == QMetaType::Bool
+                && readyArguments.constFirst().toBool()) {
                 const QDBusReply<QString> confirmedOwner(busInterface->serviceOwner(serviceName));
                 if (confirmedOwner.isValid() && confirmedOwner.value() == candidateOwner) {
                     launcherOwner = candidateOwner;
@@ -260,30 +263,14 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
     launchAttempted = true;
     const QDBusMessage launchReply = interface.call(QStringLiteral("LaunchProfile"), request.profileName, requestId, display);
     if (launchReply.type() == QDBusMessage::ErrorMessage) {
-        if (!ownerLost) {
-            const QDBusReply<QString> ownerAfterError(busInterface->serviceOwner(serviceName));
-            if (!ownerAfterError.isValid() || ownerAfterError.value() != launcherOwner) {
-                markOwnerLost();
-            }
-        }
-        if (ownerLost) {
-            sendStop(false, true);
-        }
+        sendStop(false, true);
         disconnectLaunchFinished();
         return 1;
     }
     const QVariantList launchArguments = launchReply.arguments();
     if (launchReply.type() != QDBusMessage::ReplyMessage || launchArguments.size() != 1
         || launchArguments.constFirst().metaType().id() != QMetaType::Bool) {
-        if (!ownerLost) {
-            const QDBusReply<QString> ownerAfterInvalidReply(busInterface->serviceOwner(serviceName));
-            if (!ownerAfterInvalidReply.isValid() || ownerAfterInvalidReply.value() != launcherOwner) {
-                markOwnerLost();
-            }
-        }
-        if (ownerLost) {
-            sendStop(false, true);
-        }
+        sendStop(false, true);
         disconnectLaunchFinished();
         return 1;
     }

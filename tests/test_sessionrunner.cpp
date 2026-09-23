@@ -213,9 +213,14 @@ public:
         return username == QStringLiteral("player1");
     }
 
-    bool readSteamShortcutsForUser(const QString &username, QByteArray *content) override
+    bool readSteamShortcutsForUser(const QString &username,
+                                   const QString &steamId,
+                                   QByteArray *content,
+                                   std::function<bool()> shouldContinue,
+                                   QString *) override
     {
-        if (username != QStringLiteral("player1") || !content) {
+        if (username != QStringLiteral("player1") || steamId != QStringLiteral("12345") || !content
+            || (shouldContinue && !shouldContinue())) {
             return false;
         }
         ++shortcutReadCalls;
@@ -227,7 +232,27 @@ public:
             });
             waitForRead.exec();
         }
+        if (shouldContinue && !shouldContinue()) {
+            return false;
+        }
         *content = SteamShortcutsVdf::emptyDocument();
+        return true;
+    }
+    bool writeSteamShortcutsForUser(const QString &username,
+                                    const QString &steamId,
+                                    const QByteArray &expectedDigest,
+                                    const QByteArray &content,
+                                    QString *errorMessage) override
+    {
+        Q_UNUSED(expectedDigest)
+        Q_UNUSED(content)
+        if (username != QStringLiteral("player1") || steamId != QStringLiteral("12345")) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("unexpected Steam account");
+            }
+            return false;
+        }
+        ++shortcutWriteCalls;
         return true;
     }
     bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username) override
@@ -286,6 +311,9 @@ private Q_SLOTS:
     void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
     void testSessionStoppedHandlerCanStartNewSession();
+    void testActiveChangedStartRestartDoesNotRunObsoleteSetup();
+    void testActiveChangedRestartDoesNotEmitStaleFinalizationSignals();
+    void testStreamingSetupFailureDoesNotFinalizeReplacementSession();
     void testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch();
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -1076,6 +1104,105 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
 }
 
+void TestSessionRunner::testActiveChangedRestartDoesNotEmitStaleFinalizationSignals()
+{
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+
+    QStringList events;
+    bool restarted = false;
+    bool restartAccepted = false;
+    connect(m_runner, &SessionRunner::sessionStopped, this, [&events] { events.append(QStringLiteral("stopped")); });
+    connect(m_runner, &SessionRunner::activeChanged, this, [this, &events, &restarted, &restartAccepted] {
+        events.append(m_runner->isActive() ? QStringLiteral("active") : QStringLiteral("inactive"));
+        if (!m_runner->isActive() && !restarted) {
+            restarted = true;
+            events.append(QStringLiteral("restart-entry"));
+            restartAccepted = m_runner->start();
+            events.append(QStringLiteral("restart-returned"));
+        }
+    });
+    connect(m_runner, &SessionRunner::statusChanged, this, [&events] { events.append(QStringLiteral("status")); });
+    connect(m_runner, &SessionRunner::runningChanged, this, [&events] { events.append(QStringLiteral("running")); });
+    connect(m_runner, &SessionRunner::instancesChanged, this, [&events] { events.append(QStringLiteral("instances")); });
+
+    QVERIFY(m_runner->start());
+    m_runner->stop();
+
+    QVERIFY(restarted);
+    QVERIFY(restartAccepted);
+    QVERIFY(m_runner->isActive());
+    QCOMPARE(events.count(QStringLiteral("stopped")), 1);
+    QVERIFY(events.indexOf(QStringLiteral("stopped")) < events.indexOf(QStringLiteral("restart-entry")));
+    QCOMPARE(events.last(), QStringLiteral("restart-returned"));
+
+    m_runner->stop();
+}
+
+void TestSessionRunner::testActiveChangedStartRestartDoesNotRunObsoleteSetup()
+{
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    const qsizetype initialLaunchCount = m_helperClient->launchCommands.size();
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    bool restarted = false;
+    bool restartAccepted = false;
+    connect(m_runner, &SessionRunner::activeChanged, this, [this, &restarted, &restartAccepted] {
+        if (!m_runner->isActive() || restarted) {
+            return;
+        }
+        restarted = true;
+        m_runner->stop();
+        restartAccepted = m_runner->start();
+    });
+
+    QVERIFY(m_runner->start());
+
+    QVERIFY(restarted);
+    QVERIFY(restartAccepted);
+    QVERIFY(m_runner->isActive());
+    QCOMPARE(m_helperClient->launchCommands.size() - initialLaunchCount, 1);
+    QCOMPARE(startedSpy.count(), 1);
+
+    m_runner->stop();
+}
+
+void TestSessionRunner::testStreamingSetupFailureDoesNotFinalizeReplacementSession()
+{
+    QVariantMap streamingConfig;
+    streamingConfig.insert(QStringLiteral("outputMode"), QStringLiteral("streaming"));
+    m_sessionManager->setInstanceConfig(0, streamingConfig);
+    m_helperClient->m_available = false;
+
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    bool restarted = false;
+    bool restartAccepted = false;
+    connect(m_runner, &SessionRunner::errorOccurred, m_runner,
+            [this, &restarted, &restartAccepted] {
+        if (restarted) {
+            return;
+        }
+        restarted = true;
+        m_runner->stop();
+        m_helperClient->m_available = true;
+        QVariantMap physicalConfig;
+        physicalConfig.insert(QStringLiteral("outputMode"), QStringLiteral("physical"));
+        m_sessionManager->setInstanceConfig(0, physicalConfig);
+        restartAccepted = m_runner->start();
+    });
+
+    QVERIFY(m_runner->start());
+
+    QVERIFY(restarted);
+    QVERIFY(restartAccepted);
+    QVERIFY(m_runner->isActive());
+    QCOMPARE(stoppedSpy.count(), 1);
+    QCOMPARE(startedSpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+
+    m_runner->stop();
+    QCOMPARE(stoppedSpy.count(), 2);
+}
 void TestSessionRunner::testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch()
 {
     QTemporaryDir tempDir;

@@ -1,15 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 CouchPlay Contributors
 
+#include <QByteArray>
+#include <QDBusInterface>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QObject>
+#include <QSignalSpy>
 #include <QStandardPaths>
+#include <QString>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QVariantMap>
+#include <qqmlintegration.h>
+
+#define private public
+#include "../src/dbus/CouchPlayHelperClient.h"
+#undef private
 
 #include "SteamConfigManager.h"
 #include "SteamShortcutsVdf.h"
 
+#include <functional>
 namespace {
 void appendString(QByteArray &data, const QByteArray &key, const QByteArray &value)
 {
@@ -64,6 +79,115 @@ QByteArray documentWithEntry(const QByteArray &entry)
 }
 
 }
+
+class MockShortcutSyncHelper final : public CouchPlayHelperClient
+{
+public:
+    MockShortcutSyncHelper() { m_available = false; }
+    bool isAvailable() const override { return true; }
+    QVariantMap getUserInfo(const QString &) override
+    {
+        QVariantMap result;
+        result.insert(QStringLiteral("uid"), 1001U);
+        result.insert(QStringLiteral("gid"), 1001U);
+        result.insert(QStringLiteral("home"), userHome);
+        return result;
+    }
+    QString getUserSteamRoot(const QString &) override { return steamRoot; }
+    QString getUserSteamId(const QString &) override
+    {
+        return steamIdLookups++ == 0 ? steamId : alternateSteamId;
+    }
+    bool isSteamBootstrapped(const QString &) override { return true; }
+
+    QString shortcutsPath(const QString &accountId) const
+    {
+        return steamRoot + QStringLiteral("/userdata/") + accountId + QStringLiteral("/config/shortcuts.vdf");
+    }
+
+    bool readSteamShortcutsForUser(const QString &,
+                                   const QString &selectedSteamId,
+                                   QByteArray *content,
+                                   std::function<bool()> shouldContinue,
+                                   QString *errorMessage) override
+    {
+        if (onRead) {
+            onRead();
+        }
+        if (readFails) {
+            if (errorMessage) {
+                *errorMessage = readError;
+            }
+            return false;
+        }
+        if (shouldContinue && !shouldContinue()) {
+            return false;
+        }
+        QFile target(shortcutsPath(selectedSteamId));
+        if (!target.exists()) {
+            content->clear();
+            return true;
+        }
+        if (!target.open(QIODevice::ReadOnly)) {
+            if (errorMessage) {
+                *errorMessage = target.errorString();
+            }
+            return false;
+        }
+        *content = target.readAll();
+        return true;
+    }
+
+    bool writeSteamShortcutsForUser(const QString &,
+                                    const QString &selectedSteamId,
+                                    const QByteArray &expectedDigest,
+                                    const QByteArray &content,
+                                    QString *errorMessage) override
+    {
+        const QString path = shortcutsPath(selectedSteamId);
+        QByteArray currentDigest = QByteArrayLiteral("missing");
+        QFile current(path);
+        if (current.exists()) {
+            if (!current.open(QIODevice::ReadOnly)) {
+                if (errorMessage) {
+                    *errorMessage = current.errorString();
+                }
+                return false;
+            }
+            currentDigest = QCryptographicHash::hash(current.readAll(), QCryptographicHash::Sha256).toHex();
+            current.close();
+        }
+        if (currentDigest != expectedDigest) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Steam shortcuts file changed during sync");
+            }
+            return false;
+        }
+        if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Could not create test Steam account directory");
+            }
+            return false;
+        }
+        QFile output(path);
+        if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate) || output.write(content) != content.size()) {
+            if (errorMessage) {
+                *errorMessage = output.errorString();
+            }
+            return false;
+        }
+        return true;
+    }
+
+    QString userHome;
+    QString steamRoot;
+    QString steamId = QStringLiteral("76561198000000002");
+    QString alternateSteamId = QStringLiteral("76561198000000003");
+    int steamIdLookups = 0;
+    QString readError = QStringLiteral("permission denied by helper");
+    bool readFails = false;
+    std::function<void()> onRead;
+};
 
 class TestSteamConfigManager : public QObject
 {
@@ -508,6 +632,109 @@ private Q_SLOTS:
             qputenv("HOME", oldHome);
         }
         QStandardPaths::setTestModeEnabled(false);
+    }
+    void testShortcutSyncPropagatesReadErrorsAndBindsOneSteamAccount()
+    {
+        QTemporaryDir sourceHome;
+        QTemporaryDir targetHome;
+        QTemporaryDir configHome;
+        QVERIFY(sourceHome.isValid());
+        QVERIFY(targetHome.isValid());
+        QVERIFY(configHome.isValid());
+
+        struct EnvironmentRestore {
+            bool hadHome;
+            QByteArray home;
+            bool hadConfig;
+            QByteArray config;
+            ~EnvironmentRestore()
+            {
+                if (hadHome) {
+                    qputenv("HOME", home);
+                } else {
+                    qunsetenv("HOME");
+                }
+                if (hadConfig) {
+                    qputenv("XDG_CONFIG_HOME", config);
+                } else {
+                    qunsetenv("XDG_CONFIG_HOME");
+                }
+            }
+        } restore{qEnvironmentVariableIsSet("HOME"), qgetenv("HOME"),
+                  qEnvironmentVariableIsSet("XDG_CONFIG_HOME"), qgetenv("XDG_CONFIG_HOME")};
+        qputenv("HOME", sourceHome.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", configHome.path().toLocal8Bit());
+
+        const QString sourceRoot = sourceHome.path() + QStringLiteral("/.local/share/Steam");
+        const QString sourceConfig = sourceRoot + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(sourceConfig));
+        QFile sourceShortcuts(sourceConfig + QStringLiteral("/shortcuts.vdf"));
+        const QByteArray sourceData = documentWithForeignEntry();
+        QVERIFY(sourceShortcuts.open(QIODevice::WriteOnly));
+        QCOMPARE(sourceShortcuts.write(sourceData), sourceData.size());
+        sourceShortcuts.close();
+
+        MockShortcutSyncHelper helper;
+        helper.userHome = targetHome.path();
+        helper.steamRoot = targetHome.path() + QStringLiteral("/.local/share/Steam");
+        const QString selectedPath = helper.shortcutsPath(helper.steamId);
+        const QString changedAccountPath = helper.shortcutsPath(helper.alternateSteamId);
+        QVERIFY(QDir().mkpath(QFileInfo(selectedPath).absolutePath()));
+        QVERIFY(QDir().mkpath(QFileInfo(changedAccountPath).absolutePath()));
+
+        SteamShortcut alternateProfile;
+        alternateProfile.appName = QStringLiteral("Other account profile");
+        alternateProfile.exe = QStringLiteral("/tmp/couchplay-profile.sh");
+        alternateProfile.startDir = QStringLiteral("/tmp");
+        alternateProfile.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('f'));
+        alternateProfile.tags = {QStringLiteral("CouchPlay")};
+        QByteArray alternateAccountData;
+        QString vdfError;
+        QVERIFY2(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), alternateProfile,
+                                           &alternateAccountData, &vdfError), qPrintable(vdfError));
+        QFile alternateAccountFile(changedAccountPath);
+        QVERIFY(alternateAccountFile.open(QIODevice::WriteOnly));
+        QCOMPARE(alternateAccountFile.write(alternateAccountData), alternateAccountData.size());
+        alternateAccountFile.close();
+
+        SteamConfigManager manager;
+        manager.setHelperClient(&helper);
+        QSignalSpy failed(&manager, &SteamConfigManager::syncFailed);
+        QSignalSpy completed(&manager, &SteamConfigManager::syncCompleted);
+        bool shouldContinue = true;
+
+        helper.steamIdLookups = 0;
+        helper.readFails = true;
+        QVERIFY(!manager.syncShortcutsToUser(QStringLiteral("player1"), [&] { return shouldContinue; }));
+        QCOMPARE(failed.size(), 1);
+        QCOMPARE(failed.constFirst().at(1).toString(),
+                 QStringLiteral("Failed to read target shortcuts.vdf: permission denied by helper"));
+        QVERIFY(!QFile::exists(selectedPath));
+
+        failed.clear();
+        helper.steamIdLookups = 0;
+        helper.onRead = [&] { shouldContinue = false; };
+        QVERIFY(!manager.syncShortcutsToUser(QStringLiteral("player1"), [&] { return shouldContinue; }));
+        QVERIFY(failed.isEmpty());
+        QVERIFY(!QFile::exists(selectedPath));
+
+        helper.readFails = false;
+        helper.onRead = {};
+        shouldContinue = true;
+        helper.steamIdLookups = 0;
+        QVERIFY(manager.syncShortcutsToUser(QStringLiteral("player1"), [&] { return shouldContinue; }));
+
+        QFile selectedAccountFile(selectedPath);
+        QVERIFY(selectedAccountFile.open(QIODevice::ReadOnly));
+        QList<SteamShortcut> selectedShortcuts;
+        QString decodeError;
+        QVERIFY2(SteamShortcutsVdf::decode(selectedAccountFile.readAll(), &selectedShortcuts, &decodeError),
+                 qPrintable(decodeError));
+        QCOMPARE(selectedShortcuts.size(), 1);
+        QCOMPARE(selectedShortcuts.constFirst().appName, QStringLiteral("Foreign Game"));
+        QVERIFY(alternateAccountFile.open(QIODevice::ReadOnly));
+        QCOMPARE(alternateAccountFile.readAll(), alternateAccountData);
+        QCOMPARE(completed.size(), 1);
     }
 };
 

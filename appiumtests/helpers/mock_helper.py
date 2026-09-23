@@ -237,7 +237,13 @@ class MockHelper(dbus.service.Object):
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="s")
     def GetUserSteamId(self, username):
         return ""
+    @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="ay")
+    def ReadSteamShortcutsForUser(self, username, steamId):
+        return dbus.ByteArray(b"")
 
+    @dbus.service.method(INTERFACE_NAME, in_signature="ssayay", out_signature="b")
+    def WriteSteamShortcutsForUser(self, username, steamId, expectedDigest, content):
+        return True
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="b")
     def IsSteamBootstrapped(self, username):
         return True

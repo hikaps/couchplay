@@ -85,8 +85,37 @@ public Q_SLOTS:
         sendErrorReply(QDBusError::Failed, QStringLiteral("launch transport failed"));
         return false;
     }
+    bool StopSession(const QString &)
+    {
+        return false;
+    }
 };
 
+class MalformedReadinessAdaptor final : public QDBusAbstractAdaptor
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
+
+public:
+    explicit MalformedReadinessAdaptor(QObject *parent)
+        : QDBusAbstractAdaptor(parent)
+    {
+    }
+
+    int launchCalls() const { return m_launchCalls; }
+
+public Q_SLOTS:
+    int IsReady() const { return 1; }
+    bool LaunchProfile(const QString &, const QString &, const QString &)
+    {
+        ++m_launchCalls;
+        return true;
+    }
+    bool StopSession(const QString &) { return false; }
+
+private:
+    int m_launchCalls = 0;
+};
 class ReplacingLauncherAdaptor final : public QDBusAbstractAdaptor, protected QDBusContext
 {
     Q_OBJECT
@@ -424,6 +453,33 @@ private Q_SLOTS:
         client.join();
 
         QCOMPARE(exitCode.load(), 1);
+        bus.unregisterObject(objectPath);
+        bus.unregisterService(service);
+    }
+
+    void testRunRejectsNonBooleanReadinessReply()
+    {
+        auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
+        QVERIFY(application);
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        const QString service = QStringLiteral("com.github.CouchPlay.SessionLaunchMalformedReadyTest");
+        const QString objectPath = QStringLiteral("/SessionLauncher");
+        QObject serviceObject;
+        auto *adaptor = new MalformedReadinessAdaptor(&serviceObject);
+        QVERIFY(bus.registerObject(objectPath, &serviceObject, QDBusConnection::ExportAdaptors));
+        QVERIFY(bus.registerService(service));
+
+        CommandLineRequest request;
+        request.profileName = QStringLiteral("Family");
+        request.start = true;
+        request.exitAfterSession = true;
+        std::atomic<int> exitCode{-1};
+        std::jthread client([&] { exitCode.store(SessionLaunchClient::run(*application, request, service)); });
+        QTRY_VERIFY_WITH_TIMEOUT(exitCode.load() != -1, 8000);
+        client.join();
+
+        QCOMPARE(exitCode.load(), 1);
+        QCOMPARE(adaptor->launchCalls(), 0);
         bus.unregisterObject(objectPath);
         bus.unregisterService(service);
     }

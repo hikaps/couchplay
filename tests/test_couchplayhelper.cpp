@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include <cerrno>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
@@ -458,9 +459,11 @@ private Q_SLOTS:
     void testIsSteamBootstrappedFalse();
     void testGetUserSteamIdSelectsMostRecentAccount();
     void testGetUserSteamIdAmbiguousAccounts();
+    void testGetUserSteamIdRejectsDuplicateMostRecentMarkers();
     void testGetUserSteamIdPrefersMostRecentWithoutUserdata();
     void testGetUserSteamIdDoesNotFallbackForUnsafeLoginUsers();
     void testReadSteamShortcutsForUser();
+    void testWriteSteamShortcutsRejectsConcurrentEdit();
     void testReadSteamShortcutsMissingSteamDirectories();
     // Copy directory tests
     void testCopyDirectoryToUserAbsoluteTarget();
@@ -996,7 +999,7 @@ void TestCouchPlayHelper::testGetUserSteamIdSelectsMostRecentAccount()
     QCOMPARE(steamId.value(), activeSteamId);
 
     QDBusReply<QByteArray> readShortcuts =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, activeSteamId);
     QVERIFY2(readShortcuts.isValid(), qPrintable(readShortcuts.error().message()));
     QCOMPARE(readShortcuts.value(), activeShortcuts);
 }
@@ -1034,10 +1037,46 @@ void TestCouchPlayHelper::testGetUserSteamIdAmbiguousAccounts()
     QVERIFY(steamId.value().isEmpty());
 
     QDBusReply<QByteArray> readShortcuts =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, firstSteamId);
     QVERIFY2(readShortcuts.isValid(), qPrintable(readShortcuts.error().message()));
     QVERIFY(readShortcuts.value().isEmpty());
 }
+void TestCouchPlayHelper::testGetUserSteamIdRejectsDuplicateMostRecentMarkers()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    const QString username = QStringLiteral("player1");
+    const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
+    const QString userdataPath = steamRoot + QStringLiteral("/userdata");
+    const QString existingSteamId = QStringLiteral("76561198000000001");
+    const QString secondSteamId = QStringLiteral("76561198000000002");
+    const QString loginUsersPath = steamRoot + QStringLiteral("/config/loginusers.vdf");
+    QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+    QVERIFY(QDir().mkpath(userdataPath + QLatin1Char('/') + existingSteamId + QStringLiteral("/config")));
+
+    QFile loginUsers(loginUsersPath);
+    QVERIFY(loginUsers.open(QIODevice::WriteOnly));
+    const QByteArray loginData = QStringLiteral(
+        "\"users\"\n{\n"
+        "    \"%1\"\n    {\n        \"MostRecent\" \"1\"\n    }\n"
+        "    \"%2\"\n    {\n        \"MostRecent\" \"1\"\n    }\n"
+        "}\n")
+                                    .arg(existingSteamId, secondSteamId)
+                                    .toUtf8();
+    QCOMPARE(loginUsers.write(loginData), loginData.size());
+    loginUsers.close();
+
+    m_ops->clear();
+    m_ops->setUserExists(username, true, ::getuid(), ::getgid(), home.path());
+    m_ops->setFileExists(userdataPath, true);
+    m_ops->setEntryList(userdataPath, {existingSteamId});
+
+    QDBusReply<QString> steamId = m_dbusInterface->call(QStringLiteral("GetUserSteamId"), username);
+    QVERIFY2(steamId.isValid(), qPrintable(steamId.error().message()));
+    QVERIFY(steamId.value().isEmpty());
+}
+
 void TestCouchPlayHelper::testGetUserSteamIdPrefersMostRecentWithoutUserdata()
 {
     QTemporaryDir home;
@@ -1071,7 +1110,7 @@ void TestCouchPlayHelper::testGetUserSteamIdPrefersMostRecentWithoutUserdata()
     QCOMPARE(steamId.value(), activeSteamId);
 
     QDBusReply<QByteArray> readShortcuts =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, activeSteamId);
     QVERIFY2(readShortcuts.isValid(), qPrintable(readShortcuts.error().message()));
     QVERIFY(readShortcuts.value().isEmpty());
 }
@@ -1137,22 +1176,22 @@ void TestCouchPlayHelper::testReadSteamShortcutsForUser()
     file.close();
 
     QDBusReply<QByteArray> reply =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
     QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
     QCOMPARE(reply.value(), expected);
     m_ops->truncateOnNextRead(shortcutsPath);
     QDBusReply<QByteArray> truncated =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
     QVERIFY(!truncated.isValid());
     m_ops->setAuthResult(false);
     QDBusReply<QByteArray> denied =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
     QVERIFY(!denied.isValid());
     m_ops->setAuthResult(true);
 
     QVERIFY(QFile::remove(shortcutsPath));
     QDBusReply<QByteArray> missing =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
     QVERIFY(missing.isValid());
     QVERIFY(missing.value().isEmpty());
 
@@ -1160,7 +1199,7 @@ void TestCouchPlayHelper::testReadSteamShortcutsForUser()
     QVERIFY(emptyFile.open(QIODevice::WriteOnly));
     emptyFile.close();
     QDBusReply<QByteArray> empty =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
     QVERIFY(!empty.isValid());
 
     QVERIFY(QFile::remove(shortcutsPath));
@@ -1171,9 +1210,81 @@ void TestCouchPlayHelper::testReadSteamShortcutsForUser()
     outsideFile.close();
     QVERIFY(::symlink(outsidePath.toLocal8Bit().constData(), shortcutsPath.toLocal8Bit().constData()) == 0);
     QDBusReply<QByteArray> symlinked =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
     QVERIFY(!symlinked.isValid());
 }
+void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    const QString username = QStringLiteral("player1");
+    const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
+    const QString userdataPath = steamRoot + QStringLiteral("/userdata");
+    const QString steamId = QStringLiteral("76561198000000000");
+    const QString shortcutsPath = userdataPath + QLatin1Char('/') + steamId
+        + QStringLiteral("/config/shortcuts.vdf");
+    QVERIFY(QDir().mkpath(userdataPath + QLatin1Char('/') + steamId + QStringLiteral("/config")));
+
+    m_ops->clear();
+    m_ops->setUserExists(username, true, ::getuid(), ::getgid(), home.path());
+    m_ops->setFileExists(userdataPath, true);
+    m_ops->setEntryList(userdataPath, {steamId});
+    const QByteArray initial = QByteArrayLiteral("initial shortcuts");
+    QFile file(shortcutsPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(initial), initial.size());
+    file.close();
+
+    QDBusReply<QByteArray> snapshot =
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
+    QVERIFY2(snapshot.isValid(), qPrintable(snapshot.error().message()));
+    QCOMPARE(snapshot.value(), initial);
+
+    const QByteArray concurrentEdit = QByteArrayLiteral("Steam's concurrent edit");
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(concurrentEdit), concurrentEdit.size());
+    file.close();
+
+    const QByteArray expectedDigest = QCryptographicHash::hash(snapshot.value(), QCryptographicHash::Sha256).toHex();
+    const QByteArray replacement = QByteArrayLiteral("CouchPlay replacement");
+    QDBusReply<bool> rejected = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                     username,
+                                                     steamId,
+                                                     expectedDigest,
+                                                     replacement);
+    QVERIFY(!rejected.isValid());
+
+    QFile unchanged(shortcutsPath);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), concurrentEdit);
+    unchanged.close();
+
+    const QByteArray currentDigest = QCryptographicHash::hash(concurrentEdit, QCryptographicHash::Sha256).toHex();
+    QDBusReply<bool> committed = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                      username,
+                                                      steamId,
+                                                      currentDigest,
+                                                      replacement);
+    QVERIFY2(committed.isValid(), qPrintable(committed.error().message()));
+    QVERIFY(committed.value());
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), replacement);
+    unchanged.close();
+
+    QVERIFY(QFile::remove(shortcutsPath));
+    QDBusReply<bool> created = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                     username,
+                                                     steamId,
+                                                     QByteArrayLiteral("missing"),
+                                                     concurrentEdit);
+    QVERIFY2(created.isValid(), qPrintable(created.error().message()));
+    QVERIFY(created.value());
+    QFile createdFile(shortcutsPath);
+    QVERIFY(createdFile.open(QIODevice::ReadOnly));
+    QCOMPARE(createdFile.readAll(), concurrentEdit);
+}
+
 void TestCouchPlayHelper::testReadSteamShortcutsMissingSteamDirectories()
 {
     QTemporaryDir home;
@@ -1186,7 +1297,7 @@ void TestCouchPlayHelper::testReadSteamShortcutsMissingSteamDirectories()
     m_ops->setUserExists(username, true, owner, group, home.path());
 
     QDBusReply<QByteArray> missingRoot =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, QStringLiteral("76561198000000000"));
     QVERIFY(missingRoot.isValid());
     QVERIFY(missingRoot.value().isEmpty());
 
@@ -1195,7 +1306,7 @@ void TestCouchPlayHelper::testReadSteamShortcutsMissingSteamDirectories()
     m_ops->setFileExists(steamRoot, true);
 
     QDBusReply<QByteArray> missingUserdata =
-        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, QStringLiteral("76561198000000000"));
     QVERIFY(missingUserdata.isValid());
     QVERIFY(missingUserdata.value().isEmpty());
 }

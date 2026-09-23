@@ -407,11 +407,20 @@ public Q_SLOTS:
      */
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
     /**
-     * Read the target user's Steam shortcuts file for profile sync.
-     * The helper resolves Steam paths itself and refuses symlinks.
-     * Returns empty when the file is absent; an empty file is rejected.
+     * Read the selected Steam account's shortcuts file for profile sync.
+     * The helper refuses unsafe paths and symlinks; empty means the file is absent.
      */
-    QByteArray ReadSteamShortcutsForUser(const QString &username);
+    QByteArray ReadSteamShortcutsForUser(const QString &username, const QString &steamId);
+
+    /**
+     * Atomically replace shortcuts only if the selected account still matches
+     * the snapshot read before merging. Use "missing" when no file existed,
+     * otherwise pass the lowercase SHA-256 hex digest of its bytes.
+     */
+    bool WriteSteamShortcutsForUser(const QString &username,
+                                    const QString &steamId,
+                                    const QByteArray &expectedDigest,
+                                    const QByteArray &content);
 
     /**
      * Create a virtual Wayland output for streaming capture

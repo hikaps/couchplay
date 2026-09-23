@@ -121,6 +121,7 @@ private:
     QString m_kind;
     Phase m_phase = Phase::Idle;
     QProcess *m_process = nullptr;
+    qint64 m_hostProcessGroupId = 0;
     QTimer *m_timeout = nullptr;
     QTimer *m_pollTimer = nullptr;
     std::function<void(int, const QByteArray &, const QString &)> m_hostCallback;

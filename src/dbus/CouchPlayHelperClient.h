@@ -11,6 +11,8 @@
 #include <QStringList>
 #include <QVariantMap>
 
+#include <functional>
+
 /**
  * @brief D-Bus client for the privileged CouchPlay helper
  */
@@ -80,8 +82,17 @@ public:
      * when Steam has not been bootstrapped for that user.
      */
     Q_INVOKABLE virtual QString getUserSteamRoot(const QString &username);
-    /** Empty content means the target user has no shortcuts.vdf. */
-    virtual bool readSteamShortcutsForUser(const QString &username, QByteArray *content);
+    /** Empty content means the selected Steam account has no shortcuts.vdf. */
+    virtual bool readSteamShortcutsForUser(const QString &username,
+                                           const QString &steamId,
+                                           QByteArray *content,
+                                           std::function<bool()> shouldContinue = {},
+                                           QString *errorMessage = nullptr);
+    virtual bool writeSteamShortcutsForUser(const QString &username,
+                                            const QString &steamId,
+                                            const QByteArray &expectedDigest,
+                                            const QByteArray &content,
+                                            QString *errorMessage = nullptr);
 
     /**
      * @brief Launch a gamescope instance as a specified user

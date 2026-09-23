@@ -9,6 +9,7 @@
 #include "Logging.h"
 #include "UserLookup.h"
 
+#include <QCryptographicHash>
 #include <QDataStream>
 #include <QDebug>
 #include <QDir>
@@ -424,41 +425,46 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername, std:
         return false;
     }
 
-    // Get source shortcuts.vdf path
     if (!m_steamPaths.valid || m_steamPaths.shortcutsVdf.isEmpty()) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not detected";
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Steam not detected"));
         return false;
     }
 
-    QString sourceFile = m_steamPaths.shortcutsVdf;
+    const QString sourceFile = m_steamPaths.shortcutsVdf;
     if (!QFile::exists(sourceFile)) {
         qCDebug(couchplaySteam) << "No shortcuts.vdf to sync";
-        return true; // Not an error, just nothing to do
+        return true;
     }
 
     qCDebug(couchplaySteam) << "Source file:" << sourceFile;
-
-    if (m_helperClient && m_helperClient->isAvailable()
-        && !m_helperClient->isSteamBootstrapped(targetUsername)) {
+    const bool targetSteamBootstrapped = m_helperClient->isSteamBootstrapped(targetUsername);
+    if (shouldContinue && !shouldContinue()) {
+        return false;
+    }
+    if (!targetSteamBootstrapped) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not set up for user" << targetUsername;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Steam not set up for user (run Steam once first)"));
         return false;
     }
-    // Get target user's Steam ID
-    QString targetSteamId = getTargetSteamUserId(targetUsername);
-    if (targetSteamId.isEmpty()) {
-        qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not set up for user" << targetUsername;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Steam not set up for user (run Steam once first)"));
-        return false;
-    }
-    qCDebug(couchplaySteam) << "Target Steam ID:" << targetSteamId;
 
     const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
-    if (!targetPaths.valid || targetPaths.shortcutsVdf.isEmpty()) {
+    if (shouldContinue && !shouldContinue()) {
+        return false;
+    }
+    if (!targetPaths.valid || targetPaths.shortcutsVdf.isEmpty() || targetPaths.userDataDir.isEmpty()) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Could not resolve target Steam paths for"
                                    << targetUsername;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Could not resolve target Steam paths"));
+        return false;
+    }
+    const QString targetSteamId = QFileInfo(targetPaths.userDataDir).fileName();
+    bool targetSteamIdIsNumeric = !targetSteamId.isEmpty() && targetSteamId.size() <= 20;
+    for (const QChar ch : targetSteamId) {
+        targetSteamIdIsNumeric = targetSteamIdIsNumeric && ch.unicode() >= '0' && ch.unicode() <= '9';
+    }
+    if (!targetSteamIdIsNumeric) {
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Could not resolve target Steam account"));
         return false;
     }
     const QString targetVdf = targetPaths.shortcutsVdf;
@@ -472,16 +478,34 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername, std:
 
     const QByteArray sourceVdfData = sourceFileHandle.readAll();
     sourceFileHandle.close();
+    if (shouldContinue && !shouldContinue()) {
+        return false;
+    }
 
     QByteArray targetVdfData;
-    if (!m_helperClient->readSteamShortcutsForUser(targetUsername, &targetVdfData)) {
-        qCWarning(couchplaySteam) << "Failed to read target user's shortcuts.vdf";
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to read target shortcuts.vdf"));
+    QString helperError;
+    if (!m_helperClient->readSteamShortcutsForUser(targetUsername,
+                                                  targetSteamId,
+                                                  &targetVdfData,
+                                                  shouldContinue,
+                                                  &helperError)) {
+        if (shouldContinue && !shouldContinue()) {
+            return false;
+        }
+        const QString message = helperError.isEmpty()
+            ? QStringLiteral("Failed to read target shortcuts.vdf")
+            : QStringLiteral("Failed to read target shortcuts.vdf: %1").arg(helperError);
+        qCWarning(couchplaySteam) << message;
+        Q_EMIT syncFailed(targetUsername, message);
         return false;
     }
     if (shouldContinue && !shouldContinue()) {
         return false;
     }
+
+    const QByteArray expectedDigest = targetVdfData.isEmpty()
+        ? QByteArrayLiteral("missing")
+        : QCryptographicHash::hash(targetVdfData, QCryptographicHash::Sha256).toHex();
     if (targetVdfData.isEmpty()) {
         targetVdfData = SteamShortcutsVdf::emptyDocument();
     }
@@ -493,21 +517,32 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername, std:
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Invalid source or target shortcuts.vdf"));
         return false;
     }
+    if (shouldContinue && !shouldContinue()) {
+        return false;
+    }
 
-    qCDebug(couchplaySteam) << "Read" << vdfData.size() << "bytes from source, writing directly to" << targetVdf;
-
-    // Write directly to target user via helper (avoids PrivateTmp issues)
-    bool success = m_helperClient->writeFileToUser(vdfData, targetVdf, targetUsername);
-
+    qCDebug(couchplaySteam) << "Read" << vdfData.size() << "bytes from source, conditionally writing to" << targetVdf;
+    helperError.clear();
+    const bool success = m_helperClient->writeSteamShortcutsForUser(targetUsername,
+                                                                    targetSteamId,
+                                                                    expectedDigest,
+                                                                    vdfData,
+                                                                    &helperError);
     if (success) {
         qCDebug(couchplaySteam) << "Synced shortcuts to" << targetUsername;
         Q_EMIT syncCompleted(targetUsername);
-    } else {
-        qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Failed to write shortcuts.vdf to" << targetVdf;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to write shortcuts.vdf"));
+        return true;
+    }
+    if (shouldContinue && !shouldContinue()) {
+        return false;
     }
 
-    return success;
+    const QString message = helperError.isEmpty()
+        ? QStringLiteral("Failed to write shortcuts.vdf")
+        : QStringLiteral("Failed to write shortcuts.vdf: %1").arg(helperError);
+    qCWarning(couchplaySteam) << "syncShortcutsToUser failed -" << message;
+    Q_EMIT syncFailed(targetUsername, message);
+    return false;
 }
 
 // Get target Steam paths for a user (uses target user's Steam ID)

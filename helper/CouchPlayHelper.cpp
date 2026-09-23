@@ -40,6 +40,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <limits>
@@ -2822,7 +2823,7 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
 
     return true;
 }
-QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username)
+QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username, const QString &steamId)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
         return {};
@@ -2837,8 +2838,17 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username)
     const gid_t userGid = pw->pw_gid;
     const QString userHome = QString::fromLocal8Bit(pw->pw_dir);
     const QString steamRoot = GetUserSteamRoot(username);
-    const QString steamId = GetUserSteamId(username);
-    if (steamRoot.isEmpty() || steamId.isEmpty()) {
+    bool steamIdIsNumeric = !steamId.isEmpty() && steamId.size() <= 20;
+    for (const QChar ch : steamId) {
+        steamIdIsNumeric = steamIdIsNumeric && ch.unicode() >= '0' && ch.unicode() <= '9';
+    }
+    bool steamIdFits = false;
+    steamId.toULongLong(&steamIdFits);
+    if (steamRoot.isEmpty()) {
+        return {};
+    }
+    if (!steamIdIsNumeric || !steamIdFits) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid Steam account ID"));
         return {};
     }
 
@@ -2918,6 +2928,196 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username)
     }
     ::close(fileFd);
     return content;
+}
+
+bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
+                                                 const QString &steamId,
+                                                 const QByteArray &expectedDigest,
+                                                 const QByteArray &content)
+{
+    constexpr qsizetype maxShortcutsSize = 16 * 1024 * 1024;
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+    if (content.isEmpty() || content.size() > maxShortcutsSize
+        || (expectedDigest != QByteArrayLiteral("missing") && expectedDigest.size() != 64)) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid Steam shortcuts content or snapshot"));
+        return false;
+    }
+
+    bool steamIdIsNumeric = !steamId.isEmpty() && steamId.size() <= 20;
+    for (const QChar ch : steamId) {
+        steamIdIsNumeric = steamIdIsNumeric && ch.unicode() >= '0' && ch.unicode() <= '9';
+    }
+    bool steamIdFits = false;
+    steamId.toULongLong(&steamIdFits);
+    if (!steamIdIsNumeric || !steamIdFits) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid Steam account ID"));
+        return false;
+    }
+
+    const uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+    const gid_t userGid = pw->pw_gid;
+    const QString userHome = QString::fromLocal8Bit(pw->pw_dir);
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (userHome.isEmpty() || steamRoot.isEmpty()) {
+        return false;
+    }
+
+    const QString targetPath = steamRoot + QStringLiteral("/userdata/") + steamId
+        + QStringLiteral("/config/shortcuts.vdf");
+    const QString relativeTarget = QDir(userHome).relativeFilePath(targetPath);
+    QStringList targetParts = relativeTarget.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (relativeTarget.startsWith(QLatin1Char('/')) || targetParts.size() < 2
+        || targetParts.contains(QStringLiteral(".."))) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid Steam shortcuts path"));
+        return false;
+    }
+    const QString leafName = targetParts.takeLast();
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const QString safeHome = canonicalHome.isEmpty() ? userHome : canonicalHome;
+    const int homeFd = SecureFs::openBaseDir(safeHome);
+    if (homeFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+    const int parentFd = SecureFs::openDirBelow(homeFd, targetParts, true, userUid, userGid);
+    ::close(homeFd);
+    if (parentFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely open Steam shortcuts directory"));
+        return false;
+    }
+
+    const QByteArray leafBytes = leafName.toLocal8Bit();
+    auto readCurrentDigest = [&](QByteArray &digest) {
+        const int fileFd = ::openat(parentFd,
+                                    leafBytes.constData(),
+                                    O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+        if (fileFd < 0) {
+            if (errno == ENOENT) {
+                digest = QByteArrayLiteral("missing");
+                return true;
+            }
+            return false;
+        }
+
+        struct stat before;
+        if (::fstat(fileFd, &before) != 0 || !S_ISREG(before.st_mode) || before.st_uid != userUid
+            || before.st_nlink != 1 || before.st_size <= 0 || before.st_size > maxShortcutsSize) {
+            ::close(fileFd);
+            return false;
+        }
+        QByteArray current;
+        current.reserve(static_cast<qsizetype>(before.st_size));
+        char buffer[64 * 1024];
+        while (true) {
+            const ssize_t bytesRead = m_ops->read(fileFd, buffer, sizeof(buffer));
+            if (bytesRead == 0) {
+                break;
+            }
+            if (bytesRead < 0 && errno == EINTR) {
+                continue;
+            }
+            if (bytesRead < 0 || current.size() + bytesRead > maxShortcutsSize) {
+                ::close(fileFd);
+                return false;
+            }
+            current.append(buffer, static_cast<qsizetype>(bytesRead));
+        }
+        struct stat after;
+        const bool changedWhileReading = ::fstat(fileFd, &after) != 0 || before.st_size != after.st_size
+            || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
+            || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
+        ::close(fileFd);
+        if (changedWhileReading || current.size() != before.st_size) {
+            return false;
+        }
+        digest = QCryptographicHash::hash(current, QCryptographicHash::Sha256).toHex();
+        return true;
+    };
+
+    QByteArray currentDigest;
+    if (!readCurrentDigest(currentDigest)) {
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file is unsafe or changed while being read"));
+        return false;
+    }
+    if (currentDigest != expectedDigest) {
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed during sync"));
+        return false;
+    }
+
+    QString temporaryName;
+    QByteArray temporaryBytes;
+    int temporaryFd = -1;
+    for (int attempt = 0; attempt < 8 && temporaryFd < 0; ++attempt) {
+        temporaryName = QStringLiteral(".shortcuts.vdf.couchplay-%1.tmp")
+            .arg(QString::number(QRandomGenerator::global()->generate64(), 16));
+        temporaryBytes = temporaryName.toLocal8Bit();
+        temporaryFd = ::openat(parentFd,
+                               temporaryBytes.constData(),
+                               O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                               0600);
+        if (temporaryFd < 0 && errno != EEXIST) {
+            break;
+        }
+    }
+    if (temporaryFd < 0) {
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not create Steam shortcuts temporary file"));
+        return false;
+    }
+
+    bool writeSucceeded = ::fchown(temporaryFd, userUid, userGid) == 0 && ::fchmod(temporaryFd, 0644) == 0;
+    qsizetype offset = 0;
+    while (writeSucceeded && offset < content.size()) {
+        const ssize_t bytesWritten = ::write(temporaryFd,
+                                             content.constData() + offset,
+                                             static_cast<size_t>(content.size() - offset));
+        if (bytesWritten < 0 && errno == EINTR) {
+            continue;
+        }
+        if (bytesWritten <= 0) {
+            writeSucceeded = false;
+            break;
+        }
+        offset += static_cast<qsizetype>(bytesWritten);
+    }
+    if (writeSucceeded && ::fsync(temporaryFd) != 0) {
+        writeSucceeded = false;
+    }
+    if (::close(temporaryFd) != 0) {
+        writeSucceeded = false;
+    }
+    if (!writeSucceeded) {
+        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not write Steam shortcuts temporary file"));
+        return false;
+    }
+
+    QByteArray confirmedDigest;
+    if (!readCurrentDigest(confirmedDigest) || confirmedDigest != expectedDigest) {
+        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed during sync"));
+        return false;
+    }
+    if (::renameat(parentFd, temporaryBytes.constData(), parentFd, leafBytes.constData()) != 0) {
+        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not atomically replace Steam shortcuts file"));
+        return false;
+    }
+    (void)::fsync(parentFd);
+    ::close(parentFd);
+    return true;
 }
 
 bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &username)
@@ -3293,7 +3493,19 @@ SteamVdfToken nextSteamVdfToken(const QByteArray &source, qsizetype &position, Q
     return SteamVdfToken::Invalid;
 }
 
-QString findMostRecentSteamAccount(const QByteArray &loginUsers)
+enum class SteamAccountResolutionState {
+    NoRecent,
+    Unique,
+    Ambiguous,
+    Invalid,
+};
+
+struct SteamAccountResolution {
+    SteamAccountResolutionState state;
+    QString steamId;
+};
+
+SteamAccountResolution findMostRecentSteamAccount(const QByteArray &loginUsers)
 {
     QStringList objectPath;
     QByteArray pendingKey;
@@ -3311,20 +3523,23 @@ QString findMostRecentSteamAccount(const QByteArray &loginUsers)
                 expectingValue = true;
                 break;
             }
-            // MostRecent is meaningful only as a direct field under users/<SteamID>.
             if (objectPath.size() == 2 && objectPath.at(0) == QStringLiteral("users")
-                && pendingKey == QByteArrayLiteral("MostRecent") && tokenValue == QByteArrayLiteral("1")) {
-                if (!activeId.isEmpty()) {
-                    return {};
+                && pendingKey == QByteArrayLiteral("MostRecent")) {
+                if (tokenValue == QByteArrayLiteral("1")) {
+                    if (!activeId.isEmpty()) {
+                        return {SteamAccountResolutionState::Ambiguous, {}};
+                    }
+                    activeId = objectPath.at(1);
+                } else if (tokenValue != QByteArrayLiteral("0")) {
+                    return {SteamAccountResolutionState::Invalid, {}};
                 }
-                activeId = objectPath.at(1);
             }
             pendingKey.clear();
             expectingValue = false;
             break;
         case SteamVdfToken::OpenBrace:
             if (!expectingValue) {
-                return {};
+                return {SteamAccountResolutionState::Invalid, {}};
             }
             objectPath.append(QString::fromUtf8(pendingKey));
             pendingKey.clear();
@@ -3332,19 +3547,22 @@ QString findMostRecentSteamAccount(const QByteArray &loginUsers)
             break;
         case SteamVdfToken::CloseBrace:
             if (expectingValue || objectPath.isEmpty()) {
-                return {};
+                return {SteamAccountResolutionState::Invalid, {}};
             }
             objectPath.removeLast();
             break;
         case SteamVdfToken::End:
-            return expectingValue || !objectPath.isEmpty() ? QString() : activeId;
+            if (expectingValue || !objectPath.isEmpty()) {
+                return {SteamAccountResolutionState::Invalid, {}};
+            }
+            return {activeId.isEmpty() ? SteamAccountResolutionState::NoRecent : SteamAccountResolutionState::Unique,
+                    activeId};
         case SteamVdfToken::Invalid:
-            return {};
+            return {SteamAccountResolutionState::Invalid, {}};
         }
     }
 }
 }
-
 QString CouchPlayHelper::GetUserSteamId(const QString &username)
 {
     if (!s_validUsername.match(username).hasMatch()) {
@@ -3446,7 +3664,14 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
         return {};
     }
 
-    const QString activeId = findMostRecentSteamAccount(contents);
+    const SteamAccountResolution account = findMostRecentSteamAccount(contents);
+    if (account.state == SteamAccountResolutionState::NoRecent) {
+        return singleAccountFallback;
+    }
+    if (account.state != SteamAccountResolutionState::Unique) {
+        return {};
+    }
+    const QString &activeId = account.steamId;
     bool allDigits = !activeId.isEmpty();
     for (const QChar ch : activeId) {
         if (ch.unicode() < '0' || ch.unicode() > '9') {
@@ -3456,10 +3681,7 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
     }
     bool fitsInSteamId = false;
     activeId.toULongLong(&fitsInSteamId);
-    if (allDigits && fitsInSteamId) {
-        return activeId;
-    }
-    return singleAccountFallback;
+    return allDigits && fitsInSteamId ? activeId : QString();
 }
 bool CouchPlayHelper::IsSteamBootstrapped(const QString &username)
 {

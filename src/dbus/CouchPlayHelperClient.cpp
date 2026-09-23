@@ -6,6 +6,7 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QDBusPendingCall>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDBusReply>
@@ -239,29 +240,95 @@ QString CouchPlayHelperClient::getUserSteamRoot(const QString &username)
     }
     return reply.value();
 }
-bool CouchPlayHelperClient::readSteamShortcutsForUser(const QString &username, QByteArray *content)
+bool CouchPlayHelperClient::readSteamShortcutsForUser(const QString &username,
+                                                      const QString &steamId,
+                                                      QByteArray *content,
+                                                      std::function<bool()> shouldContinue,
+                                                      QString *errorMessage)
 {
-    if (!m_available || !content) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper unavailable or invalid shortcuts result"));
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+    auto fail = [&](const QString &message) {
+        if (errorMessage) {
+            *errorMessage = message;
+        }
+        Q_EMIT errorOccurred(message);
         return false;
+    };
+    if (shouldContinue && !shouldContinue()) {
+        return false;
+    }
+    if (!m_available || !m_interface || !content) {
+        return fail(QStringLiteral("Helper unavailable or invalid shortcuts result"));
     }
 
     QDBusMessage message = QDBusMessage::createMethodCall(
         SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, QStringLiteral("ReadSteamShortcutsForUser"));
-    message << username;
-    QDBusPendingCall pending = QDBusConnection::systemBus().asyncCall(message, 30000);
+    message << username << steamId;
+    QDBusPendingCall pending = m_interface->connection().asyncCall(message, 30000);
     QDBusPendingCallWatcher watcher(pending);
     QEventLoop waitForReply;
+    bool cancelled = false;
+    QTimer cancellationPoll;
+    cancellationPoll.setInterval(20);
     QObject::connect(&watcher, &QDBusPendingCallWatcher::finished, &waitForReply, &QEventLoop::quit);
+    QObject::connect(&cancellationPoll, &QTimer::timeout, &waitForReply, [&] {
+        if (shouldContinue && !shouldContinue()) {
+            cancelled = true;
+            waitForReply.quit();
+        }
+    });
     if (!watcher.isFinished()) {
+        if (shouldContinue) {
+            cancellationPoll.start();
+        }
         waitForReply.exec();
+    }
+    cancellationPoll.stop();
+
+    if (cancelled || (shouldContinue && !shouldContinue())) {
+        return false;
     }
     QDBusPendingReply<QByteArray> reply = watcher;
     if (reply.isError()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return false;
+        return fail(reply.error().message());
     }
     *content = reply.value();
+    return true;
+}
+
+bool CouchPlayHelperClient::writeSteamShortcutsForUser(const QString &username,
+                                                       const QString &steamId,
+                                                       const QByteArray &expectedDigest,
+                                                       const QByteArray &content,
+                                                       QString *errorMessage)
+{
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+    auto fail = [&](const QString &message) {
+        if (errorMessage) {
+            *errorMessage = message;
+        }
+        Q_EMIT errorOccurred(message);
+        return false;
+    };
+    if (!m_available || !m_interface) {
+        return fail(QStringLiteral("Helper unavailable"));
+    }
+
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                               username,
+                                               steamId,
+                                               expectedDigest,
+                                               content);
+    if (!reply.isValid()) {
+        return fail(reply.error().message());
+    }
+    if (!reply.value()) {
+        return fail(QStringLiteral("Helper rejected the Steam shortcuts update"));
+    }
     return true;
 }
 
