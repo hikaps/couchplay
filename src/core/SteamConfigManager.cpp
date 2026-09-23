@@ -411,9 +411,12 @@ QStringList SteamConfigManager::extractShortcutDirectories() const
     return dirs.values();
 }
 
-bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
+bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername, std::function<bool()> shouldContinue)
 {
     qCDebug(couchplaySteam) << "syncShortcutsToUser called for" << targetUsername;
+    if (shouldContinue && !shouldContinue()) {
+        return false;
+    }
 
     if (!m_helperClient || !m_helperClient->isAvailable()) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Helper not available";
@@ -474,6 +477,9 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
     if (!m_helperClient->readSteamShortcutsForUser(targetUsername, &targetVdfData)) {
         qCWarning(couchplaySteam) << "Failed to read target user's shortcuts.vdf";
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to read target shortcuts.vdf"));
+        return false;
+    }
+    if (shouldContinue && !shouldContinue()) {
         return false;
     }
     if (targetVdfData.isEmpty()) {

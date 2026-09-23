@@ -207,8 +207,12 @@ private Q_SLOTS:
 
         QSignalSpy launched(&bridge, &CommandLineBridge::launchRequested);
         QObject::connect(&bridge, &CommandLineBridge::launchRequested, &bridge,
-                         [&bridge](const QString &, bool, bool) { bridge.setRequestAccepted(true); });
-        QTimer::singleShot(250, &bridge, [&bus, &service] { bus.unregisterService(service); });
+                         [&bridge, &bus, &service](const QString &, bool, bool) {
+            bridge.setRequestAccepted(true);
+            QTimer::singleShot(0, &bridge, [&bridge, &bus, &service] {
+                QTimer::singleShot(250, &bridge, [&bus, &service] { bus.unregisterService(service); });
+            });
+        });
 
         CommandLineRequest request;
         request.profileName = QStringLiteral("Family");

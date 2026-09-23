@@ -7,6 +7,15 @@ set -euo pipefail
 MAX_DOCUMENT_SIZE=$((16 * 1024 * 1024))
 STEAM_APP_ID="com.valvesoftware.Steam"
 
+ACTIVE_TEMP_FILE=""
+ACTIVE_BACKUP_TEMP_FILE=""
+cleanup_temporary_files() {
+    if [[ -n "$ACTIVE_TEMP_FILE" || -n "$ACTIVE_BACKUP_TEMP_FILE" ]]; then
+        rm -f -- "${ACTIVE_TEMP_FILE:-}" "${ACTIVE_BACKUP_TEMP_FILE:-}" 2>/dev/null || true
+    fi
+}
+trap cleanup_temporary_files EXIT
+
 fail() {
     printf '%s\n' "$2" >&2
     return "${1:-1}"
@@ -197,16 +206,18 @@ commit_shortcuts() {
     steam_running "$root" && fail 4 "steam-still-running"
     assert_expected "$path" "$expected"
     temp=$(mktemp "$config_fd/.shortcuts.vdf.couchplay.XXXXXX")
-    trap 'rm -f -- "${temp:-}" "${backup_temp:-}"' RETURN
+    ACTIVE_TEMP_FILE=$temp
     cat >"$temp"
     [[ "$(stat -c '%s' -- "$temp")" -le "$MAX_DOCUMENT_SIZE" ]] || fail 4 "shortcuts-file-too-large"
     chmod 600 "$temp"
     if [[ -e "$path" ]]; then
         mode=$(stat -c '%a' -- "$path")
         backup_temp=$(mktemp "$config_fd/.shortcuts.vdf.couchplay-backup.XXXXXX")
+        ACTIVE_BACKUP_TEMP_FILE=$backup_temp
         cp -- "$path" "$backup_temp"
         chmod 600 "$backup_temp"
         mv -fT -- "$backup_temp" "$config_fd/shortcuts.vdf.couchplay-backup"
+        ACTIVE_BACKUP_TEMP_FILE=""
         chmod "$mode" "$temp"
     fi
     account_valid "$root" "$account" || fail 4 "unsafe-account-path"
@@ -214,7 +225,7 @@ commit_shortcuts() {
     [[ "$config_fd_identity" == "$config_path_identity" ]] || fail 4 "unsafe-account-path"
     steam_running "$root" && fail 4 "steam-started-during-write"
     mv -fT -- "$temp" "$path"
-    trap - RETURN
+    ACTIVE_TEMP_FILE=""
     printf '%s\n' committed
 }
 
@@ -269,7 +280,7 @@ export_payload() {
         [[ -f "$target" && ! -L "$target" ]] || fail 3 "unsafe-export-target"
     fi
     temp=$(mktemp "$output_dir_fd/.export.XXXXXX")
-    trap 'rm -f -- "$temp"' RETURN
+    ACTIVE_TEMP_FILE=$temp
     cat >"$temp"
     if [[ "$kind" == icon ]]; then chmod 600 "$temp"; else chmod 700 "$temp"; fi
     app_path_identity=$(stat -c '%d:%i' -- "$app_dir") || fail 3 "unsafe-export-directory"
@@ -277,7 +288,7 @@ export_payload() {
     [[ "$app_fd_identity" == "$app_path_identity" && "$output_fd_identity" == "$output_path_identity" ]] \
         || fail 3 "unsafe-export-directory"
     mv -fT -- "$temp" "$target"
-    trap - RETURN
+    ACTIVE_TEMP_FILE=""
     printf '%s\n' "$canonical_data_dir/couchplay/steam-shortcuts/$output"
 }
 

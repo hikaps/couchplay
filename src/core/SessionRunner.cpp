@@ -365,6 +365,7 @@ bool SessionRunner::start()
         }
         m_launchCommands.append(command);
     }
+    ++m_startupGeneration;
     m_startingProfile = profile;
     m_hasStartingProfile = true;
 
@@ -385,6 +386,10 @@ void SessionRunner::continueStart()
     if (!m_active || m_finalizing) {
         return;
     }
+    const quint64 startupGeneration = m_startupGeneration;
+    const auto isCurrentStartup = [this, startupGeneration] {
+        return startupGeneration == m_startupGeneration && m_active && !m_finalizing;
+    };
 
     const SessionProfile &profile = activeProfile();
     const int instanceCount = profile.instances.size();
@@ -433,15 +438,19 @@ void SessionRunner::continueStart()
     }
 
 
-    if (!setupSessionResources()) {
-        if (m_finalizing || !m_active) {
-            return;
-        }
+    const bool sessionResourcesReady = setupSessionResources(startupGeneration);
+    if (!isCurrentStartup()) {
+        return;
+    }
+    if (!sessionResourcesReady) {
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
         return;
     }
     if (!buildOverrideBinds()) {
         beginFinalization(true, QStringLiteral("Failed to prepare override binds"));
+        return;
+    }
+    if (!isCurrentStartup()) {
         return;
     }
 
@@ -531,6 +540,7 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
         return;
     }
 
+    ++m_startupGeneration;
     m_finalizing = true;
     m_startupFailure = startupFailure;
     m_finalizationMessage = message;
@@ -860,9 +870,16 @@ void SessionRunner::restoreDeviceOwnership()
     m_ownedDevicePaths.clear();
 }
 
-bool SessionRunner::setupSessionResources()
+bool SessionRunner::setupSessionResources(quint64 startupGeneration)
 {
     if (!m_helperClient || !m_sessionManager || !m_presetManager) {
+        return false;
+    }
+    const auto isCurrentStartup = [this, startupGeneration] {
+        return startupGeneration == 0
+            || (startupGeneration == m_startupGeneration && m_active && !m_finalizing);
+    };
+    if (!isCurrentStartup()) {
         return false;
     }
 
@@ -920,8 +937,8 @@ bool SessionRunner::setupSessionResources()
                     qCWarning(couchplaySteam) << "Failed to set ACL on shortcut directory" << dir;
                 }
             }
-            const bool synced = m_steamConfigManager->syncShortcutsToUser(username);
-            if (m_finalizing) {
+            const bool synced = m_steamConfigManager->syncShortcutsToUser(username, isCurrentStartup);
+            if (!isCurrentStartup()) {
                 return false;
             }
             if (!synced) {

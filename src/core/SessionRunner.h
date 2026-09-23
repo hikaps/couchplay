@@ -219,7 +219,7 @@ private:
     bool prepareLaunchCommands();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
-    bool setupSessionResources();
+    bool setupSessionResources(quint64 startupGeneration = 0);
     void teardownSharedDirectories();
     void teardownSharingState();
     bool buildOverrideBinds();
@@ -251,6 +251,7 @@ private:
     SessionManager *m_sessionManager = nullptr;
     SessionProfile m_startingProfile;
     bool m_hasStartingProfile = false;
+    quint64 m_startupGeneration = 0;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
     PresetManager *m_presetManager = nullptr;

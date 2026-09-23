@@ -3,6 +3,7 @@
 
 #include <pwd.h>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -11,6 +12,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <functional>
 #include <unistd.h>
 
 #define private public
@@ -20,6 +22,7 @@
 #include "HeroicConfigManager.h"
 #include "SessionManager.h"
 #include "SteamConfigManager.h"
+#include "SteamShortcutsVdf.h"
 #define private public
 #include "CouchPlayHelperClient.h"
 
@@ -78,6 +81,9 @@ public:
     QList<OverlayCall> overlayCalls;
     QList<CopyDirCall> copyDirCalls;
     QList<MirrorCall> mirrorCalls;
+    int shortcutReadCalls = 0;
+    int shortcutWriteCalls = 0;
+    std::function<void()> onShortcutRead;
 
     explicit MockCouchPlayHelperClient(QObject *parent = nullptr)
         : CouchPlayHelperClient(parent)
@@ -202,9 +208,31 @@ public:
     {
         return username == QStringLiteral("player1") ? player1SteamRoot : QString();
     }
+    bool isSteamBootstrapped(const QString &username) override
+    {
+        return username == QStringLiteral("player1");
+    }
 
+    bool readSteamShortcutsForUser(const QString &username, QByteArray *content) override
+    {
+        if (username != QStringLiteral("player1") || !content) {
+            return false;
+        }
+        ++shortcutReadCalls;
+        if (onReadSteamShortcuts) {
+            QEventLoop waitForRead;
+            QTimer::singleShot(0, &waitForRead, [this, &waitForRead] {
+                onShortcutRead();
+                waitForRead.quit();
+            });
+            waitForRead.exec();
+        }
+        *content = SteamShortcutsVdf::emptyDocument();
+        return true;
+    }
     bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username) override
     {
+        ++shortcutWriteCalls;
         Q_UNUSED(username)
         if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) {
             return false;
@@ -257,7 +285,7 @@ private Q_SLOTS:
     void testPreHookUsesStartingProfileSnapshot();
     void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
-
+    void testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch();
 private:
     void createMockHeroicConfig(const QString &basePath);
     void createMockLegendaryConfig(const QString &basePath);
@@ -991,6 +1019,58 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     const QByteArray vdfContent = vdf.readAll();
     QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
     QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
+}
+
+void TestSessionRunner::testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString sourceRoot = tempDir.path() + QStringLiteral("/source-steam");
+    const QString sourceShortcuts = sourceRoot + QStringLiteral("/userdata/12345/config/shortcuts.vdf");
+    QVERIFY(QDir().mkpath(QFileInfo(sourceShortcuts).absolutePath()));
+    QFile sourceFile(sourceShortcuts);
+    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+    sourceFile.write(SteamShortcutsVdf::emptyDocument());
+    sourceFile.close();
+
+    const QString targetHome = tempDir.path() + QStringLiteral("/player-home");
+    QVERIFY(QDir().mkpath(targetHome));
+    m_helperClient->player1Home = targetHome;
+    m_helperClient->player1SteamRoot = tempDir.path() + QStringLiteral("/target-steam");
+
+    SteamPaths paths;
+    paths.valid = true;
+    paths.steamRoot = sourceRoot;
+    paths.configDir = sourceRoot + QStringLiteral("/config");
+    paths.userDataDir = sourceRoot + QStringLiteral("/userdata/12345");
+    paths.libraryFoldersVdf = paths.configDir + QStringLiteral("/libraryfolders.vdf");
+    paths.shortcutsVdf = sourceShortcuts;
+    m_steamConfigManager->m_steamPaths = paths;
+    m_steamConfigManager->setHelperClient(m_helperClient);
+    m_steamConfigManager->setSyncShortcutsEnabled(true);
+
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    m_runner->m_startingProfile = m_sessionManager->currentProfile();
+    m_runner->m_hasStartingProfile = true;
+    m_runner->m_startupGeneration = 7;
+    m_runner->m_active = true;
+    LaunchCommand launchCommand;
+    launchCommand.program = QStringLiteral("/bin/true");
+    m_runner->m_launchCommands.append(launchCommand);
+    m_helperClient->onShortcutRead = [this] { m_runner->stop(); };
+
+    m_runner->continueStart();
+
+    QCOMPARE(m_helperClient->shortcutReadCalls, 1);
+    QCOMPARE(m_helperClient->shortcutWriteCalls, 0);
+    QVERIFY(m_helperClient->launchCommands.isEmpty());
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(m_runner->m_startupGeneration > 7);
 }
 
 QTEST_MAIN(TestSessionRunner)

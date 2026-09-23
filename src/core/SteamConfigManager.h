@@ -9,6 +9,7 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
+#include <functional>
 
 class CouchPlayHelperClient;
 struct DataDirectory;
@@ -175,7 +176,7 @@ public:
     Q_INVOKABLE QVariantList gamesAsVariant() const;
     Q_INVOKABLE QStringList extractShortcutDirectories() const;
 
-    bool syncShortcutsToUser(const QString &targetUsername);
+    bool syncShortcutsToUser(const QString &targetUsername, std::function<bool()> shouldContinue = {});
     bool shareLibraryToUser(const QString &targetUsername);
     bool cleanupLibrarySharing(const QString &targetUsername);
     bool prepareDataDir(const DataDirectory &dir, const QString &username);
