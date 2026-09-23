@@ -3,14 +3,16 @@
 
 #pragma once
 
-#include <QObject>
+#include <QByteArray>
+#include <QDeadlineTimer>
 #include <QList>
+#include <QObject>
 #include <QString>
 #include <QStringList>
-#include <functional>
-#include <QByteArray>
 #include <QVariantList>
 #include <qqmlintegration.h>
+
+#include <functional>
 
 class SessionManager;
 class SessionRunner;
@@ -77,10 +79,12 @@ private:
     void setStatus(const QString &status);
     void fail(const QString &message);
     void finishCancelled();
+    void finishShutdownTimeout();
     void runHost(const QString &operation,
                  const QStringList &arguments,
                  const QByteArray &input,
-                 std::function<void(int, const QByteArray &, const QString &)> callback);
+                 std::function<void(int, const QByteArray &, const QString &)> callback,
+                 int timeoutMs = -1);
     void parseProbe(const QByteArray &output);
     bool selectedAccountRunning() const;
     void beginWrite();
@@ -125,7 +129,7 @@ private:
     bool m_wasRunning = false;
     bool m_reopenAttempted = false;
     bool m_shutdownConfirmed = false;
-    int m_pollAttempts = 0;
+    QDeadlineTimer m_shutdownDeadline;
     quint64 m_pollGeneration = 0;
     bool m_cancelled = false;
     QString m_status;

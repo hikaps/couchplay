@@ -24,6 +24,8 @@ constexpr quint8 VdfUint64 = 0x07;
 constexpr quint8 VdfEnd = 0x08;
 constexpr quint8 VdfInt64 = 0x0a;
 constexpr int MaxNesting = 32;
+// Bound decoded Qt nodes independently of the 16 MiB input-byte limit.
+constexpr qsizetype MaxParserNodes = 50'000;
 
 struct Field {
     qsizetype start = 0;
@@ -48,6 +50,10 @@ struct Document {
     qsizetype entriesStart = 0;
     qsizetype rootEnd = 0;
     QList<Entry> entries;
+};
+
+struct ParseBudget {
+    qsizetype nodes = 0;
 };
 
 void setError(QString *errorMessage, const QString &message)
@@ -79,8 +85,13 @@ bool readFixed(const QByteArray &data, qsizetype &pos, qsizetype size, QString *
     return true;
 }
 
-bool parseRecord(const QByteArray &data, qsizetype &pos, int depth, Field *field, QString *errorMessage)
+bool parseRecord(const QByteArray &data, qsizetype &pos, int depth, ParseBudget &budget, Field *field,
+                 QString *errorMessage)
 {
+    if (++budget.nodes > MaxParserNodes) {
+        setError(errorMessage, QStringLiteral("Too many VDF records"));
+        return false;
+    }
     if (depth > MaxNesting || pos >= data.size()) {
         setError(errorMessage, QStringLiteral("Invalid VDF nesting or truncated record"));
         return false;
@@ -110,7 +121,7 @@ bool parseRecord(const QByteArray &data, qsizetype &pos, int depth, Field *field
     case VdfObject:
         while (pos < data.size() && static_cast<quint8>(data.at(pos)) != VdfEnd) {
             Field child;
-            if (!parseRecord(data, pos, depth + 1, &child, errorMessage)) {
+            if (!parseRecord(data, pos, depth + 1, budget, &child, errorMessage)) {
                 return false;
             }
             field->children.append(child);
@@ -175,7 +186,7 @@ bool parseRecord(const QByteArray &data, qsizetype &pos, int depth, Field *field
 
 bool isDecimalKey(const QString &key)
 {
-    static const QRegularExpression expression(QStringLiteral("^[0-9]+$"));
+    static const QRegularExpression expression(QStringLiteral("\\A[0-9]+\\z"));
     return expression.match(key).hasMatch();
 }
 
@@ -191,8 +202,9 @@ bool parseDocument(const QByteArray &data, Document *document, QString *errorMes
     }
 
     qsizetype pos = 0;
+    ParseBudget budget;
     Field root;
-    if (!parseRecord(data, pos, 0, &root, errorMessage) || root.type != VdfObject
+    if (!parseRecord(data, pos, 0, budget, &root, errorMessage) || root.type != VdfObject
         || root.key != QStringLiteral("shortcuts")) {
         if (!errorMessage || errorMessage->isEmpty()) {
             setError(errorMessage, QStringLiteral("Invalid shortcuts.vdf root"));
@@ -279,6 +291,16 @@ quint32 intField(const Entry &entry, const QString &key)
         | (static_cast<quint32>(static_cast<quint8>(field->valueBytes.at(3))) << 24);
 }
 
+bool readValidAppId(const Entry &entry, quint32 &appId)
+{
+    const Field *field = findField(entry, QStringLiteral("appid"));
+    if (!field || field->type != VdfInt32) {
+        return false;
+    }
+    appId = intField(entry, QStringLiteral("appid"));
+    return appId != 0;
+}
+
 SteamShortcut toShortcut(const Entry &entry)
 {
     SteamShortcut shortcut;
@@ -332,6 +354,35 @@ QByteArray intRecord(const QByteArray &key, quint32 value)
     result.append(static_cast<char>((value >> 8) & 0xff));
     result.append(static_cast<char>((value >> 16) & 0xff));
     result.append(static_cast<char>((value >> 24) & 0xff));
+    return result;
+}
+
+bool isAppIdField(const Field &field)
+{
+    return field.key == QStringLiteral("appid") || field.key == QStringLiteral("AppId");
+}
+
+QByteArray rewriteProfileEntry(const QByteArray &bytes, const Entry &entry, const QString &indexKey,
+                                quint32 appId)
+{
+    QByteArray result;
+    result.append(char(VdfObject));
+    result.append(indexKey.toUtf8());
+    result.append('\0');
+
+    bool replacedAppId = false;
+    for (const Field &field : entry.fields) {
+        if (isAppIdField(field)) {
+            result += intRecord(field.keyBytes, appId);
+            replacedAppId = true;
+        } else {
+            result += bytes.mid(field.start, field.end - field.start);
+        }
+    }
+    if (!replacedAppId) {
+        result += intRecord("appid", appId);
+    }
+    result.append(char(VdfEnd));
     return result;
 }
 
@@ -395,10 +446,20 @@ QByteArray replaceEntry(const QByteArray &bytes, const Entry &entry, const Steam
     result.append(char(VdfObject));
     result.append(entry.indexKey.toUtf8());
     result.append('\0');
+    bool replacedAppId = false;
     for (const Field &field : entry.fields) {
-        if (!isReplacedField(field.key)) {
+        if (isReplacedField(field.key)) {
+            continue;
+        }
+        if (isAppIdField(field)) {
+            result += intRecord(field.keyBytes, shortcut.appId);
+            replacedAppId = true;
+        } else {
             result += bytes.mid(field.start, field.end - field.start);
         }
+    }
+    if (!replacedAppId) {
+        result += intRecord("appid", shortcut.appId);
     }
     result += stringRecord("AppName", shortcut.appName);
     result += stringRecord("exe", shortcut.exe);
@@ -419,6 +480,27 @@ quint32 crc32(const QByteArray &data)
         }
     }
     return crc ^ 0xffffffffu;
+}
+
+bool allocateUniqueAppId(quint32 preferred, const SteamShortcut &shortcut, QSet<quint32> &usedAppIds,
+                         quint32 &appId)
+{
+    quint32 candidate = preferred;
+    if (candidate == 0) {
+        candidate = crc32(shortcut.exe.toUtf8() + shortcut.appName.toUtf8()) | 0x80000000u;
+    }
+
+    const quint64 attempts = static_cast<quint64>(usedAppIds.size()) + 1;
+    for (quint64 attempt = 0; attempt < attempts; ++attempt) {
+        if (candidate != 0 && !usedAppIds.contains(candidate)) {
+            usedAppIds.insert(candidate);
+            appId = candidate;
+            return true;
+        }
+        ++candidate;
+        candidate |= 0x80000000u;
+    }
+    return false;
 }
 
 bool validShortcutForWrite(const SteamShortcut &shortcut, QString *errorMessage)
@@ -498,10 +580,29 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &input, QByteArray *res
     SteamShortcut shortcut = input;
     if (matchingIndex >= 0) {
         const Entry &existingEntry = document.entries.at(matchingIndex);
-        const SteamShortcut existing = toShortcut(existingEntry);
-        shortcut.appId = existing.appId;
-        const QByteArray updated = bytes.left(existingEntry.start) + replaceEntry(bytes, existingEntry, shortcut)
-            + bytes.mid(existingEntry.end);
+        quint32 existingAppId = 0;
+        if (!readValidAppId(existingEntry, existingAppId)) {
+            setError(errorMessage, QStringLiteral("Managed CouchPlay profile has an invalid AppId"));
+            return false;
+        }
+        QSet<quint32> usedAppIds;
+        for (int i = 0; i < document.entries.size(); ++i) {
+            if (i == matchingIndex) {
+                continue;
+            }
+            quint32 appId = 0;
+            if (readValidAppId(document.entries.at(i), appId)) {
+                usedAppIds.insert(appId);
+            }
+        }
+        quint32 appId = 0;
+        if (!allocateUniqueAppId(existingAppId, shortcut, usedAppIds, appId)) {
+            setError(errorMessage, QStringLiteral("No unique shortcut AppId is available"));
+            return false;
+        }
+        shortcut.appId = appId;
+        const QByteArray updated = bytes.left(existingEntry.start)
+            + replaceEntry(bytes, existingEntry, shortcut) + bytes.mid(existingEntry.end);
         if (updated.size() > MaxDocumentSize) {
             setError(errorMessage, QStringLiteral("Updated shortcuts.vdf exceeds the size limit"));
             return false;
@@ -514,7 +615,10 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &input, QByteArray *res
     QSet<quint32> usedAppIds;
     for (const Entry &entry : document.entries) {
         usedIndices.insert(entry.indexKey);
-        usedAppIds.insert(toShortcut(entry).appId);
+        const quint32 appId = toShortcut(entry).appId;
+        if (appId != 0) {
+            usedAppIds.insert(appId);
+        }
     }
 
     int index = 0;
@@ -526,12 +630,9 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &input, QByteArray *res
         ++index;
     }
 
-    if (shortcut.appId == 0) {
-        shortcut.appId = crc32(shortcut.exe.toUtf8() + shortcut.appName.toUtf8()) | 0x80000000u;
-    }
-    while (usedAppIds.contains(shortcut.appId)) {
-        ++shortcut.appId;
-        shortcut.appId |= 0x80000000u;
+    if (!allocateUniqueAppId(shortcut.appId, shortcut, usedAppIds, shortcut.appId)) {
+        setError(errorMessage, QStringLiteral("No unique shortcut AppId is available"));
+        return false;
     }
     const QByteArray newEntry = canonicalEntry(shortcut, QString::number(index));
 
@@ -608,8 +709,13 @@ bool mergePreservingProfiles(const QByteArray &source,
     }
 
     QSet<QString> usedIndices;
+    QSet<quint32> usedAppIds;
     for (const Entry &entry : sourceDocument.entries) {
         usedIndices.insert(entry.indexKey);
+        quint32 appId = 0;
+        if (readValidAppId(entry, appId)) {
+            usedAppIds.insert(appId);
+        }
     }
 
     QSet<QString> profileMarkers;
@@ -639,14 +745,16 @@ bool mergePreservingProfiles(const QByteArray &source,
         }
         usedIndices.insert(indexKey);
 
-        const QByteArray originalEntry = target.mid(entry.start, entry.end - entry.start);
-        if (indexKey == entry.indexKey) {
-            merged.append(originalEntry);
+        quint32 appId = 0;
+        if (!allocateUniqueAppId(shortcut.appId, shortcut, usedAppIds, appId)) {
+            setError(errorMessage, QStringLiteral("No unique shortcut AppId is available"));
+            return false;
+        }
+
+        if (indexKey == entry.indexKey && appId == shortcut.appId) {
+            merged.append(target.mid(entry.start, entry.end - entry.start));
         } else {
-            merged.append(char(VdfObject));
-            merged.append(indexKey.toUtf8());
-            merged.append('\0');
-            merged.append(originalEntry.mid(entry.indexKey.toUtf8().size() + 2));
+            merged.append(rewriteProfileEntry(target, entry, indexKey, appId));
         }
         if (merged.size() > MaxDocumentSize) {
             setError(errorMessage, QStringLiteral("Merged shortcuts.vdf exceeds the size limit"));

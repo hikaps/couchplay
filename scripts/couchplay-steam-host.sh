@@ -207,7 +207,7 @@ commit_shortcuts() {
     assert_expected "$path" "$expected"
     temp=$(mktemp "$config_fd/.shortcuts.vdf.couchplay.XXXXXX")
     ACTIVE_TEMP_FILE=$temp
-    cat >"$temp"
+    head -c "$((MAX_DOCUMENT_SIZE + 1))" >"$temp"
     [[ "$(stat -c '%s' -- "$temp")" -le "$MAX_DOCUMENT_SIZE" ]] || fail 4 "shortcuts-file-too-large"
     chmod 600 "$temp"
     if [[ -e "$path" ]]; then
@@ -224,6 +224,7 @@ commit_shortcuts() {
     config_path_identity=$(stat -c '%d:%i' -- "$config") || fail 4 "unsafe-account-path"
     [[ "$config_fd_identity" == "$config_path_identity" ]] || fail 4 "unsafe-account-path"
     steam_running "$root" && fail 4 "steam-started-during-write"
+    assert_expected "$path" "$expected"
     mv -fT -- "$temp" "$path"
     ACTIVE_TEMP_FILE=""
     printf '%s\n' committed
@@ -281,7 +282,8 @@ export_payload() {
     fi
     temp=$(mktemp "$output_dir_fd/.export.XXXXXX")
     ACTIVE_TEMP_FILE=$temp
-    cat >"$temp"
+    head -c "$((MAX_DOCUMENT_SIZE + 1))" >"$temp"
+    [[ "$(stat -c '%s' -- "$temp")" -le "$MAX_DOCUMENT_SIZE" ]] || fail 3 "export-payload-too-large"
     if [[ "$kind" == icon ]]; then chmod 600 "$temp"; else chmod 700 "$temp"; fi
     app_path_identity=$(stat -c '%d:%i' -- "$app_dir") || fail 3 "unsafe-export-directory"
     output_path_identity=$(stat -c '%d:%i' -- "$output_dir") || fail 3 "unsafe-export-directory"
@@ -307,7 +309,7 @@ shutdown_steam() {
 
 start_steam() {
     require_user
-    local root=$1 binary
+    local root=$1 binary deadline
     is_game_mode && fail 2 "game-mode-restart-refused"
     root_valid "$root" || fail 3 "invalid-steam-root"
     if [[ "$(root_kind "$root")" == native ]]; then
@@ -316,7 +318,16 @@ start_steam() {
     else
         nohup flatpak run "$STEAM_APP_ID" >/dev/null 2>&1 </dev/null &
     fi
-    printf '%s\n' started
+
+    deadline=$((SECONDS + 10))
+    while ((SECONDS < deadline)); do
+        if steam_running "$root"; then
+            printf '%s\n' started
+            return 0
+        fi
+        sleep 0.25
+    done
+    fail 3 "steam-start-timeout"
 }
 
 flatpak_steam_preflight() {

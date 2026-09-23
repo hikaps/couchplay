@@ -56,6 +56,12 @@ QByteArray documentWithForeignEntry()
     document.insert(document.size() - 2, foreignEntry());
     return document;
 }
+QByteArray documentWithEntry(const QByteArray &entry)
+{
+    QByteArray document = SteamShortcutsVdf::emptyDocument();
+    document.insert(document.size() - 2, entry);
+    return document;
+}
 
 }
 
@@ -116,6 +122,168 @@ private Q_SLOTS:
         unsupported.insert(unsupported.size() - 1, "bad", 3);
         QVERIFY(!SteamShortcutsVdf::decode(unsupported, &shortcuts, &error));
     }
+
+    void testCodecRejectsShortcutIndexWithFinalNewline()
+    {
+        QByteArray entry;
+        entry.append(char(0x00));
+        entry.append("0\n");
+        entry.append(char('\0'));
+        entry.append(char(0x08));
+
+        QList<SteamShortcut> shortcuts;
+        QString error;
+        QVERIFY(!SteamShortcutsVdf::decode(documentWithEntry(entry), &shortcuts, &error));
+        QVERIFY(!error.isEmpty());
+    }
+
+    void testCodecBoundsParserNodeExpansion()
+    {
+        constexpr int entryCount = 50'000;
+        QByteArray document = SteamShortcutsVdf::emptyDocument();
+        document.chop(2);
+        document.reserve(entryCount * 9 + document.size() + 2);
+        for (int i = 0; i < entryCount; ++i) {
+            document.append(char(0x00));
+            document.append(QByteArray::number(i));
+            document.append(char('\0'));
+            document.append(char(0x08));
+        }
+        document.append(char(0x08));
+        document.append(char(0x08));
+
+        QList<SteamShortcut> shortcuts;
+        QString error;
+        QVERIFY(document.size() < SteamShortcutsVdf::MaxDocumentSize);
+        QVERIFY(!SteamShortcutsVdf::decode(document, &shortcuts, &error));
+        QVERIFY(!error.isEmpty());
+    }
+
+    void testMergeReassignsProfileAppIdCollidingWithForeignShortcut()
+    {
+        SteamShortcut profile;
+        profile.appId = 123;
+        profile.appName = QStringLiteral("Player-owned profile");
+        profile.exe = QStringLiteral("/tmp/couchplay-profile.sh");
+        profile.startDir = QStringLiteral("/tmp");
+        profile.icon = QStringLiteral("/tmp/player-artwork.png");
+        profile.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('a'));
+        profile.launchOptions = QStringLiteral("--profile=Original");
+        profile.tags = {QStringLiteral("Player tag")};
+
+        QByteArray target;
+        QString error;
+        QVERIFY2(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), profile, &target, &error),
+                 qPrintable(error));
+        const QByteArray customField = QByteArray::fromHex("01637573746f6d4d65746164617461006b6565702d6d6500");
+        target.insert(target.size() - 3, customField);
+
+        QByteArray merged;
+        QVERIFY2(SteamShortcutsVdf::mergePreservingProfiles(documentWithForeignEntry(), target, &merged, &error),
+                 qPrintable(error));
+        QVERIFY(merged.contains(foreignEntry()));
+        QList<SteamShortcut> shortcuts;
+        QVERIFY2(SteamShortcutsVdf::decode(merged, &shortcuts, &error), qPrintable(error));
+        QCOMPARE(shortcuts.size(), 2);
+        QCOMPARE(shortcuts.at(0).appId, quint32(123));
+        QCOMPARE(shortcuts.at(0).appName, QStringLiteral("Foreign Game"));
+        QCOMPARE(shortcuts.at(1).shortcutPath, profile.shortcutPath);
+        QVERIFY(shortcuts.at(1).appId != 0);
+        QVERIFY(shortcuts.at(1).appId != shortcuts.at(0).appId);
+        QCOMPARE(shortcuts.at(1).appName, profile.appName);
+        QCOMPARE(shortcuts.at(1).icon, profile.icon);
+        QCOMPARE(shortcuts.at(1).tags, profile.tags);
+        QCOMPARE(shortcuts.at(1).launchOptions, profile.launchOptions);
+        QVERIFY(merged.contains(customField));
+    }
+
+    void testUpsertReassignsManagedAppIdCollision()
+    {
+        SteamShortcut profile;
+        profile.appId = 123;
+        profile.appName = QStringLiteral("Player-owned profile");
+        profile.exe = QStringLiteral("/tmp/couchplay-profile.sh");
+        profile.startDir = QStringLiteral("/tmp");
+        profile.icon = QStringLiteral("/tmp/user-artwork.png");
+        profile.launchOptions = QStringLiteral("--profile=Original");
+        profile.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('c'));
+        profile.tags = {QStringLiteral("Player tag")};
+
+        QByteArray document;
+        QString error;
+        QVERIFY2(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), profile, &document, &error),
+                 qPrintable(error));
+        const QByteArray customField = QByteArray::fromHex("01637573746f6d4d65746164617461006b6565702d6d6500");
+        document.insert(document.size() - 3, customField);
+        QByteArray foreign = foreignEntry();
+        foreign[1] = '1';
+        document.insert(document.size() - 2, foreign);
+
+        QList<SteamShortcut> before;
+        QVERIFY2(SteamShortcutsVdf::decode(document, &before, &error), qPrintable(error));
+        QCOMPARE(before.size(), 2);
+        QCOMPARE(before.at(0).appId, quint32(123));
+        QCOMPARE(before.at(1).appId, quint32(123));
+
+        profile.appName = QStringLiteral("Refreshed profile");
+        profile.icon = QStringLiteral("/tmp/generated.png");
+        profile.launchOptions = QStringLiteral("--profile=Updated");
+        profile.tags = {QStringLiteral("CouchPlay")};
+        QByteArray updated;
+        QVERIFY2(SteamShortcutsVdf::upsert(document, profile, &updated, &error), qPrintable(error));
+
+        QList<SteamShortcut> after;
+        QVERIFY2(SteamShortcutsVdf::decode(updated, &after, &error), qPrintable(error));
+        QCOMPARE(after.size(), 2);
+        QVERIFY(after.at(0).appId != 0);
+        QVERIFY(after.at(0).appId != after.at(1).appId);
+        QCOMPARE(after.at(0).appName, QStringLiteral("Refreshed profile"));
+        QCOMPARE(after.at(0).launchOptions, QStringLiteral("--profile=Updated"));
+        QCOMPARE(after.at(0).icon, QStringLiteral("/tmp/user-artwork.png"));
+        QCOMPARE(after.at(0).tags, QStringList{QStringLiteral("Player tag")});
+        QCOMPARE(after.at(1).appId, quint32(123));
+        QCOMPARE(after.at(1).appName, QStringLiteral("Foreign Game"));
+        QVERIFY(updated.contains(customField));
+        QVERIFY(updated.contains(foreign));
+    }
+
+    void testUpsertRejectsManagedProfilesWithInvalidAppId()
+    {
+        SteamShortcut profile;
+        profile.appId = 77;
+        profile.appName = QStringLiteral("CouchPlay - Corrupt AppId");
+        profile.exe = QStringLiteral("/tmp/couchplay-profile.sh");
+        profile.startDir = QStringLiteral("/tmp");
+        profile.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('b'));
+
+        QByteArray valid;
+        QString error;
+        QVERIFY2(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), profile, &valid, &error),
+                 qPrintable(error));
+
+        const QByteArray appIdField = QByteArray::fromHex("02617070696400");
+        const qsizetype appIdPosition = valid.indexOf(appIdField);
+        QVERIFY(appIdPosition >= 0);
+        QByteArray missing = valid;
+        missing.remove(appIdPosition, appIdField.size() + 4);
+
+        QByteArray wrongType = valid;
+        QByteArray wrongTypeField;
+        appendString(wrongTypeField, "appid", "77");
+        wrongType.replace(appIdPosition, appIdField.size() + 4, wrongTypeField);
+
+        QByteArray zero = valid;
+        zero.replace(appIdPosition + appIdField.size(), 4, QByteArray(4, char(0)));
+
+        profile.appName = QStringLiteral("Updated profile");
+        const QList<QByteArray> corruptRecords{missing, wrongType, zero};
+        for (const QByteArray &corrupt : corruptRecords) {
+            QByteArray result("unchanged");
+            QVERIFY2(!SteamShortcutsVdf::upsert(corrupt, profile, &result, &error), qPrintable(error));
+            QCOMPARE(result, QByteArray("unchanged"));
+        }
+    }
+
     void testCodecRejectsNulTagsAndNonExactMarkers()
     {
         SteamShortcut shortcut;
@@ -200,6 +368,9 @@ private Q_SLOTS:
         QByteArray initial;
         QString error;
         QVERIFY2(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), shortcut, &initial, &error), qPrintable(error));
+        QList<SteamShortcut> initialShortcuts;
+        QVERIFY2(SteamShortcutsVdf::decode(initial, &initialShortcuts, &error), qPrintable(error));
+        const quint32 initialAppId = initialShortcuts.constLast().appId;
         shortcut.appName = QStringLiteral("Updated profile name");
         shortcut.icon = QStringLiteral("/tmp/generated.png");
         shortcut.tags = {QStringLiteral("CouchPlay")};
@@ -209,6 +380,7 @@ private Q_SLOTS:
         QVERIFY2(SteamShortcutsVdf::upsert(initial, shortcut, &updated, &error), qPrintable(error));
         QList<SteamShortcut> loaded;
         QVERIFY2(SteamShortcutsVdf::decode(updated, &loaded, &error), qPrintable(error));
+        QCOMPARE(loaded.constLast().appId, initialAppId);
         QCOMPARE(loaded.constLast().appName, QStringLiteral("Updated profile name"));
         QCOMPARE(loaded.constLast().icon, QStringLiteral("/tmp/user-artwork.png"));
         QCOMPARE(loaded.constLast().tags, QStringList{QStringLiteral("Favorites")});

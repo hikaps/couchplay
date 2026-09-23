@@ -219,7 +219,7 @@ public:
             return false;
         }
         ++shortcutReadCalls;
-        if (onReadSteamShortcuts) {
+        if (onShortcutRead) {
             QEventLoop waitForRead;
             QTimer::singleShot(0, &waitForRead, [this, &waitForRead] {
                 onShortcutRead();
@@ -285,6 +285,7 @@ private Q_SLOTS:
     void testPreHookUsesStartingProfileSnapshot();
     void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
+    void testSessionStoppedHandlerCanStartNewSession();
     void testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch();
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -940,6 +941,60 @@ void TestSessionRunner::testPostSessionRunsOnceAfterStop()
     QFile marker(markerPath);
     QVERIFY(marker.open(QIODevice::ReadOnly | QIODevice::Text));
     QCOMPARE(marker.readAll(), QByteArray("post\n"));
+}
+
+void TestSessionRunner::testSessionStoppedHandlerCanStartNewSession()
+{
+    QTemporaryDir scriptDir;
+    QVERIFY(scriptDir.isValid());
+    const QString postPath = scriptDir.filePath(QStringLiteral("post-new-session.sh"));
+    const QString markerPath = scriptDir.filePath(QStringLiteral("post-new-session.log"));
+    QFile postScript(postPath);
+    QVERIFY(postScript.open(QIODevice::WriteOnly | QIODevice::Text));
+    postScript.write("#!/bin/sh\necho new-session >> \"" + markerPath.toUtf8() + "\"\n");
+    postScript.close();
+    QVERIFY(postScript.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Reentrant restart game"),
+                                                              QStringLiteral("/bin/true"));
+    QVERIFY(!presetId.isEmpty());
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+    bool restarted = false;
+    bool restartAccepted = false;
+    bool restartStateInitialized = false;
+    connect(m_runner, &SessionRunner::sessionStopped, m_runner,
+            [this, postPath, &restarted, &restartAccepted, &restartStateInitialized] {
+        if (restarted) {
+            return;
+        }
+        restarted = true;
+        m_sessionManager->setPostSessionExecutable(postPath);
+        restartAccepted = m_runner->start();
+        restartStateInitialized = m_runner->isActive() && m_runner->m_hasStartingProfile
+            && m_runner->m_startingProfile.postSessionExecutable == postPath && m_runner->m_postHookArmed;
+    });
+
+    QVERIFY(m_runner->start());
+    m_runner->stop();
+
+    QVERIFY(restarted);
+    QVERIFY(restartAccepted);
+    QVERIFY(restartStateInitialized);
+    QVERIFY(m_runner->isActive());
+    QVERIFY(m_runner->m_hasStartingProfile);
+    QCOMPARE(m_runner->m_startingProfile.postSessionExecutable, postPath);
+    QVERIFY(m_runner->m_postHookArmed);
+    QVERIFY(!m_runner->m_finalizing);
+    QCOMPARE(stoppedSpy.count(), 1);
+
+    m_runner->stop();
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 2, 2000);
+    QFile marker(markerPath);
+    QVERIFY(marker.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(marker.readAll(), QByteArray("new-session\n"));
 }
 
 void TestSessionRunner::testResolveCompositorHomeViaHelper()

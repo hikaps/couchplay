@@ -11,6 +11,7 @@
 #include <QDBusReply>
 #include <QEventLoop>
 #include <QSocketNotifier>
+#include <QMetaType>
 #include <QThread>
 #include <QTimer>
 #include <QUuid>
@@ -120,27 +121,35 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
     if (!busInterface) {
         return 1;
     }
-    bool launcherReady = false;
-    for (int attempt = 0; attempt < 100 && !launcherReady; ++attempt) {
-        if (busInterface->isServiceRegistered(serviceName)) {
+
+    QString launcherOwner;
+    for (int attempt = 0; attempt < 100 && launcherOwner.isEmpty(); ++attempt) {
+        const QDBusReply<QString> ownerReply(busInterface->serviceOwner(serviceName));
+        if (ownerReply.isValid() && !ownerReply.value().isEmpty()) {
+            const QString candidateOwner = ownerReply.value();
             const QDBusMessage readyCall = QDBusMessage::createMethodCall(
-                serviceName,
+                candidateOwner,
                 QStringLiteral("/SessionLauncher"),
                 QStringLiteral("com.github.CouchPlay.SessionLauncher"),
                 QStringLiteral("IsReady"));
             const QDBusMessage readyReply = bus.call(readyCall, QDBus::Block, 250);
-            launcherReady = readyReply.type() == QDBusMessage::ReplyMessage
-                && readyReply.arguments().value(0).toBool();
+            if (readyReply.type() == QDBusMessage::ReplyMessage && readyReply.arguments().value(0).toBool()) {
+                const QDBusReply<QString> confirmedOwner(busInterface->serviceOwner(serviceName));
+                if (confirmedOwner.isValid() && confirmedOwner.value() == candidateOwner) {
+                    launcherOwner = candidateOwner;
+                    break;
+                }
+            }
         }
-        if (!launcherReady) {
+        if (launcherOwner.isEmpty()) {
             QThread::msleep(50);
         }
     }
-    if (!launcherReady) {
+    if (launcherOwner.isEmpty()) {
         return 1;
     }
 
-    QDBusInterface interface(serviceName,
+    QDBusInterface interface(launcherOwner,
                              QStringLiteral("/SessionLauncher"),
                              QStringLiteral("com.github.CouchPlay.SessionLauncher"),
                              bus);
@@ -151,18 +160,40 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
     QEventLoop loop;
     int result = 1;
     bool completed = false;
-    bool serviceLost = false;
+    bool ownerLost = false;
+    bool launchAccepted = false;
+    bool launchAttempted = false;
+    bool terminationRequested = false;
     bool stopSent = false;
     DbusSignalReceiver receiver;
     QTimer stopRejectedTimeout;
     stopRejectedTimeout.setSingleShot(true);
     QObject::connect(&stopRejectedTimeout, &QTimer::timeout, &loop, [&] {
-        if (!completed && !serviceLost) {
+        if (!completed && !ownerLost) {
             result = 1;
             loop.quit();
         }
     });
-    QDBusServiceWatcher watcher(serviceName, bus, QDBusServiceWatcher::WatchForUnregistration);
+
+    QDBusServiceWatcher wellKnownWatcher(serviceName, bus, QDBusServiceWatcher::WatchForOwnerChange);
+    QDBusServiceWatcher uniqueOwnerWatcher(launcherOwner, bus, QDBusServiceWatcher::WatchForUnregistration);
+
+    auto sendStop = [&](bool waitForCompletion, bool force = false) {
+        if ((!launchAccepted && !(force && launchAttempted)) || completed || stopSent) {
+            return;
+        }
+        stopSent = true;
+        const QDBusMessage stopReply = interface.call(QStringLiteral("StopSession"), requestId);
+        const bool stopped = stopReply.type() == QDBusMessage::ReplyMessage
+            && stopReply.arguments().size() == 1
+            && stopReply.arguments().constFirst().metaType().id() == QMetaType::Bool
+            && stopReply.arguments().constFirst().toBool();
+        if (waitForCompletion && !stopped && !completed && !ownerLost) {
+            // The owner may have completed the request before processing StopSession.
+            // Let an already-queued LaunchFinished/unregistration determine the result.
+            stopRejectedTimeout.start(500);
+        }
+    };
 
     QObject::connect(&receiver, &DbusSignalReceiver::launchFinished, &loop,
                      [&](const QString &finishedRequestId, int exitCode) {
@@ -170,17 +201,31 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
             return;
         }
         completed = true;
-        result = exitCode;
+        result = ownerLost ? 1 : exitCode;
         loop.quit();
     });
-    QObject::connect(&watcher, &QDBusServiceWatcher::serviceUnregistered, &loop, [&](const QString &service) {
-        if (service == serviceName && !completed) {
-            serviceLost = true;
-            result = 1;
-            loop.quit();
+    auto markOwnerLost = [&] {
+        if (completed || ownerLost) {
+            return;
+        }
+        ownerLost = true;
+        result = 1;
+        sendStop(false, true);
+        loop.quit();
+    };
+    QObject::connect(&wellKnownWatcher, &QDBusServiceWatcher::serviceOwnerChanged, &loop,
+                     [&](const QString &service, const QString &oldOwner, const QString &newOwner) {
+        if (service == serviceName && oldOwner == launcherOwner && newOwner != launcherOwner) {
+            markOwnerLost();
         }
     });
-    if (!bus.connect(serviceName,
+    QObject::connect(&uniqueOwnerWatcher, &QDBusServiceWatcher::serviceUnregistered, &loop,
+                     [&](const QString &service) {
+        if (service == launcherOwner) {
+            markOwnerLost();
+        }
+    });
+    if (!bus.connect(launcherOwner,
                      QStringLiteral("/SessionLauncher"),
                      QStringLiteral("com.github.CouchPlay.SessionLauncher"),
                      QStringLiteral("LaunchFinished"),
@@ -189,40 +234,81 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
         return 1;
     }
 
-    auto *termination = static_cast<TerminationNotifier *>(SessionLaunchClient::watchTermination(&loop, [&] {
-        if (stopSent || completed) {
-            return;
-        }
-        stopSent = true;
-        const QDBusMessage stopReply = interface.call(QStringLiteral("StopSession"), requestId);
-        if (stopReply.type() == QDBusMessage::ErrorMessage || !stopReply.arguments().value(0).toBool()) {
-            // The owner may have completed the request before processing StopSession.
-            // Let an already-queued LaunchFinished/unregistration determine the result.
-            stopRejectedTimeout.start(500);
-        }
-    }));
-    Q_UNUSED(termination)
-
-    const QDBusMessage launchReply = interface.call(QStringLiteral("LaunchProfile"), request.profileName, requestId, display);
-    if (launchReply.type() == QDBusMessage::ErrorMessage || launchReply.arguments().value(0).toBool() == false) {
-        bus.disconnect(serviceName,
+    auto disconnectLaunchFinished = [&] {
+        bus.disconnect(launcherOwner,
                        QStringLiteral("/SessionLauncher"),
                        QStringLiteral("com.github.CouchPlay.SessionLauncher"),
                        QStringLiteral("LaunchFinished"),
                        &receiver,
                        SLOT(onLaunchFinished(QString, int)));
+    };
+    const QDBusReply<QString> currentOwner(busInterface->serviceOwner(serviceName));
+    if (ownerLost || !currentOwner.isValid() || currentOwner.value() != launcherOwner) {
+        disconnectLaunchFinished();
+        return 1;
+    }
+
+    auto *termination = static_cast<TerminationNotifier *>(SessionLaunchClient::watchTermination(&loop, [&] {
+        if (completed) {
+            return;
+        }
+        terminationRequested = true;
+        sendStop(true);
+    }));
+    Q_UNUSED(termination)
+
+    launchAttempted = true;
+    const QDBusMessage launchReply = interface.call(QStringLiteral("LaunchProfile"), request.profileName, requestId, display);
+    if (launchReply.type() == QDBusMessage::ErrorMessage) {
+        if (!ownerLost) {
+            const QDBusReply<QString> ownerAfterError(busInterface->serviceOwner(serviceName));
+            if (!ownerAfterError.isValid() || ownerAfterError.value() != launcherOwner) {
+                markOwnerLost();
+            }
+        }
+        if (ownerLost) {
+            sendStop(false, true);
+        }
+        disconnectLaunchFinished();
+        return 1;
+    }
+    const QVariantList launchArguments = launchReply.arguments();
+    if (launchReply.type() != QDBusMessage::ReplyMessage || launchArguments.size() != 1
+        || launchArguments.constFirst().metaType().id() != QMetaType::Bool) {
+        if (!ownerLost) {
+            const QDBusReply<QString> ownerAfterInvalidReply(busInterface->serviceOwner(serviceName));
+            if (!ownerAfterInvalidReply.isValid() || ownerAfterInvalidReply.value() != launcherOwner) {
+                markOwnerLost();
+            }
+        }
+        if (ownerLost) {
+            sendStop(false, true);
+        }
+        disconnectLaunchFinished();
+        return 1;
+    }
+    if (!launchArguments.constFirst().toBool()) {
+        disconnectLaunchFinished();
         return 2;
     }
-    if (!completed && !serviceLost) {
+
+    launchAccepted = true;
+    if (!completed) {
+        const QDBusReply<QString> ownerAfterLaunch(busInterface->serviceOwner(serviceName));
+        if (!ownerAfterLaunch.isValid() || ownerAfterLaunch.value() != launcherOwner) {
+            markOwnerLost();
+        }
+    }
+    if (ownerLost) {
+        sendStop(false, true);
+    } else if (terminationRequested) {
+        sendStop(true);
+    }
+    if (!completed && !ownerLost) {
         loop.exec();
     }
     stopRejectedTimeout.stop();
-    bus.disconnect(serviceName,
-                   QStringLiteral("/SessionLauncher"),
-                   QStringLiteral("com.github.CouchPlay.SessionLauncher"),
-                   QStringLiteral("LaunchFinished"),
-                   &receiver,
-                   SLOT(onLaunchFinished(QString, int)));
+    disconnectLaunchFinished();
     return result;
 }
 

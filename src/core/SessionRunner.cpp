@@ -618,8 +618,30 @@ void SessionRunner::finishFinalization()
     }
     const bool startupFailure = m_startupFailure;
     const QString message = m_finalizationMessage;
-    setActive(false);
-    setStatus(startupFailure ? QStringLiteral("Error") : QStringLiteral("Stopped"));
+    const bool wasActive = m_active;
+    const QString finalStatus = startupFailure ? QStringLiteral("Error") : QStringLiteral("Stopped");
+    const bool statusDidChange = m_status != finalStatus;
+
+    // Commit the complete stopped state before notifying observers: direct
+    // signal handlers may synchronously start a new session.
+    m_active = false;
+    m_status = finalStatus;
+    m_finalizing = false;
+    m_startupFailure = false;
+    m_preHookCompleted = false;
+    m_postHookArmed = false;
+    m_postHookStarted = false;
+    m_hookIsPost = false;
+    m_finalizationMessage.clear();
+    m_hasStartingProfile = false;
+    m_startingProfile = SessionProfile{};
+
+    if (wasActive) {
+        Q_EMIT activeChanged();
+    }
+    if (statusDidChange) {
+        Q_EMIT statusChanged();
+    }
     Q_EMIT runningChanged();
     Q_EMIT instancesChanged();
     if (startupFailure) {
@@ -630,15 +652,6 @@ void SessionRunner::finishFinalization()
     } else {
         Q_EMIT sessionStopped();
     }
-    m_finalizing = false;
-    m_startupFailure = false;
-    m_preHookCompleted = false;
-    m_postHookArmed = false;
-    m_postHookStarted = false;
-    m_hookIsPost = false;
-    m_finalizationMessage.clear();
-    m_hasStartingProfile = false;
-    m_startingProfile = SessionProfile{};
 }
 
 void SessionRunner::stop()

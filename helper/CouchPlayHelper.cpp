@@ -3228,40 +3228,239 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
     return allSucceeded;
 }
 
+
+namespace
+{
+enum class SteamVdfToken {
+    String,
+    OpenBrace,
+    CloseBrace,
+    End,
+    Invalid,
+};
+
+SteamVdfToken nextSteamVdfToken(const QByteArray &source, qsizetype &position, QByteArray &value)
+{
+    if (position == 0 && source.size() >= 3 && static_cast<unsigned char>(source.at(0)) == 0xef
+        && static_cast<unsigned char>(source.at(1)) == 0xbb
+        && static_cast<unsigned char>(source.at(2)) == 0xbf) {
+        position = 3;
+    }
+    while (position < source.size()) {
+        const char ch = source.at(position);
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            ++position;
+            continue;
+        }
+        if (ch == '/' && position + 1 < source.size() && source.at(position + 1) == '/') {
+            while (position < source.size() && source.at(position) != '\n') {
+                ++position;
+            }
+            continue;
+        }
+        break;
+    }
+
+    if (position == source.size()) {
+        return SteamVdfToken::End;
+    }
+    const char ch = source.at(position++);
+    if (ch == '{') {
+        return SteamVdfToken::OpenBrace;
+    }
+    if (ch == '}') {
+        return SteamVdfToken::CloseBrace;
+    }
+    if (ch != '"') {
+        return SteamVdfToken::Invalid;
+    }
+
+    value.clear();
+    while (position < source.size()) {
+        const char next = source.at(position++);
+        if (next == '"') {
+            return SteamVdfToken::String;
+        }
+        if (next == '\\') {
+            if (position == source.size()) {
+                return SteamVdfToken::Invalid;
+            }
+            value.append(source.at(position++));
+        } else {
+            value.append(next);
+        }
+    }
+    return SteamVdfToken::Invalid;
+}
+
+QString findMostRecentSteamAccount(const QByteArray &loginUsers)
+{
+    QStringList objectPath;
+    QByteArray pendingKey;
+    bool expectingValue = false;
+    QString activeId;
+    qsizetype position = 0;
+    QByteArray tokenValue;
+
+    while (true) {
+        const SteamVdfToken token = nextSteamVdfToken(loginUsers, position, tokenValue);
+        switch (token) {
+        case SteamVdfToken::String:
+            if (!expectingValue) {
+                pendingKey = tokenValue;
+                expectingValue = true;
+                break;
+            }
+            // MostRecent is meaningful only as a direct field under users/<SteamID>.
+            if (objectPath.size() == 2 && objectPath.at(0) == QStringLiteral("users")
+                && pendingKey == QByteArrayLiteral("MostRecent") && tokenValue == QByteArrayLiteral("1")) {
+                if (!activeId.isEmpty()) {
+                    return {};
+                }
+                activeId = objectPath.at(1);
+            }
+            pendingKey.clear();
+            expectingValue = false;
+            break;
+        case SteamVdfToken::OpenBrace:
+            if (!expectingValue) {
+                return {};
+            }
+            objectPath.append(QString::fromUtf8(pendingKey));
+            pendingKey.clear();
+            expectingValue = false;
+            break;
+        case SteamVdfToken::CloseBrace:
+            if (expectingValue || objectPath.isEmpty()) {
+                return {};
+            }
+            objectPath.removeLast();
+            break;
+        case SteamVdfToken::End:
+            return expectingValue || !objectPath.isEmpty() ? QString() : activeId;
+        case SteamVdfToken::Invalid:
+            return {};
+        }
+    }
+}
+}
+
 QString CouchPlayHelper::GetUserSteamId(const QString &username)
 {
     if (!s_validUsername.match(username).hasMatch()) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid username format"));
-        return QString();
+        return {};
     }
 
     if (!userExists(username)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("User '%1' does not exist").arg(username));
-        return QString();
+        return {};
     }
 
     const QString steamRoot = GetUserSteamRoot(username);
     if (steamRoot.isEmpty()) {
-        return QString();
+        return {};
     }
 
-    const QString userDataBase = steamRoot + QStringLiteral("/userdata");
-    if (!m_ops->fileExists(userDataBase)) {
-        return QString();
-    }
-
-    const QStringList entries = m_ops->entryList(userDataBase, QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString &entry : entries) {
-        bool ok;
-        entry.toULongLong(&ok);
-        if (ok) {
-            return entry;
+    const QString userdataPath = steamRoot + QStringLiteral("/userdata");
+    QStringList steamIds;
+    if (m_ops->fileExists(userdataPath)) {
+        const QStringList entries = m_ops->entryList(userdataPath, {}, QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &entry : entries) {
+            bool ok = false;
+            entry.toULongLong(&ok);
+            if (ok) {
+                steamIds.append(entry);
+            }
         }
     }
+    const QString singleAccountFallback = steamIds.size() == 1 ? steamIds.constFirst() : QString();
 
-    return QString();
+    const QString userHome = getUserHome(username);
+    if (userHome.isEmpty()) {
+        return {};
+    }
+    const uint userUid = getUserUid(username);
+    const QString loginUsersPath = steamRoot + QStringLiteral("/config/loginusers.vdf");
+    const QString relativePath = QDir(userHome).relativeFilePath(loginUsersPath);
+    QStringList pathParts = relativePath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (relativePath.startsWith(QLatin1Char('/')) || pathParts.size() < 2
+        || pathParts.contains(QStringLiteral(".."))) {
+        return {};
+    }
+    const QString leafName = pathParts.takeLast();
+
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const QString safeHome = canonicalHome.isEmpty() ? userHome : canonicalHome;
+    const int homeFd = SecureFs::openBaseDir(safeHome);
+    if (homeFd < 0) {
+        return {};
+    }
+    const int parentFd = SecureFs::openDirBelow(homeFd, pathParts, false, userUid, 0);
+    ::close(homeFd);
+
+    if (parentFd < 0) {
+        return parentFd == -ENOENT ? singleAccountFallback : QString();
+    }
+    const int fileFd = ::openat(parentFd,
+                                leafName.toLocal8Bit().constData(),
+                                O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    const int openError = fileFd < 0 ? errno : 0;
+    ::close(parentFd);
+
+    if (fileFd < 0) {
+        return openError == ENOENT ? singleAccountFallback : QString();
+    }
+    constexpr off_t maxLoginUsersSize = 1024 * 1024;
+    struct stat before;
+    if (::fstat(fileFd, &before) != 0 || !S_ISREG(before.st_mode) || before.st_uid != userUid
+        || before.st_nlink != 1 || before.st_size < 0 || before.st_size > maxLoginUsersSize) {
+        ::close(fileFd);
+        return {};
+    }
+
+    QByteArray contents;
+    contents.reserve(static_cast<qsizetype>(before.st_size));
+    char buffer[8192];
+    while (true) {
+        const ssize_t bytesRead = m_ops->read(fileFd, buffer, sizeof(buffer));
+        if (bytesRead == 0) {
+            break;
+        }
+        if (bytesRead < 0 && errno == EINTR) {
+            continue;
+        }
+        if (bytesRead < 0 || contents.size() + bytesRead > maxLoginUsersSize) {
+            ::close(fileFd);
+            return {};
+        }
+        contents.append(buffer, static_cast<qsizetype>(bytesRead));
+    }
+
+    struct stat after;
+    const bool changedWhileReading = ::fstat(fileFd, &after) != 0 || before.st_size != after.st_size
+        || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
+        || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
+    ::close(fileFd);
+    if (changedWhileReading || contents.size() != before.st_size) {
+        return {};
+    }
+
+    const QString activeId = findMostRecentSteamAccount(contents);
+    bool allDigits = !activeId.isEmpty();
+    for (const QChar ch : activeId) {
+        if (ch.unicode() < '0' || ch.unicode() > '9') {
+            allDigits = false;
+            break;
+        }
+    }
+    bool fitsInSteamId = false;
+    activeId.toULongLong(&fitsInSteamId);
+    if (allDigits && fitsInSteamId) {
+        return activeId;
+    }
+    return singleAccountFallback;
 }
-
 bool CouchPlayHelper::IsSteamBootstrapped(const QString &username)
 {
     if (!userExists(username)) {

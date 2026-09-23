@@ -9,19 +9,23 @@
 #include "SteamShortcutsVdf.h"
 
 #include <QCoreApplication>
-#include <QHash>
 #include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QProcess>
 #include <QTimer>
 #include <QVariantMap>
 
 #include <algorithm>
 #include <memory>
+#include <signal.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 namespace {
 
+constexpr int HostTerminationGraceMs = 1000;
 QString shellQuote(const QString &value)
 {
     QString quoted(QStringLiteral("'"));
@@ -155,6 +159,7 @@ QString SteamShortcutManager::profileIdentity() const
 void SteamShortcutManager::fail(const QString &message)
 {
     stopSteamPoll();
+    m_shutdownDeadline = QDeadlineTimer();
     if (m_cancelled) {
         finishCancelled();
         return;
@@ -170,19 +175,28 @@ void SteamShortcutManager::fail(const QString &message)
     m_reopenAttempted = true;
     setPhase(Phase::ReopeningSteam);
     setStatus(QStringLiteral("Reopening Steam"));
-    runHost(QStringLiteral("start"), {m_root}, QByteArray(), [this, message](int, const QByteArray &, const QString &) {
+    runHost(QStringLiteral("start"), {m_root}, QByteArray(),
+            [this, message](int exitCode, const QByteArray &, const QString &recoveryError) {
         m_shutdownConfirmed = false;
         setPhase(Phase::Idle);
         setBusy(false);
-        setStatus(message);
-        Q_EMIT errorOccurred(message);
+        QString finalMessage = message;
+        if (exitCode != 0) {
+            const QString reason = recoveryError.isEmpty()
+                ? QStringLiteral("Steam could not be reopened")
+                : QStringLiteral("Steam could not be reopened: %1").arg(recoveryError);
+            finalMessage += QStringLiteral("; ") + reason;
+        }
+        setStatus(finalMessage);
+        Q_EMIT errorOccurred(finalMessage);
     });
 }
 
 void SteamShortcutManager::runHost(const QString &operation,
                                    const QStringList &arguments,
                                    const QByteArray &input,
-                                   std::function<void(int, const QByteArray &, const QString &)> callback)
+                                   std::function<void(int, const QByteArray &, const QString &)> callback,
+                                   int timeoutMs)
 {
     if (m_process) {
         fail(QStringLiteral("Another Steam operation is already running"));
@@ -199,7 +213,8 @@ void SteamShortcutManager::runHost(const QString &operation,
     m_process = process;
     m_hostCallback = std::move(callback);
     auto completed = std::make_shared<bool>(false);
-    auto finish = [this, process, completed](int exitCode, const QByteArray &output, const QString &error) {
+    auto timedOut = std::make_shared<bool>(false);
+    auto finish = [this, process, completed, timedOut](int exitCode, const QByteArray &output, const QString &error) {
         if (*completed) {
             return;
         }
@@ -217,7 +232,11 @@ void SteamShortcutManager::runHost(const QString &operation,
             return;
         }
         if (callback) {
-            callback(exitCode, output, error);
+            if (*timedOut) {
+                callback(-1, output, QStringLiteral("Steam host operation timed out"));
+            } else {
+                callback(exitCode, output, error);
+            }
         }
     };
 
@@ -237,9 +256,20 @@ void SteamShortcutManager::runHost(const QString &operation,
         m_timeout->setSingleShot(true);
     }
     m_timeout->disconnect();
-    connect(m_timeout, &QTimer::timeout, this, [process, finish] {
-        process->kill();
-        finish(-1, QByteArray(), QStringLiteral("Steam host operation timed out"));
+    connect(m_timeout, &QTimer::timeout, this, [process, completed, timedOut] {
+        *timedOut = true;
+        const pid_t processId = static_cast<pid_t>(process->processId());
+        if (processId <= 0 || ::kill(-processId, SIGTERM) != 0) {
+            process->terminate();
+        }
+        QTimer::singleShot(HostTerminationGraceMs, process, [process, completed] {
+            if (!*completed && process->state() != QProcess::NotRunning) {
+                const pid_t processId = static_cast<pid_t>(process->processId());
+                if (processId <= 0 || ::kill(-processId, SIGKILL) != 0) {
+                    process->kill();
+                }
+            }
+        });
     });
 
     QStringList processArguments;
@@ -254,12 +284,18 @@ void SteamShortcutManager::runHost(const QString &operation,
     processArguments.append(arguments);
     process->setArguments(processArguments);
     process->setProcessChannelMode(QProcess::SeparateChannels);
+    process->setChildProcessModifier([] {
+        if (::setpgid(0, 0) != 0) {
+            ::_exit(127);
+        }
+    });
+    const int defaultTimeoutMs = operation == QStringLiteral("start") ? 15000 : 10000;
+    m_timeout->start(timeoutMs > 0 ? timeoutMs : defaultTimeoutMs);
     process->start();
     if (!input.isEmpty()) {
         process->write(input);
     }
     process->closeWriteChannel();
-    m_timeout->start(10000);
 }
 
 bool SteamShortcutManager::prepare(const QString &requestedProfile)
@@ -288,7 +324,7 @@ bool SteamShortcutManager::prepare(const QString &requestedProfile)
     stopSteamPoll();
     m_cancelled = false;
     m_shutdownConfirmed = false;
-    m_pollAttempts = 0;
+    m_shutdownDeadline = QDeadlineTimer();
     m_selectedProfile = profile->name;
     m_profilePath = profile->filePath;
     m_identity = profileIdentity();
@@ -392,24 +428,42 @@ void SteamShortcutManager::addToSteam(int accountIndex, bool allowRestart)
     stopSteamPoll();
     m_cancelled = false;
     m_shutdownConfirmed = false;
-    m_pollAttempts = 0;
+    m_shutdownDeadline = QDeadlineTimer();
     m_reopenAttempted = false;
     setBusy(true);
     auto beginRegistration = [this] {
         if (m_wasRunning) {
             setPhase(Phase::ClosingSteam);
+            m_shutdownDeadline = QDeadlineTimer(30000, Qt::PreciseTimer);
             setStatus(QStringLiteral("Closing Steam"));
             runHost(QStringLiteral("shutdown"), {m_root}, QByteArray(), [this](int exitCode, const QByteArray &, const QString &error) {
                 if (exitCode != 0 && !m_cancelled) {
                     const QString shutdownError = error.isEmpty() ? QStringLiteral("Steam could not be closed") : error;
+                    if (!m_shutdownDeadline.isForever() && m_shutdownDeadline.hasExpired()) {
+                        finishShutdownTimeout();
+                        return;
+                    }
+                    const qint64 remainingMs = m_shutdownDeadline.isForever() ? 10000 : m_shutdownDeadline.remainingTime();
+                    if (!m_shutdownDeadline.isForever() && remainingMs <= HostTerminationGraceMs) {
+                        finishShutdownTimeout();
+                        return;
+                    }
+                    const qint64 probeBudgetMs = m_shutdownDeadline.isForever()
+                        ? 10000
+                        : remainingMs - HostTerminationGraceMs;
+                    const int probeTimeoutMs = static_cast<int>(std::min<qint64>(10000, probeBudgetMs));
                     runHost(QStringLiteral("probe"), {}, QByteArray(),
                             [this, shutdownError](int probeExitCode, const QByteArray &output, const QString &) {
+                        if (!m_shutdownDeadline.isForever() && m_shutdownDeadline.hasExpired()) {
+                            finishShutdownTimeout();
+                            return;
+                        }
                         if (probeExitCode == 0) {
                             parseProbe(output);
                             m_shutdownConfirmed = m_wasRunning && !selectedAccountRunning();
                         }
                         fail(shutdownError);
-                    });
+                    }, probeTimeoutMs);
                     return;
                 }
                 pollSteamStopped();
@@ -468,22 +522,28 @@ void SteamShortcutManager::pollSteamStopped()
     if (m_phase != Phase::ClosingSteam || !m_busy) {
         return;
     }
-    if (++m_pollAttempts > 120) {
-        m_pollAttempts = 0;
-        if (m_cancelled) {
-            m_shutdownConfirmed = m_wasRunning;
-            finishCancelled();
-        } else {
-            fail(QStringLiteral("Steam did not close within 30 seconds"));
-        }
+    if (!m_shutdownDeadline.isForever() && m_shutdownDeadline.hasExpired()) {
+        finishShutdownTimeout();
         return;
     }
-    runHost(QStringLiteral("probe"), {}, QByteArray(), [this](int exitCode, const QByteArray &output, const QString &error) {
+
+    const qint64 remainingMs = m_shutdownDeadline.isForever() ? 10000 : m_shutdownDeadline.remainingTime();
+    if (!m_shutdownDeadline.isForever() && remainingMs <= HostTerminationGraceMs) {
+        finishShutdownTimeout();
+        return;
+    }
+    const qint64 probeBudgetMs = m_shutdownDeadline.isForever() ? 10000 : remainingMs - HostTerminationGraceMs;
+    const int probeTimeoutMs = static_cast<int>(std::min<qint64>(10000, probeBudgetMs));
+    runHost(QStringLiteral("probe"), {}, QByteArray(),
+            [this](int exitCode, const QByteArray &output, const QString &error) {
+        if (!m_shutdownDeadline.isForever() && m_shutdownDeadline.hasExpired()) {
+            finishShutdownTimeout();
+            return;
+        }
         if (exitCode != 0) {
             if (m_cancelled) {
                 scheduleSteamPoll();
             } else {
-                m_pollAttempts = 0;
                 fail(error.isEmpty() ? QStringLiteral("Steam state could not be checked") : error);
             }
             return;
@@ -493,14 +553,14 @@ void SteamShortcutManager::pollSteamStopped()
             scheduleSteamPoll();
             return;
         }
-        m_pollAttempts = 0;
+        m_shutdownDeadline = QDeadlineTimer();
         m_shutdownConfirmed = m_wasRunning;
         if (m_cancelled) {
             finishCancelled();
         } else {
             beginWrite();
         }
-    });
+    }, probeTimeoutMs);
 }
 
 void SteamShortcutManager::beginWrite()
@@ -637,25 +697,28 @@ void SteamShortcutManager::finishRegistration(bool updated, bool steamReopened)
 {
     stopSteamPoll();
     m_shutdownConfirmed = false;
-    m_pollAttempts = 0;
+    m_shutdownDeadline = QDeadlineTimer();
     m_cancelled = false;
     setPhase(Phase::Idle);
     setBusy(false);
     setStatus(steamReopened || !m_wasRunning ? QStringLiteral("Steam shortcut added")
                                                : QStringLiteral("Steam shortcut saved; Steam could not be reopened"));
     Q_EMIT registrationFinished(m_selectedProfile, updated, steamReopened);
+    if (m_wasRunning && !steamReopened) {
+        Q_EMIT errorOccurred(m_status);
+    }
 }
 
 void SteamShortcutManager::finishCancelled()
 {
     stopSteamPoll();
+    m_shutdownDeadline = QDeadlineTimer();
     if (m_shutdownConfirmed && m_wasRunning && !m_reopenAttempted && !m_root.isEmpty()) {
         m_reopenAttempted = true;
         setPhase(Phase::ReopeningSteam);
         setStatus(QStringLiteral("Reopening Steam after cancellation"));
         runHost(QStringLiteral("start"), {m_root}, QByteArray(), [this](int exitCode, const QByteArray &, const QString &) {
             m_shutdownConfirmed = false;
-            m_pollAttempts = 0;
             m_cancelled = false;
             setPhase(Phase::Idle);
             setBusy(false);
@@ -669,13 +732,27 @@ void SteamShortcutManager::finishCancelled()
     }
 
     m_shutdownConfirmed = false;
-    m_pollAttempts = 0;
     m_cancelled = false;
     setPhase(Phase::Idle);
     setBusy(false);
     setStatus(QStringLiteral("Steam registration cancelled"));
 }
 
+void SteamShortcutManager::finishShutdownTimeout()
+{
+    stopSteamPoll();
+    m_shutdownDeadline = QDeadlineTimer();
+    m_shutdownConfirmed = false;
+    if (m_cancelled) {
+        m_cancelled = false;
+        setPhase(Phase::Idle);
+        setBusy(false);
+        setStatus(QStringLiteral("Cancellation timed out; Steam may still be running"));
+        Q_EMIT errorOccurred(m_status);
+        return;
+    }
+    fail(QStringLiteral("Steam did not close within 30 seconds"));
+}
 void SteamShortcutManager::cancel()
 {
     if (!m_busy || !cancellable()) {

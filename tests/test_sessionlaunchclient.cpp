@@ -5,6 +5,8 @@
 #include <atomic>
 #include <QDBusAbstractAdaptor>
 #include <QDBusConnection>
+#include <QDBusContext>
+#include <QDBusError>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusReply>
@@ -12,8 +14,10 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <QTimer>
+#include <QUuid>
 #include <csignal>
 #include <thread>
+#include <utility>
 
 #include "CommandLineBridge.h"
 #include "SessionLaunchClient.h"
@@ -57,6 +61,151 @@ Q_SIGNALS:
 
 private:
     QString m_requestId;
+};
+
+class FailedLaunchAdaptor final : public QDBusAbstractAdaptor, protected QDBusContext
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
+
+public:
+    explicit FailedLaunchAdaptor(QObject *parent)
+        : QDBusAbstractAdaptor(parent)
+    {
+    }
+
+public Q_SLOTS:
+    bool IsReady() const
+    {
+        return true;
+    }
+
+    bool LaunchProfile(const QString &, const QString &, const QString &)
+    {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("launch transport failed"));
+        return false;
+    }
+};
+
+class ReplacingLauncherAdaptor final : public QDBusAbstractAdaptor, protected QDBusContext
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
+
+public:
+    ReplacingLauncherAdaptor(QObject *parent,
+                             QString serviceName,
+                             QDBusConnection ownerBus,
+                             QDBusConnection replacementBus)
+        : QDBusAbstractAdaptor(parent)
+        , m_serviceName(std::move(serviceName))
+        , m_ownerBus(std::move(ownerBus))
+        , m_replacementBus(std::move(replacementBus))
+    {
+    }
+
+    int launchCalls() const
+    {
+        return m_launchCalls;
+    }
+
+    int stopCalls() const
+    {
+        return m_stopCalls;
+    }
+
+    bool replacementRegistered() const
+    {
+        return m_replacementRegistered;
+    }
+
+public Q_SLOTS:
+    bool IsReady() const
+    {
+        return true;
+    }
+
+    bool LaunchProfile(const QString &, const QString &requestId, const QString &)
+    {
+        ++m_launchCalls;
+        m_requestId = requestId;
+        QTimer::singleShot(500, this, [this, requestId] { Q_EMIT LaunchFinished(requestId, 93); });
+        const QDBusMessage reply = message().createReply(true);
+        const QDBusConnection replyBus = connection();
+        setDelayedReply(true);
+        QTimer::singleShot(100, this, [this, replyBus, reply] {
+            m_ownerBus.unregisterService(m_serviceName);
+            m_replacementRegistered = m_replacementBus.registerService(m_serviceName);
+            if (!m_replacementRegistered) {
+                Q_EMIT LaunchFinished(m_requestId, 91);
+            }
+            replyBus.send(reply);
+        });
+        return false;
+    }
+
+    bool StopSession(const QString &requestId)
+    {
+        if (requestId != m_requestId) {
+            return false;
+        }
+        ++m_stopCalls;
+        Q_EMIT LaunchFinished(requestId, 41);
+        return true;
+    }
+
+Q_SIGNALS:
+    void LaunchFinished(const QString &requestId, int exitCode);
+
+private:
+    QString m_serviceName;
+    QDBusConnection m_ownerBus;
+    QDBusConnection m_replacementBus;
+    QString m_requestId;
+    int m_launchCalls = 0;
+    int m_stopCalls = 0;
+    bool m_replacementRegistered = false;
+};
+
+class ReplacementLauncherAdaptor final : public QDBusAbstractAdaptor
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
+
+public:
+    explicit ReplacementLauncherAdaptor(QObject *parent)
+        : QDBusAbstractAdaptor(parent)
+    {
+    }
+
+    int launchCalls() const
+    {
+        return m_launchCalls;
+    }
+
+public Q_SLOTS:
+    bool IsReady() const
+    {
+        return true;
+    }
+
+    bool LaunchProfile(const QString &, const QString &requestId, const QString &)
+    {
+        ++m_launchCalls;
+        Q_EMIT LaunchFinished(requestId, 89);
+        return true;
+    }
+
+    bool StopSession(const QString &)
+    {
+        return false;
+    }
+
+Q_SIGNALS:
+    void LaunchFinished(const QString &requestId, int exitCode);
+
+private:
+    int m_launchCalls = 0;
 };
 
 class TestSessionLaunchClient : public QObject
@@ -226,6 +375,101 @@ private Q_SLOTS:
         QCOMPARE(exitCode.load(), 1);
         QCOMPARE(launched.size(), 1);
         bus.unregisterObject(objectPath);
+    }
+    void testRunClassifiesLaunchRejectionSeparatelyFromTransportError()
+    {
+        auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
+        QVERIFY(application);
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        const QString service = QStringLiteral("com.github.CouchPlay.SessionLaunchRejectTest");
+        const QString objectPath = QStringLiteral("/SessionLauncher");
+        CommandLineBridge bridge;
+        QVERIFY(bus.registerObject(objectPath, &bridge, QDBusConnection::ExportAdaptors));
+        QVERIFY(bus.registerService(service));
+        bridge.setReady(true);
+
+        CommandLineRequest request;
+        request.profileName = QStringLiteral("Family");
+        request.start = true;
+        request.exitAfterSession = true;
+        std::atomic<int> exitCode{-1};
+        std::jthread client([&] { exitCode.store(SessionLaunchClient::run(*application, request, service)); });
+        QTRY_VERIFY_WITH_TIMEOUT(exitCode.load() != -1, 5000);
+        client.join();
+
+        QCOMPARE(exitCode.load(), 2);
+        bus.unregisterObject(objectPath);
+        bus.unregisterService(service);
+    }
+
+    void testRunClassifiesLaunchTransportErrorAsOperationalFailure()
+    {
+        auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
+        QVERIFY(application);
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        const QString service = QStringLiteral("com.github.CouchPlay.SessionLaunchTransportErrorTest");
+        const QString objectPath = QStringLiteral("/SessionLauncher");
+        QObject serviceObject;
+        new FailedLaunchAdaptor(&serviceObject);
+        QVERIFY(bus.registerObject(objectPath, &serviceObject, QDBusConnection::ExportAdaptors));
+        QVERIFY(bus.registerService(service));
+
+        CommandLineRequest request;
+        request.profileName = QStringLiteral("Family");
+        request.start = true;
+        request.exitAfterSession = true;
+        std::atomic<int> exitCode{-1};
+        std::jthread client([&] { exitCode.store(SessionLaunchClient::run(*application, request, service)); });
+        QTRY_VERIFY_WITH_TIMEOUT(exitCode.load() != -1, 5000);
+        client.join();
+
+        QCOMPARE(exitCode.load(), 1);
+        bus.unregisterObject(objectPath);
+        bus.unregisterService(service);
+    }
+
+    void testRunStopsAcceptedLaunchOnOwnerReplacement()
+    {
+        auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
+        QVERIFY(application);
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        const QString service = QStringLiteral("com.github.CouchPlay.SessionLaunchOwnerReplacementTest");
+        const QString objectPath = QStringLiteral("/SessionLauncher");
+        const QString ownerConnectionName = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const QString replacementConnectionName = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QDBusConnection ownerBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus, ownerConnectionName);
+        QDBusConnection replacementBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus, replacementConnectionName);
+        QVERIFY(ownerBus.isConnected());
+        QVERIFY(replacementBus.isConnected());
+        QObject ownerObject;
+        ReplacingLauncherAdaptor owner(&ownerObject, service, ownerBus, replacementBus);
+        QObject replacementObject;
+        ReplacementLauncherAdaptor replacement(&replacementObject);
+        QVERIFY(ownerBus.registerObject(objectPath, &ownerObject, QDBusConnection::ExportAdaptors));
+        QVERIFY(replacementBus.registerObject(objectPath, &replacementObject, QDBusConnection::ExportAdaptors));
+        QVERIFY(ownerBus.registerService(service));
+
+        CommandLineRequest request;
+        request.profileName = QStringLiteral("Family");
+        request.start = true;
+        request.exitAfterSession = true;
+        std::atomic<int> exitCode{-1};
+        std::jthread client([&] { exitCode.store(SessionLaunchClient::run(*application, request, service)); });
+        QTRY_VERIFY_WITH_TIMEOUT(exitCode.load() != -1, 5000);
+        client.join();
+
+        QCOMPARE(exitCode.load(), 1);
+        QCOMPARE(owner.launchCalls(), 1);
+        QCOMPARE(owner.stopCalls(), 1);
+        QCOMPARE(owner.replacementRegistered(), true);
+        QCOMPARE(replacement.launchCalls(), 0);
+        if (owner.replacementRegistered()) {
+            replacementBus.unregisterService(service);
+        }
+        ownerBus.unregisterObject(objectPath);
+        replacementBus.unregisterObject(objectPath);
+        QDBusConnection::disconnectFromBus(ownerConnectionName);
+        QDBusConnection::disconnectFromBus(replacementConnectionName);
     }
     void testRunPreservesExitStatusAfterRejectedStop()
     {
