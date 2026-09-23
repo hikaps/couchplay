@@ -375,6 +375,168 @@ private Q_SLOTS:
         QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
     }
 
+    void testDestroyingManagerCancelsDelayedHostSideEffect()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host process supervision requires Linux procfs");
+        }
+        if (::geteuid() == 0) {
+            QSKIP("host Steam script refuses to run as root");
+        }
+        HostTestHome home;
+        QVERIFY(home.ready);
+        QVERIFY(QFile::remove(home.steamRoot + QStringLiteral("/config/libraryfolders.vdf")));
+
+        const QString flatpakRoot = home.home.path()
+            + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+        QVERIFY(QDir().mkpath(flatpakRoot + QStringLiteral("/config")));
+        QVERIFY(writeFile(flatpakRoot + QStringLiteral("/config/libraryfolders.vdf"),
+                          "\"libraryfolders\" { }\n"));
+
+        const QString binDir = home.home.path() + QStringLiteral("/bin");
+        QVERIFY(QDir().mkpath(binDir));
+        QVERIFY(writeFile(binDir + QStringLiteral("/flatpak"),
+                          "#!/bin/bash\n"
+                          "[[ \"$1\" == ps ]] || exit 1\n"
+                          "( trap '' TERM; : > \"$HOME/flatpak-started\"; /bin/sleep 2; : > \"$HOME/flatpak-side-effect\" ) &\n"
+                          "wait\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", (binDir + QLatin1Char(':') + QString::fromLocal8Bit(oldPath)).toLocal8Bit());
+        struct RestorePath {
+            QByteArray value;
+            ~RestorePath()
+            {
+                if (value.isNull()) {
+                    qunsetenv("PATH");
+                } else {
+                    qputenv("PATH", value);
+                }
+            }
+        } restorePath{oldPath};
+
+        {
+            SteamShortcutManager manager;
+            manager.m_busy = true;
+            manager.m_phase = SteamShortcutManager::Phase::Probing;
+            manager.runHost(QStringLiteral("probe"), {}, QByteArray(),
+                            [](int, const QByteArray &, const QString &) {}, 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(home.home.path() + QStringLiteral("/flatpak-started")), 3000);
+        }
+
+        QTest::qWait(2500);
+        QVERIFY(!QFile::exists(home.home.path() + QStringLiteral("/flatpak-side-effect")));
+    }
+
+    void testUnknownSteamProcessStatePreservesShortcuts()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host operations require Linux procfs");
+        }
+
+        {
+            HostTestHome home;
+            QVERIFY(home.ready);
+            const QString root = home.home.path()
+                + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+            const QString configDir = root + QStringLiteral("/userdata/123/config");
+            QVERIFY(QDir().mkpath(root + QStringLiteral("/config")));
+            QVERIFY(QDir().mkpath(configDir));
+            QVERIFY(writeFile(root + QStringLiteral("/config/libraryfolders.vdf"),
+                              "\"libraryfolders\" { }\n"));
+            const QString shortcutsPath = configDir + QStringLiteral("/shortcuts.vdf");
+            const QByteArray original = "existing flatpak shortcuts";
+            QVERIFY(writeFile(shortcutsPath, original));
+            if (::geteuid() == 0) {
+                const QByteArray configPathBytes = configDir.toLocal8Bit();
+                const QByteArray shortcutPathBytes = shortcutsPath.toLocal8Bit();
+                QVERIFY(::chown(configPathBytes.constData(), 65534, 65534) == 0);
+                QVERIFY(::chmod(configPathBytes.constData(), 0777) == 0);
+                QVERIFY(::chown(shortcutPathBytes.constData(), 65534, 65534) == 0);
+            }
+
+            const QString binDir = home.home.path() + QStringLiteral("/bin");
+            QVERIFY(QDir().mkpath(binDir));
+            QVERIFY(writeFile(binDir + QStringLiteral("/flatpak"), "#!/bin/sh\nexit 1\n",
+                              QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther
+                                  | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+            QProcess process;
+            home.configure(process, QStringLiteral("commit"), {root, QStringLiteral("123"), fileHash(original)});
+            QProcessEnvironment environment = process.processEnvironment();
+            environment.insert(QStringLiteral("PATH"),
+                               binDir + QLatin1Char(':') + environment.value(QStringLiteral("PATH")));
+            process.setProcessEnvironment(environment);
+            process.start();
+            QVERIFY(process.waitForStarted(3000));
+            QVERIFY(process.waitForFinished(5000));
+            QCOMPARE(process.exitCode(), 3);
+            QVERIFY(process.readAllStandardError().contains("steam-process-state-unknown"));
+            QFile shortcuts(shortcutsPath);
+            QVERIFY(shortcuts.open(QIODevice::ReadOnly));
+            QCOMPARE(shortcuts.readAll(), original);
+            QVERIFY(!hasTemporaryFiles(configDir, QStringLiteral(".shortcuts.vdf.couchplay.*")));
+        }
+
+        {
+            HostTestHome home;
+            QVERIFY(home.ready);
+            const QByteArray original = "existing native shortcuts";
+            QVERIFY(writeFile(home.shortcutsPath, original));
+            QVERIFY(home.makeShortcutHostOwned());
+            const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
+            QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
+            QVERIFY(writeFile(binary, "#!/bin/sh\nexit 0\n",
+                              QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther
+                                  | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+
+            const QString binDir = home.home.path() + QStringLiteral("/bin");
+            QVERIFY(QDir().mkpath(binDir));
+            QVERIFY(writeFile(binDir + QStringLiteral("/readlink"), "#!/bin/sh\nexit 1\n",
+                              QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther
+                                  | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+            QProcess process;
+            home.configure(process, QStringLiteral("commit"),
+                           {home.steamRoot, QStringLiteral("123"), fileHash(original)});
+            QProcessEnvironment environment = process.processEnvironment();
+            environment.insert(QStringLiteral("PATH"),
+                               binDir + QLatin1Char(':') + environment.value(QStringLiteral("PATH")));
+            process.setProcessEnvironment(environment);
+            process.start();
+            QVERIFY(process.waitForStarted(3000));
+            QVERIFY(process.waitForFinished(5000));
+            QCOMPARE(process.exitCode(), 3);
+            QVERIFY(process.readAllStandardError().contains("steam-process-state-unknown"));
+            QFile shortcuts(home.shortcutsPath);
+            QVERIFY(shortcuts.open(QIODevice::ReadOnly));
+            QCOMPARE(shortcuts.readAll(), original);
+            QVERIFY(!hasTemporaryFiles(home.configDir, QStringLiteral(".shortcuts.vdf.couchplay.*")));
+        }
+    }
+
+    void testHostExitTrapCleansTrackedTemporaryFileOnTerm()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host signal cleanup requires Linux");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString temporaryPath = directory.path() + QStringLiteral("/in-progress");
+        QVERIFY(writeFile(temporaryPath, "partial"));
+
+        QProcess process;
+        process.setProgram(QStringLiteral("/bin/bash"));
+        process.setArguments({QStringLiteral("-c"),
+                              hostScript() + QStringLiteral("\nACTIVE_TEMP_FILE=\"$1\"\nkill -TERM \"$$\"\n"),
+                              QStringLiteral("couchplay-cleanup-test"), temporaryPath});
+        process.start();
+        QVERIFY(process.waitForStarted(3000));
+        QVERIFY(process.waitForFinished(3000));
+        QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(process.exitCode(), 143);
+        QVERIFY(!QFile::exists(temporaryPath));
+    }
+
     void testHostReadRejectsHardlinksAndOpensWithoutFollowingSymlinkRaces()
     {
         if (QSysInfo::kernelType() != QStringLiteral("linux")) {

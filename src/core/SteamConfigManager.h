@@ -179,7 +179,9 @@ public:
     bool syncShortcutsToUser(const QString &targetUsername, std::function<bool()> shouldContinue = {});
     bool shareLibraryToUser(const QString &targetUsername);
     bool cleanupLibrarySharing(const QString &targetUsername);
-    bool prepareDataDir(const DataDirectory &dir, const QString &username);
+    bool prepareDataDir(const DataDirectory &dir,
+                        const QString &username,
+                        std::function<bool()> shouldContinue = {});
     bool finalizeDataDir(const DataDirectory &dir, const QString &username);
 
 Q_SIGNALS:

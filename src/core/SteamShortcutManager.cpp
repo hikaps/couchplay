@@ -96,12 +96,44 @@ SteamShortcutManager::SteamShortcutManager(QObject *parent)
 
 SteamShortcutManager::~SteamShortcutManager()
 {
-    if (m_hostProcessGroupId > 0) {
-        ::kill(-static_cast<pid_t>(m_hostProcessGroupId), SIGKILL);
-        m_hostProcessGroupId = 0;
-    } else if (m_process) {
-        m_process->kill();
+    if (m_timeout) {
+        m_timeout->stop();
     }
+    QProcess *process = m_process;
+    if (process) {
+        QObject::disconnect(process, nullptr, this, nullptr);
+    }
+
+    pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
+    if (processGroupId <= 0 && process) {
+        processGroupId = static_cast<pid_t>(process->processId());
+    }
+    const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGTERM) == 0;
+    if (!groupSignalled && process) {
+        process->terminate();
+    }
+    if (process && process->state() != QProcess::NotRunning) {
+        if (!process->waitForFinished(HostTerminationGraceMs)) {
+            if (processGroupId > 0) {
+                ::kill(-processGroupId, SIGKILL);
+            }
+            process->kill();
+            process->waitForFinished(HostTerminationGraceMs);
+        }
+    } else if (groupSignalled) {
+        constexpr useconds_t PollIntervalUs = 50'000;
+        for (int elapsedMs = 0; elapsedMs < HostTerminationGraceMs; elapsedMs += 50) {
+            if (::kill(-processGroupId, 0) != 0) {
+                break;
+            }
+            ::usleep(PollIntervalUs);
+        }
+        if (::kill(-processGroupId, 0) == 0) {
+            ::kill(-processGroupId, SIGKILL);
+        }
+    }
+    m_hostProcessGroupId = 0;
+    m_process = nullptr;
 }
 
 QVariantList SteamShortcutManager::accounts() const

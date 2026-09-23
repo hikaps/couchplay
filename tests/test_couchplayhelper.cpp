@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include <cerrno>
+#include <functional>
+#include <utility>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -28,6 +30,10 @@ class MockSystemOps : public SystemOps
 public:
     MockSystemOps() = default;
     ~MockSystemOps() override = default;
+    void setBeforeNextRenameAt(std::function<void()> callback)
+    {
+        m_beforeNextRenameAt = std::move(callback);
+    }
 
     void setAuthResult(bool authorized)
     {
@@ -124,8 +130,9 @@ public:
         m_mockProcessStart = false;
         m_standardOutput.clear();
         m_standardError.clear();
-    }
+        m_beforeNextRenameAt = {};
 
+    }
     QStringList getLastProcessArgs() const
     {
         return m_processArgs;
@@ -329,6 +336,16 @@ public:
         return ::read(fd, buffer, count);
     }
 
+    int renameAt(int oldDirFd, const char *oldPath, int newDirFd, const char *newPath, unsigned int flags) override
+    {
+        if (m_beforeNextRenameAt) {
+            const auto callback = m_beforeNextRenameAt;
+            m_beforeNextRenameAt = {};
+            callback();
+        }
+        return SystemOps::renameAt(oldDirFd, oldPath, newDirFd, newPath, flags);
+    }
+
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override
     {
         Q_UNUSED(nameFilters)
@@ -413,6 +430,7 @@ private:
     QByteArray m_standardOutput;
     QByteArray m_standardError;
     QString m_truncateOnNextRead;
+    std::function<void()> m_beforeNextRenameAt;
 };
 
 class TestCouchPlayHelper : public QObject
@@ -1261,16 +1279,57 @@ void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
     unchanged.close();
 
     const QByteArray currentDigest = QCryptographicHash::hash(concurrentEdit, QCryptographicHash::Sha256).toHex();
+    const QByteArray renameRaceEdit = QByteArrayLiteral("Edit between compare and exchange");
+    m_ops->setBeforeNextRenameAt([&] {
+        QFile racedFile(shortcutsPath);
+        if (!racedFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return;
+        }
+        (void)racedFile.write(renameRaceEdit);
+        racedFile.close();
+    });
+    QDBusReply<bool> raceRejected = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                         username,
+                                                         steamId,
+                                                         currentDigest,
+                                                         replacement);
+    QVERIFY(!raceRejected.isValid());
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), renameRaceEdit);
+    unchanged.close();
+
+    const QByteArray stableDigest = QCryptographicHash::hash(renameRaceEdit, QCryptographicHash::Sha256).toHex();
     QDBusReply<bool> committed = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
                                                       username,
                                                       steamId,
-                                                      currentDigest,
+                                                      stableDigest,
                                                       replacement);
     QVERIFY2(committed.isValid(), qPrintable(committed.error().message()));
     QVERIFY(committed.value());
     QVERIFY(unchanged.open(QIODevice::ReadOnly));
     QCOMPARE(unchanged.readAll(), replacement);
     unchanged.close();
+
+    QVERIFY(QFile::remove(shortcutsPath));
+    const QByteArray missingRaceEdit = QByteArrayLiteral("Steam created before no-replace");
+    m_ops->setBeforeNextRenameAt([&] {
+        QFile racedFile(shortcutsPath);
+        if (!racedFile.open(QIODevice::WriteOnly)) {
+            return;
+        }
+        (void)racedFile.write(missingRaceEdit);
+        racedFile.close();
+    });
+    QDBusReply<bool> missingRaceRejected = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                                username,
+                                                                steamId,
+                                                                QByteArrayLiteral("missing"),
+                                                                concurrentEdit);
+    QVERIFY(!missingRaceRejected.isValid());
+    QFile missingWinner(shortcutsPath);
+    QVERIFY(missingWinner.open(QIODevice::ReadOnly));
+    QCOMPARE(missingWinner.readAll(), missingRaceEdit);
+    missingWinner.close();
 
     QVERIFY(QFile::remove(shortcutsPath));
     QDBusReply<bool> created = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),

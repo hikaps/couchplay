@@ -15,6 +15,10 @@ cleanup_temporary_files() {
     fi
 }
 trap cleanup_temporary_files EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 131' QUIT
+trap 'exit 143' TERM
 
 fail() {
     printf '%s\n' "$2" >&2
@@ -95,27 +99,38 @@ steam_binary() {
 }
 
 steam_running() {
-    local root=$1 kind pid exe candidate canonical uid
+    local root=$1 kind pid exe candidate canonical uid process_list process_uid
     local -a native_binaries=()
     kind=$(root_kind "$root")
     uid=$(id -u)
     if [[ "$kind" == flatpak ]]; then
         if ! command -v flatpak >/dev/null 2>&1; then
-            return 1
+            fail 3 "steam-process-state-unknown"
+            return 3
         fi
-        while IFS= read -r pid; do
-            [[ -r "/proc/$pid/status" ]] || continue
-            [[ "$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" == "$uid" ]] && return 0
-        done < <(flatpak ps --columns=application,pid 2>/dev/null | awk -v app="$STEAM_APP_ID" '$1 == app {print $2}')
+        if ! process_list=$(flatpak ps --columns=application,pid 2>/dev/null); then
+            fail 3 "steam-process-state-unknown"
+            return 3
+        fi
+        while read -r candidate pid _; do
+            [[ "$candidate" == "$STEAM_APP_ID" ]] || continue
+            [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { fail 3 "steam-process-state-unknown"; return 3; }
+            [[ -e "/proc/$pid/status" ]] || continue
+            [[ -r "/proc/$pid/status" ]] || { fail 3 "steam-process-state-unknown"; return 3; }
+            process_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)
+            [[ -n "$process_uid" ]] || { fail 3 "steam-process-state-unknown"; return 3; }
+            [[ "$process_uid" == "$uid" ]] && return 0
+        done <<< "$process_list"
         return 1
     fi
 
     for candidate in "$root/ubuntu12_64/steam" "$root/ubuntu12_32/steam"; do
         [[ -x "$candidate" ]] || continue
-        canonical=$(readlink -f -- "$candidate" 2>/dev/null || true)
-        [[ -n "$canonical" ]] && native_binaries+=("$canonical")
+        canonical=$(readlink -f -- "$candidate" 2>/dev/null) || { fail 3 "steam-process-state-unknown"; return 3; }
+        [[ -n "$canonical" ]] || { fail 3 "steam-process-state-unknown"; return 3; }
+        native_binaries+=("$canonical")
     done
-    ((${#native_binaries[@]})) || return 1
+    ((${#native_binaries[@]})) || { fail 3 "steam-process-state-unknown"; return 3; }
 
     for pid in /proc/[0-9]*; do
         pid=${pid##*/}
@@ -129,13 +144,25 @@ steam_running() {
     return 1
 }
 
+steam_must_be_stopped() {
+    local root=$1 runningError=$2 status
+    if steam_running "$root"; then
+        fail 4 "$runningError"
+        return 4
+    else
+        status=$?
+    fi
+    [[ "$status" == 1 ]] && return 0
+    return "$status"
+}
+
 emit_field() {
     printf '%s\0' "$1"
 }
 
 probe() {
     require_user
-    local home data_home root account kind running uid
+    local home data_home root account kind running uid state
     home=$(home_dir)
     data_home=${XDG_DATA_HOME:-$home/.local/share}
     [[ "$data_home" == /* ]] || fail 2 "invalid-data-home"
@@ -147,7 +174,13 @@ probe() {
     if is_game_mode; then emit_field G; emit_field 1; else emit_field G; emit_field 0; fi
     while IFS= read -r root; do
         kind=$(root_kind "$root")
-        if steam_running "$root"; then running=1; else running=0; fi
+        if steam_running "$root"; then
+            running=1
+        else
+            state=$?
+            [[ "$state" == 1 ]] || return "$state"
+            running=0
+        fi
         emit_field I
         emit_field "$root"
         emit_field "$kind"
@@ -255,17 +288,17 @@ commit_shortcuts() {
     if [[ -e "$path" || -L "$path" ]]; then
         [[ -f "$path" && ! -L "$path" && "$(stat -c '%u' -- "$path")" == "$(id -u)" && "$(stat -c '%h' -- "$path")" == 1 ]] || fail 4 "unsafe-shortcuts-file"
     fi
-    steam_running "$root" && fail 4 "steam-still-running"
+    steam_must_be_stopped "$root" "steam-still-running"
     assert_expected "$path" "$expected"
-    temp=$(mktemp "$config_fd/.shortcuts.vdf.couchplay.XXXXXX")
-    ACTIVE_TEMP_FILE=$temp
+    ACTIVE_TEMP_FILE=$(mktemp "$config_fd/.shortcuts.vdf.couchplay.XXXXXX")
+    temp=$ACTIVE_TEMP_FILE
     head -c "$((MAX_DOCUMENT_SIZE + 1))" >"$temp"
     [[ "$(stat -c '%s' -- "$temp")" -le "$MAX_DOCUMENT_SIZE" ]] || fail 4 "shortcuts-file-too-large"
     chmod 600 "$temp"
     if [[ -e "$path" ]]; then
         mode=$(stat -c '%a' -- "$path")
-        backup_temp=$(mktemp "$config_fd/.shortcuts.vdf.couchplay-backup.XXXXXX")
-        ACTIVE_BACKUP_TEMP_FILE=$backup_temp
+        ACTIVE_BACKUP_TEMP_FILE=$(mktemp "$config_fd/.shortcuts.vdf.couchplay-backup.XXXXXX")
+        backup_temp=$ACTIVE_BACKUP_TEMP_FILE
         cp -- "$path" "$backup_temp"
         chmod 600 "$backup_temp"
         mv -fT -- "$backup_temp" "$config_fd/shortcuts.vdf.couchplay-backup"
@@ -275,7 +308,7 @@ commit_shortcuts() {
     account_valid "$root" "$account" || fail 4 "unsafe-account-path"
     config_path_identity=$(stat -c '%d:%i' -- "$config") || fail 4 "unsafe-account-path"
     [[ "$config_fd_identity" == "$config_path_identity" ]] || fail 4 "unsafe-account-path"
-    steam_running "$root" && fail 4 "steam-started-during-write"
+    steam_must_be_stopped "$root" "steam-started-during-write"
     assert_expected "$path" "$expected"
     mv -fT -- "$temp" "$path"
     ACTIVE_TEMP_FILE=""
@@ -332,8 +365,8 @@ export_payload() {
     if [[ -e "$target" || -L "$target" ]]; then
         [[ -f "$target" && ! -L "$target" ]] || fail 3 "unsafe-export-target"
     fi
-    temp=$(mktemp "$output_dir_fd/.export.XXXXXX")
-    ACTIVE_TEMP_FILE=$temp
+    ACTIVE_TEMP_FILE=$(mktemp "$output_dir_fd/.export.XXXXXX")
+    temp=$ACTIVE_TEMP_FILE
     head -c "$((MAX_DOCUMENT_SIZE + 1))" >"$temp"
     [[ "$(stat -c '%s' -- "$temp")" -le "$MAX_DOCUMENT_SIZE" ]] || fail 3 "export-payload-too-large"
     if [[ "$kind" == icon ]]; then chmod 600 "$temp"; else chmod 700 "$temp"; fi
@@ -348,9 +381,16 @@ export_payload() {
 
 shutdown_steam() {
     require_user
-    local root=$1 binary
+    local root=$1 binary state
     is_game_mode && fail 2 "game-mode-restart-refused"
     root_valid "$root" || fail 3 "invalid-steam-root"
+    if steam_running "$root"; then
+        :
+    else
+        state=$?
+        [[ "$state" == 1 ]] && return 0
+        return "$state"
+    fi
     if [[ "$(root_kind "$root")" == native ]]; then
         binary=$(steam_binary "$root") || fail 3 "steam-binary-not-found"
         "$binary" -shutdown >/dev/null 2>&1 || true
@@ -361,9 +401,16 @@ shutdown_steam() {
 
 start_steam() {
     require_user
-    local root=$1 binary deadline
+    local root=$1 binary deadline state
     is_game_mode && fail 2 "game-mode-restart-refused"
     root_valid "$root" || fail 3 "invalid-steam-root"
+    if steam_running "$root"; then
+        printf '%s\n' started
+        return 0
+    else
+        state=$?
+        [[ "$state" == 1 ]] || return "$state"
+    fi
     if [[ "$(root_kind "$root")" == native ]]; then
         binary=$(steam_binary "$root") || fail 3 "steam-binary-not-found"
         nohup "$binary" >/dev/null 2>&1 </dev/null &
@@ -376,6 +423,9 @@ start_steam() {
         if steam_running "$root"; then
             printf '%s\n' started
             return 0
+        else
+            state=$?
+            [[ "$state" == 1 ]] || return "$state"
         fi
         sleep 0.25
     done

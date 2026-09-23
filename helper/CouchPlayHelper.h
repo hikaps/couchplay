@@ -413,9 +413,10 @@ public Q_SLOTS:
     QByteArray ReadSteamShortcutsForUser(const QString &username, const QString &steamId);
 
     /**
-     * Atomically replace shortcuts only if the selected account still matches
-     * the snapshot read before merging. Use "missing" when no file existed,
-     * otherwise pass the lowercase SHA-256 hex digest of its bytes.
+     * Best-effort snapshot validation: atomic exchange detects edits present
+     * at the exchange point but does not lock out later external Steam writes.
+     * Callers must keep Steam stopped for the duration. Use "missing" when no
+     * file existed; otherwise pass its lowercase SHA-256 digest.
      */
     bool WriteSteamShortcutsForUser(const QString &username,
                                     const QString &steamId,

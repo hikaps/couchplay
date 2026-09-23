@@ -1000,8 +1000,15 @@ bool SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
     return true;
 }
 
-bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString &username)
+bool SteamConfigManager::prepareDataDir(const DataDirectory &dir,
+                                        const QString &username,
+                                        std::function<bool()> shouldContinue)
 {
+    const auto canContinue = [&shouldContinue] { return !shouldContinue || shouldContinue(); };
+    if (!canContinue()) {
+        return false;
+    }
+
     // Library sharing: overlay mode on steamRoot
     if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
         && dir.path == m_steamPaths.steamRoot) {
@@ -1012,6 +1019,9 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
 
         if (m_libraries.isEmpty()) {
             loadLibraryFolders();
+        }
+        if (!canContinue()) {
+            return false;
         }
         if (m_libraries.isEmpty()) {
             qCWarning(couchplaySteam) << "prepareDataDir: No Steam libraries loaded";
@@ -1024,10 +1034,19 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
 
         bool anyFailure = false;
         for (const SteamLibraryFolder &library : m_libraries) {
+            if (!canContinue()) {
+                return false;
+            }
             const QString sourceCommon = library.path + QStringLiteral("/steamapps/common");
             qCDebug(couchplaySteam) << "prepareDataDir: Setting ACL on" << sourceCommon << "for" << username;
             const bool parentAclOk = m_helperClient->setPathAclWithParents(sourceCommon, username);
+            if (!canContinue()) {
+                return false;
+            }
             const bool contentAclOk = m_helperClient->setDirectoryAcl(sourceCommon, username, true);
+            if (!canContinue()) {
+                return false;
+            }
             if (!parentAclOk || !contentAclOk) {
                 qCWarning(couchplaySteam) << "prepareDataDir: Failed to set recursive ACL on" << sourceCommon;
                 anyFailure = true;
@@ -1037,12 +1056,31 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
         // Mount only game content. The library root can contain the
         // compositor's Steam account, userdata, and configuration, none of
         // which should be exposed to a player.
+        bool mountedAnyLibrary = false;
+        const auto rollbackMounts = [&] {
+            if (mountedAnyLibrary && m_helperClient && m_helperClient->isAvailable()) {
+                m_helperClient->unmountAllSharedDirectories();
+                mountedAnyLibrary = false;
+            }
+        };
         for (int i = 0; i < m_libraries.size(); ++i) {
+            if (!canContinue()) {
+                rollbackMounts();
+                return false;
+            }
             const QString sourceCommon = m_libraries[i].path + QStringLiteral("/steamapps/common");
             const QString alias =
                 QStringLiteral(".couchplay/steam-libs/%1/steamapps/common").arg(QString::number(i));
             qCDebug(couchplaySteam) << "prepareDataDir: Overlaying" << sourceCommon << "at" << alias << "for" << username;
-            if (!m_helperClient->setupOverlayMount(username, sourceCommon, alias)) {
+            const bool mounted = m_helperClient->setupOverlayMount(username, sourceCommon, alias);
+            if (mounted) {
+                mountedAnyLibrary = true;
+            }
+            if (!canContinue()) {
+                rollbackMounts();
+                return false;
+            }
+            if (!mounted) {
                 qCWarning(couchplaySteam) << "prepareDataDir: Failed to mount library content" << sourceCommon;
                 anyFailure = true;
             }

@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 CouchPlay Contributors
 
 #include <QByteArray>
-#include <QDBusInterface>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QObject>
@@ -24,7 +24,9 @@
 #include "SteamConfigManager.h"
 #include "SteamShortcutsVdf.h"
 
+#include <atomic>
 #include <functional>
+#include <thread>
 namespace {
 void appendString(QByteArray &data, const QByteArray &key, const QByteArray &value)
 {

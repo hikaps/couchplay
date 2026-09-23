@@ -17,6 +17,7 @@
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 /**
@@ -54,6 +55,14 @@ public:
     virtual ssize_t read(int fd, void *buffer, size_t count)
     {
         return ::read(fd, buffer, count);
+    }
+    virtual int renameAt(int oldDirFd,
+                         const char *oldPath,
+                         int newDirFd,
+                         const char *newPath,
+                         unsigned int flags)
+    {
+        return static_cast<int>(::syscall(SYS_renameat2, oldDirFd, oldPath, newDirFd, newPath, flags));
     }
     // Device path validation
     virtual bool statPath(const QString &path, struct stat *buf) = 0;

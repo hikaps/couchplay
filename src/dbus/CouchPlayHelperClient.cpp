@@ -12,6 +12,7 @@
 #include <QDBusReply>
 #include <QEventLoop>
 #include <QDebug>
+#include <QTimer>
 
 static const QString SERVICE_NAME = QStringLiteral("io.github.hikaps.CouchPlayHelper");
 static const QString OBJECT_PATH = QStringLiteral("/io/github/hikaps/CouchPlayHelper");

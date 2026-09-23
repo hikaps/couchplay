@@ -21,6 +21,14 @@ Kirigami.Dialog {
     property bool restartConfirmed: false
     property bool completed: false
     property string errorText: ""
+    property int messageType: Kirigami.MessageType.Error
+    property bool registrationReopenWarning: false
+    property bool hasSteamAccounts: (manager?.accounts?.length ?? 0) > 0
+
+    onOpened: {
+        root.registrationReopenWarning = false
+        root.messageType = Kirigami.MessageType.Error
+    }
 
     function selectedAccount() {
         const accounts = root.manager ? root.manager.accounts : []
@@ -39,13 +47,19 @@ Kirigami.Dialog {
         function onRegistrationFinished(name, updated, steamReopened) {
             if (name !== root.profileName) return
             const account = root.selectedAccount()
+            root.registrationReopenWarning = !!account && account.running && !steamReopened
             root.completed = true
-            root.errorText = !account || (account.running && !steamReopened)
+            root.messageType = root.registrationReopenWarning
+                ? Kirigami.MessageType.Warning
+                : Kirigami.MessageType.Positive
+            root.errorText = root.registrationReopenWarning
                 ? i18nc("@info", "Profile saved, but Steam could not be reopened.")
                 : i18nc("@info", "Profile added to Steam.")
         }
         function onErrorOccurred(message) {
+            if (root.registrationReopenWarning) return
             root.errorText = message
+            root.messageType = Kirigami.MessageType.Error
         }
     }
 
@@ -59,15 +73,29 @@ Kirigami.Dialog {
         }
 
         Kirigami.InlineMessage {
+            objectName: "messageSteamGameMode"
+            Accessible.name: text
             Layout.fillWidth: true
             visible: root.manager?.gameMode ?? false
             type: Kirigami.MessageType.Warning
             text: i18nc("@info", "Switch to Desktop Mode to add this profile to Steam.")
         }
 
+        Kirigami.InlineMessage {
+            objectName: "messageNoSteamAccounts"
+            Accessible.name: text
+            Layout.fillWidth: true
+            visible: !(root.manager?.gameMode ?? false) && !root.hasSteamAccounts
+            type: Kirigami.MessageType.Warning
+            text: i18nc(
+                "@info",
+                "No Steam accounts were found. Install Steam and sign in to an account, then close this dialog and select Add to Steam again."
+            )
+        }
+
         Controls.Label {
             Layout.fillWidth: true
-            visible: !(root.manager?.gameMode ?? false)
+            visible: !(root.manager?.gameMode ?? false) && root.hasSteamAccounts
             text: i18nc("@label", "Steam account")
         }
 
@@ -76,7 +104,7 @@ Kirigami.Dialog {
             objectName: "comboSteamAccount"
             Accessible.name: i18nc("@label", "Steam account")
             Layout.fillWidth: true
-            visible: !(root.manager?.gameMode ?? false)
+            visible: !(root.manager?.gameMode ?? false) && root.hasSteamAccounts
             model: root.manager ? root.manager.accounts : []
             textRole: "label"
             onCurrentIndexChanged: root.restartConfirmed = false
@@ -86,7 +114,7 @@ Kirigami.Dialog {
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             visible: root.errorText !== ""
-            type: root.completed ? Kirigami.MessageType.Positive : Kirigami.MessageType.Error
+            type: root.messageType
             text: root.errorText
         }
 
@@ -106,7 +134,7 @@ Kirigami.Dialog {
 
         RowLayout {
             Layout.fillWidth: true
-            visible: !(root.manager?.gameMode ?? false)
+            visible: !(root.manager?.gameMode ?? false) && root.hasSteamAccounts
             spacing: Kirigami.Units.smallSpacing
 
             Controls.Button {
@@ -140,9 +168,15 @@ Kirigami.Dialog {
                 enabled: root.selectedAccount() !== null && !root.manager?.busy
                 text: i18nc("@action:button", "Open Steam")
                 onClicked: {
-                    if (root.selectedAccount()) root.manager.openSteam(comboSteamAccount.currentIndex)
+                    if (root.selectedAccount()) {
+                        root.registrationReopenWarning = false
+                        root.errorText = ""
+                        root.messageType = Kirigami.MessageType.Error
+                        root.manager.openSteam(comboSteamAccount.currentIndex)
+                    }
                 }
             }
         }
     }
 }
+

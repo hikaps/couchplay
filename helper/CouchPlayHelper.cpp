@@ -27,6 +27,7 @@
 #include <QSaveFile>
 #include <QThread>
 
+#include <linux/fs.h>
 #include <linux/input.h>
 #include <fcntl.h>
 #include <QSocketNotifier>
@@ -2994,9 +2995,9 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
     }
 
     const QByteArray leafBytes = leafName.toLocal8Bit();
-    auto readCurrentDigest = [&](QByteArray &digest) {
+    auto readDigestAt = [&](const QByteArray &name, QByteArray &digest) {
         const int fileFd = ::openat(parentFd,
-                                    leafBytes.constData(),
+                                    name.constData(),
                                     O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
         if (fileFd < 0) {
             if (errno == ENOENT) {
@@ -3042,7 +3043,7 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
     };
 
     QByteArray currentDigest;
-    if (!readCurrentDigest(currentDigest)) {
+    if (!readDigestAt(leafBytes, currentDigest)) {
         ::close(parentFd);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file is unsafe or changed while being read"));
         return false;
@@ -3103,18 +3104,56 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
     }
 
     QByteArray confirmedDigest;
-    if (!readCurrentDigest(confirmedDigest) || confirmedDigest != expectedDigest) {
+    if (!readDigestAt(leafBytes, confirmedDigest) || confirmedDigest != expectedDigest) {
         ::unlinkat(parentFd, temporaryBytes.constData(), 0);
         ::close(parentFd);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed during sync"));
         return false;
     }
-    if (::renameat(parentFd, temporaryBytes.constData(), parentFd, leafBytes.constData()) != 0) {
+    // Exchange exposes the displaced inode for verification; callers must quiesce Steam.
+    const unsigned int replacementFlags = expectedDigest == QByteArrayLiteral("missing")
+        ? RENAME_NOREPLACE
+        : RENAME_EXCHANGE;
+    if (m_ops->renameAt(parentFd,
+                        temporaryBytes.constData(),
+                        parentFd,
+                        leafBytes.constData(),
+                        replacementFlags) != 0) {
+        const bool snapshotConflict = expectedDigest == QByteArrayLiteral("missing") && errno == EEXIST;
         ::unlinkat(parentFd, temporaryBytes.constData(), 0);
         ::close(parentFd);
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not atomically replace Steam shortcuts file"));
+        sendErrorReply(QDBusError::Failed,
+                       snapshotConflict ? QStringLiteral("Steam shortcuts file changed during sync")
+                                        : QStringLiteral("Could not atomically replace Steam shortcuts file"));
         return false;
     }
+
+    if (expectedDigest != QByteArrayLiteral("missing")) {
+        QByteArray displacedDigest;
+        const bool displacedFileIsExpected = readDigestAt(temporaryBytes, displacedDigest)
+            && displacedDigest == expectedDigest;
+        if (!displacedFileIsExpected) {
+            const bool restored = m_ops->renameAt(parentFd,
+                                                  temporaryBytes.constData(),
+                                                  parentFd,
+                                                  leafBytes.constData(),
+                                                  RENAME_EXCHANGE) == 0;
+            if (restored) {
+                ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+            } else {
+                qWarning() << "WriteSteamShortcutsForUser: concurrent snapshot retained at" << temporaryName;
+            }
+            ::close(parentFd);
+            sendErrorReply(QDBusError::Failed,
+                           restored ? QStringLiteral("Steam shortcuts file changed during sync")
+                                    : QStringLiteral("Steam shortcuts changed during sync; concurrent snapshot retained"));
+            return false;
+        }
+        if (::unlinkat(parentFd, temporaryBytes.constData(), 0) != 0) {
+            qWarning() << "WriteSteamShortcutsForUser: Could not remove previous snapshot" << temporaryName;
+        }
+    }
+
     (void)::fsync(parentFd);
     ::close(parentFd);
     return true;

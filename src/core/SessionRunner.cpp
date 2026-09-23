@@ -134,33 +134,44 @@ void SessionRunner::runHook(const QString &path, bool postHook)
         return;
     }
 
-    m_hookProcess = new QProcess(this);
-    m_hookProcess->setProcessChannelMode(QProcess::MergedChannels);
-    connect(m_hookProcess, &QProcess::finished, this, &SessionRunner::onHookFinished);
-    connect(m_hookProcess, &QProcess::errorOccurred, this, &SessionRunner::onHookError);
+    const quint64 hookGeneration = m_startupGeneration;
+    QProcess *const process = new QProcess(this);
+    m_hookProcess = process;
+    process->setProcessChannelMode(QProcess::MergedChannels);
+    connect(process, &QProcess::finished, this,
+            [this, process, hookGeneration](int exitCode, QProcess::ExitStatus exitStatus) {
+        onHookFinished(process, hookGeneration, exitCode, exitStatus);
+    });
+    connect(process, &QProcess::errorOccurred, this,
+            [this, process, hookGeneration](QProcess::ProcessError error) {
+        onHookError(process, hookGeneration, error);
+    });
 
     if (isFlatpak) {
-        m_hookProcess->setProgram(QStringLiteral("/usr/bin/flatpak-spawn"));
-        m_hookProcess->setArguments({QStringLiteral("--host"), QStringLiteral("--watch-bus"), path});
+        process->setProgram(QStringLiteral("/usr/bin/flatpak-spawn"));
+        process->setArguments({QStringLiteral("--host"), QStringLiteral("--watch-bus"), path});
     } else {
-        m_hookProcess->setProgram(path);
-        m_hookProcess->setArguments({});
+        process->setProgram(path);
+        process->setArguments({});
     }
-    m_hookProcess->start();
+    process->start();
 }
 
-void SessionRunner::onHookFinished(int exitCode, QProcess::ExitStatus exitStatus)
+void SessionRunner::onHookFinished(QProcess *process,
+                                   quint64 generation,
+                                   int exitCode,
+                                   QProcess::ExitStatus exitStatus)
 {
-    if (!m_hookProcess) {
+    if (m_hookProcess != process || generation != m_startupGeneration) {
         return;
     }
-    const QByteArray output = m_hookProcess->readAll();
+    const QByteArray output = process->readAll();
     if (!output.isEmpty()) {
         qCDebug(couchplayCore) << "Session hook output:" << output.trimmed();
     }
     const bool postHook = m_hookIsPost;
-    const QString program = m_hookProcess->program();
-    m_hookProcess->deleteLater();
+    const QString program = process->program();
+    process->deleteLater();
     m_hookProcess = nullptr;
 
     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
@@ -185,14 +196,14 @@ void SessionRunner::onHookFinished(int exitCode, QProcess::ExitStatus exitStatus
     }
 }
 
-void SessionRunner::onHookError(QProcess::ProcessError error)
+void SessionRunner::onHookError(QProcess *process, quint64 generation, QProcess::ProcessError error)
 {
-    if (!m_hookProcess || error != QProcess::FailedToStart) {
+    if (m_hookProcess != process || generation != m_startupGeneration || error != QProcess::FailedToStart) {
         return;
     }
     const bool postHook = m_hookIsPost;
-    const QString program = m_hookProcess->program();
-    m_hookProcess->deleteLater();
+    const QString program = process->program();
+    process->deleteLater();
     m_hookProcess = nullptr;
     const QString message = QStringLiteral("%1-session script failed to start: %2")
         .arg(postHook ? QStringLiteral("Post") : QStringLiteral("Pre"), program);
@@ -1166,7 +1177,8 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                 // Finalization writes manifests and libraryfolders.vdf
                 // entries for the alias mounts — skip it when preparation
                 // failed, or it would advertise libraries that never mounted.
-                const bool steamLibraryPrepared = m_steamConfigManager->prepareDataDir(dir, username);
+                const bool steamLibraryPrepared =
+                    m_steamConfigManager->prepareDataDir(dir, username, isCurrentStartup);
                 if (!isCurrentStartup()) {
                     return false;
                 }
@@ -1195,7 +1207,8 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
             }
 
             if (requiresSteam && m_steamConfigManager) {
-                const bool steamDataPrepared = m_steamConfigManager->prepareDataDir(dir, username);
+                const bool steamDataPrepared =
+                    m_steamConfigManager->prepareDataDir(dir, username, isCurrentStartup);
                 if (!isCurrentStartup()) {
                     return false;
                 }
@@ -1621,19 +1634,35 @@ void SessionRunner::onInstanceStarted()
 void SessionRunner::onInstanceStopped()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
-    if (!instance) {
+    if (!instance || !m_instances.contains(instance)) {
         return;
     }
 
+    const quint64 stopGeneration = m_startupGeneration;
     const int idx = instance->index();
     if (m_streamingInstances.contains(idx)) {
         m_streamManager->stopStream(idx);
+        if (stopGeneration != m_startupGeneration) {
+            return;
+        }
         cleanupStreamingInstance(idx);
+        if (stopGeneration != m_startupGeneration) {
+            return;
+        }
     }
 
     Q_EMIT instanceStopped(idx);
+    if (stopGeneration != m_startupGeneration) {
+        return;
+    }
     Q_EMIT instancesChanged();
+    if (stopGeneration != m_startupGeneration) {
+        return;
+    }
     Q_EMIT runningInstanceCountChanged();
+    if (stopGeneration != m_startupGeneration) {
+        return;
+    }
 
     if (!m_finalizing && !isRunning()) {
         beginFinalization(false);

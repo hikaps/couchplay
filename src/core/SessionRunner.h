@@ -204,10 +204,13 @@ private Q_SLOTS:
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
     void startNextInstance();
-    void onHookFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void onHookError(QProcess::ProcessError error);
 
 private:
+    void onHookFinished(QProcess *process,
+                        quint64 generation,
+                        int exitCode,
+                        QProcess::ExitStatus exitStatus);
+    void onHookError(QProcess *process, quint64 generation, QProcess::ProcessError error);
     void setStatus(const QString &status);
     void cleanupInstances();
     void continueStart();

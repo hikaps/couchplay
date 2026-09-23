@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QList>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -84,7 +85,8 @@ public:
     int shortcutReadCalls = 0;
     int shortcutWriteCalls = 0;
     std::function<void()> onShortcutRead;
-
+    QStringList mountedOverlayAliases;
+    std::function<void()> onOverlayMount;
     explicit MockCouchPlayHelperClient(QObject *parent = nullptr)
         : CouchPlayHelperClient(parent)
     {
@@ -139,6 +141,12 @@ public:
     bool setupOverlayMount(const QString &username, const QString &sourceDir, const QString &targetAlias) override
     {
         overlayCalls.append({username, sourceDir, targetAlias});
+        if (onOverlayMount) {
+            auto callback = onOverlayMount;
+            onOverlayMount = {};
+            callback();
+        }
+        mountedOverlayAliases.append(targetAlias);
         return true;
     }
 
@@ -164,6 +172,7 @@ public:
     int unmountAllSharedDirectories() override
     {
         unmountAllCalls++;
+        mountedOverlayAliases.clear();
         return 0;
     }
 
@@ -300,6 +309,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesMirrorsStagedData();
     void testSetupDataDirectoriesLibrarySharingGate();
     void testSetupDataDirectoriesSecondaryLibrariesMounted();
+    void testCancelSteamLibraryPreparationRollsBackMounts();
     void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
@@ -313,6 +323,8 @@ private Q_SLOTS:
     void testSessionStoppedHandlerCanStartNewSession();
     void testActiveChangedStartRestartDoesNotRunObsoleteSetup();
     void testActiveChangedRestartDoesNotEmitStaleFinalizationSignals();
+    void testStaleHookEventsCannotAffectReplacementHook();
+    void testInstanceStoppedReentrancyDoesNotFinalizeReplacementSession();
     void testStreamingSetupFailureDoesNotFinalizeReplacementSession();
     void testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch();
 private:
@@ -1253,6 +1265,159 @@ void TestSessionRunner::testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch()
     QVERIFY(m_helperClient->launchCommands.isEmpty());
     QVERIFY(!m_runner->isActive());
     QVERIFY(m_runner->m_startupGeneration > 7);
+}
+
+void TestSessionRunner::testCancelSteamLibraryPreparationRollsBackMounts()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    const QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+    const QString secondaryLibrary = homeDir.path() + QStringLiteral("/secondary-library");
+    QVERIFY(QDir().mkpath(secondaryLibrary + QStringLiteral("/steamapps")));
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n{\n"
+                     "  \"0\"\n  {\n"
+                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
+                     "  }\n  \"1\"\n  {\n"
+                     "    \"path\"\t\t\"" + secondaryLibrary.toUtf8() + "\"\n"
+                     "  }\n}\n");
+    libraryVdf.close();
+
+    auto *steamManager = new SteamConfigManager(this);
+    steamManager->setHelperClient(m_helperClient);
+    steamManager->setShareLibraryEnabled(true);
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+    QVariantMap steamRootDir;
+    steamRootDir.insert(QStringLiteral("path"), steamRoot);
+    steamRootDir.insert(QStringLiteral("mode"), QStringLiteral("overlay"));
+    QVariantList dataDirectories;
+    dataDirectories.append(steamRootDir);
+    m_sessionManager->setInstanceDataDirectories(0, dataDirectories);
+
+    m_helperClient->onOverlayMount = [this] { m_runner->stop(); };
+    QVERIFY(m_runner->start());
+
+    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
+    QCOMPARE(m_helperClient->mountedOverlayAliases.size(), 0);
+
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(!m_runner->m_finalizing);
+}
+
+void TestSessionRunner::testStaleHookEventsCannotAffectReplacementHook()
+{
+    QTemporaryDir scriptDir;
+    QVERIFY(scriptDir.isValid());
+    const QString scriptPath = scriptDir.filePath(QStringLiteral("blocking-hook.sh"));
+    QFile script(scriptPath);
+    QVERIFY(script.open(QIODevice::WriteOnly | QIODevice::Text));
+    script.write("#!/bin/sh\nexec sleep 20\n");
+    script.close();
+    QVERIFY(script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    m_runner->runHook(scriptPath, false);
+    QProcess *staleErrorProcess = m_runner->m_hookProcess;
+    QVERIFY(staleErrorProcess);
+    QTRY_COMPARE_WITH_TIMEOUT(staleErrorProcess->state(), QProcess::Running, 2000);
+    auto *replacementHook = new QProcess(m_runner);
+    m_runner->m_hookProcess = replacementHook;
+    QVERIFY(QMetaObject::invokeMethod(staleErrorProcess,
+                                      "errorOccurred",
+                                      Qt::DirectConnection,
+                                      Q_ARG(QProcess::ProcessError, QProcess::FailedToStart)));
+    QCOMPARE(m_runner->m_hookProcess, replacementHook);
+    QCOMPARE(failedSpy.count(), 0);
+    QVERIFY(QMetaObject::invokeMethod(staleErrorProcess,
+                                      "finished",
+                                      Qt::DirectConnection,
+                                      Q_ARG(int, 0),
+                                      Q_ARG(QProcess::ExitStatus, QProcess::NormalExit)));
+    QCOMPARE(m_runner->m_hookProcess, replacementHook);
+    staleErrorProcess->kill();
+    staleErrorProcess->waitForFinished(2000);
+
+    m_runner->m_hookProcess = nullptr;
+    m_runner->runHook(scriptPath, false);
+    QProcess *staleGenerationProcess = m_runner->m_hookProcess;
+    QVERIFY(staleGenerationProcess);
+    QTRY_COMPARE_WITH_TIMEOUT(staleGenerationProcess->state(), QProcess::Running, 2000);
+    ++m_runner->m_startupGeneration;
+    QVERIFY(QMetaObject::invokeMethod(staleGenerationProcess,
+                                      "finished",
+                                      Qt::DirectConnection,
+                                      Q_ARG(int, 0),
+                                      Q_ARG(QProcess::ExitStatus, QProcess::NormalExit)));
+    QCOMPARE(m_runner->m_hookProcess, staleGenerationProcess);
+    QVERIFY(!m_runner->m_preHookCompleted);
+    QCOMPARE(failedSpy.count(), 0);
+    QVERIFY(QMetaObject::invokeMethod(staleGenerationProcess,
+                                      "errorOccurred",
+                                      Qt::DirectConnection,
+                                      Q_ARG(QProcess::ProcessError, QProcess::FailedToStart)));
+    QCOMPARE(m_runner->m_hookProcess, staleGenerationProcess);
+    QVERIFY(!m_runner->m_preHookCompleted);
+    staleGenerationProcess->kill();
+    staleGenerationProcess->waitForFinished(2000);
+    m_runner->m_hookProcess = nullptr;
+}
+
+void TestSessionRunner::testInstanceStoppedReentrancyDoesNotFinalizeReplacementSession()
+{
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    int startedCount = 0;
+    connect(m_runner, &SessionRunner::sessionStarted, m_runner, [this, &startedCount] {
+        ++startedCount;
+        if (startedCount == 2 && !m_runner->m_instances.isEmpty()) {
+            m_runner->m_instances.first()->m_helperPid = 0;
+        }
+    });
+
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+    bool restartFromStop = false;
+    bool restartAccepted = false;
+    connect(m_runner, &SessionRunner::sessionStopped, m_runner, [this, &restartFromStop, &restartAccepted] {
+        if (!restartFromStop) {
+            restartFromStop = true;
+            restartAccepted = m_runner->start();
+        }
+    });
+
+    bool stopFromInstanceSignal = false;
+    connect(m_runner, &SessionRunner::instanceStopped, m_runner, [this, &stopFromInstanceSignal](int) {
+        if (!stopFromInstanceSignal) {
+            stopFromInstanceSignal = true;
+            m_runner->stop();
+        }
+    });
+
+    QVERIFY(m_runner->start());
+    QCOMPARE(startedCount, 1);
+    QVERIFY(!m_runner->m_instances.isEmpty());
+    GamescopeInstance *stoppedInstance = m_runner->m_instances.first();
+    stoppedInstance->m_helperPid = 0;
+    const quint64 stoppedGeneration = m_runner->m_startupGeneration;
+    QVERIFY(QMetaObject::invokeMethod(stoppedInstance, "stopped", Qt::DirectConnection));
+
+    QVERIFY(stopFromInstanceSignal);
+    QVERIFY(restartFromStop);
+    QVERIFY(restartAccepted);
+    QCOMPARE(startedCount, 2);
+    QCOMPARE(stoppedSpy.count(), 1);
+    QVERIFY(m_runner->isActive());
+    QVERIFY(!m_runner->m_finalizing);
+    QVERIFY(m_runner->m_startupGeneration > stoppedGeneration);
+
+    m_runner->stop();
 }
 
 QTEST_MAIN(TestSessionRunner)
