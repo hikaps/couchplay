@@ -500,8 +500,13 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &input, QByteArray *res
         const Entry &existingEntry = document.entries.at(matchingIndex);
         const SteamShortcut existing = toShortcut(existingEntry);
         shortcut.appId = existing.appId;
-        *result = bytes.left(existingEntry.start) + replaceEntry(bytes, existingEntry, shortcut)
+        const QByteArray updated = bytes.left(existingEntry.start) + replaceEntry(bytes, existingEntry, shortcut)
             + bytes.mid(existingEntry.end);
+        if (updated.size() > MaxDocumentSize) {
+            setError(errorMessage, QStringLiteral("Updated shortcuts.vdf exceeds the size limit"));
+            return false;
+        }
+        *result = updated;
         return true;
     }
 
@@ -528,9 +533,14 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &input, QByteArray *res
         ++shortcut.appId;
         shortcut.appId |= 0x80000000u;
     }
-
     const QByteArray newEntry = canonicalEntry(shortcut, QString::number(index));
-    *result = bytes.left(document.rootEnd) + newEntry + bytes.mid(document.rootEnd);
+
+    const QByteArray updated = bytes.left(document.rootEnd) + newEntry + bytes.mid(document.rootEnd);
+    if (updated.size() > MaxDocumentSize) {
+        setError(errorMessage, QStringLiteral("Updated shortcuts.vdf exceeds the size limit"));
+        return false;
+    }
+    *result = updated;
     return true;
 }
 

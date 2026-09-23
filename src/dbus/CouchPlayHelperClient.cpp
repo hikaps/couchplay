@@ -6,7 +6,10 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDBusReply>
+#include <QEventLoop>
 #include <QDebug>
 
 static const QString SERVICE_NAME = QStringLiteral("io.github.hikaps.CouchPlayHelper");
@@ -243,8 +246,18 @@ bool CouchPlayHelperClient::readSteamShortcutsForUser(const QString &username, Q
         return false;
     }
 
-    QDBusReply<QByteArray> reply = m_interface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
-    if (!reply.isValid()) {
+    QDBusMessage message = QDBusMessage::createMethodCall(
+        SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, QStringLiteral("ReadSteamShortcutsForUser"));
+    message << username;
+    QDBusPendingCall pending = QDBusConnection::systemBus().asyncCall(message, 30000);
+    QDBusPendingCallWatcher watcher(pending);
+    QEventLoop waitForReply;
+    QObject::connect(&watcher, &QDBusPendingCallWatcher::finished, &waitForReply, &QEventLoop::quit);
+    if (!watcher.isFinished()) {
+        waitForReply.exec();
+    }
+    QDBusPendingReply<QByteArray> reply = watcher;
+    if (reply.isError()) {
         Q_EMIT errorOccurred(reply.error().message());
         return false;
     }

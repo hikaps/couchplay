@@ -48,6 +48,10 @@ public:
     {
         m_standardError = output;
     }
+    void truncateOnNextRead(const QString &path)
+    {
+        m_truncateOnNextRead = path;
+    }
     void
     setUserExists(const QString &username, bool exists, uint uid = 0, gid_t gid = 0, const QString &home = QString())
     {
@@ -314,6 +318,16 @@ public:
         return m_standardOutput;
     }
 
+    ssize_t read(int fd, void *buffer, size_t count) override
+    {
+        if (!m_truncateOnNextRead.isEmpty()) {
+            const QByteArray path = m_truncateOnNextRead.toLocal8Bit();
+            m_truncateOnNextRead.clear();
+            ::truncate(path.constData(), 1);
+        }
+        return ::read(fd, buffer, count);
+    }
+
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override
     {
         Q_UNUSED(nameFilters)
@@ -397,6 +411,7 @@ private:
     bool m_mockProcessStart = false;
     QByteArray m_standardOutput;
     QByteArray m_standardError;
+    QString m_truncateOnNextRead;
 };
 
 class TestCouchPlayHelper : public QObject
@@ -442,7 +457,7 @@ private Q_SLOTS:
     void testIsSteamBootstrappedTrue();
     void testIsSteamBootstrappedFalse();
     void testReadSteamShortcutsForUser();
-
+    void testReadSteamShortcutsMissingSteamDirectories();
     // Copy directory tests
     void testCopyDirectoryToUserAbsoluteTarget();
     void testCopyDirectoryToUserTraversalTarget();
@@ -966,7 +981,10 @@ void TestCouchPlayHelper::testReadSteamShortcutsForUser()
         m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
     QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
     QCOMPARE(reply.value(), expected);
-
+    m_ops->truncateOnNextRead(shortcutsPath);
+    QDBusReply<QByteArray> truncated =
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+    QVERIFY(!truncated.isValid());
     m_ops->setAuthResult(false);
     QDBusReply<QByteArray> denied =
         m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
@@ -996,6 +1014,31 @@ void TestCouchPlayHelper::testReadSteamShortcutsForUser()
     QDBusReply<QByteArray> symlinked =
         m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
     QVERIFY(!symlinked.isValid());
+}
+void TestCouchPlayHelper::testReadSteamShortcutsMissingSteamDirectories()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    const QString username = QStringLiteral("player1");
+    const uid_t owner = ::getuid();
+    const gid_t group = ::getgid();
+    m_ops->clear();
+    m_ops->setUserExists(username, true, owner, group, home.path());
+
+    QDBusReply<QByteArray> missingRoot =
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+    QVERIFY(missingRoot.isValid());
+    QVERIFY(missingRoot.value().isEmpty());
+
+    const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
+    QVERIFY(QDir().mkpath(steamRoot));
+    m_ops->setFileExists(steamRoot, true);
+
+    QDBusReply<QByteArray> missingUserdata =
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username);
+    QVERIFY(missingUserdata.isValid());
+    QVERIFY(missingUserdata.value().isEmpty());
 }
 
 void TestCouchPlayHelper::testCopyDirectoryToUserAbsoluteTarget()

@@ -154,6 +154,7 @@ QString SteamShortcutManager::profileIdentity() const
 
 void SteamShortcutManager::fail(const QString &message)
 {
+    stopSteamPoll();
     if (m_cancelled) {
         finishCancelled();
         return;
@@ -284,6 +285,7 @@ bool SteamShortcutManager::prepare(const QString &requestedProfile)
         return false;
     }
 
+    stopSteamPoll();
     m_cancelled = false;
     m_shutdownConfirmed = false;
     m_pollAttempts = 0;
@@ -387,6 +389,7 @@ void SteamShortcutManager::addToSteam(int accountIndex, bool allowRestart)
         return;
     }
 
+    stopSteamPoll();
     m_cancelled = false;
     m_shutdownConfirmed = false;
     m_pollAttempts = 0;
@@ -429,11 +432,46 @@ void SteamShortcutManager::addToSteam(int accountIndex, bool allowRestart)
     }
 }
 
+void SteamShortcutManager::stopSteamPoll()
+{
+    ++m_pollGeneration;
+    if (!m_pollTimer) {
+        return;
+    }
+    m_pollTimer->stop();
+    m_pollTimer->deleteLater();
+    m_pollTimer = nullptr;
+}
+
+void SteamShortcutManager::scheduleSteamPoll()
+{
+    stopSteamPoll();
+    const quint64 generation = m_pollGeneration;
+    auto *timer = new QTimer(this);
+    timer->setSingleShot(true);
+    m_pollTimer = timer;
+    connect(timer, &QTimer::timeout, this, [this, timer, generation] {
+        if (m_pollTimer == timer) {
+            m_pollTimer = nullptr;
+        }
+        timer->deleteLater();
+        if (generation != m_pollGeneration || m_phase != Phase::ClosingSteam) {
+            return;
+        }
+        pollSteamStopped();
+    });
+    timer->start(250);
+}
+
 void SteamShortcutManager::pollSteamStopped()
 {
+    if (m_phase != Phase::ClosingSteam || !m_busy) {
+        return;
+    }
     if (++m_pollAttempts > 120) {
         m_pollAttempts = 0;
         if (m_cancelled) {
+            m_shutdownConfirmed = m_wasRunning;
             finishCancelled();
         } else {
             fail(QStringLiteral("Steam did not close within 30 seconds"));
@@ -442,31 +480,25 @@ void SteamShortcutManager::pollSteamStopped()
     }
     runHost(QStringLiteral("probe"), {}, QByteArray(), [this](int exitCode, const QByteArray &output, const QString &error) {
         if (exitCode != 0) {
-            m_pollAttempts = 0;
             if (m_cancelled) {
-                finishCancelled();
+                scheduleSteamPoll();
             } else {
+                m_pollAttempts = 0;
                 fail(error.isEmpty() ? QStringLiteral("Steam state could not be checked") : error);
             }
             return;
         }
         parseProbe(output);
-        const bool running = selectedAccountRunning();
-        if (running) {
-            if (m_cancelled) {
-                m_pollAttempts = 0;
-                finishCancelled();
-            } else {
-                QTimer::singleShot(250, this, &SteamShortcutManager::pollSteamStopped);
-            }
+        if (selectedAccountRunning()) {
+            scheduleSteamPoll();
+            return;
+        }
+        m_pollAttempts = 0;
+        m_shutdownConfirmed = m_wasRunning;
+        if (m_cancelled) {
+            finishCancelled();
         } else {
-            m_pollAttempts = 0;
-            m_shutdownConfirmed = m_wasRunning;
-            if (m_cancelled) {
-                finishCancelled();
-            } else {
-                beginWrite();
-            }
+            beginWrite();
         }
     });
 }
@@ -603,6 +635,7 @@ void SteamShortcutManager::reopenSteam(bool success, bool updated)
 
 void SteamShortcutManager::finishRegistration(bool updated, bool steamReopened)
 {
+    stopSteamPoll();
     m_shutdownConfirmed = false;
     m_pollAttempts = 0;
     m_cancelled = false;
@@ -615,6 +648,7 @@ void SteamShortcutManager::finishRegistration(bool updated, bool steamReopened)
 
 void SteamShortcutManager::finishCancelled()
 {
+    stopSteamPoll();
     if (m_shutdownConfirmed && m_wasRunning && !m_reopenAttempted && !m_root.isEmpty()) {
         m_reopenAttempted = true;
         setPhase(Phase::ReopeningSteam);
@@ -650,6 +684,10 @@ void SteamShortcutManager::cancel()
     m_cancelled = true;
     setStatus(QStringLiteral("Cancelling Steam registration"));
     if (m_phase == Phase::ClosingSteam) {
+        if (!m_process) {
+            stopSteamPoll();
+            pollSteamStopped();
+        }
         return;
     }
     if (m_process) {

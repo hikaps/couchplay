@@ -177,39 +177,41 @@ assert_expected() {
 
 commit_shortcuts() {
     require_user
-    local root=$1 account=$2 expected=$3 path config lock temp backup_temp mode lock_fd_identity lock_path_identity
+    local root=$1 account=$2 expected=$3 path config config_fd config_fd_identity config_path_identity temp backup_temp mode
     account_valid "$root" "$account" || fail 3 "invalid-account"
-    path="$root/userdata/$account/config/shortcuts.vdf"
-    config=$(dirname -- "$path")
-    if [[ -e "$path" ]]; then
-        [[ -f "$path" && ! -L "$path" && "$(stat -c '%u' -- "$path")" == "$(id -u)" && "$(stat -c '%h' -- "$path")" == 1 ]] || fail 4 "unsafe-shortcuts-file"
-    fi
-    mkdir -p -- "$config"
-    lock="$config/shortcuts.vdf.couchplay.lock"
-    [[ ! -L "$lock" ]] || fail 4 "unsafe-lock-file"
-    exec 9>>"$lock"
-    [[ ! -L "$lock" && -f "$lock" ]] || fail 4 "unsafe-lock-file"
-    lock_fd_identity=$(stat -Lc '%d:%i' "/proc/$BASHPID/fd/9") || fail 4 "unsafe-lock-file"
-    lock_path_identity=$(stat -c '%d:%i' -- "$lock") || fail 4 "unsafe-lock-file"
-    [[ "$lock_fd_identity" == "$lock_path_identity" ]] || fail 4 "unsafe-lock-file"
+    config="$root/userdata/$account/config"
+    exec 9<"$config" || fail 3 "unsafe-account-path"
+    config_fd="/proc/$BASHPID/fd/9"
+    config_fd_identity=$(stat -Lc '%d:%i' -- "$config_fd") || fail 4 "unsafe-account-path"
+    config_path_identity=$(stat -c '%d:%i' -- "$config") || fail 4 "unsafe-account-path"
+    [[ "$config_fd_identity" == "$config_path_identity" ]] || fail 4 "unsafe-account-path"
     flock -n 9 || fail 4 "shortcuts-busy"
     account_valid "$root" "$account" || fail 4 "unsafe-account-path"
+    config_path_identity=$(stat -c '%d:%i' -- "$config") || fail 4 "unsafe-account-path"
+    [[ "$config_fd_identity" == "$config_path_identity" ]] || fail 4 "unsafe-account-path"
+
+    path="$config_fd/shortcuts.vdf"
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ -f "$path" && ! -L "$path" && "$(stat -c '%u' -- "$path")" == "$(id -u)" && "$(stat -c '%h' -- "$path")" == 1 ]] || fail 4 "unsafe-shortcuts-file"
+    fi
     steam_running "$root" && fail 4 "steam-still-running"
     assert_expected "$path" "$expected"
-    temp=$(mktemp "$config/.shortcuts.vdf.couchplay.XXXXXX")
+    temp=$(mktemp "$config_fd/.shortcuts.vdf.couchplay.XXXXXX")
     trap 'rm -f -- "${temp:-}" "${backup_temp:-}"' RETURN
     cat >"$temp"
     [[ "$(stat -c '%s' -- "$temp")" -le "$MAX_DOCUMENT_SIZE" ]] || fail 4 "shortcuts-file-too-large"
     chmod 600 "$temp"
     if [[ -e "$path" ]]; then
         mode=$(stat -c '%a' -- "$path")
-        backup_temp=$(mktemp "$config/.shortcuts.vdf.couchplay-backup.XXXXXX")
+        backup_temp=$(mktemp "$config_fd/.shortcuts.vdf.couchplay-backup.XXXXXX")
         cp -- "$path" "$backup_temp"
         chmod 600 "$backup_temp"
-        mv -fT -- "$backup_temp" "$config/shortcuts.vdf.couchplay-backup"
+        mv -fT -- "$backup_temp" "$config_fd/shortcuts.vdf.couchplay-backup"
         chmod "$mode" "$temp"
     fi
     account_valid "$root" "$account" || fail 4 "unsafe-account-path"
+    config_path_identity=$(stat -c '%d:%i' -- "$config") || fail 4 "unsafe-account-path"
+    [[ "$config_fd_identity" == "$config_path_identity" ]] || fail 4 "unsafe-account-path"
     steam_running "$root" && fail 4 "steam-started-during-write"
     mv -fT -- "$temp" "$path"
     trap - RETURN
@@ -218,7 +220,8 @@ commit_shortcuts() {
 
 export_payload() {
     require_user
-    local identity=$1 kind=$2 home data_dir output_dir output target
+    local identity=$1 kind=$2 home data_dir canonical_data_dir app_dir app_dir_fd app_fd_identity app_path_identity
+    local output_dir output_dir_fd output_fd_identity output_path_identity output_owner output target temp uid
     [[ "$identity" =~ ^[0-9a-f]{64}$ ]] || fail 2 "invalid-profile-identity"
     case "$kind" in
         launcher) output="$identity.sh" ;;
@@ -229,21 +232,53 @@ export_payload() {
     home=$(home_dir)
     data_dir=${XDG_DATA_HOME:-$home/.local/share}
     [[ "$data_dir" == /* ]] || fail 2 "invalid-data-home"
-    output_dir="$data_dir/couchplay/steam-shortcuts"
-    mkdir -p -- "$output_dir"
-    chmod 700 "$data_dir/couchplay" "$output_dir"
-    target="$output_dir/$output"
+    mkdir -p -- "$data_dir" || fail 3 "unsafe-export-directory"
+    canonical_data_dir=$(realpath -e -- "$data_dir") || fail 3 "unsafe-export-directory"
+    uid=$(id -u)
+    [[ -d "$canonical_data_dir" && "$(stat -c '%u' -- "$canonical_data_dir")" == "$uid" ]] || fail 3 "unsafe-export-directory"
+
+    app_dir="$canonical_data_dir/couchplay"
+    if [[ ! -e "$app_dir" && ! -L "$app_dir" ]]; then
+        mkdir -m 700 -- "$app_dir" 2>/dev/null || true
+    fi
+    [[ -d "$app_dir" && ! -L "$app_dir" && "$(realpath -e -- "$app_dir")" == "$app_dir" ]] || fail 3 "unsafe-export-directory"
+    exec 8<"$app_dir" || fail 3 "unsafe-export-directory"
+    app_dir_fd="/proc/$BASHPID/fd/8"
+    app_fd_identity=$(stat -Lc '%d:%i' -- "$app_dir_fd") || fail 3 "unsafe-export-directory"
+    app_path_identity=$(stat -c '%d:%i' -- "$app_dir") || fail 3 "unsafe-export-directory"
+    [[ "$app_fd_identity" == "$app_path_identity" && "$(stat -Lc '%u' -- "$app_dir_fd")" == "$uid" ]] || fail 3 "unsafe-export-directory"
+    chmod 700 "$app_dir_fd" || fail 3 "unsafe-export-directory"
+
+    output_dir="$app_dir_fd/steam-shortcuts"
+    if [[ ! -e "$output_dir" && ! -L "$output_dir" ]]; then
+        mkdir -m 700 -- "$output_dir" 2>/dev/null || true
+    fi
+    [[ -d "$output_dir" && ! -L "$output_dir" \
+        && "$(realpath -e -- "$output_dir")" == "$canonical_data_dir/couchplay/steam-shortcuts" ]] \
+        || fail 3 "unsafe-export-directory"
+    exec 9<"$output_dir" || fail 3 "unsafe-export-directory"
+    output_dir_fd="/proc/$BASHPID/fd/9"
+    output_fd_identity=$(stat -Lc '%d:%i' -- "$output_dir_fd") || fail 3 "unsafe-export-directory"
+    output_path_identity=$(stat -c '%d:%i' -- "$output_dir") || fail 3 "unsafe-export-directory"
+    output_owner=$(stat -Lc '%u' -- "$output_dir_fd") || fail 3 "unsafe-export-directory"
+    [[ "$output_fd_identity" == "$output_path_identity" && "$output_owner" == "$uid" ]] || fail 3 "unsafe-export-directory"
+    chmod 700 "$output_dir_fd" || fail 3 "unsafe-export-directory"
+
+    target="$output_dir_fd/$output"
     if [[ -e "$target" || -L "$target" ]]; then
         [[ -f "$target" && ! -L "$target" ]] || fail 3 "unsafe-export-target"
     fi
-    local temp
-    temp=$(mktemp "$output_dir/.export.XXXXXX")
+    temp=$(mktemp "$output_dir_fd/.export.XXXXXX")
     trap 'rm -f -- "$temp"' RETURN
     cat >"$temp"
     if [[ "$kind" == icon ]]; then chmod 600 "$temp"; else chmod 700 "$temp"; fi
+    app_path_identity=$(stat -c '%d:%i' -- "$app_dir") || fail 3 "unsafe-export-directory"
+    output_path_identity=$(stat -c '%d:%i' -- "$output_dir") || fail 3 "unsafe-export-directory"
+    [[ "$app_fd_identity" == "$app_path_identity" && "$output_fd_identity" == "$output_path_identity" ]] \
+        || fail 3 "unsafe-export-directory"
     mv -fT -- "$temp" "$target"
     trap - RETURN
-    printf '%s\n' "$target"
+    printf '%s\n' "$canonical_data_dir/couchplay/steam-shortcuts/$output"
 }
 
 shutdown_steam() {

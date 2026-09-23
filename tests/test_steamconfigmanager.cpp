@@ -213,6 +213,48 @@ private Q_SLOTS:
         QCOMPARE(loaded.constLast().icon, QStringLiteral("/tmp/user-artwork.png"));
         QCOMPARE(loaded.constLast().tags, QStringList{QStringLiteral("Favorites")});
     }
+    void testUpsertRejectsOversizedOutputs()
+    {
+        SteamShortcut shortcut;
+        shortcut.appName = QStringLiteral("CouchPlay - Size Boundary");
+        shortcut.exe = QStringLiteral("/tmp/couchplay-profile.sh");
+        shortcut.startDir = QStringLiteral("/tmp");
+        shortcut.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('9'));
+
+        QString error;
+        const QByteArray foreignName("Foreign Game");
+        QByteArray insertionSource = documentWithForeignEntry();
+        const qsizetype foreignNameSize = SteamShortcutsVdf::MaxDocumentSize - insertionSource.size()
+            + foreignName.size();
+        insertionSource.replace(foreignName, QByteArray(foreignNameSize, 'x'));
+        QCOMPARE(insertionSource.size(), SteamShortcutsVdf::MaxDocumentSize);
+        QList<SteamShortcut> decoded;
+        QVERIFY2(SteamShortcutsVdf::decode(insertionSource, &decoded, &error), qPrintable(error));
+
+        QByteArray result("unchanged");
+        QVERIFY(!SteamShortcutsVdf::upsert(insertionSource, shortcut, &result, &error));
+        QCOMPARE(result, QByteArray("unchanged"));
+        QVERIFY(!error.isEmpty());
+
+        QByteArray replacementSource;
+        QVERIFY2(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), shortcut, &replacementSource, &error),
+                 qPrintable(error));
+        const QByteArray originalName = shortcut.appName.toUtf8();
+        const QByteArray prefix("CouchPlay - ");
+        const qsizetype longNameSize = SteamShortcutsVdf::MaxDocumentSize - replacementSource.size()
+            + originalName.size() - 1;
+        const QByteArray longName = prefix + QByteArray(longNameSize - prefix.size(), 'y');
+        replacementSource.replace(originalName, longName);
+        QCOMPARE(replacementSource.size(), SteamShortcutsVdf::MaxDocumentSize - 1);
+        QVERIFY2(SteamShortcutsVdf::decode(replacementSource, &decoded, &error), qPrintable(error));
+
+        shortcut.appName = QString::fromUtf8(longName + QByteArray("xx"));
+        result = QByteArray("unchanged");
+        QVERIFY(!SteamShortcutsVdf::upsert(replacementSource, shortcut, &result, &error));
+        QCOMPARE(result, QByteArray("unchanged"));
+        QVERIFY(!error.isEmpty());
+    }
+
     void testLoadGamesMergesNativeAndShortcut()
     {
         QTemporaryDir home;

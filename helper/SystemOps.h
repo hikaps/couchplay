@@ -51,7 +51,10 @@ public:
     virtual bool removeFile(const QString &path) = 0;
     virtual bool copyFile(const QString &source, const QString &dest) = 0;
     virtual bool writeFile(const QString &path, const QByteArray &content) = 0;
-
+    virtual ssize_t read(int fd, void *buffer, size_t count)
+    {
+        return ::read(fd, buffer, count);
+    }
     // Device path validation
     virtual bool statPath(const QString &path, struct stat *buf) = 0;
     virtual bool isCharDevice(mode_t mode) = 0;

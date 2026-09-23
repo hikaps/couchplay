@@ -2839,7 +2839,6 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username)
     const QString steamRoot = GetUserSteamRoot(username);
     const QString steamId = GetUserSteamId(username);
     if (steamRoot.isEmpty() || steamId.isEmpty()) {
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam is not initialized for '%1'").arg(username));
         return {};
     }
 
@@ -2894,7 +2893,7 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username)
     content.reserve(static_cast<qsizetype>(st.st_size));
     char buffer[64 * 1024];
     while (true) {
-        const ssize_t bytesRead = ::read(fileFd, buffer, sizeof(buffer));
+        const ssize_t bytesRead = m_ops->read(fileFd, buffer, sizeof(buffer));
         if (bytesRead == 0) {
             break;
         }
@@ -2907,6 +2906,15 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username)
             return {};
         }
         content.append(buffer, static_cast<qsizetype>(bytesRead));
+    }
+    struct stat finalStat;
+    const bool readChanged = ::fstat(fileFd, &finalStat) != 0 || finalStat.st_size != st.st_size
+        || finalStat.st_mtim.tv_sec != st.st_mtim.tv_sec || finalStat.st_mtim.tv_nsec != st.st_mtim.tv_nsec
+        || finalStat.st_ctim.tv_sec != st.st_ctim.tv_sec || finalStat.st_ctim.tv_nsec != st.st_ctim.tv_nsec;
+    if (readChanged || content.size() != st.st_size) {
+        ::close(fileFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed while being read"));
+        return {};
     }
     ::close(fileFd);
     return content;

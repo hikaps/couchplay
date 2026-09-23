@@ -434,6 +434,9 @@ void SessionRunner::continueStart()
 
 
     if (!setupSessionResources()) {
+        if (m_finalizing || !m_active) {
+            return;
+        }
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
         return;
     }
@@ -917,7 +920,11 @@ bool SessionRunner::setupSessionResources()
                     qCWarning(couchplaySteam) << "Failed to set ACL on shortcut directory" << dir;
                 }
             }
-            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
+            const bool synced = m_steamConfigManager->syncShortcutsToUser(username);
+            if (m_finalizing) {
+                return false;
+            }
+            if (!synced) {
                 qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
                 allSucceeded = false;
             }

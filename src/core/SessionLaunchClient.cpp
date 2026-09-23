@@ -12,6 +12,7 @@
 #include <QEventLoop>
 #include <QSocketNotifier>
 #include <QThread>
+#include <QTimer>
 #include <QUuid>
 
 #include <cerrno>
@@ -153,6 +154,14 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
     bool serviceLost = false;
     bool stopSent = false;
     DbusSignalReceiver receiver;
+    QTimer stopRejectedTimeout;
+    stopRejectedTimeout.setSingleShot(true);
+    QObject::connect(&stopRejectedTimeout, &QTimer::timeout, &loop, [&] {
+        if (!completed && !serviceLost) {
+            result = 1;
+            loop.quit();
+        }
+    });
     QDBusServiceWatcher watcher(serviceName, bus, QDBusServiceWatcher::WatchForUnregistration);
 
     QObject::connect(&receiver, &DbusSignalReceiver::launchFinished, &loop,
@@ -186,9 +195,10 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
         }
         stopSent = true;
         const QDBusMessage stopReply = interface.call(QStringLiteral("StopSession"), requestId);
-        if (stopReply.type() == QDBusMessage::ErrorMessage || stopReply.arguments().value(0).toBool() == false) {
-            result = 1;
-            loop.quit();
+        if (stopReply.type() == QDBusMessage::ErrorMessage || !stopReply.arguments().value(0).toBool()) {
+            // The owner may have completed the request before processing StopSession.
+            // Let an already-queued LaunchFinished/unregistration determine the result.
+            stopRejectedTimeout.start(500);
         }
     }));
     Q_UNUSED(termination)
@@ -206,6 +216,7 @@ int SessionLaunchClient::run(QApplication &application, const CommandLineRequest
     if (!completed && !serviceLost) {
         loop.exec();
     }
+    stopRejectedTimeout.stop();
     bus.disconnect(serviceName,
                    QStringLiteral("/SessionLauncher"),
                    QStringLiteral("com.github.CouchPlay.SessionLauncher"),

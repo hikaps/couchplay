@@ -90,6 +90,8 @@ private:
     void exportLauncher();
     void commitShortcut();
     void pollSteamStopped();
+    void scheduleSteamPoll();
+    void stopSteamPoll();
     void reopenSteam(bool success, bool updated);
     void finishRegistration(bool updated, bool steamReopened);
     QString profileIdentity() const;
@@ -116,6 +118,7 @@ private:
     Phase m_phase = Phase::Idle;
     QProcess *m_process = nullptr;
     QTimer *m_timeout = nullptr;
+    QTimer *m_pollTimer = nullptr;
     std::function<void(int, const QByteArray &, const QString &)> m_hostCallback;
     bool m_busy = false;
     bool m_gameMode = false;
@@ -123,6 +126,7 @@ private:
     bool m_reopenAttempted = false;
     bool m_shutdownConfirmed = false;
     int m_pollAttempts = 0;
+    quint64 m_pollGeneration = 0;
     bool m_cancelled = false;
     QString m_status;
 };

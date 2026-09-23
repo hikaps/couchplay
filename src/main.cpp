@@ -103,6 +103,7 @@ int main(int argc, char *argv[])
         return 2;
     }
     const bool waitingLaunch = initialRequest.start && initialRequest.exitAfterSession;
+    const QString serviceName = QStringLiteral("com.github.CouchPlay");
     CommandLineBridge commandLineBridge;
     if (!QDBusConnection::sessionBus().registerObject(QStringLiteral("/SessionLauncher"),
                                                        &commandLineBridge,
@@ -111,12 +112,14 @@ int main(int argc, char *argv[])
                    << QDBusConnection::sessionBus().lastError().message();
         return 1;
     }
+    // Claim the well-known name atomically before KDBusService can forward
+    // command-line activation and exit this process on a duplicate instance.
+    if (waitingLaunch && !QDBusConnection::sessionBus().registerService(serviceName)) {
+        return SessionLaunchClient::run(app, initialRequest, serviceName);
+    }
     KDBusService service(KDBusService::Unique | KDBusService::NoExitOnFailure);
     if (!service.isRegistered()) {
-        if (waitingLaunch) {
-            return SessionLaunchClient::run(app, initialRequest, QStringLiteral("com.github.CouchPlay"));
-        }
-        return 0;
+        return waitingLaunch ? SessionLaunchClient::run(app, initialRequest, serviceName) : 0;
     }
 
     QApplication::setStyle(QStringLiteral("breeze"));

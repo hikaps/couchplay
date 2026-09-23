@@ -7,6 +7,7 @@ from helpers.base_test import BaseTest
 
 import json
 import os
+import subprocess
 import time
 
 # These exercise the mock D-Bus helper (system bus) + pre-created users; skip in
@@ -226,3 +227,24 @@ class TestSessionLifecycle(BaseTest):
         # Dialog + field don't expose objectName -> NAME (confirm button + label)
         self.wait_for_element(driver, AppiumBy.NAME, "Create User", LONG_TIMEOUT)
         self.wait_for_element(driver, AppiumBy.NAME, "Username", LONG_TIMEOUT)
+
+    def test_duplicate_waiting_launch_uses_running_instance(self, driver, mock_helper):
+        executable = os.environ.get("COUCHPLAY_APP_ID")
+        assert executable and os.path.isfile(executable)
+        completed = subprocess.run(
+            [
+                executable,
+                "--profile",
+                "Missing Steam Shortcut Profile",
+                "--start",
+                "--exit-after-session",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=LONG_TIMEOUT,
+        )
+        assert completed.returncode == 2, (
+            f"duplicate launch returned {completed.returncode}; stdout={completed.stdout!r} "
+            f"stderr={completed.stderr!r}"
+        )
