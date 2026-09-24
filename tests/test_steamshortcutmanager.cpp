@@ -416,7 +416,7 @@ private Q_SLOTS:
         manager.m_process = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
     }
-    void testDestructionKillsDescendantsAfterProcessLeaderExits()
+    void testDestructionKillsDescendantsWithoutExplicitCancel()
     {
         if (QSysInfo::kernelType() != QStringLiteral("linux")) {
             QSKIP("process-group cleanup requires Linux procfs");
@@ -453,9 +453,6 @@ private Q_SLOTS:
             QVERIFY(manager.m_hostProcessGroupStartTime > 0);
             manager.m_phase = SteamShortcutManager::Phase::Probing;
             manager.m_busy = true;
-            manager.cancel();
-            QVERIFY(process.waitForFinished(3000));
-            manager.m_process = nullptr;
         }
         QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
     }

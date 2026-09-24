@@ -218,7 +218,11 @@ SteamShortcutManager::~SteamShortcutManager()
     }
 
     QList<HostProcessGroup> signalledGroups;
-    for (const HostProcessGroup &group : groups) {
+    for (HostProcessGroup &group : groups) {
+        if (group.processGroupId > 0 && group.leaderStartTime > 0 && group.witnesses.isEmpty()
+            && processStartTime(static_cast<pid_t>(group.processGroupId)) == group.leaderStartTime) {
+            group.witnesses = processGroupWitnesses(static_cast<pid_t>(group.processGroupId));
+        }
         const bool identityMatches = processGroupIdentityMatches(group.processGroupId,
                                                                  group.leaderStartTime,
                                                                  group.termSignalled,
@@ -226,6 +230,7 @@ SteamShortcutManager::~SteamShortcutManager()
         const bool groupSignalled = group.processGroupId > 0 && identityMatches
             && ::kill(-static_cast<pid_t>(group.processGroupId), SIGTERM) == 0;
         if (groupSignalled) {
+            group.termSignalled = true;
             signalledGroups.append(group);
         } else if (group.process && group.process->state() != QProcess::NotRunning) {
             group.process->terminate();
@@ -246,7 +251,8 @@ SteamShortcutManager::~SteamShortcutManager()
                 groupProcess->kill();
                 groupProcess->waitForFinished(HostTerminationGraceMs);
             }
-        } else if (std::any_of(signalledGroups.cbegin(), signalledGroups.cend(),
+        }
+        if (std::any_of(signalledGroups.cbegin(), signalledGroups.cend(),
                                [&group](const HostProcessGroup &signalled) {
             return signalled.generation == group.generation
                 && signalled.processGroupId == group.processGroupId;
