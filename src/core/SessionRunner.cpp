@@ -300,6 +300,18 @@ bool SessionRunner::start()
         return false;
     }
 
+    // A previous session may have finished while helper cleanup was
+    // unavailable. Retry before arming a replacement session; otherwise the
+    // new setup would overwrite the pending Steam snapshots or mount state.
+    restoreDeviceOwnership();
+    teardownSharingState();
+    teardownStreamingInstances();
+    if (m_sharedStateActive || !m_steamSharedUsers.isEmpty() || !m_ownedDevicePaths.isEmpty()
+        || !m_streamingInstances.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("Previous session resources are still pending cleanup"));
+        return false;
+    }
+
     const quint64 startupGeneration = ++m_startupGeneration;
     const auto isCurrentStart = [this, startupGeneration] {
         return startupGeneration == m_startupGeneration && !m_finalizing;
@@ -753,15 +765,28 @@ void SessionRunner::stop()
 
 void SessionRunner::stopInstance(int index)
 {
-    if (index >= 0 && index < m_instances.size()) {
-        bool isStreaming = m_streamingInstances.contains(index);
-        if (isStreaming) {
-            m_streamManager->stopStream(index);
-        }
-        m_instances[index]->stop();
-        if (isStreaming) {
-            cleanupStreamingInstance(index);
-        }
+    if (index < 0 || index >= m_instances.size()) {
+        return;
+    }
+
+    GamescopeInstance *const instance = m_instances.at(index);
+    const bool isStreaming = m_streamingInstances.contains(index);
+    const quint64 stopGeneration = m_startupGeneration;
+    if (isStreaming) {
+        m_streamManager->stopStream(index);
+    }
+    if (stopGeneration != m_startupGeneration || !m_instances.contains(instance)
+        || m_instances.value(index) != instance) {
+        return;
+    }
+
+    instance->stop();
+    if (stopGeneration != m_startupGeneration || !m_instances.contains(instance)
+        || m_instances.value(index) != instance) {
+        return;
+    }
+    if (isStreaming) {
+        cleanupStreamingInstance(index);
     }
 }
 
@@ -928,12 +953,13 @@ bool SessionRunner::setupDeviceOwnership()
     }
     QStringList acquiredDevicePaths;
     const auto rollbackStaleSetup = [this, &acquiredDevicePaths] {
-        if (!m_helperClient || !m_helperClient->isAvailable()) {
-            return;
-        }
         for (const QString &path : acquiredDevicePaths) {
-            if (!m_ownedDevicePaths.contains(path)) {
-                m_helperClient->restoreDeviceOwner(path);
+            if (m_ownedDevicePaths.contains(path)) {
+                continue;
+            }
+            if (!m_helperClient || !m_helperClient->isAvailable()
+                || !m_helperClient->restoreDeviceOwner(path)) {
+                m_ownedDevicePaths.append(path);
             }
         }
     };
@@ -1035,9 +1061,11 @@ void SessionRunner::restoreDeviceOwnership()
         return;
     }
 
-    m_helperClient->restoreAllDevices();
-
-    m_ownedDevicePaths.clear();
+    if (m_helperClient->restoreAllDevices()) {
+        m_ownedDevicePaths.clear();
+    } else {
+        qWarning() << "SessionRunner: Device ownership restoration failed, retaining paths for retry";
+    }
 }
 
 bool SessionRunner::setupSessionResources(quint64 startupGeneration)
@@ -1665,21 +1693,43 @@ QList<QRect> SessionRunner::calculateLayout(const QString &layout,
 void SessionRunner::onInstanceStarted()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
-    if (instance) {
-        int idx = instance->index();
-
-        if (m_streamingInstances.contains(idx)) {
-            if (idx < m_pendingInstanceConfigs.size()) {
-                m_streamManager->startStream(idx, m_pendingInstanceConfigs[idx]);
-            }
-        } else {
-            positionInstanceWindow(instance);
-        }
-
-        Q_EMIT instanceStarted(idx);
-        Q_EMIT instancesChanged();
-        Q_EMIT runningInstanceCountChanged();
+    if (!instance) {
+        return;
     }
+    if (!m_active || m_finalizing || !m_instances.contains(instance)) {
+        instance->stop();
+        return;
+    }
+
+    const quint64 startupGeneration = m_startupGeneration;
+    const auto isCurrentStartup = [this, startupGeneration, instance] {
+        return startupGeneration == m_startupGeneration && m_active && !m_finalizing
+            && m_instances.contains(instance);
+    };
+    const int idx = instance->index();
+    if (m_streamingInstances.contains(idx)) {
+        if (idx < m_pendingInstanceConfigs.size()) {
+            m_streamManager->startStream(idx, m_pendingInstanceConfigs.at(idx));
+        }
+    } else {
+        positionInstanceWindow(instance);
+    }
+    if (!isCurrentStartup()) {
+        instance->stop();
+        return;
+    }
+
+    Q_EMIT instanceStarted(idx);
+    if (!isCurrentStartup()) {
+        instance->stop();
+        return;
+    }
+    Q_EMIT instancesChanged();
+    if (!isCurrentStartup()) {
+        instance->stop();
+        return;
+    }
+    Q_EMIT runningInstanceCountChanged();
 }
 
 void SessionRunner::onInstanceStopped()
@@ -1968,17 +2018,21 @@ bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap 
             return false;
         }
     }
-
     const QString username = config.value(QStringLiteral("username")).toString();
-    const auto destroyLocalResources = [helperClient, &username](const QString &displayContext, const QString &sinkName) {
-        if (!helperClient || !helperClient->isAvailable()) {
+    const auto destroyLocalResources = [this, helperClient, &username, instanceIndex](
+                                           const QString &displayContext, const QString &sinkName) {
+        if (displayContext.isEmpty() && sinkName.isEmpty()) {
             return;
         }
-        if (!sinkName.isEmpty() && !helperClient->destroyNullSink(username, sinkName)) {
-            qWarning() << "SessionRunner: Failed to destroy stale null sink" << sinkName;
-        }
-        if (!displayContext.isEmpty() && !helperClient->destroyVirtualOutput(username, displayContext)) {
-            qWarning() << "SessionRunner: Failed to destroy stale virtual output" << displayContext;
+        StreamingInstanceInfo remaining;
+        remaining.username = username;
+        remaining.displayContext = displayContext;
+        remaining.sinkName = sinkName;
+        remaining.virtualDisplayCreated = !displayContext.isEmpty();
+        remaining.nullSinkCreated = !sinkName.isEmpty();
+        m_streamingInstances[instanceIndex] = remaining;
+        if (helperClient && helperClient->isAvailable()) {
+            cleanupStreamingInstance(instanceIndex);
         }
     };
     if (username.isEmpty()) {

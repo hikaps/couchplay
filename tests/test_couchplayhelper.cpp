@@ -531,6 +531,7 @@ private Q_SLOTS:
     void testCopyDirectoryToUserSourceNotExists();
     void testCopyDirectoryToUserSuccessReplacesAndChowns();
     void testCopyDirectoryToUserPreservesTargetOnFailedCopy();
+    void testCopyDirectoryToUserTargetSwapPreservesExternal();
     void testCopyDirectoryToUserDotDotNameAccepted();
     void testCopyDirectoryToUserSymlinkedTargetRejected();
     void testCopyDirectoryToUserSourceSymlinkResolvesOutside();
@@ -1056,7 +1057,12 @@ void TestCouchPlayHelper::testGetUserSteamIdSelectsMostRecentAccount()
     QDBusReply<QString> steamId = m_dbusInterface->call(QStringLiteral("GetUserSteamId"), username);
     QVERIFY2(steamId.isValid(), qPrintable(steamId.error().message()));
     QCOMPARE(steamId.value(), activeSteamId);
-
+    m_ops->replaceOnNextRead(loginUsersPath);
+    QDBusReply<QString> pathnameReplaced = m_dbusInterface->call(QStringLiteral("GetUserSteamId"), username);
+    QVERIFY(pathnameReplaced.isValid());
+    QVERIFY(pathnameReplaced.value().isEmpty());
+    QVERIFY(QFile::remove(loginUsersPath));
+    QVERIFY(QFile::rename(loginUsersPath + QStringLiteral(".original"), loginUsersPath));
     QDBusReply<QByteArray> readShortcuts =
         m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, activeSteamId);
     QVERIFY2(readShortcuts.isValid(), qPrintable(readShortcuts.error().message()));
@@ -1233,7 +1239,12 @@ void TestCouchPlayHelper::testReadSteamShortcutsForUser()
     QVERIFY(file.open(QIODevice::WriteOnly));
     QCOMPARE(file.write(expected), expected.size());
     file.close();
-
+    m_ops->replaceOnNextRead(shortcutsPath);
+    QDBusReply<QByteArray> pathnameReplaced =
+        m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
+    QVERIFY(!pathnameReplaced.isValid());
+    QVERIFY(QFile::remove(shortcutsPath));
+    QVERIFY(QFile::rename(shortcutsPath + QStringLiteral(".original"), shortcutsPath));
     QDBusReply<QByteArray> reply =
         m_dbusInterface->call(QStringLiteral("ReadSteamShortcutsForUser"), username, steamId);
     QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
@@ -1467,7 +1478,28 @@ void TestCouchPlayHelper::testReadSteamLibraryFoldersSecurely()
     QCOMPARE(hardlinkFile.readAll(), original);
     hardlinkFile.close();
     QVERIFY(::unlink(hardlink.toLocal8Bit().constData()) == 0);
-    QVERIFY(QFile::remove(path));
+    const QByteArray concurrentReplacement = QByteArrayLiteral("concurrent replacement");
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(original), original.size());
+    file.close();
+    m_ops->setBeforeNextRenameAt([&] {
+        const QString displaced = path + QStringLiteral(".race-original");
+        QFile::remove(displaced);
+        if (!QFile::rename(path, displaced)) return;
+        QFile replacement(path);
+        if (!replacement.open(QIODevice::WriteOnly)) return;
+        (void)replacement.write(concurrentReplacement);
+        replacement.close();
+    });
+    QDBusReply<bool> unlinkRace = m_dbusInterface->call(QStringLiteral("RestoreSteamLibraryFoldersForUser"),
+                                                        username,
+                                                        false,
+                                                        QByteArray());
+    QVERIFY(!unlinkRace.isValid());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), concurrentReplacement);
+    file.close();
+    QFile::remove(path + QStringLiteral(".race-original"));
     const QString outside = home.path() + QStringLiteral("/outside.vdf");
     QFile outsideFile(outside);
     QVERIFY(outsideFile.open(QIODevice::WriteOnly));
@@ -1625,6 +1657,52 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
     const QStringList parentEntries =
         QDir(homeDir.path()).entryList(QDir::Dirs | QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
     QCOMPARE(parentEntries.size(), 2); // source-game + games
+}
+
+void TestCouchPlayHelper::testCopyDirectoryToUserTargetSwapPreservesExternal()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+
+    QDir sourceDir(homeDir.path() + QStringLiteral("/source-game"));
+    QVERIFY(sourceDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(sourceDir.path(), true);
+    m_ops->setDirectoryExists(sourceDir.path(), true);
+    QFile sourceFile(sourceDir.filePath(QStringLiteral("new.dat")));
+    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+    QVERIFY(sourceFile.write("new") == 3);
+    sourceFile.close();
+
+    QDir targetDir(homeDir.path() + QStringLiteral("/games"));
+    QVERIFY(targetDir.mkpath(QStringLiteral(".")));
+    QFile oldFile(targetDir.filePath(QStringLiteral("old.dat")));
+    QVERIFY(oldFile.open(QIODevice::WriteOnly));
+    QVERIFY(oldFile.write("old") == 3);
+    oldFile.close();
+
+    QDir externalDir(homeDir.path() + QStringLiteral("/external-target"));
+    QVERIFY(externalDir.mkpath(QStringLiteral(".")));
+    QFile externalFile(externalDir.filePath(QStringLiteral("external.dat")));
+    QVERIFY(externalFile.open(QIODevice::WriteOnly));
+    QVERIFY(externalFile.write("external") == 8);
+    externalFile.close();
+
+    m_ops->setBeforeNextRenameAt([&] {
+        QDir parent(homeDir.path());
+        if (!parent.rename(QStringLiteral("games"), QStringLiteral("moved-target"))) return;
+        (void)parent.rename(QStringLiteral("external-target"), QStringLiteral("games"));
+    });
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"),
+                                                   sourceDir.path(),
+                                                   QStringLiteral("games"));
+    QVERIFY(!reply.isValid());
+    QFile preserved(homeDir.filePath(QStringLiteral("games/external.dat")));
+    QVERIFY(preserved.open(QIODevice::ReadOnly));
+    QCOMPARE(preserved.readAll(), QByteArrayLiteral("external"));
+    preserved.close();
 }
 
 void TestCouchPlayHelper::testCopyDirectoryToUserPreservesTargetOnFailedCopy()
@@ -2417,8 +2495,8 @@ void TestCouchPlayHelper::testResetAllDevicesPartialFailure()
 
     QDBusReply<int> resetReply = m_dbusInterface->call(QStringLiteral("ResetAllDevices"));
 
-    QVERIFY(resetReply.isValid());
-    QCOMPARE(resetReply.value(), 0); // All fail due to chown error
+    QVERIFY(!resetReply.isValid());
+    QCOMPARE(resetReply.error().type(), QDBusError::Failed);
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerBatchEmpty()

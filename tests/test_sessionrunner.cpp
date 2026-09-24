@@ -122,10 +122,20 @@ public:
         return nextPid++;
     }
 
+    int stopInstanceCalls = 0;
     bool stopInstance(qint64 pid) override
     {
         Q_UNUSED(pid)
+        ++stopInstanceCalls;
         return true;
+    }
+
+    bool restoreAllDevicesResult = true;
+    int restoreAllDevicesCalls = 0;
+    bool restoreAllDevices() override
+    {
+        ++restoreAllDevicesCalls;
+        return restoreAllDevicesResult;
     }
 
     bool killInstance(qint64 pid) override
@@ -363,6 +373,7 @@ private Q_SLOTS:
     void testStaleHookEventsCannotAffectReplacementHook();
     void testInstanceStoppedReentrancyDoesNotFinalizeReplacementSession();
     void testStartNextInstanceReentrancyDoesNotUseStaleConfig();
+    void testStopInstanceReentrancyDoesNotTouchReplacement();
     void testStaleWindowCallbacksCannotAffectReplacementSession();
     void testTeardownRetainsResourcesForRetry();
     void testStreamingSetupFailureDoesNotFinalizeReplacementSession();
@@ -790,6 +801,15 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
                      "}\n");
     libraryVdf.close();
 
+    // Finalization snapshots the target user's libraryfolders.vdf through the
+    // helper. Keep that target root in the isolated fixture so the test does
+    // not depend on a real /home/player1 installation.
+    const QString player1Home = homeDir.path() + QStringLiteral("/player1");
+    const QString player1SteamRoot = player1Home + QStringLiteral("/.steam/steam");
+    QVERIFY(QDir().mkpath(player1SteamRoot + QStringLiteral("/config")));
+    m_helperClient->player1Home = player1Home;
+    m_helperClient->player1SteamRoot = player1SteamRoot;
+
     auto *steamManager = new SteamConfigManager(this);
     steamManager->setHelperClient(m_helperClient); // prepareDataDir ACLs/mounts via the manager's own client
     m_runner->setSteamConfigManager(steamManager);
@@ -1202,6 +1222,7 @@ void TestSessionRunner::testActiveChangedRestartDoesNotEmitStaleFinalizationSign
 
 void TestSessionRunner::testActiveChangedStartRestartDoesNotRunObsoleteSetup()
 {
+    m_sessionManager->setInstanceCount(1);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     const qsizetype initialLaunchCount = m_helperClient->launchCommands.size();
     QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
@@ -1516,10 +1537,34 @@ void TestSessionRunner::testStartNextInstanceReentrancyDoesNotUseStaleConfig()
     m_runner->startNextInstance();
 
     QCOMPARE(m_helperClient->launchCommands.size(), 1);
+    // The launch callback stopped the session before start() returned. The
+    // synchronous started signal is stale and must stop that launched helper
+    // process instead of leaving it orphaned.
+    QCOMPARE(m_helperClient->stopInstanceCalls, 1);
     QVERIFY(!m_runner->isActive());
     QVERIFY(m_runner->m_pendingInstanceConfigs.isEmpty());
     QVERIFY(m_runner->m_instances.isEmpty());
 }
+void TestSessionRunner::testStopInstanceReentrancyDoesNotTouchReplacement()
+{
+    auto *instance = new GamescopeInstance(m_runner);
+    instance->m_index = 0;
+    instance->m_helperPid = 100;
+    m_runner->m_instances.append(instance);
+    auto *replacement = new GamescopeInstance(m_runner);
+    replacement->m_index = 0;
+
+    // Run before SessionRunner's stopped handler to model synchronous
+    // replacement during stop().
+    connect(instance, &GamescopeInstance::stopped, m_runner, [this, replacement] {
+        m_runner->m_instances[0] = replacement;
+    });
+    connect(instance, &GamescopeInstance::stopped, m_runner, &SessionRunner::onInstanceStopped);
+
+    m_runner->stopInstance(0);
+    QCOMPARE(m_runner->m_instances.value(0), replacement);
+}
+
 
 void TestSessionRunner::testStaleWindowCallbacksCannotAffectReplacementSession()
 {
@@ -1556,6 +1601,7 @@ void TestSessionRunner::testTeardownRetainsResourcesForRetry()
     m_runner->m_sharedStateActive = true;
     m_runner->m_steamSharedUsers.insert(QStringLiteral("player1"));
     m_runner->m_ownedDevicePaths.append(QStringLiteral("/dev/input/event-test"));
+    m_steamConfigManager->setHelperClient(m_helperClient);
     m_helperClient->m_available = false;
 
     m_runner->cleanupStreamingInstance(7);
@@ -1565,10 +1611,19 @@ void TestSessionRunner::testTeardownRetainsResourcesForRetry()
     QVERIFY(m_runner->m_sharedStateActive);
     QVERIFY(m_runner->m_steamSharedUsers.contains(QStringLiteral("player1")));
     QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event-test")));
+    QVERIFY(!m_runner->start());
 
-    m_runner->m_ownedDevicePaths.clear();
     m_helperClient->m_available = true;
+    m_helperClient->restoreAllDevicesResult = false;
     m_runner->stop();
+    // A successful D-Bus connection does not imply ResetAllDevices succeeded.
+    // Keep the path for a later retry when the helper reports failure.
+    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event-test")));
+
+    m_helperClient->restoreAllDevicesResult = true;
+    m_runner->stop();
+    QCOMPARE(m_helperClient->restoreAllDevicesCalls, 2);
+    QVERIFY(m_runner->m_ownedDevicePaths.isEmpty());
     QVERIFY(!m_runner->m_sharedStateActive);
     QVERIFY(m_runner->m_steamSharedUsers.isEmpty());
 }

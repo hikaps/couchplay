@@ -549,7 +549,12 @@ int CouchPlayHelper::ResetAllDevices()
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to reset devices"));
         return 0;
     }
-    return resetAllDevicesInternal();
+    const int resetCount = resetAllDevicesInternal();
+    if (!m_modifiedDevices.isEmpty()) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not reset all device ownership"));
+        return 0;
+    }
+    return resetCount;
 }
 
 int CouchPlayHelper::resetAllDevicesInternal()
@@ -2438,6 +2443,12 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
 }
 
 // Remove an entry (recursively for directories) below an open parent FD,
+static bool sameFileIdentity(const struct stat &left, const struct stat &right)
+{
+    return left.st_dev == right.st_dev && left.st_ino == right.st_ino && left.st_uid == right.st_uid
+        && left.st_nlink == right.st_nlink && (left.st_mode & S_IFMT) == (right.st_mode & S_IFMT);
+}
+
 // never following symlinks: a leaf symlink is unlinked, not descended into
 static void removeEntryUnder(int parentFd, const char *name)
 {
@@ -2591,7 +2602,12 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     ::fchown(dstFd, userUid, pw->pw_gid);
 
     int copyResult = SecureFs::copyTreeContents(srcFd, dstFd, userUid, pw->pw_gid);
+    struct stat temporarySt{};
+    const bool temporaryStatValid = ::fstat(dstFd, &temporarySt) == 0;
     ::close(dstFd);
+    if (copyResult == 0 && !temporaryStatValid) {
+        copyResult = -EIO;
+    }
     if (copyResult != 0) {
         // The player's previous tree is untouched — discard only the partial copy
         removeEntryUnder(parentFd, tempNameUtf8.constData());
@@ -2603,37 +2619,107 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         return false;
     }
 
-    // Swap: move any existing target aside, rename the fresh copy into place,
-    // then discard the old tree. If the swap fails, restore the old target.
-    struct stat existingSt;
-    const bool hadExisting =
-        ::fstatat(parentFd, leafNameUtf8.constData(), &existingSt, AT_SYMLINK_NOFOLLOW) == 0;
-    QString oldName;
-    bool asideMoved = false;
-    if (hadExisting) {
-        oldName = QStringLiteral(".%1.cpold-%2")
-                      .arg(leafName, QString::number(QRandomGenerator::global()->generate(), 16));
-        asideMoved = ::renameat(parentFd, leafNameUtf8.constData(), parentFd, oldName.toUtf8().constData()) == 0;
-    }
-    bool renamedIn = asideMoved || !hadExisting;
-    if (renamedIn) {
-        renamedIn = ::renameat(parentFd, tempNameUtf8.constData(), parentFd, leafNameUtf8.constData()) == 0;
-    }
-    if (!renamedIn) {
-        int err = errno;
-        if (asideMoved
-            && ::renameat(parentFd, oldName.toUtf8().constData(), parentFd, leafNameUtf8.constData()) != 0) {
-            qWarning() << "CopyDirectoryToUser: Could not restore previous target" << targetPath << strerror(errno);
-        }
+    // Atomically exchange the prepared tree with the target. A no-replace
+    // install is used when the target did not exist; an exchange is used for
+    // an existing target so the previous inode remains available for an
+    // identity-checked cleanup or rollback.
+    struct stat existingSt{};
+    const int existingResult = ::fstatat(parentFd, leafNameUtf8.constData(), &existingSt, AT_SYMLINK_NOFOLLOW);
+    if (existingResult != 0 && errno != ENOENT) {
+        const int error = errno;
         removeEntryUnder(parentFd, tempNameUtf8.constData());
         ::close(parentFd);
         ::close(srcFd);
-        qWarning() << "CopyDirectoryToUser: Failed to swap in copied directory:" << targetPath << strerror(err);
+        qWarning() << "CopyDirectoryToUser: Could not inspect target:" << targetPath << strerror(error);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not inspect target directory"));
+        return false;
+    }
+    const bool hadExisting = existingResult == 0;
+    const unsigned int swapFlags = hadExisting ? RENAME_EXCHANGE : RENAME_NOREPLACE;
+    const int swapResult = m_ops->renameAt(parentFd,
+                                           tempNameUtf8.constData(),
+                                           parentFd,
+                                           leafNameUtf8.constData(),
+                                           swapFlags);
+    if (swapResult != 0) {
+        const int error = errno;
+        struct stat currentTemporary{};
+        if (::fstatat(parentFd, tempNameUtf8.constData(), &currentTemporary, AT_SYMLINK_NOFOLLOW) == 0
+            && sameFileIdentity(temporarySt, currentTemporary)) {
+            removeEntryUnder(parentFd, tempNameUtf8.constData());
+        }
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Failed to swap in copied directory:" << targetPath << strerror(error);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to replace target directory"));
         return false;
     }
+
+    struct stat installedSt{};
+    struct stat displacedSt{};
+    const bool installed = ::fstatat(parentFd, leafNameUtf8.constData(), &installedSt, AT_SYMLINK_NOFOLLOW) == 0
+        && sameFileIdentity(temporarySt, installedSt);
+    const bool displaced = !hadExisting
+        || (::fstatat(parentFd, tempNameUtf8.constData(), &displacedSt, AT_SYMLINK_NOFOLLOW) == 0
+            && sameFileIdentity(existingSt, displacedSt));
+    if (!installed || !displaced) {
+        // A target swap before the exchange leaves the external inode in the
+        // temporary name. Restore it only while the target still names our
+        // prepared inode; never overwrite a newer target during rollback.
+        bool rolledBack = false;
+        if (hadExisting && installed) {
+            struct stat currentTarget{};
+            struct stat currentTemporary{};
+            const bool targetStillOurs = ::fstatat(parentFd,
+                                                   leafNameUtf8.constData(),
+                                                   &currentTarget,
+                                                   AT_SYMLINK_NOFOLLOW) == 0
+                && sameFileIdentity(temporarySt, currentTarget);
+            const bool temporaryStable = ::fstatat(parentFd,
+                                                   tempNameUtf8.constData(),
+                                                   &currentTemporary,
+                                                   AT_SYMLINK_NOFOLLOW) == 0;
+            if (targetStillOurs && temporaryStable
+                && m_ops->renameAt(parentFd,
+                                   tempNameUtf8.constData(),
+                                   parentFd,
+                                   leafNameUtf8.constData(),
+                                   RENAME_EXCHANGE) == 0) {
+                struct stat restoredTarget{};
+                struct stat restoredTemporary{};
+                rolledBack = ::fstatat(parentFd,
+                                       leafNameUtf8.constData(),
+                                       &restoredTarget,
+                                       AT_SYMLINK_NOFOLLOW) == 0
+                    && ::fstatat(parentFd,
+                                 tempNameUtf8.constData(),
+                                 &restoredTemporary,
+                                 AT_SYMLINK_NOFOLLOW) == 0
+                    && sameFileIdentity(currentTemporary, restoredTarget)
+                    && sameFileIdentity(temporarySt, restoredTemporary);
+                if (rolledBack) {
+                    removeEntryUnder(parentFd, tempNameUtf8.constData());
+                }
+            }
+        }
+        ::close(parentFd);
+        ::close(srcFd);
+        qWarning() << "CopyDirectoryToUser: Target changed during replacement:" << targetPath
+                   << (rolledBack ? "(restored)" : "(preserved)");
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Target directory changed during replacement"));
+        return false;
+    }
+
     if (hadExisting) {
-        removeEntryUnder(parentFd, oldName.toUtf8().constData());
+        struct stat currentTemporary{};
+        if (::fstatat(parentFd, tempNameUtf8.constData(), &currentTemporary, AT_SYMLINK_NOFOLLOW) != 0
+            || !sameFileIdentity(existingSt, currentTemporary)) {
+            ::close(parentFd);
+            ::close(srcFd);
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Target directory changed during replacement"));
+            return false;
+        }
+        removeEntryUnder(parentFd, tempNameUtf8.constData());
     }
     ::close(parentFd);
     ::close(srcFd);
@@ -2879,15 +2965,16 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username, c
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely open Steam shortcuts directory"));
         return {};
     }
-
+    const QByteArray leafBytes = leafName.toLocal8Bit();
     const int fileFd = ::openat(parentFd,
-                                 leafName.toLocal8Bit().constData(),
+                                 leafBytes.constData(),
                                  O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
-    ::close(parentFd);
     if (fileFd < 0) {
         if (errno == ENOENT) {
+            ::close(parentFd);
             return {};
         }
+        ::close(parentFd);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely open Steam shortcuts file"));
         return {};
     }
@@ -2896,6 +2983,7 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username, c
     if (::fstat(fileFd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != userUid || st.st_nlink != 1
         || st.st_size <= 0 || st.st_size > 16 * 1024 * 1024) {
         ::close(fileFd);
+        ::close(parentFd);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file is unsafe, empty, or too large"));
         return {};
     }
@@ -2913,21 +3001,28 @@ QByteArray CouchPlayHelper::ReadSteamShortcutsForUser(const QString &username, c
         }
         if (bytesRead < 0 || content.size() + bytesRead > 16 * 1024 * 1024) {
             ::close(fileFd);
+            ::close(parentFd);
             sendErrorReply(QDBusError::Failed, QStringLiteral("Could not read Steam shortcuts file"));
             return {};
         }
         content.append(buffer, static_cast<qsizetype>(bytesRead));
     }
     struct stat finalStat;
-    const bool readChanged = ::fstat(fileFd, &finalStat) != 0 || finalStat.st_size != st.st_size
+    struct stat pathnameAfter;
+    const bool readChanged = ::fstat(fileFd, &finalStat) != 0
+        || ::fstatat(parentFd, leafBytes.constData(), &pathnameAfter, AT_SYMLINK_NOFOLLOW) != 0
+        || !sameFileIdentity(finalStat, pathnameAfter)
+        || finalStat.st_size != st.st_size
         || finalStat.st_mtim.tv_sec != st.st_mtim.tv_sec || finalStat.st_mtim.tv_nsec != st.st_mtim.tv_nsec
         || finalStat.st_ctim.tv_sec != st.st_ctim.tv_sec || finalStat.st_ctim.tv_nsec != st.st_ctim.tv_nsec;
     if (readChanged || content.size() != st.st_size) {
         ::close(fileFd);
+        ::close(parentFd);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed while being read"));
         return {};
     }
     ::close(fileFd);
+    ::close(parentFd);
     return content;
 }
 
@@ -3031,7 +3126,11 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
             current.append(buffer, static_cast<qsizetype>(bytesRead));
         }
         struct stat after;
-        const bool changedWhileReading = ::fstat(fileFd, &after) != 0 || before.st_size != after.st_size
+        struct stat pathnameAfter;
+        const bool changedWhileReading = ::fstat(fileFd, &after) != 0
+            || ::fstatat(parentFd, name.constData(), &pathnameAfter, AT_SYMLINK_NOFOLLOW) != 0
+            || !sameFileIdentity(after, pathnameAfter)
+            || before.st_size != after.st_size
             || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
             || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
         ::close(fileFd);
@@ -3705,13 +3804,14 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
     if (parentFd < 0) {
         return parentFd == -ENOENT ? singleAccountFallback : QString();
     }
+    const QByteArray leafBytes = leafName.toLocal8Bit();
     const int fileFd = ::openat(parentFd,
-                                leafName.toLocal8Bit().constData(),
+                                leafBytes.constData(),
                                 O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
     const int openError = fileFd < 0 ? errno : 0;
-    ::close(parentFd);
 
     if (fileFd < 0) {
+        ::close(parentFd);
         return openError == ENOENT ? singleAccountFallback : QString();
     }
     constexpr off_t maxLoginUsersSize = 1024 * 1024;
@@ -3719,6 +3819,7 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
     if (::fstat(fileFd, &before) != 0 || !S_ISREG(before.st_mode) || before.st_uid != userUid
         || before.st_nlink != 1 || before.st_size < 0 || before.st_size > maxLoginUsersSize) {
         ::close(fileFd);
+        ::close(parentFd);
         return {};
     }
 
@@ -3735,16 +3836,22 @@ QString CouchPlayHelper::GetUserSteamId(const QString &username)
         }
         if (bytesRead < 0 || contents.size() + bytesRead > maxLoginUsersSize) {
             ::close(fileFd);
+            ::close(parentFd);
             return {};
         }
         contents.append(buffer, static_cast<qsizetype>(bytesRead));
     }
 
     struct stat after;
-    const bool changedWhileReading = ::fstat(fileFd, &after) != 0 || before.st_size != after.st_size
+    struct stat pathnameAfter;
+    const bool changedWhileReading = ::fstat(fileFd, &after) != 0
+        || ::fstatat(parentFd, leafBytes.constData(), &pathnameAfter, AT_SYMLINK_NOFOLLOW) != 0
+        || !sameFileIdentity(after, pathnameAfter)
+        || before.st_size != after.st_size
         || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
         || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
     ::close(fileFd);
+    ::close(parentFd);
     if (changedWhileReading || contents.size() != before.st_size) {
         return {};
     }
@@ -3902,8 +4009,55 @@ bool CouchPlayHelper::RestoreSteamLibraryFoldersForUser(const QString &username,
         if (::fstatat(parentFd, leafBytes.constData(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
             restored = errno == ENOENT;
         } else if (S_ISREG(st.st_mode) && st.st_uid == pw->pw_uid && st.st_nlink == 1) {
-            restored = ::unlinkat(parentFd, leafBytes.constData(), 0) == 0;
+            QByteArray displacedName;
+            bool displaced = false;
+            for (int attempt = 0; attempt < 8 && !displaced; ++attempt) {
+                displacedName = QStringLiteral(".%1.couchplay-restore-%2")
+                                    .arg(leaf, QString::number(QRandomGenerator::global()->generate64(), 16))
+                                    .toLocal8Bit();
+                if (m_ops->renameAt(parentFd,
+                                    leafBytes.constData(),
+                                    parentFd,
+                                    displacedName.constData(),
+                                    RENAME_NOREPLACE) == 0) {
+                    displaced = true;
+                } else if (errno != EEXIST) {
+                    restored = errno == ENOENT;
+                    break;
+                }
+            }
+            if (displaced) {
+                struct stat displacedStat;
+                const bool movedExpected = ::fstatat(parentFd,
+                                                      displacedName.constData(),
+                                                      &displacedStat,
+                                                      AT_SYMLINK_NOFOLLOW) == 0
+                    && sameFileIdentity(st, displacedStat);
+                if (!movedExpected) {
+                    // The pathname changed before the atomic move. Restore
+                    // only with no-replace semantics; never overwrite a
+                    // concurrent target, and retain the displaced inode if
+                    // another writer won the name in the meantime.
+                    (void)m_ops->renameAt(parentFd,
+                                          displacedName.constData(),
+                                          parentFd,
+                                          leafBytes.constData(),
+                                          RENAME_NOREPLACE);
+                    restored = false;
+                } else {
+                    struct stat beforeUnlink;
+                    restored = ::fstatat(parentFd,
+                                         displacedName.constData(),
+                                         &beforeUnlink,
+                                         AT_SYMLINK_NOFOLLOW) == 0
+                        && sameFileIdentity(st, beforeUnlink)
+                        && ::unlinkat(parentFd, displacedName.constData(), 0) == 0;
+                }
+            } else if (!restored) {
+                restored = false;
+            }
         }
+
     }
     ::close(parentFd);
     if (!restored) sendErrorReply(QDBusError::Failed, QStringLiteral("Could not restore Steam library folders"));

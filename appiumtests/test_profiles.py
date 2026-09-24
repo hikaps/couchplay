@@ -35,6 +35,29 @@ class TestProfiles(BaseTest):
             driver, AppiumBy.ACCESSIBILITY_ID, f"profileCard_{profile_name}"
         )
 
+    def _finish_profile_test(self, driver, *profile_names):
+        dialogs = [
+            dialog
+            for dialog in driver.find_elements(
+                AppiumBy.ACCESSIBILITY_ID, "dialogAddToSteam"
+            )
+            if dialog.is_displayed()
+        ]
+        if dialogs:
+            try:
+                self.click_by_name(driver, "Cancel")
+            except Exception:
+                pass
+        self.navigate_to_profiles(driver)
+        cleanup_error = None
+        for profile_name in profile_names:
+            try:
+                self._delete_profile_if_present(driver, profile_name)
+            except Exception as error:
+                cleanup_error = error
+        if cleanup_error is not None:
+            raise cleanup_error
+
     def test_profiles_page_loads(self, driver):
         self.navigate_to_profiles(driver)
         title = self.wait_for_element(driver, AppiumBy.NAME, "Profiles")
@@ -59,45 +82,49 @@ class TestProfiles(BaseTest):
     def test_duplicate_profile_creates_copy(self, driver):
         profile_name = "Automation Profile " + uuid.uuid4().hex[:8]
         copy_name = profile_name + " Copy"
-        self.navigate_to_session_setup(driver)
-        self.click_by_name(driver, "Save Profile")
-        field = self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "fieldProfileName")
-        field.send_keys(profile_name)
-        self.click_by_name(driver, "Save")
-
-        self.navigate_to_profiles(driver)
         try:
+            self.navigate_to_session_setup(driver)
+            self.click_by_name(driver, "Save Profile")
+            field = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "fieldProfileName"
+            )
+            field.send_keys(profile_name)
+            self.click_by_name(driver, "Save")
+
+            self.navigate_to_profiles(driver)
             original_card = self._profile_card(driver, profile_name)
             original_card.find_element(
                 AppiumBy.ACCESSIBILITY_ID, "btnDuplicateProfile"
             ).click()
             self._profile_card(driver, copy_name)
         finally:
-            for cleanup_name in (copy_name, profile_name):
-                self._delete_profile_if_present(driver, cleanup_name)
+            self._finish_profile_test(driver, copy_name, profile_name)
 
     def test_add_to_steam_guides_user_when_no_accounts_are_detected(self, driver):
         profile_name = "Steam Test Profile " + uuid.uuid4().hex[:8]
-        self.navigate_to_session_setup(driver)
-        self.click_by_name(driver, "Save Profile")
-        field = self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "fieldProfileName")
-        field.send_keys(profile_name)
-        self.click_by_name(driver, "Save")
-
-        self.navigate_to_profiles(driver)
-        profile_card = self._profile_card(driver, profile_name)
-        profile_card.find_element(
-            AppiumBy.ACCESSIBILITY_ID, "btnAddProfileToSteam"
-        ).click()
-        dialog = self.wait_for_element(
-            driver, AppiumBy.ACCESSIBILITY_ID, "dialogAddToSteam", timeout=30
-        )
-        assert dialog.is_displayed()
-        profile_label = self.wait_for_element(
-            driver, AppiumBy.ACCESSIBILITY_ID, "labelProfileToAdd"
-        )
-        assert profile_name in profile_label.text
         try:
+            self.navigate_to_session_setup(driver)
+            self.click_by_name(driver, "Save Profile")
+            field = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "fieldProfileName"
+            )
+            field.send_keys(profile_name)
+            self.click_by_name(driver, "Save")
+
+            self.navigate_to_profiles(driver)
+            profile_card = self._profile_card(driver, profile_name)
+            profile_card.find_element(
+                AppiumBy.ACCESSIBILITY_ID, "btnAddProfileToSteam"
+            ).click()
+            dialog = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "dialogAddToSteam", timeout=30
+            )
+            assert dialog.is_displayed()
+            profile_label = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "labelProfileToAdd"
+            )
+            assert profile_name in profile_label.text
+
             game_mode_messages = driver.find_elements(
                 AppiumBy.ACCESSIBILITY_ID, "messageSteamGameMode"
             )
@@ -124,5 +151,4 @@ class TestProfiles(BaseTest):
             assert guidance.is_displayed()
             assert "Install Steam and sign in" in guidance.text
         finally:
-            self.click_by_name(driver, "Cancel")
-            self._delete_profile_if_present(driver, profile_name)
+            self._finish_profile_test(driver, profile_name)

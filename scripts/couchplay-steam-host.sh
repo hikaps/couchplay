@@ -98,11 +98,22 @@ steam_binary() {
     return 1
 }
 
+procfs_accessible() {
+    [[ -d /proc && -r /proc && -x /proc && -r /proc/self/status ]]
+}
+
+pid_disappeared() {
+    local pid=$1
+    kill -0 -- "$pid" 2>/dev/null && return 1
+    [[ ! -e "/proc/$pid" ]]
+}
+
 steam_running() {
     local root=$1 kind pid exe candidate canonical uid process_list process_uid
     local -a native_binaries=()
     kind=$(root_kind "$root")
     uid=$(id -u)
+    procfs_accessible || { fail 3 "steam-process-state-unknown"; return 3; }
     if [[ "$kind" == flatpak ]]; then
         if ! command -v flatpak >/dev/null 2>&1; then
             fail 3 "steam-process-state-unknown"
@@ -116,23 +127,28 @@ steam_running() {
             [[ "$candidate" == "$STEAM_APP_ID" ]] || continue
             [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { fail 3 "steam-process-state-unknown"; return 3; }
             if [[ ! -e "/proc/$pid/status" ]]; then
-                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-                continue
+                pid_disappeared "$pid" && continue
+                fail 3 "steam-process-state-unknown"
+                return 3
             fi
             if [[ ! -r "/proc/$pid/status" ]]; then
-                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-                continue
+                pid_disappeared "$pid" && continue
+                fail 3 "steam-process-state-unknown"
+                return 3
             fi
             if ! process_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null); then
-                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-                continue
+                pid_disappeared "$pid" && continue
+                fail 3 "steam-process-state-unknown"
+                return 3
             fi
             if [[ -z "$process_uid" ]]; then
-                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-                continue
+                pid_disappeared "$pid" && continue
+                fail 3 "steam-process-state-unknown"
+                return 3
             fi
             [[ "$process_uid" == "$uid" ]] && return 0
         done <<< "$process_list"
+        procfs_accessible || { fail 3 "steam-process-state-unknown"; return 3; }
         return 1
     fi
 
@@ -147,28 +163,33 @@ steam_running() {
     for pid in /proc/[0-9]*; do
         pid=${pid##*/}
         if [[ ! -e "/proc/$pid/status" ]]; then
-            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-            continue
+            pid_disappeared "$pid" && continue
+            fail 3 "steam-process-state-unknown"
+            return 3
         fi
         if ! process_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null) || [[ -z "$process_uid" ]]; then
-            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-            continue
+            pid_disappeared "$pid" && continue
+            fail 3 "steam-process-state-unknown"
+            return 3
         fi
         [[ "$process_uid" == "$uid" ]] || continue
         if ! exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null); then
             # A same-UID process that still exists but cannot be inspected is
             # an unknown state, not evidence that Steam is stopped.
-            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-            continue
+            pid_disappeared "$pid" && continue
+            fail 3 "steam-process-state-unknown"
+            return 3
         fi
         if [[ -z "$exe" ]]; then
-            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
-            continue
+            pid_disappeared "$pid" && continue
+            fail 3 "steam-process-state-unknown"
+            return 3
         fi
         for candidate in "${native_binaries[@]}"; do
             [[ "$exe" == "$candidate" ]] && return 0
         done
     done
+    procfs_accessible || { fail 3 "steam-process-state-unknown"; return 3; }
     return 1
 }
 

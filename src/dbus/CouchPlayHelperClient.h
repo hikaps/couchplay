@@ -40,7 +40,7 @@ public:
 
     Q_INVOKABLE virtual bool watchDevice(const QString &devicePath);
 
-    Q_INVOKABLE void restoreAllDevices();
+    Q_INVOKABLE virtual bool restoreAllDevices();
 
     Q_INVOKABLE bool createUser(const QString &username);
 

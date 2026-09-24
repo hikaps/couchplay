@@ -98,6 +98,24 @@ public:
         }
         const QByteArray contents = "\"libraryfolders\" { }\n";
         ready = libraryFolders.write(contents) == contents.size();
+        libraryFolders.close();
+        const QString steamBinaryPath = steamRoot + QStringLiteral("/ubuntu12_64/steam");
+        if (ready && !QDir().mkpath(QFileInfo(steamBinaryPath).absolutePath())) {
+            ready = false;
+        }
+        QFile steamBinary(steamBinaryPath);
+        const QByteArray steamBinaryContents = "#!/bin/sh\nexit 0\n";
+        if (ready && (!steamBinary.open(QIODevice::WriteOnly)
+                      || steamBinary.write(steamBinaryContents) != steamBinaryContents.size())) {
+            ready = false;
+        }
+        steamBinary.close();
+        if (ready) {
+            ready = QFile::setPermissions(steamBinaryPath,
+                                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                              | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                              | QFileDevice::ReadOther | QFileDevice::ExeOther);
+        }
         if (ready && ::geteuid() == 0) {
             const QByteArray homePath = home.path().toLocal8Bit();
             const QByteArray dataPath = dataHome.toLocal8Bit();
@@ -544,6 +562,7 @@ private Q_SLOTS:
             QVERIFY(home.makeShortcutHostOwned());
             const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
             QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
+            QVERIFY(QFile::remove(binary));
             QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
             QVERIFY(QFile::setPermissions(binary, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
                                                     | QFileDevice::ReadGroup | QFileDevice::ExeGroup
@@ -758,6 +777,7 @@ private Q_SLOTS:
             QVERIFY(home.ready);
             const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
             QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
+            QVERIFY(QFile::remove(binary));
             QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
             QVERIFY(QFile::setPermissions(binary, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
                                                   | QFileDevice::ReadGroup | QFileDevice::ExeGroup
@@ -787,6 +807,7 @@ private Q_SLOTS:
             QVERIFY(home.ready);
             const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
             QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
+            QVERIFY(QFile::remove(binary));
             QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
             QVERIFY(QFile::setPermissions(binary, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
                                                   | QFileDevice::ReadGroup | QFileDevice::ExeGroup
@@ -1147,6 +1168,7 @@ private Q_SLOTS:
         QVERIFY(home.ready);
         const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
         QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
+        QVERIFY(QFile::remove(binary));
         QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
         QVERIFY(QFile::setPermissions(binary, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
                                                | QFileDevice::ReadGroup | QFileDevice::ExeGroup

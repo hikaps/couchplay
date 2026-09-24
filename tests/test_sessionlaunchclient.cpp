@@ -63,14 +63,28 @@ private:
     QString m_requestId;
 };
 
-class FailedLaunchAdaptor final : public QDBusAbstractAdaptor, protected QDBusContext
+class FailedLaunchService final : public QObject, protected QDBusContext
+{
+    Q_OBJECT
+
+public:
+    void sendLaunchError()
+    {
+        if (calledFromDBus()) {
+            sendErrorReply(QDBusError::Failed, QStringLiteral("launch transport failed"));
+        }
+    }
+};
+
+class FailedLaunchAdaptor final : public QDBusAbstractAdaptor
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
 
 public:
-    explicit FailedLaunchAdaptor(QObject *parent)
-        : QDBusAbstractAdaptor(parent)
+    explicit FailedLaunchAdaptor(FailedLaunchService *service)
+        : QDBusAbstractAdaptor(service)
+        , m_service(service)
     {
     }
 
@@ -82,13 +96,16 @@ public Q_SLOTS:
 
     bool LaunchProfile(const QString &, const QString &, const QString &)
     {
-        sendErrorReply(QDBusError::Failed, QStringLiteral("launch transport failed"));
+        m_service->sendLaunchError();
         return false;
     }
     bool StopSession(const QString &)
     {
         return false;
     }
+
+private:
+    FailedLaunchService *m_service;
 };
 
 class MalformedReadinessAdaptor final : public QDBusAbstractAdaptor
@@ -240,10 +257,16 @@ private:
 namespace {
 
 volatile std::sig_atomic_t restoredTerminationSignalCount = 0;
+volatile std::sig_atomic_t restoredInterruptSignalCount = 0;
 
 void restoredTerminationSignalHandler(int)
 {
     ++restoredTerminationSignalCount;
+}
+
+void restoredInterruptSignalHandler(int)
+{
+    ++restoredInterruptSignalCount;
 }
 
 class DelayedFinishLauncherAdaptor final : public QDBusAbstractAdaptor
@@ -289,6 +312,57 @@ private:
 };
 
 } // namespace
+
+class CompletionRaceLauncherAdaptor final : public QDBusAbstractAdaptor
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
+
+public:
+    explicit CompletionRaceLauncherAdaptor(QObject *parent)
+        : QDBusAbstractAdaptor(parent)
+    {
+    }
+
+    int stopCalls() const
+    {
+        return m_stopCalls;
+    }
+
+public Q_SLOTS:
+    bool IsReady() const
+    {
+        return true;
+    }
+
+    bool LaunchProfile(const QString &, const QString &requestId, const QString &)
+    {
+        ++m_launchCalls;
+        QTimer::singleShot(100, this, [this, requestId] {
+            // Queue termination after completion is sent, while the run notifier still owns the pipe.
+            Q_EMIT LaunchFinished(requestId, 31);
+            if (m_launchCalls == 1) {
+                std::raise(SIGTERM);
+                std::raise(SIGINT);
+            }
+        });
+        return true;
+    }
+
+    bool StopSession(const QString &requestId)
+    {
+        ++m_stopCalls;
+        Q_EMIT LaunchFinished(requestId, 99);
+        return true;
+    }
+
+Q_SIGNALS:
+    void LaunchFinished(const QString &requestId, int exitCode);
+
+private:
+    int m_launchCalls = 0;
+    int m_stopCalls = 0;
+};
 
 class TestSessionLaunchClient : public QObject
 {
@@ -491,7 +565,7 @@ private Q_SLOTS:
         QDBusConnection bus = QDBusConnection::sessionBus();
         const QString service = QStringLiteral("com.github.CouchPlay.SessionLaunchTransportErrorTest");
         const QString objectPath = QStringLiteral("/SessionLauncher");
-        QObject serviceObject;
+        FailedLaunchService serviceObject;
         new FailedLaunchAdaptor(&serviceObject);
         QVERIFY(bus.registerObject(objectPath, &serviceObject, QDBusConnection::ExportAdaptors));
         QVERIFY(bus.registerService(service));
@@ -620,6 +694,54 @@ private Q_SLOTS:
         QCOMPARE(adaptor->stopCalls(), 0);
 
         std::signal(SIGTERM, previousHandler);
+        bus.unregisterObject(objectPath);
+        bus.unregisterService(service);
+    }
+    void testRunDrainsTerminationNotifierAfterCompletionRace()
+    {
+        auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
+        QVERIFY(application);
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        const QString service = QStringLiteral("com.github.CouchPlay.SessionLaunchNotifierRaceTest");
+        const QString objectPath = QStringLiteral("/SessionLauncher");
+        QObject serviceObject;
+        auto *adaptor = new CompletionRaceLauncherAdaptor(&serviceObject);
+        QVERIFY(bus.registerObject(objectPath, &serviceObject, QDBusConnection::ExportAdaptors));
+        QVERIFY(bus.registerService(service));
+
+        CommandLineRequest request;
+        request.profileName = QStringLiteral("Family");
+        request.start = true;
+        request.exitAfterSession = true;
+        restoredTerminationSignalCount = 0;
+        restoredInterruptSignalCount = 0;
+        const auto previousTerminationHandler = std::signal(SIGTERM, &restoredTerminationSignalHandler);
+        const auto previousInterruptHandler = std::signal(SIGINT, &restoredInterruptSignalHandler);
+
+        std::atomic<int> firstExitCode{-1};
+        std::jthread firstClient([&] {
+            firstExitCode.store(SessionLaunchClient::run(*application, request, service));
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(firstExitCode.load() != -1, 5000);
+        firstClient.join();
+        QCOMPARE(firstExitCode.load(), 31);
+
+        std::raise(SIGTERM);
+        std::raise(SIGINT);
+        QCOMPARE(static_cast<int>(restoredTerminationSignalCount), 1);
+        QCOMPARE(static_cast<int>(restoredInterruptSignalCount), 1);
+
+        std::atomic<int> secondExitCode{-1};
+        std::jthread secondClient([&] {
+            secondExitCode.store(SessionLaunchClient::run(*application, request, service));
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(secondExitCode.load() != -1, 5000);
+        secondClient.join();
+        QCOMPARE(secondExitCode.load(), 31);
+        QCOMPARE(adaptor->stopCalls(), 0);
+
+        std::signal(SIGTERM, previousTerminationHandler);
+        std::signal(SIGINT, previousInterruptHandler);
         bus.unregisterObject(objectPath);
         bus.unregisterService(service);
     }

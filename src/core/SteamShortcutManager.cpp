@@ -152,8 +152,8 @@ SteamShortcutManager::~SteamShortcutManager()
     QList<HostProcessGroup> signalledGroups;
     for (const HostProcessGroup &group : groups) {
         const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
-        const bool identityMatches = group.leaderStartTime <= 0 || currentStartTime <= 0
-            || currentStartTime == group.leaderStartTime;
+        const bool identityMatches = group.leaderStartTime <= 0
+            || (currentStartTime > 0 && currentStartTime == group.leaderStartTime);
         const bool groupSignalled = group.processGroupId > 0 && identityMatches
             && ::kill(-static_cast<pid_t>(group.processGroupId), SIGTERM) == 0;
         if (groupSignalled) {
@@ -168,8 +168,8 @@ SteamShortcutManager::~SteamShortcutManager()
         if (groupProcess && groupProcess->state() != QProcess::NotRunning) {
             if (!groupProcess->waitForFinished(HostTerminationGraceMs)) {
                 const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
-                const bool identityMatches = group.leaderStartTime <= 0 || currentStartTime <= 0
-                    || currentStartTime == group.leaderStartTime;
+                const bool identityMatches = group.leaderStartTime <= 0
+                    || (currentStartTime > 0 && currentStartTime == group.leaderStartTime);
                 if (group.processGroupId > 0 && identityMatches) {
                     ::kill(-static_cast<pid_t>(group.processGroupId), SIGKILL);
                 }
@@ -189,8 +189,8 @@ SteamShortcutManager::~SteamShortcutManager()
                 ::usleep(PollIntervalUs);
             }
             const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
-            const bool identityMatches = group.leaderStartTime <= 0 || currentStartTime <= 0
-                || currentStartTime == group.leaderStartTime;
+            const bool identityMatches = group.leaderStartTime <= 0
+                || (currentStartTime > 0 && currentStartTime == group.leaderStartTime);
             if (identityMatches) {
                 ::kill(-static_cast<pid_t>(group.processGroupId), SIGKILL);
             }
@@ -382,7 +382,7 @@ bool SteamShortcutManager::hostProcessGroupIdentityMatches(quint64 generation, q
         return true;
     }
     const qint64 currentStartTime = processStartTime(static_cast<pid_t>(processGroupId));
-    return currentStartTime <= 0 || currentStartTime == group.leaderStartTime;
+    return currentStartTime > 0 && currentStartTime == group.leaderStartTime;
 }
 
 bool SteamShortcutManager::signalOwnedHostProcessGroup(quint64 generation,

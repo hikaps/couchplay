@@ -121,13 +121,20 @@ bool CouchPlayHelperClient::watchDevice(const QString &devicePath)
 }
 
 
-void CouchPlayHelperClient::restoreAllDevices()
+bool CouchPlayHelperClient::restoreAllDevices()
 {
     if (!m_available) {
-        return;
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
     }
 
-    m_interface->call(QStringLiteral("ResetAllDevices"));
+    QDBusReply<int> reply = m_interface->call(QStringLiteral("ResetAllDevices"));
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return true;
 }
 
 bool CouchPlayHelperClient::createUser(const QString &username)
@@ -529,7 +536,13 @@ bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath,
         return false;
     }
 
-    bool result = replyMsg.arguments().value(0).toBool();
+    const QVariantList replyArguments = replyMsg.arguments();
+    if (replyArguments.size() != 1 || replyArguments.constFirst().metaType() != QMetaType::fromType<bool>()) {
+        qCWarning(couchplayHelper) << "copyFileToUser: Malformed D-Bus boolean reply";
+        Q_EMIT errorOccurred(QStringLiteral("Malformed D-Bus reply"));
+        return false;
+    }
+    const bool result = replyArguments.constFirst().toBool();
     if (!result) {
         qCWarning(couchplayHelper) << "copyFileToUser: Helper returned false";
     }
@@ -654,7 +667,13 @@ bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
         return false;
     }
 
-    bool result = replyMsg.arguments().value(0).toBool();
+    const QVariantList replyArguments = replyMsg.arguments();
+    if (replyArguments.size() != 1 || replyArguments.constFirst().metaType() != QMetaType::fromType<bool>()) {
+        qCWarning(couchplayHelper) << "writeFileToUser: Malformed D-Bus boolean reply";
+        Q_EMIT errorOccurred(QStringLiteral("Malformed D-Bus reply"));
+        return false;
+    }
+    const bool result = replyArguments.constFirst().toBool();
     if (!result) {
         qCWarning(couchplayHelper) << "writeFileToUser: Helper returned false";
     }
