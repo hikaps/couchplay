@@ -13,6 +13,7 @@
 #include <QDBusReply>
 #include <QProcess>
 #include <QSignalSpy>
+#include <QVariantMap>
 #include <QTest>
 
 #define private public
