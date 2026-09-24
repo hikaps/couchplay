@@ -278,6 +278,36 @@ public:
         f.write(content);
         return true;
     }
+    bool readSteamLibraryFoldersForUser(const QString &username, QByteArray *content, bool *exists) override
+    {
+        if (username != QStringLiteral("player1") || !content || !exists || player1SteamRoot.isEmpty()) {
+            return false;
+        }
+        QFile file(player1SteamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        *exists = file.exists();
+        if (!*exists) {
+            content->clear();
+            return true;
+        }
+        if (!file.open(QIODevice::ReadOnly)) {
+            return false;
+        }
+        *content = file.readAll();
+        return true;
+    }
+
+    bool restoreSteamLibraryFoldersForUser(const QString &username, bool existed, const QByteArray &content) override
+    {
+        if (username != QStringLiteral("player1") || player1SteamRoot.isEmpty()) {
+            return false;
+        }
+        const QString path = player1SteamRoot + QStringLiteral("/config/libraryfolders.vdf");
+        if (!existed) {
+            return !QFile::exists(path) || QFile::remove(path);
+        }
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
+    }
 
     bool isInCouchPlayGroup(const QString &username) override
     {
@@ -1069,24 +1099,31 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
         manifest.write("\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n}\n");
     }
 
+    const QByteArray originalLibraryFolders =
+        QByteArrayLiteral("\"libraryfolders\"\n"
+                          "{\n"
+                          "  \"0\"\n"
+                          "  {\n"
+                          "    \"path\"\t\t\"" )
+        + steamRoot.toUtf8()
+        + QByteArrayLiteral("\"\n"
+                            "  }\n"
+                            "  \"1\"\n"
+                            "  {\n"
+                            "    \"path\"\t\t\"")
+        + externalLib.toUtf8()
+        + QByteArrayLiteral("\"\n"
+                            "  }\n"
+                            "}\n");
     QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
     QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
-    libraryVdf.write("\"libraryfolders\"\n"
-                     "{\n"
-                     "  \"0\"\n"
-                     "  {\n"
-                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
-                     "  }\n"
-                     "  \"1\"\n"
-                     "  {\n"
-                     "    \"path\"\t\t\"" + externalLib.toUtf8() + "\"\n"
-                     "  }\n"
-                     "}\n");
+    QCOMPARE(libraryVdf.write(originalLibraryFolders), originalLibraryFolders.size());
     libraryVdf.close();
 
     // The helper-resolved home points at the temp dir; no passwd entry for
     // player1 exists in the test environment
     m_helperClient->player1Home = homeDir.path();
+    m_helperClient->player1SteamRoot = steamRoot;
 
     auto *steamManager = new SteamConfigManager(this);
     steamManager->setHelperClient(m_helperClient);
@@ -1114,8 +1151,11 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     const QByteArray vdfContent = vdf.readAll();
     QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
     QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
+    QVERIFY(steamManager->cleanupLibrarySharing(QStringLiteral("player1")));
+    QFile restoredVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(restoredVdf.open(QIODevice::ReadOnly));
+    QCOMPARE(restoredVdf.readAll(), originalLibraryFolders);
 }
-
 void TestSessionRunner::testActiveChangedRestartDoesNotEmitStaleFinalizationSignals()
 {
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
@@ -1286,8 +1326,22 @@ void TestSessionRunner::testCancelSteamLibraryPreparationRollsBackMounts()
                      "    \"path\"\t\t\"" + secondaryLibrary.toUtf8() + "\"\n"
                      "  }\n}\n");
     libraryVdf.close();
+    const QString player1Home = homeDir.path() + QStringLiteral("/player1");
+    const QString player1SteamRoot = player1Home + QStringLiteral("/.steam/steam");
+    const QString player1Config = player1SteamRoot + QStringLiteral("/config");
+    QVERIFY(QDir().mkpath(player1Config));
+    QVERIFY(QDir().mkpath(player1SteamRoot + QStringLiteral("/userdata/12345/config")));
+    const QByteArray originalPlayerLibraryFolders =
+        QByteArrayLiteral("\"libraryfolders\" { \"1\" { \"path\" \"/mnt/player-library\" } }\n");
+    QFile playerLibraryFolders(player1Config + QStringLiteral("/libraryfolders.vdf"));
+    QVERIFY(playerLibraryFolders.open(QIODevice::WriteOnly));
+    QCOMPARE(playerLibraryFolders.write(originalPlayerLibraryFolders), originalPlayerLibraryFolders.size());
+    playerLibraryFolders.close();
 
-    auto *steamManager = new SteamConfigManager(this);
+    m_helperClient->player1Home = player1Home;
+    m_helperClient->player1SteamRoot = player1SteamRoot;
+
+    auto *steamManager = new SteamConfigManager(m_runner);
     steamManager->setHelperClient(m_helperClient);
     steamManager->setShareLibraryEnabled(true);
     m_runner->setSteamConfigManager(steamManager);
@@ -1303,14 +1357,29 @@ void TestSessionRunner::testCancelSteamLibraryPreparationRollsBackMounts()
     dataDirectories.append(steamRootDir);
     m_sessionManager->setInstanceDataDirectories(0, dataDirectories);
 
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    bool restarted = false;
+    bool restartAccepted = false;
+    connect(m_runner, &SessionRunner::sessionStopped, m_runner, [this, &restarted, &restartAccepted] {
+        if (!restarted) {
+            restarted = true;
+            restartAccepted = m_runner->start();
+        }
+    });
     m_helperClient->onOverlayMount = [this] { m_runner->stop(); };
     QVERIFY(m_runner->start());
 
-    QCOMPARE(m_helperClient->overlayCalls.size(), 1);
-    QCOMPARE(m_helperClient->mountedOverlayAliases.size(), 0);
-
-    QVERIFY(!m_runner->isActive());
+    QVERIFY(restarted);
+    QVERIFY(restartAccepted);
+    QCOMPARE(m_helperClient->overlayCalls.size(), 3);
+    QCOMPARE(m_helperClient->mountedOverlayAliases.size(), 2);
+    QCOMPARE(startedSpy.count(), 1);
+    QVERIFY(m_runner->isActive());
     QVERIFY(!m_runner->m_finalizing);
+    m_runner->stop();
+    QFile restoredLibraryFolders(player1Config + QStringLiteral("/libraryfolders.vdf"));
+    QVERIFY(restoredLibraryFolders.open(QIODevice::ReadOnly));
+    QCOMPARE(restoredLibraryFolders.readAll(), originalPlayerLibraryFolders);
 }
 
 void TestSessionRunner::testStaleHookEventsCannotAffectReplacementHook()

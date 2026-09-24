@@ -853,6 +853,19 @@ QString SteamConfigManager::generateLibraryFoldersVdf(const QList<SteamLibraryFo
     return vdf;
 }
 
+bool SteamConfigManager::captureLibraryFoldersSnapshot(const QString &username)
+{
+    if (m_libraryFoldersSnapshots.contains(username)) return true;
+    if (!m_helperClient || !m_helperClient->isAvailable()) return false;
+    LibraryFoldersSnapshot snapshot;
+    if (!m_helperClient->readSteamLibraryFoldersForUser(username, &snapshot.content, &snapshot.existed)) {
+        qCWarning(couchplaySteam) << "Could not snapshot target libraryfolders.vdf for" << username;
+        return false;
+    }
+    m_libraryFoldersSnapshots.insert(username, std::move(snapshot));
+    return true;
+}
+
 bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
 {
     qCDebug(couchplaySteam) << "shareLibraryToUser called for" << targetUsername;
@@ -900,6 +913,9 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         return false;
     }
     
+    if (!captureLibraryFoldersSnapshot(targetUsername)) {
+        return false;
+    }
     QList<SteamLibraryFolder> targetLibraries;
     bool anyFailure = false;
     
@@ -983,20 +999,16 @@ bool SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
         return false;
     }
 
-    const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
-    if (!targetPaths.valid || targetPaths.libraryFoldersVdf.isEmpty()) {
+    auto snapshot = m_libraryFoldersSnapshots.constFind(targetUsername);
+    if (snapshot == m_libraryFoldersSnapshots.cend()) return true;
+    if (!m_helperClient->restoreSteamLibraryFoldersForUser(targetUsername,
+                                                           snapshot->existed,
+                                                           snapshot->content)) {
+        qCWarning(couchplaySteam) << "Failed to restore target libraryfolders.vdf for" << targetUsername;
         return false;
     }
-
-    // Restore minimal libraryfolders.vdf — clears shared library entries
-    // so Steam doesn't reference bind-mounted paths that no longer exist.
-    const QString emptyVdf = QStringLiteral("\"libraryfolders\"\n{\n}\n");
-    if (!m_helperClient->writeFileToUser(emptyVdf.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername)) {
-        qCWarning(couchplaySteam) << "Failed to clean up library sharing for" << targetUsername;
-        return false;
-    }
-
-    qCDebug(couchplaySteam) << "Cleaned up library sharing for" << targetUsername;
+    m_libraryFoldersSnapshots.remove(targetUsername);
+    qCDebug(couchplaySteam) << "Restored target libraryfolders.vdf for" << targetUsername;
     return true;
 }
 
@@ -1125,7 +1137,9 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
             qCWarning(couchplaySteam) << "finalizeDataDir: Target user has not set up Steam:" << username;
             return false;
         }
-
+        if (!captureLibraryFoldersSnapshot(username)) {
+            return false;
+        }
         QList<SteamLibraryFolder> targetLibraries;
         bool anyFailure = false;
 

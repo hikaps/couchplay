@@ -95,6 +95,17 @@ public:
                                             QString *errorMessage = nullptr);
 
     /**
+     * Return the target user's existing libraryfolders.vdf bytes and whether
+     * the file existed, using a bounded no-follow helper-side read.
+     */
+    virtual bool readSteamLibraryFoldersForUser(const QString &username,
+                                                QByteArray *content,
+                                                bool *exists);
+    virtual bool restoreSteamLibraryFoldersForUser(const QString &username,
+                                                   bool existed,
+                                                   const QByteArray &content);
+
+    /**
      * @brief Launch a gamescope instance as a specified user
      * @param username User to run as
      * @param compositorUid UID of compositor user (for Wayland socket access)

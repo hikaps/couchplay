@@ -23,6 +23,7 @@
 
 #include "SteamConfigManager.h"
 #include "SteamShortcutsVdf.h"
+#include "PresetManager.h"
 
 #include <atomic>
 #include <functional>
@@ -96,6 +97,28 @@ public:
         return result;
     }
     QString getUserSteamRoot(const QString &) override { return steamRoot; }
+    bool readSteamLibraryFoldersForUser(const QString &, QByteArray *content, bool *exists) override
+    {
+        QFile file(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        *exists = file.exists();
+        if (!*exists) { content->clear(); return true; }
+        if (!file.open(QIODevice::ReadOnly)) return false;
+        *content = file.readAll();
+        return true;
+    }
+    bool restoreSteamLibraryFoldersForUser(const QString &, bool existed, const QByteArray &content) override
+    {
+        const QString path = steamRoot + QStringLiteral("/config/libraryfolders.vdf");
+        if (!existed) return !QFile::exists(path) || QFile::remove(path);
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
+    }
+    bool writeFileToUser(const QByteArray &content, const QString &path, const QString &) override
+    {
+        if (!QDir().mkpath(QFileInfo(path).absolutePath())) return false;
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
+    }
     QString getUserSteamId(const QString &) override
     {
         return steamIdLookups++ == 0 ? steamId : alternateSteamId;
@@ -196,6 +219,66 @@ class TestSteamConfigManager : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void testFinalizeRestoresTargetLibraryFolders()
+    {
+        QTemporaryDir hostHome;
+        QTemporaryDir targetHome;
+        QTemporaryDir library;
+        QVERIFY(hostHome.isValid());
+        QVERIFY(targetHome.isValid());
+        QVERIFY(library.isValid());
+        const QByteArray previousHome = qgetenv("HOME");
+        qputenv("HOME", hostHome.path().toLocal8Bit());
+        QStandardPaths::setTestModeEnabled(true);
+
+        const QString ownRoot = hostHome.path() + QStringLiteral("/.local/share/Steam");
+        const QString configDir = ownRoot + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(configDir));
+        const QString sourceVdf = configDir + QStringLiteral("/libraryfolders.vdf");
+        QFile source(sourceVdf);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        const QByteArray sourceBytes = QByteArrayLiteral("\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\"")
+            + library.path().toUtf8() + QByteArrayLiteral("\"\n\t}\n}\n");
+        QCOMPARE(source.write(sourceBytes), qint64(sourceBytes.size()));
+        source.close();
+
+        SteamConfigManager manager;
+        manager.detectSteamPaths();
+        manager.loadLibraryFolders();
+        QCOMPARE(manager.libraryCount(), 1);
+
+        MockShortcutSyncHelper helper;
+        helper.userHome = targetHome.path();
+        helper.steamRoot = targetHome.path() + QStringLiteral("/.local/share/Steam");
+        const QString targetConfig = helper.steamRoot + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(targetConfig));
+        const QByteArray original = QByteArrayLiteral("\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\"/target/steam\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\"/target/secondary-library\"\n\t}\n}\n");
+        QFile target(targetConfig + QStringLiteral("/libraryfolders.vdf"));
+        QVERIFY(target.open(QIODevice::WriteOnly));
+        QCOMPARE(target.write(original), qint64(original.size()));
+        target.close();
+        manager.setHelperClient(&helper);
+
+        DataDirectory directory;
+        directory.path = ownRoot;
+        directory.mode = QStringLiteral("overlay");
+        QVERIFY(manager.finalizeDataDir(directory, QStringLiteral("player1")));
+        QVERIFY(target.open(QIODevice::ReadOnly));
+        const QByteArray duringSession = target.readAll();
+        target.close();
+        QVERIFY(duringSession.contains(QByteArrayLiteral(".couchplay/steam-libs/0")));
+        QVERIFY(!duringSession.contains(QByteArrayLiteral("/target/secondary-library")));
+
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player1")));
+        QVERIFY(target.open(QIODevice::ReadOnly));
+        QCOMPARE(target.readAll(), original);
+        target.close();
+        QVERIFY(original.contains(QByteArrayLiteral("/target/secondary-library")));
+
+        if (previousHome.isNull()) qunsetenv("HOME");
+        else qputenv("HOME", previousHome);
+        QStandardPaths::setTestModeEnabled(false);
+    }
     void testCodecUpsertPreservesForeignBytes()
     {
         SteamShortcut shortcut;

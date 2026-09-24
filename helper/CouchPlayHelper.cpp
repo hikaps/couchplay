@@ -3075,7 +3075,9 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
         return false;
     }
 
-    bool writeSucceeded = ::fchown(temporaryFd, userUid, userGid) == 0 && ::fchmod(temporaryFd, 0644) == 0;
+    struct stat helperInstalledStat{};
+    bool writeSucceeded = ::fchown(temporaryFd, userUid, userGid) == 0 && ::fchmod(temporaryFd, 0644) == 0
+        && ::fstat(temporaryFd, &helperInstalledStat) == 0;
     qsizetype offset = 0;
     while (writeSucceeded && offset < content.size()) {
         const ssize_t bytesWritten = ::write(temporaryFd,
@@ -3110,7 +3112,20 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
         sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed during sync"));
         return false;
     }
-    // Exchange exposes the displaced inode for verification; callers must quiesce Steam.
+    QProcess *steamProcess = m_ops->createProcess();
+    m_ops->startProcess(steamProcess, QStringLiteral("pgrep"), {
+        QStringLiteral("-u"), QString::number(userUid), QStringLiteral("-f"),
+        QStringLiteral("(^|/)(steam|steamwebhelper)([[:space:]]|$)")});
+    const bool steamCheckFinished = m_ops->waitForFinished(steamProcess, 3000);
+    const int steamCheckExitCode = steamCheckFinished ? m_ops->processExitCode(steamProcess) : -1;
+    delete steamProcess;
+    if (!steamCheckFinished || steamCheckExitCode != 1) {
+        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Steam must be verifiably stopped before updating shortcuts"));
+        return false;
+    }
     const unsigned int replacementFlags = expectedDigest == QByteArrayLiteral("missing")
         ? RENAME_NOREPLACE
         : RENAME_EXCHANGE;
@@ -3133,20 +3148,51 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
         const bool displacedFileIsExpected = readDigestAt(temporaryBytes, displacedDigest)
             && displacedDigest == expectedDigest;
         if (!displacedFileIsExpected) {
-            const bool restored = m_ops->renameAt(parentFd,
-                                                  temporaryBytes.constData(),
-                                                  parentFd,
-                                                  leafBytes.constData(),
-                                                  RENAME_EXCHANGE) == 0;
+            // Do not exchange the snapshot back over a newer inode. The
+            // first exchange installed our temporary inode; an external
+            // writer may have replaced the leaf again in the meantime.
+            // The temporary name held the displaced inode after the first
+            // exchange. Only roll back while the leaf still names the inode
+            // installed by this helper; otherwise preserve that snapshot.
+            bool leafStillHelperInstalled = false;
+            const int leafFd = ::openat(parentFd,
+                                        leafBytes.constData(),
+                                        O_PATH | O_NOFOLLOW | O_CLOEXEC);
+            if (leafFd >= 0) {
+                struct stat leafStat;
+                leafStillHelperInstalled = ::fstat(leafFd, &leafStat) == 0
+                    && helperInstalledStat.st_dev == leafStat.st_dev
+                    && helperInstalledStat.st_ino == leafStat.st_ino;
+                ::close(leafFd);
+            }
+            bool rollbackSnapshotRemoved = false;
+            const bool restored = leafStillHelperInstalled
+                && m_ops->renameAt(parentFd,
+                                   temporaryBytes.constData(),
+                                   parentFd,
+                                   leafBytes.constData(),
+                                   RENAME_EXCHANGE) == 0;
             if (restored) {
-                ::unlinkat(parentFd, temporaryBytes.constData(), 0);
-            } else {
+                const int installedFd = ::openat(parentFd,
+                                                 temporaryBytes.constData(),
+                                                 O_PATH | O_NOFOLLOW | O_CLOEXEC);
+                struct stat installedStat;
+                const bool temporaryStillHelperInstalled = installedFd >= 0
+                    && ::fstat(installedFd, &installedStat) == 0
+                    && helperInstalledStat.st_dev == installedStat.st_dev
+                    && helperInstalledStat.st_ino == installedStat.st_ino;
+                if (installedFd >= 0) ::close(installedFd);
+                if (temporaryStillHelperInstalled) {
+                    rollbackSnapshotRemoved = ::unlinkat(parentFd, temporaryBytes.constData(), 0) == 0;
+                }
+            }
+            if (!rollbackSnapshotRemoved) {
                 qWarning() << "WriteSteamShortcutsForUser: concurrent snapshot retained at" << temporaryName;
             }
             ::close(parentFd);
             sendErrorReply(QDBusError::Failed,
-                           restored ? QStringLiteral("Steam shortcuts file changed during sync")
-                                    : QStringLiteral("Steam shortcuts changed during sync; concurrent snapshot retained"));
+                           rollbackSnapshotRemoved ? QStringLiteral("Steam shortcuts file changed during sync")
+                                                   : QStringLiteral("Steam shortcuts changed during sync; concurrent snapshot retained"));
             return false;
         }
         if (::unlinkat(parentFd, temporaryBytes.constData(), 0) != 0) {
@@ -3738,6 +3784,124 @@ bool CouchPlayHelper::IsSteamBootstrapped(const QString &username)
     // (userdata alone is insufficient).
     return m_ops->fileExists(steamRoot + QStringLiteral("/steam.sh"))
         || m_ops->fileExists(steamRoot + QStringLiteral("/ubuntu12_32/steam"));
+}
+
+QVariantMap CouchPlayHelper::ReadSteamLibraryFoldersForUser(const QString &username)
+{
+    constexpr qsizetype maxSize = 4 * 1024 * 1024;
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return {};
+    }
+    struct passwd *pw = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!pw) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return {};
+    }
+    const QString home = QString::fromLocal8Bit(pw->pw_dir);
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (home.isEmpty() || steamRoot.isEmpty()) {
+        return {};
+    }
+    const QString relative = QDir(home).relativeFilePath(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QStringList parts = relative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (relative.startsWith(QLatin1Char('/')) || parts.size() < 2 || parts.contains(QStringLiteral(".."))) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid Steam library folders path"));
+        return {};
+    }
+    const QString leaf = parts.takeLast();
+    const QString canonicalHome = m_ops->canonicalFilePath(home);
+    const int homeFd = SecureFs::openBaseDir(canonicalHome.isEmpty() ? home : canonicalHome);
+    if (homeFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely open user home"));
+        return {};
+    }
+    const int parentFd = SecureFs::openDirBelow(homeFd, parts, false, pw->pw_uid, pw->pw_gid);
+    ::close(homeFd);
+    if (parentFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely open Steam config directory"));
+        return {};
+    }
+    const QByteArray leafBytes = leaf.toLocal8Bit();
+    const int fd = ::openat(parentFd, leafBytes.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0 && errno == ENOENT) {
+        ::close(parentFd);
+        return {{QStringLiteral("exists"), false}, {QStringLiteral("content"), QByteArray()}};
+    }
+    if (fd < 0) {
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not securely read Steam library folders"));
+        return {};
+    }
+    struct stat before;
+    if (::fstat(fd, &before) != 0 || !S_ISREG(before.st_mode) || before.st_uid != pw->pw_uid
+        || before.st_nlink != 1 || before.st_size < 0 || before.st_size > maxSize) {
+        ::close(fd);
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam library folders file is unsafe"));
+        return {};
+    }
+    QByteArray content;
+    content.reserve(static_cast<qsizetype>(before.st_size));
+    char buffer[64 * 1024];
+    while (true) {
+        const ssize_t count = m_ops->read(fd, buffer, sizeof(buffer));
+        if (count == 0) break;
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0 || content.size() + count > maxSize) {
+            ::close(fd); ::close(parentFd);
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Steam library folders file could not be read safely"));
+            return {};
+        }
+        content.append(buffer, static_cast<qsizetype>(count));
+    }
+    struct stat after;
+    const bool changed = ::fstat(fd, &after) != 0 || before.st_size != after.st_size
+        || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
+        || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
+    ::close(fd); ::close(parentFd);
+    if (changed || content.size() != before.st_size) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam library folders changed while being read"));
+        return {};
+    }
+    return {{QStringLiteral("exists"), true}, {QStringLiteral("content"), content}};
+}
+
+bool CouchPlayHelper::RestoreSteamLibraryFoldersForUser(const QString &username, bool existed, const QByteArray &content)
+{
+    constexpr qsizetype maxSize = 4 * 1024 * 1024;
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS) || (existed && content.size() > maxSize)) {
+        return false;
+    }
+    struct passwd *pw = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!pw) return false;
+    const QString home = QString::fromLocal8Bit(pw->pw_dir);
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (home.isEmpty() || steamRoot.isEmpty()) return false;
+    const QString relative = QDir(home).relativeFilePath(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QStringList parts = relative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (relative.startsWith(QLatin1Char('/')) || parts.size() < 2 || parts.contains(QStringLiteral(".."))) return false;
+    const QString leaf = parts.takeLast();
+    const QString canonicalHome = m_ops->canonicalFilePath(home);
+    const int homeFd = SecureFs::openBaseDir(canonicalHome.isEmpty() ? home : canonicalHome);
+    if (homeFd < 0) return false;
+    const int parentFd = SecureFs::openDirBelow(homeFd, parts, false, pw->pw_uid, pw->pw_gid);
+    ::close(homeFd);
+    if (parentFd < 0) return false;
+    const QByteArray leafBytes = leaf.toLocal8Bit();
+    bool restored = false;
+    if (existed) {
+        restored = SecureFs::writeFileAt(parentFd, leaf, content, pw->pw_uid, pw->pw_gid) == 0;
+    } else {
+        struct stat st;
+        if (::fstatat(parentFd, leafBytes.constData(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
+            restored = errno == ENOENT;
+        } else if (S_ISREG(st.st_mode) && st.st_uid == pw->pw_uid && st.st_nlink == 1) {
+            restored = ::unlinkat(parentFd, leafBytes.constData(), 0) == 0;
+        }
+    }
+    ::close(parentFd);
+    if (!restored) sendErrorReply(QDBusError::Failed, QStringLiteral("Could not restore Steam library folders"));
+    return restored;
 }
 
 QString CouchPlayHelper::findGamescopePath()

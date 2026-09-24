@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <QByteArray>
+#include <QHash>
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QString>
@@ -210,4 +212,7 @@ private:
     QString m_userHome;
     bool m_syncShortcutsEnabled = false;
     bool m_shareLibraryEnabled = false;
+    struct LibraryFoldersSnapshot { bool existed = false; QByteArray content; };
+    bool captureLibraryFoldersSnapshot(const QString &username);
+    QHash<QString, LibraryFoldersSnapshot> m_libraryFoldersSnapshots;
 };

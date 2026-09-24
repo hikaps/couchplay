@@ -58,30 +58,32 @@ class TestProfiles(BaseTest):
             driver, AppiumBy.ACCESSIBILITY_ID, "dialogAddToSteam", timeout=30
         )
         assert dialog.is_displayed()
+        try:
+            game_mode_messages = driver.find_elements(
+                AppiumBy.ACCESSIBILITY_ID, "messageSteamGameMode"
+            )
+            if any(message.is_displayed() for message in game_mode_messages):
+                pytest.skip("Steam account discovery is unavailable in Game Mode")
 
-        game_mode_messages = driver.find_elements(
-            AppiumBy.ACCESSIBILITY_ID, "messageSteamGameMode"
-        )
-        if any(message.is_displayed() for message in game_mode_messages):
-            pytest.skip("Steam account discovery is unavailable in Game Mode")
+            account_combos = driver.find_elements(AppiumBy.ACCESSIBILITY_ID, "comboSteamAccount")
+            visible_combos = [combo for combo in account_combos if combo.is_displayed()]
+            if visible_combos:
+                account = visible_combos[0]
+                value = (account.get_attribute("value") or "").strip()
+                visible_text = account.text.strip()
+                if (value and value != "Steam account") or (
+                    visible_text and visible_text != "Steam account"
+                ):
+                    pytest.skip(
+                        "This host has a Steam account; the empty-account state is not applicable"
+                    )
 
-        account_combos = driver.find_elements(AppiumBy.ACCESSIBILITY_ID, "comboSteamAccount")
-        visible_combos = [combo for combo in account_combos if combo.is_displayed()]
-        if visible_combos:
-            account = visible_combos[0]
-            value = (account.get_attribute("value") or "").strip()
-            visible_text = account.text.strip()
-            if (value and value != "Steam account") or (
-                visible_text and visible_text != "Steam account"
-            ):
-                pytest.skip(
-                    "This host has a Steam account; the empty-account state is not applicable"
-                )
-
-        guidance = self.wait_for_element(
-            driver, AppiumBy.ACCESSIBILITY_ID, "messageNoSteamAccounts"
-        )
-        assert guidance.is_displayed()
-        assert "Install Steam and sign in" in guidance.text
-        self.wait_for_absence(driver, AppiumBy.ACCESSIBILITY_ID, "comboSteamAccount")
+            guidance = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "messageNoSteamAccounts"
+            )
+            assert guidance.is_displayed()
+            assert "Install Steam and sign in" in guidance.text
+            self.wait_for_absence(driver, AppiumBy.ACCESSIBILITY_ID, "comboSteamAccount")
+        finally:
+            self.click_by_name(driver, "Cancel")
 

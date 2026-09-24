@@ -134,9 +134,25 @@ steam_running() {
 
     for pid in /proc/[0-9]*; do
         pid=${pid##*/}
-        [[ -r "/proc/$pid/status" ]] || continue
-        [[ "$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" == "$uid" ]] || continue
-        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+        if [[ ! -e "/proc/$pid/status" ]]; then
+            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+            continue
+        fi
+        if ! process_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null) || [[ -z "$process_uid" ]]; then
+            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+            continue
+        fi
+        [[ "$process_uid" == "$uid" ]] || continue
+        if ! exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null); then
+            # A same-UID process that still exists but cannot be inspected is
+            # an unknown state, not evidence that Steam is stopped.
+            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+            continue
+        fi
+        if [[ -z "$exe" ]]; then
+            [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+            continue
+        fi
         for candidate in "${native_binaries[@]}"; do
             [[ "$exe" == "$candidate" ]] && return 0
         done

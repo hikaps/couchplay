@@ -492,7 +492,14 @@ void SessionRunner::continueStart()
     }
 
 
+    m_sessionResourcesSetupInProgress = true;
     const bool sessionResourcesReady = setupSessionResources(startupGeneration);
+    m_sessionResourcesSetupInProgress = false;
+    if (m_finishAfterSessionResources) {
+        m_finishAfterSessionResources = false;
+        finishFinalization();
+        return;
+    }
     if (!isCurrentStartup()) {
         return;
     }
@@ -667,6 +674,10 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
 
 void SessionRunner::finishFinalization()
 {
+    if (m_sessionResourcesSetupInProgress) {
+        m_finishAfterSessionResources = true;
+        return;
+    }
     if (m_hookProcess) {
         m_hookProcess->deleteLater();
         m_hookProcess = nullptr;

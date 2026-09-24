@@ -394,6 +394,9 @@ public Q_SLOTS:
      */
     bool IsSteamBootstrapped(const QString &username);
 
+    QVariantMap ReadSteamLibraryFoldersForUser(const QString &username);
+    bool RestoreSteamLibraryFoldersForUser(const QString &username, bool existed, const QByteArray &content);
+
     /**
      * Write content directly to a file in a user's directory
      *
@@ -415,14 +418,15 @@ public Q_SLOTS:
     /**
      * Best-effort snapshot validation: atomic exchange detects edits present
      * at the exchange point but does not lock out later external Steam writes.
-     * Callers must keep Steam stopped for the duration. Use "missing" when no
-     * file existed; otherwise pass its lowercase SHA-256 digest.
+     * The helper checks the target user's Steam process immediately before
+     * committing and refuses when it is running or its state is unknown. This
+     * check cannot prevent Steam starting after that boundary. Use "missing"
+     * when no file existed; otherwise pass its lowercase SHA-256 digest.
      */
     bool WriteSteamShortcutsForUser(const QString &username,
                                     const QString &steamId,
                                     const QByteArray &expectedDigest,
                                     const QByteArray &content);
-
     /**
      * Create a virtual Wayland output for streaming capture
      *

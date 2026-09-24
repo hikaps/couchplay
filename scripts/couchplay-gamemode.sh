@@ -7,7 +7,7 @@
 # Launches CouchPlay inside SteamOS Game Mode by starting a nested KWin Wayland
 # compositor. It is also safe to use as a normal Desktop Mode launcher.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTE=auto
@@ -57,7 +57,9 @@ cleanup() {
         wait "$KWIN_PID" 2>/dev/null || true
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 run_couchplay() {
     if [[ "$ROUTE" == flatpak ]]; then
@@ -143,9 +145,10 @@ export QT_QPA_PLATFORM=wayland
 export QT_LOGGING_RULES="couchplay.*=true"
 export QT_MESSAGE_PATTERN="[%{time hh:mm:ss.zzz}] %{if-category}%{category}: %{endif}%{message}"
 
-set +e
-run_couchplay "$@"
-COUCHPLAY_EXIT=$?
-set -e
+if run_couchplay "$@"; then
+    COUCHPLAY_EXIT=0
+else
+    COUCHPLAY_EXIT=$?
+fi
 echo "CouchPlay exited with code $COUCHPLAY_EXIT"
 exit "$COUCHPLAY_EXIT"

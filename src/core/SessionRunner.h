@@ -268,6 +268,8 @@ private:
     QString m_status;
     bool m_active = false;
     bool m_finalizing = false;
+    bool m_sessionResourcesSetupInProgress = false;
+    bool m_finishAfterSessionResources = false;
     bool m_startupFailure = false;
     bool m_preHookCompleted = false;
     bool m_postHookArmed = false;

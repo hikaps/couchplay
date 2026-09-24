@@ -23,6 +23,8 @@
 #include "../helper/MountSpec.h"
 
 #include <fcntl.h>
+#include <linux/fs.h>
+#include <stdio.h>
 #include <unistd.h>
 
 class MockSystemOps : public SystemOps
@@ -33,6 +35,10 @@ public:
     void setBeforeNextRenameAt(std::function<void()> callback)
     {
         m_beforeNextRenameAt = std::move(callback);
+    }
+    void setAfterFirstExchange(std::function<void()> callback)
+    {
+        m_afterFirstExchange = std::move(callback);
     }
 
     void setAuthResult(bool authorized)
@@ -131,6 +137,7 @@ public:
         m_standardOutput.clear();
         m_standardError.clear();
         m_beforeNextRenameAt = {};
+        m_afterFirstExchange = {};
 
     }
     QStringList getLastProcessArgs() const
@@ -343,7 +350,13 @@ public:
             m_beforeNextRenameAt = {};
             callback();
         }
-        return SystemOps::renameAt(oldDirFd, oldPath, newDirFd, newPath, flags);
+        const int result = SystemOps::renameAt(oldDirFd, oldPath, newDirFd, newPath, flags);
+        if (result == 0 && flags == RENAME_EXCHANGE && m_afterFirstExchange) {
+            const auto callback = m_afterFirstExchange;
+            m_afterFirstExchange = {};
+            callback();
+        }
+        return result;
     }
 
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override
@@ -418,6 +431,8 @@ private:
     QMap<QString, bool> m_directories;
     QMap<QString, QString> m_symlinks;
     QMap<QString, QString> m_canonical;
+    std::function<void()> m_beforeNextRenameAt;
+    std::function<void()> m_afterFirstExchange;
     bool m_authorized = true;
     QMap<QString, QStringList> m_entryLists;
     int m_processExitCode = 0;
@@ -430,7 +445,6 @@ private:
     QByteArray m_standardOutput;
     QByteArray m_standardError;
     QString m_truncateOnNextRead;
-    std::function<void()> m_beforeNextRenameAt;
 };
 
 class TestCouchPlayHelper : public QObject
@@ -482,6 +496,7 @@ private Q_SLOTS:
     void testGetUserSteamIdDoesNotFallbackForUnsafeLoginUsers();
     void testReadSteamShortcutsForUser();
     void testWriteSteamShortcutsRejectsConcurrentEdit();
+    void testReadSteamLibraryFoldersSecurely();
     void testReadSteamShortcutsMissingSteamDirectories();
     // Copy directory tests
     void testCopyDirectoryToUserAbsoluteTarget();
@@ -1247,6 +1262,8 @@ void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
     m_ops->clear();
     m_ops->setUserExists(username, true, ::getuid(), ::getgid(), home.path());
     m_ops->setFileExists(userdataPath, true);
+    m_ops->setMockProcessStart(true);
+    m_ops->setProcessExitCode(1);
     m_ops->setEntryList(userdataPath, {steamId});
     const QByteArray initial = QByteArrayLiteral("initial shortcuts");
     QFile file(shortcutsPath);
@@ -1280,13 +1297,20 @@ void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
 
     const QByteArray currentDigest = QCryptographicHash::hash(concurrentEdit, QCryptographicHash::Sha256).toHex();
     const QByteArray renameRaceEdit = QByteArrayLiteral("Edit between compare and exchange");
+    const QByteArray externalReplacement = QByteArrayLiteral("External atomic replacement");
+    const QString externalTempPath = QFileInfo(shortcutsPath).absolutePath() + QStringLiteral("/external.vdf");
     m_ops->setBeforeNextRenameAt([&] {
         QFile racedFile(shortcutsPath);
-        if (!racedFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            return;
-        }
+        if (!racedFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
         (void)racedFile.write(renameRaceEdit);
         racedFile.close();
+    });
+    m_ops->setAfterFirstExchange([&] {
+        QFile racedFile(externalTempPath);
+        if (!racedFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+        (void)racedFile.write(externalReplacement);
+        racedFile.close();
+        QVERIFY(::rename(externalTempPath.toLocal8Bit().constData(), shortcutsPath.toLocal8Bit().constData()) == 0);
     });
     QDBusReply<bool> raceRejected = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
                                                          username,
@@ -1295,10 +1319,31 @@ void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
                                                          replacement);
     QVERIFY(!raceRejected.isValid());
     QVERIFY(unchanged.open(QIODevice::ReadOnly));
-    QCOMPARE(unchanged.readAll(), renameRaceEdit);
+    QCOMPARE(unchanged.readAll(), externalReplacement);
     unchanged.close();
+    const QStringList retainedNames = QDir(QFileInfo(shortcutsPath).absolutePath())
+        .entryList({QStringLiteral(".shortcuts.vdf.couchplay-*.tmp")}, QDir::Files);
+    QCOMPARE(retainedNames.size(), 1);
+    QFile retainedSnapshot(QFileInfo(shortcutsPath).absolutePath() + QLatin1Char('/') + retainedNames.first());
+    QVERIFY(retainedSnapshot.open(QIODevice::ReadOnly));
+    QCOMPARE(retainedSnapshot.readAll(), renameRaceEdit);
+    retainedSnapshot.close();
 
-    const QByteArray stableDigest = QCryptographicHash::hash(renameRaceEdit, QCryptographicHash::Sha256).toHex();
+    const QByteArray externalDigest = QCryptographicHash::hash(externalReplacement, QCryptographicHash::Sha256).toHex();
+    m_ops->setProcessExitCode(0);
+    QDBusReply<bool> runningRejected = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                            username, steamId, externalDigest, replacement);
+    QVERIFY(!runningRejected.isValid());
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), externalReplacement);
+    unchanged.close();
+    m_ops->setProcessExitCode(2);
+    QDBusReply<bool> unknownRejected = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                            username, steamId, externalDigest, replacement);
+    QVERIFY(!unknownRejected.isValid());
+    m_ops->setProcessExitCode(1);
+
+    const QByteArray stableDigest = externalDigest;
     QDBusReply<bool> committed = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
                                                       username,
                                                       steamId,
@@ -1342,6 +1387,55 @@ void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
     QFile createdFile(shortcutsPath);
     QVERIFY(createdFile.open(QIODevice::ReadOnly));
     QCOMPARE(createdFile.readAll(), concurrentEdit);
+}
+void TestCouchPlayHelper::testReadSteamLibraryFoldersSecurely()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    const QString username = QStringLiteral("player1");
+    const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
+    const QString configDir = steamRoot + QStringLiteral("/config");
+    const QString userdata = steamRoot + QStringLiteral("/userdata");
+    QVERIFY(QDir().mkpath(configDir));
+    QVERIFY(QDir().mkpath(userdata));
+    const QString path = configDir + QStringLiteral("/libraryfolders.vdf");
+    const QByteArray original = QByteArrayLiteral("libraryfolders original bytes");
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(original), original.size());
+    file.close();
+
+    m_ops->clear();
+    m_ops->setUserExists(username, true, ::getuid(), ::getgid(), home.path());
+    m_ops->setFileExists(userdata, true);
+    QDBusReply<QVariantMap> snapshot =
+        m_dbusInterface->call(QStringLiteral("ReadSteamLibraryFoldersForUser"), username);
+    QVERIFY2(snapshot.isValid(), qPrintable(snapshot.error().message()));
+    QCOMPARE(snapshot.value().value(QStringLiteral("exists")).toBool(), true);
+    QCOMPARE(snapshot.value().value(QStringLiteral("content")).toByteArray(), original);
+
+    const QByteArray sessionVdf = QByteArrayLiteral("temporary CouchPlay library entries");
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(sessionVdf), sessionVdf.size());
+    file.close();
+    QDBusReply<bool> restored = m_dbusInterface->call(QStringLiteral("RestoreSteamLibraryFoldersForUser"),
+                                                      username, true, original);
+    QVERIFY2(restored.isValid(), qPrintable(restored.error().message()));
+    QVERIFY(restored.value());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), original);
+    file.close();
+
+    QVERIFY(QFile::remove(path));
+    const QString outside = home.path() + QStringLiteral("/outside.vdf");
+    QFile outsideFile(outside);
+    QVERIFY(outsideFile.open(QIODevice::WriteOnly));
+    QCOMPARE(outsideFile.write(original), original.size());
+    outsideFile.close();
+    QVERIFY(::symlink(outside.toLocal8Bit().constData(), path.toLocal8Bit().constData()) == 0);
+    QDBusReply<QVariantMap> unsafe =
+        m_dbusInterface->call(QStringLiteral("ReadSteamLibraryFoldersForUser"), username);
+    QVERIFY(!unsafe.isValid());
 }
 
 void TestCouchPlayHelper::testReadSteamShortcutsMissingSteamDirectories()

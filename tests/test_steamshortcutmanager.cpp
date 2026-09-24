@@ -46,6 +46,14 @@ QString hostScript()
     }
     return QString::fromUtf8(file.readAll());
 }
+QString gameModeScript()
+{
+    QFile file(QStringLiteral(":/couchplay/gamemode.sh"));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return QString::fromUtf8(file.readAll());
+}
 
 class HostTestHome
 {
@@ -486,27 +494,44 @@ private Q_SLOTS:
             QVERIFY(home.makeShortcutHostOwned());
             const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
             QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
-            QVERIFY(writeFile(binary, "#!/bin/sh\nexit 0\n",
-                              QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther
-                                  | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+            QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
+            QVERIFY(QFile::setPermissions(binary, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                                    | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                                    | QFileDevice::ReadOther | QFileDevice::ExeOther));
 
             const QString binDir = home.home.path() + QStringLiteral("/bin");
             QVERIFY(QDir().mkpath(binDir));
-            QVERIFY(writeFile(binDir + QStringLiteral("/readlink"), "#!/bin/sh\nexit 1\n",
+            QVERIFY(writeFile(binDir + QStringLiteral("/readlink"),
+                              "#!/bin/sh\ncase \" $* \" in *\"/proc/$COUCHPLAY_UNINSPECTABLE_PID/exe\"*) exit 1;; esac\nexec /usr/bin/readlink \"$@\"\n",
                               QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther
                                   | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+            QProcess fakeSteam;
+            fakeSteam.setProgram(binary);
+            fakeSteam.setArguments({QStringLiteral("30")});
+            fakeSteam.setChildProcessModifier([] {
+                if (::setpgid(0, 0) != 0
+                    || (::geteuid() == 0 && (::setgroups(0, nullptr) != 0 || ::setgid(65534) != 0 || ::setuid(65534) != 0))) {
+                    ::_exit(127);
+                }
+            });
+            fakeSteam.start();
+            QVERIFY(fakeSteam.waitForStarted(3000));
             QProcess process;
             home.configure(process, QStringLiteral("commit"),
                            {home.steamRoot, QStringLiteral("123"), fileHash(original)});
             QProcessEnvironment environment = process.processEnvironment();
             environment.insert(QStringLiteral("PATH"),
                                binDir + QLatin1Char(':') + environment.value(QStringLiteral("PATH")));
+            environment.insert(QStringLiteral("COUCHPLAY_UNINSPECTABLE_PID"),
+                               QString::number(fakeSteam.processId()));
             process.setProcessEnvironment(environment);
             process.start();
             QVERIFY(process.waitForStarted(3000));
             QVERIFY(process.waitForFinished(5000));
             QCOMPARE(process.exitCode(), 3);
             QVERIFY(process.readAllStandardError().contains("steam-process-state-unknown"));
+            fakeSteam.terminate();
+            QVERIFY(fakeSteam.waitForFinished(3000));
             QFile shortcuts(home.shortcutsPath);
             QVERIFY(shortcuts.open(QIODevice::ReadOnly));
             QCOMPARE(shortcuts.readAll(), original);
@@ -950,6 +975,50 @@ private Q_SLOTS:
         QVERIFY(failedStart.exitCode() != 0);
         QVERIFY(failedStart.readAllStandardOutput().trimmed() != QByteArray("started"));
         QVERIFY(failedStart.readAllStandardError().contains("steam-start-timeout"));
+    }
+
+    void testGameModeSignalDuringReadinessCleansKwin()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("game mode process cleanup requires Linux");
+        }
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        const QString binDir = home.path() + QStringLiteral("/bin");
+        QVERIFY(QDir().mkpath(binDir));
+        const QString kwinPidPath = home.path() + QStringLiteral("/kwin-pid");
+        QVERIFY(writeFile(binDir + QStringLiteral("/kwin_wayland"),
+                          "#!/bin/sh\necho $$ > \"$KWINT_TEST_PID\"\nexec /bin/sleep 30\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        QVERIFY(writeFile(binDir + QStringLiteral("/dbus-send"), "#!/bin/sh\nexit 1\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        QVERIFY(writeFile(binDir + QStringLiteral("/sleep"),
+                          "#!/bin/sh\n: > \"$READINESS_SLEEP_MARKER\"\nexec /bin/sleep \"$@\"\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        QProcess process;
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("HOME"), home.path());
+        environment.insert(QStringLiteral("PATH"), binDir + QLatin1Char(':') + environment.value(QStringLiteral("PATH")));
+        environment.insert(QStringLiteral("GAMESCOPE_WAYLAND_DISPLAY"), QStringLiteral("gamescope-0"));
+        environment.insert(QStringLiteral("KWINT_TEST_PID"), kwinPidPath);
+        environment.insert(QStringLiteral("READINESS_SLEEP_MARKER"), home.path() + QStringLiteral("/sleep-marker"));
+        process.setProcessEnvironment(environment);
+        process.setProgram(QStringLiteral("/bin/bash"));
+        process.setArguments({QStringLiteral("-c"), gameModeScript(), QStringLiteral("gamemode-test"),
+                              QStringLiteral("--couchplay-native"), QStringLiteral("/bin/true"), QStringLiteral("--")});
+        process.start();
+        QVERIFY(process.waitForStarted(3000));
+        const QString sleepMarker = home.path() + QStringLiteral("/sleep-marker");
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(kwinPidPath) && QFile::exists(sleepMarker), 3000);
+        QFile pidFile(kwinPidPath);
+        QVERIFY(pidFile.open(QIODevice::ReadOnly));
+        bool ok = false;
+        const pid_t kwinPid = static_cast<pid_t>(pidFile.readAll().trimmed().toLongLong(&ok));
+        QVERIFY(ok && kwinPid > 0);
+        QCOMPARE(::kill(static_cast<pid_t>(process.processId()), SIGTERM), 0);
+        QVERIFY(process.waitForFinished(2000));
+        QCOMPARE(process.exitCode(), 143);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(kwinPid)), 3000);
     }
 
     void testInvalidProfileFailsBeforeHostProbe()

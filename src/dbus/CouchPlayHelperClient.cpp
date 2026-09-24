@@ -333,6 +333,28 @@ bool CouchPlayHelperClient::writeSteamShortcutsForUser(const QString &username,
     return true;
 }
 
+bool CouchPlayHelperClient::readSteamLibraryFoldersForUser(const QString &username, QByteArray *content, bool *exists)
+{
+    if (!m_available || !m_interface || !content || !exists) return false;
+    QDBusReply<QVariantMap> reply = m_interface->call(QStringLiteral("ReadSteamLibraryFoldersForUser"), username);
+    if (!reply.isValid()) return false;
+    const QVariantMap snapshot = reply.value();
+    if (!snapshot.contains(QStringLiteral("exists")) || !snapshot.contains(QStringLiteral("content"))) return false;
+    *exists = snapshot.value(QStringLiteral("exists")).toBool();
+    *content = snapshot.value(QStringLiteral("content")).toByteArray();
+    return true;
+}
+
+bool CouchPlayHelperClient::restoreSteamLibraryFoldersForUser(const QString &username,
+                                                               bool existed,
+                                                               const QByteArray &content)
+{
+    if (!m_available || !m_interface) return false;
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("RestoreSteamLibraryFoldersForUser"),
+                                               username, existed, content);
+    return reply.isValid() && reply.value();
+}
+
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              const QString &displayContext,
                                              const QStringList &gamescopeArgs,
@@ -587,6 +609,7 @@ bool CouchPlayHelperClient::isSteamBootstrapped(const QString &username)
 
     return reply.value();
 }
+
 
 bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
                                             const QString &targetPath,
