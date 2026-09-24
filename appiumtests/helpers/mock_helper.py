@@ -104,6 +104,8 @@ class MockHelper(dbus.service.Object):
 
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="b")
     def IsInCouchPlayGroup(self, username):
+        if FAKE_USERS:
+            return username in self._created_users
         result = subprocess.run(["groups", username], capture_output=True, text=True)
         return "couchplay" in result.stdout
 
