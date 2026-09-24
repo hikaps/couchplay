@@ -7,6 +7,8 @@ from helpers.base_test import BaseTest
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import time
 
@@ -168,6 +170,48 @@ class TestSessionLifecycle(BaseTest):
                     return out
             except FileNotFoundError:
                 return []
+        def visible_ui_status():
+            """Return a small accessibility snapshot for remote E2E failures."""
+            status_names = (
+                "Start Session",
+                "Stop Session",
+                "Starting session...",
+                "Session running",
+                "Stopping session...",
+                "Stopped",
+                "Error",
+            )
+            visible = []
+            for name in status_names:
+                try:
+                    if any(element.is_displayed() for element in driver.find_elements(AppiumBy.NAME, name)):
+                        visible.append(name)
+                except Exception:
+                    continue
+            try:
+                source = driver.page_source
+                labels = re.findall(r'(?:name|text)="([^"]+)"', source)
+                keywords = ("error", "failed", "session", "sunshine", "starting", "stopped")
+                for label in labels:
+                    label = label.strip()
+                    if label and any(keyword in label.lower() for keyword in keywords):
+                        if label not in visible:
+                            visible.append(label[:160])
+                    if len(visible) >= 20:
+                        break
+            except Exception:
+                pass
+            return " | ".join(visible)[:2000]
+
+        def copy_launch_artifact():
+            artifact_dir = os.environ.get("APPIUM_ARTIFACT_OUTPUT_PATH")
+            if not artifact_dir:
+                return
+            try:
+                shutil.copyfile(log_path, os.path.join(artifact_dir, "couchplay-mock-launch.jsonl"))
+            except OSError:
+                pass
+
 
         try:
             before = len(read_calls())
@@ -211,8 +255,29 @@ class TestSessionLifecycle(BaseTest):
                 if e.get("method") is None
                 and "sunshine" in str(e.get("gameCommand", "")).lower()
             ]
+            # Keep a bounded snapshot in the failure so a remote E2E run shows
+            # whether the streaming gamescope launch happened and which helper
+            # setup calls completed, without dumping an unbounded shared log.
+            diagnostic_entries = []
+            for entry in new_entries[:8]:
+                command = entry.get("gameCommand", [])
+                if isinstance(command, (list, tuple)):
+                    command = [str(argument)[:160] for argument in command[:4]]
+                else:
+                    command = str(command)[:320]
+                diagnostic_entries.append(
+                    {
+                        "method": entry.get("method") or "LaunchInstance",
+                        "username": entry.get("username"),
+                        "gameCommand": command,
+                    }
+                )
+            ui_status = visible_ui_status()
+            diagnostics = (
+                f"UI status: {ui_status}; helper calls (first 8): {diagnostic_entries}"
+            )[:5000]
             assert sunshine_launches, (
-                "streaming session did not issue a sunshine LaunchInstance"
+                "streaming session did not issue a sunshine LaunchInstance; " + diagnostics
             )
             # And the generated config path must be the per-instance sunshine.conf.
             command = " ".join(sunshine_launches[0]["gameCommand"])
@@ -221,6 +286,7 @@ class TestSessionLifecycle(BaseTest):
                 + command
             )
         finally:
+            copy_launch_artifact()
             self._stop_session_if_running(driver)
 
     def test_device_assignment_page_with_helper(self, driver, mock_helper):
