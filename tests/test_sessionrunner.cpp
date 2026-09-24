@@ -14,6 +14,7 @@
 #include <QTest>
 #include <QTimer>
 #include <functional>
+#include <utility>
 #include <unistd.h>
 
 #define private public
@@ -1294,8 +1295,7 @@ void TestSessionRunner::testStreamingSetupFailureDoesNotFinalizeReplacementSessi
     QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
     bool restarted = false;
     bool restartAccepted = false;
-    connect(m_runner, &SessionRunner::errorOccurred, m_runner,
-            [this, &restarted, &restartAccepted] {
+    connect(m_runner, &SessionRunner::errorOccurred, m_runner, [this, &restarted] {
         if (restarted) {
             return;
         }
@@ -1305,8 +1305,9 @@ void TestSessionRunner::testStreamingSetupFailureDoesNotFinalizeReplacementSessi
         QVariantMap physicalConfig;
         physicalConfig.insert(QStringLiteral("outputMode"), QStringLiteral("physical"));
         m_sessionManager->setInstanceConfig(0, physicalConfig);
-        restartAccepted = m_runner->start();
     });
+    const QMetaObject::Connection restartConnection = connect(m_runner, &SessionRunner::sessionStopped, m_runner,
+                                                              [this, &restartAccepted] { restartAccepted = m_runner->start(); });
 
     QVERIFY(m_runner->start());
 
@@ -1317,6 +1318,7 @@ void TestSessionRunner::testStreamingSetupFailureDoesNotFinalizeReplacementSessi
     QCOMPARE(startedSpy.count(), 1);
     QCOMPARE(failedSpy.count(), 0);
 
+    QObject::disconnect(restartConnection);
     m_runner->stop();
     QCOMPARE(stoppedSpy.count(), 2);
 }
