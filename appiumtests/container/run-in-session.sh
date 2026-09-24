@@ -15,15 +15,15 @@ export QT_QPA_PLATFORM=wayland
 export LIBGL_ALWAYS_SOFTWARE=1
 export QT_QUICK_BACKEND=software
 export TEST_WITH_VIDEO_RECORDER=0
-# The AT-SPI driver launches this executable and tracks its PID. Keep exec so
-# the observed process is CouchPlay, while preserving its Qt warnings in CI.
+export COUCHPLAY_APP_ID=/src/couchplay/build/bin/couchplay
+# CouchPlay's message handler writes only through its opt-in file logger;
+# stderr redirection alone cannot capture its warnings. Save that log even
+# when pytest fails so resource-setup errors reach the CI artifact.
+export COUCHPLAY_LOG=1
+export QT_LOGGING_RULES='couchplay.*=true'
 export APPIUM_ARTIFACT_OUTPUT_PATH=/tmp/cp-out
-mkdir -p "$APPIUM_ARTIFACT_OUTPUT_PATH"
-export COUCHPLAY_APP_ID="$APPIUM_ARTIFACT_OUTPUT_PATH/couchplay-launch"
-cat > "$COUCHPLAY_APP_ID" <<'EOF'
-#!/bin/sh
-exec /src/couchplay/build/bin/couchplay "$@" >>/tmp/cp-out/couchplay-app.log 2>&1
-EOF
-chmod 700 "$COUCHPLAY_APP_ID"
+app_log_dir="${XDG_DATA_HOME:-$HOME/.local/share}/couchplay"
+mkdir -p "$app_log_dir" "$APPIUM_ARTIFACT_OUTPUT_PATH"
+trap 'cp "$app_log_dir/couchplay.log" "$APPIUM_ARTIFACT_OUTPUT_PATH/couchplay-app.log" 2>/dev/null || true' EXIT
 
 selenium-webdriver-at-spi-run /opt/e2e-venv/bin/pytest "$@"
