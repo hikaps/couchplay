@@ -223,7 +223,7 @@ private:
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
     bool setupSessionResources(quint64 startupGeneration = 0);
-    void teardownSharedDirectories();
+    bool teardownSharedDirectories();
     void teardownSharingState();
     bool buildOverrideBinds();
     QRect getScreenGeometry() const;
@@ -243,6 +243,11 @@ private:
         bool virtualDisplayCreated = false;
         bool nullSinkCreated = false;
     };
+    struct PendingWindowRequest {
+        quint64 startupGeneration = 0;
+        int instanceIndex = -1;
+    };
+
 
     QMap<int, QStringList> m_instanceBindPaths;
     QMap<int, QStringList> m_instanceSharedRoots;
@@ -286,6 +291,9 @@ private:
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
+    QMap<int, PendingWindowRequest> m_pendingWindowRequests;
+    int m_nextWindowRequestId = 0;
+
 
     // Privileged sharing state (mounts, Steam library sharing) is active from
     // setup until teardown — natural instance exit must release it too

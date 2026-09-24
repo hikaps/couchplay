@@ -86,6 +86,34 @@ QString markerFor(const QString &path)
     return QStringLiteral("couchplay://profile/") + QString::fromLatin1(hash);
 }
 
+qint64 processStartTime(pid_t processId)
+{
+#ifdef Q_OS_LINUX
+    if (processId <= 0) {
+        return 0;
+    }
+    QFile statFile(QStringLiteral("/proc/%1/stat").arg(processId));
+    if (!statFile.open(QIODevice::ReadOnly)) {
+        return 0;
+    }
+    const QByteArray stat = statFile.readAll();
+    const qsizetype commandEnd = stat.lastIndexOf(')');
+    if (commandEnd < 0) {
+        return 0;
+    }
+    const QList<QByteArray> fields = stat.mid(commandEnd + 2).simplified().split(' ');
+    if (fields.size() <= 19) {
+        return 0;
+    }
+    bool ok = false;
+    const qint64 startTime = fields.at(19).toLongLong(&ok);
+    return ok ? startTime : 0;
+#else
+    Q_UNUSED(processId);
+    return 0;
+#endif
+}
+
 } // namespace
 
 SteamShortcutManager::SteamShortcutManager(QObject *parent)
@@ -104,35 +132,73 @@ SteamShortcutManager::~SteamShortcutManager()
         QObject::disconnect(process, nullptr, this, nullptr);
     }
 
-    pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
-    if (processGroupId <= 0 && process) {
-        processGroupId = static_cast<pid_t>(process->processId());
+    QList<HostProcessGroup> groups = m_pendingHostProcessGroups;
+    if (m_hostProcessGroupId > 0) {
+        HostProcessGroup active;
+        active.generation = m_hostProcessGeneration;
+        active.processGroupId = m_hostProcessGroupId;
+        active.leaderStartTime = m_hostProcessGroupStartTime;
+        active.process = process;
+        groups.append(active);
+    } else if (process && process->processId() > 0) {
+        HostProcessGroup fallback;
+        fallback.generation = m_hostProcessGeneration;
+        fallback.processGroupId = process->processId();
+        fallback.leaderStartTime = processStartTime(process->processId());
+        fallback.process = process;
+        groups.append(fallback);
     }
-    const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGTERM) == 0;
-    if (!groupSignalled && process) {
-        process->terminate();
+
+    QList<HostProcessGroup> signalledGroups;
+    for (const HostProcessGroup &group : groups) {
+        const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
+        const bool identityMatches = group.leaderStartTime <= 0 || currentStartTime <= 0
+            || currentStartTime == group.leaderStartTime;
+        const bool groupSignalled = group.processGroupId > 0 && identityMatches
+            && ::kill(-static_cast<pid_t>(group.processGroupId), SIGTERM) == 0;
+        if (groupSignalled) {
+            signalledGroups.append(group);
+        } else if (group.process && group.process->state() != QProcess::NotRunning) {
+            group.process->terminate();
+        }
     }
-    if (process && process->state() != QProcess::NotRunning) {
-        if (!process->waitForFinished(HostTerminationGraceMs)) {
-            if (processGroupId > 0) {
-                ::kill(-processGroupId, SIGKILL);
+
+    for (const HostProcessGroup &group : groups) {
+        QProcess *groupProcess = group.process.data();
+        if (groupProcess && groupProcess->state() != QProcess::NotRunning) {
+            if (!groupProcess->waitForFinished(HostTerminationGraceMs)) {
+                const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
+                const bool identityMatches = group.leaderStartTime <= 0 || currentStartTime <= 0
+                    || currentStartTime == group.leaderStartTime;
+                if (group.processGroupId > 0 && identityMatches) {
+                    ::kill(-static_cast<pid_t>(group.processGroupId), SIGKILL);
+                }
+                groupProcess->kill();
+                groupProcess->waitForFinished(HostTerminationGraceMs);
             }
-            process->kill();
-            process->waitForFinished(HostTerminationGraceMs);
-        }
-    } else if (groupSignalled) {
-        constexpr useconds_t PollIntervalUs = 50'000;
-        for (int elapsedMs = 0; elapsedMs < HostTerminationGraceMs; elapsedMs += 50) {
-            if (::kill(-processGroupId, 0) != 0) {
-                break;
+        } else if (std::any_of(signalledGroups.cbegin(), signalledGroups.cend(),
+                               [&group](const HostProcessGroup &signalled) {
+            return signalled.generation == group.generation
+                && signalled.processGroupId == group.processGroupId;
+        })) {
+            constexpr useconds_t PollIntervalUs = 50'000;
+            for (int elapsedMs = 0; elapsedMs < HostTerminationGraceMs; elapsedMs += 50) {
+                if (::kill(-static_cast<pid_t>(group.processGroupId), 0) != 0) {
+                    break;
+                }
+                ::usleep(PollIntervalUs);
             }
-            ::usleep(PollIntervalUs);
-        }
-        if (::kill(-processGroupId, 0) == 0) {
-            ::kill(-processGroupId, SIGKILL);
+            const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
+            const bool identityMatches = group.leaderStartTime <= 0 || currentStartTime <= 0
+                || currentStartTime == group.leaderStartTime;
+            if (identityMatches) {
+                ::kill(-static_cast<pid_t>(group.processGroupId), SIGKILL);
+            }
         }
     }
+    m_pendingHostProcessGroups.clear();
     m_hostProcessGroupId = 0;
+    m_hostProcessGroupStartTime = 0;
     m_process = nullptr;
 }
 
@@ -223,6 +289,134 @@ QString SteamShortcutManager::profileIdentity() const
     return markerFor(m_profilePath).mid(QStringLiteral("couchplay://profile/").size());
 }
 
+void SteamShortcutManager::detachHostProcessGroup(quint64 generation,
+                                                   qint64 processGroupId,
+                                                   QProcess *process)
+{
+    if (processGroupId <= 0) {
+        return;
+    }
+
+    HostProcessGroup group;
+    group.generation = generation;
+    group.processGroupId = processGroupId;
+    group.leaderStartTime = m_hostProcessGroupStartTime;
+    if (group.leaderStartTime == 0) {
+        group.leaderStartTime = processStartTime(static_cast<pid_t>(processGroupId));
+    }
+    group.process = process;
+    if (m_hostProcessGeneration == generation && m_hostProcessGroupId == processGroupId
+        && m_hostProcessGroupStartTime > 0) {
+        group.leaderStartTime = m_hostProcessGroupStartTime;
+    }
+
+    for (HostProcessGroup &pending : m_pendingHostProcessGroups) {
+        if (pending.generation == generation && pending.processGroupId == processGroupId) {
+            if (pending.leaderStartTime == 0) {
+                pending.leaderStartTime = group.leaderStartTime;
+            }
+            if (!pending.process) {
+                pending.process = process;
+            }
+            if (m_hostProcessGeneration == generation && m_hostProcessGroupId == processGroupId) {
+                m_hostProcessGroupId = 0;
+                m_hostProcessGroupStartTime = 0;
+            }
+            return;
+        }
+    }
+
+    m_pendingHostProcessGroups.append(group);
+    if (m_hostProcessGeneration == generation && m_hostProcessGroupId == processGroupId) {
+        m_hostProcessGroupId = 0;
+        m_hostProcessGroupStartTime = 0;
+    }
+}
+
+void SteamShortcutManager::releaseHostProcessGroup(quint64 generation, qint64 processGroupId)
+{
+    if (m_hostProcessGeneration == generation && m_hostProcessGroupId == processGroupId) {
+        m_hostProcessGroupId = 0;
+        m_hostProcessGroupStartTime = 0;
+    }
+    for (int index = m_pendingHostProcessGroups.size() - 1; index >= 0; --index) {
+        if (m_pendingHostProcessGroups.at(index).generation == generation
+            && m_pendingHostProcessGroups.at(index).processGroupId == processGroupId) {
+            m_pendingHostProcessGroups.removeAt(index);
+        }
+    }
+}
+
+bool SteamShortcutManager::findHostProcessGroup(quint64 generation,
+                                                qint64 processGroupId,
+                                                HostProcessGroup *group) const
+{
+    if (m_hostProcessGeneration == generation && m_hostProcessGroupId == processGroupId
+        && processGroupId > 0) {
+        if (group) {
+            group->generation = generation;
+            group->processGroupId = processGroupId;
+            group->leaderStartTime = m_hostProcessGroupStartTime;
+            group->process = m_process;
+        }
+        return true;
+    }
+    for (const HostProcessGroup &pending : m_pendingHostProcessGroups) {
+        if (pending.generation == generation && pending.processGroupId == processGroupId) {
+            if (group) {
+                *group = pending;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SteamShortcutManager::hostProcessGroupIdentityMatches(quint64 generation, qint64 processGroupId) const
+{
+    HostProcessGroup group;
+    if (!findHostProcessGroup(generation, processGroupId, &group)) {
+        return false;
+    }
+    if (group.leaderStartTime <= 0) {
+        return true;
+    }
+    const qint64 currentStartTime = processStartTime(static_cast<pid_t>(processGroupId));
+    return currentStartTime <= 0 || currentStartTime == group.leaderStartTime;
+}
+
+bool SteamShortcutManager::signalOwnedHostProcessGroup(quint64 generation,
+                                                        qint64 processGroupId,
+                                                        int signal)
+{
+    if (processGroupId <= 0 || !findHostProcessGroup(generation, processGroupId)
+        || !hostProcessGroupIdentityMatches(generation, processGroupId)) {
+        if (processGroupId > 0 && findHostProcessGroup(generation, processGroupId)) {
+            releaseHostProcessGroup(generation, processGroupId);
+        }
+        return false;
+    }
+    return ::kill(-static_cast<pid_t>(processGroupId), signal) == 0;
+}
+
+void SteamShortcutManager::scheduleHostProcessGroupEscalation(quint64 generation,
+                                                               qint64 processGroupId,
+                                                               QProcess *process)
+{
+    const QPointer<QProcess> guardedProcess(process);
+    QTimer::singleShot(HostTerminationGraceMs, this,
+                       [this, generation, processGroupId, guardedProcess] {
+        if (processGroupId > 0) {
+            const bool groupSignalled = signalOwnedHostProcessGroup(generation, processGroupId, SIGKILL);
+            if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
+                guardedProcess->kill();
+            }
+            releaseHostProcessGroup(generation, processGroupId);
+        } else if (guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
+            guardedProcess->kill();
+        }
+    });
+}
 void SteamShortcutManager::fail(const QString &message)
 {
     stopSteamPoll();
@@ -277,12 +471,17 @@ void SteamShortcutManager::runHost(const QString &operation,
     }
     const QString script = QString::fromUtf8(scriptFile.readAll());
     auto *process = new QProcess(this);
+    const quint64 generation = ++m_hostOperationGeneration;
     m_process = process;
+    m_hostProcessGeneration = generation;
     m_hostProcessGroupId = 0;
+    m_hostProcessGroupStartTime = 0;
     m_hostCallback = std::move(callback);
     auto completed = std::make_shared<bool>(false);
     auto timedOut = std::make_shared<bool>(false);
-    auto finish = [this, process, completed, timedOut](int exitCode, const QByteArray &output, const QString &error) {
+    auto finish = [this, process, generation, completed, timedOut](int exitCode,
+                                                                    const QByteArray &output,
+                                                                    const QString &error) {
         if (*completed) {
             return;
         }
@@ -290,11 +489,18 @@ void SteamShortcutManager::runHost(const QString &operation,
         if (m_timeout) {
             m_timeout->stop();
         }
+        const qint64 processGroupId = m_hostProcessGeneration == generation ? m_hostProcessGroupId : 0;
         if (m_process == process) {
             m_process = nullptr;
         }
-        if (!*timedOut && (!m_cancelled || m_phase == Phase::ClosingSteam || m_phase == Phase::ReopeningSteam)) {
-            m_hostProcessGroupId = 0;
+        const bool retainGroup = *timedOut
+            || (m_cancelled && m_phase != Phase::ClosingSteam && m_phase != Phase::ReopeningSteam);
+        if (processGroupId > 0) {
+            if (retainGroup) {
+                detachHostProcessGroup(generation, processGroupId, process);
+            } else {
+                releaseHostProcessGroup(generation, processGroupId);
+            }
         }
         auto callback = std::move(m_hostCallback);
         process->deleteLater();
@@ -311,26 +517,22 @@ void SteamShortcutManager::runHost(const QString &operation,
         }
     };
 
-    connect(process, &QProcess::started, this, [this, process, timedOut] {
+    connect(process, &QProcess::started, this, [this, process, generation, timedOut] {
+        m_hostProcessGeneration = generation;
         m_hostProcessGroupId = process->processId();
+        m_hostProcessGroupStartTime = processStartTime(process->processId());
         if (!*timedOut && (!m_cancelled || m_phase == Phase::ClosingSteam || m_phase == Phase::ReopeningSteam)) {
             return;
         }
 
-        const pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
-        if (processGroupId <= 0 || ::kill(-processGroupId, SIGTERM) != 0) {
+        const qint64 processGroupId = m_hostProcessGroupId;
+        if (processGroupId > 0) {
+            detachHostProcessGroup(generation, processGroupId, process);
+        }
+        if (processGroupId <= 0 || !signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM)) {
             process->terminate();
         }
-        const QPointer<QProcess> guardedProcess(process);
-        QTimer::singleShot(HostTerminationGraceMs, this, [this, processGroupId, guardedProcess] {
-            const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGKILL) == 0;
-            if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
-                guardedProcess->kill();
-            }
-            if (m_hostProcessGroupId == processGroupId) {
-                m_hostProcessGroupId = 0;
-            }
-        });
+        scheduleHostProcessGroupEscalation(generation, processGroupId, process);
     });
     connect(process, &QProcess::finished, this, [finish, process](int exitCode, QProcess::ExitStatus status) {
         finish(status == QProcess::NormalExit ? exitCode : -1,
@@ -348,29 +550,22 @@ void SteamShortcutManager::runHost(const QString &operation,
         m_timeout->setSingleShot(true);
     }
     m_timeout->disconnect();
-    connect(m_timeout, &QTimer::timeout, this, [this, process, timedOut] {
+    connect(m_timeout, &QTimer::timeout, this, [this, process, generation, timedOut] {
         *timedOut = true;
-        pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
+        qint64 processGroupId = m_hostProcessGeneration == generation ? m_hostProcessGroupId : 0;
         if (processGroupId <= 0) {
-            processGroupId = static_cast<pid_t>(process->processId());
+            processGroupId = process->processId();
         }
         if (processGroupId > 0) {
-            m_hostProcessGroupId = processGroupId;
+            if (m_hostProcessGeneration == generation) {
+                m_hostProcessGroupId = processGroupId;
+            }
+            detachHostProcessGroup(generation, processGroupId, process);
         }
-        if (processGroupId <= 0 || ::kill(-processGroupId, SIGTERM) != 0) {
+        if (processGroupId <= 0 || !signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM)) {
             process->terminate();
         }
-
-        const QPointer<QProcess> guardedProcess(process);
-        QTimer::singleShot(HostTerminationGraceMs, this, [this, processGroupId, guardedProcess] {
-            const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGKILL) == 0;
-            if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
-                guardedProcess->kill();
-            }
-            if (m_hostProcessGroupId == processGroupId) {
-                m_hostProcessGroupId = 0;
-            }
-        });
+        scheduleHostProcessGroupEscalation(generation, processGroupId, process);
     });
 
     const QString hostSupervisor = QString::fromLatin1(HostSupervisorScript);
@@ -874,27 +1069,18 @@ void SteamShortcutManager::cancel()
         return;
     }
 
-    pid_t processGroupId = static_cast<pid_t>(m_hostProcessGroupId);
+    const quint64 generation = m_hostProcessGeneration;
+    qint64 processGroupId = m_hostProcessGroupId;
     if (processGroupId <= 0) {
-        processGroupId = static_cast<pid_t>(m_process->processId());
+        processGroupId = m_process->processId();
     }
     if (processGroupId > 0) {
-        m_hostProcessGroupId = processGroupId;
+        detachHostProcessGroup(generation, processGroupId, m_process);
     }
-    if (processGroupId <= 0 || ::kill(-processGroupId, SIGTERM) != 0) {
+    if (processGroupId <= 0 || !signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM)) {
         m_process->terminate();
     }
-
-    const QPointer<QProcess> guardedProcess(m_process);
-    QTimer::singleShot(HostTerminationGraceMs, this, [this, processGroupId, guardedProcess] {
-        const bool groupSignalled = processGroupId > 0 && ::kill(-processGroupId, SIGKILL) == 0;
-        if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
-            guardedProcess->kill();
-        }
-        if (m_hostProcessGroupId == processGroupId) {
-            m_hostProcessGroupId = 0;
-        }
-    });
+    scheduleHostProcessGroupEscalation(generation, processGroupId, m_process);
 }
 
 void SteamShortcutManager::openSteam(int accountIndex)

@@ -20,6 +20,7 @@ Kirigami.Dialog {
     property string profileName: ""
     property bool restartConfirmed: false
     property bool completed: false
+    property bool registrationFailed: false
     property string errorText: ""
     property int messageType: Kirigami.MessageType.Error
     property bool registrationReopenWarning: false
@@ -27,6 +28,7 @@ Kirigami.Dialog {
 
     onOpened: {
         root.registrationReopenWarning = false
+        root.registrationFailed = false
         root.messageType = Kirigami.MessageType.Error
     }
 
@@ -58,6 +60,7 @@ Kirigami.Dialog {
         }
         function onErrorOccurred(message) {
             if (root.registrationReopenWarning) return
+            if (!root.completed) root.registrationFailed = true
             root.errorText = message
             root.messageType = Kirigami.MessageType.Error
         }
@@ -67,6 +70,7 @@ Kirigami.Dialog {
         spacing: Kirigami.Units.largeSpacing
 
         Controls.Label {
+            objectName: "labelProfileToAdd"
             Layout.fillWidth: true
             text: i18nc("@info", "Profile: %1", root.profileName)
             wrapMode: Text.WordWrap
@@ -141,7 +145,8 @@ Kirigami.Dialog {
                 id: btnConfirmAddToSteam
                 objectName: "btnConfirmAddToSteam"
                 Layout.fillWidth: true
-                enabled: !root.manager?.busy && !root.completed && root.selectedAccount() !== null
+                enabled: !root.manager?.busy && !root.completed && !root.registrationFailed
+                    && root.selectedAccount() !== null
                 text: {
                     if (root.restartConfirmed) return i18nc("@action:button", "Close Steam, Add, and Reopen")
                     const account = root.selectedAccount()

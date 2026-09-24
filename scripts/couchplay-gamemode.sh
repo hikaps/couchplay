@@ -50,11 +50,18 @@ is_game_mode() {
 }
 
 KWIN_PID=""
+COUCHPLAY_PID=""
 cleanup() {
     echo "CouchPlay Game Mode: Cleaning up..."
+    if [ -n "$COUCHPLAY_PID" ] && kill -0 "$COUCHPLAY_PID" 2>/dev/null; then
+        kill "$COUCHPLAY_PID" 2>/dev/null || true
+        wait "$COUCHPLAY_PID" 2>/dev/null || true
+        COUCHPLAY_PID=""
+    fi
     if [ -n "$KWIN_PID" ] && kill -0 "$KWIN_PID" 2>/dev/null; then
         kill "$KWIN_PID" 2>/dev/null || true
         wait "$KWIN_PID" 2>/dev/null || true
+        KWIN_PID=""
     fi
 }
 trap cleanup EXIT
@@ -81,8 +88,31 @@ if is_game_mode; then
 else
     echo "Detected: Desktop Mode"
     echo "Launching CouchPlay directly..."
-    run_couchplay "$@"
-    exit $?
+    run_couchplay_forwarded() {
+        if [[ "$ROUTE" == flatpak ]]; then
+            if [[ "${COUCHPLAY_HOST_SPAWN:-0}" == 1 ]]; then
+                ( exec flatpak-spawn --host /usr/bin/flatpak run --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" --env=QT_QPA_PLATFORM="$QT_QPA_PLATFORM" io.github.hikaps.couchplay "$@" ) &
+            else
+                ( exec flatpak run io.github.hikaps.couchplay "$@" ) &
+            fi
+        else
+            ( exec "$COUCHPLAY_BIN" "$@" ) &
+        fi
+        COUCHPLAY_PID=$!
+        local status
+        if wait "$COUCHPLAY_PID"; then
+            status=0
+        else
+            status=$?
+        fi
+        COUCHPLAY_PID=""
+        return "$status"
+    }
+    if run_couchplay_forwarded "$@"; then
+        exit 0
+    else
+        exit $?
+    fi
 fi
 
 if [[ "$ROUTE" == flatpak && -z "$(command -v kwin_wayland 2>/dev/null || true)" ]]; then

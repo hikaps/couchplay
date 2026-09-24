@@ -1103,8 +1103,31 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir,
     return true;
 }
 
-bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString &username)
+bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
+                                         const QString &username,
+                                         std::function<bool()> shouldContinue)
 {
+    const auto canContinue = [&shouldContinue] {
+        return !shouldContinue || shouldContinue();
+    };
+    const auto rollbackSnapshot = [&] {
+        if (!m_libraryFoldersSnapshots.contains(username)) {
+            return;
+        }
+        if (!cleanupLibrarySharing(username)) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Failed to restore target libraryfolders.vdf for" << username;
+        }
+    };
+    const auto abortIfCancelled = [&] {
+        if (canContinue()) {
+            return false;
+        }
+        rollbackSnapshot();
+        return true;
+    };
+    if (abortIfCancelled()) {
+        return false;
+    }
     // Library sharing: overlay mode on steamRoot
     if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
         && dir.path == m_steamPaths.steamRoot) {
@@ -1137,7 +1160,13 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
             qCWarning(couchplaySteam) << "finalizeDataDir: Target user has not set up Steam:" << username;
             return false;
         }
+        if (abortIfCancelled()) {
+            return false;
+        }
         if (!captureLibraryFoldersSnapshot(username)) {
+            return false;
+        }
+        if (abortIfCancelled()) {
             return false;
         }
         QList<SteamLibraryFolder> targetLibraries;
@@ -1165,9 +1194,15 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
                     manifestFile.close();
 
                     QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
+                    if (abortIfCancelled()) {
+                        return false;
+                    }
                     if (!m_helperClient->writeFileToUser(content, targetManifestPath, username)) {
                         qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write manifest" << manifest;
                         anyFailure = true;
+                    }
+                    if (abortIfCancelled()) {
+                        return false;
                     }
                 }
             }
@@ -1187,7 +1222,15 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
         targetLibraries.prepend(ownRoot);
 
         QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
-        if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, username)) {
+        if (abortIfCancelled()) {
+            return false;
+        }
+        const bool vdfWritten =
+            m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, username);
+        if (abortIfCancelled()) {
+            return false;
+        }
+        if (!vdfWritten) {
             qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write libraryfolders.vdf for" << username;
             return false;
         }

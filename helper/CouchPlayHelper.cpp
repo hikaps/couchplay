@@ -3855,7 +3855,13 @@ QVariantMap CouchPlayHelper::ReadSteamLibraryFoldersForUser(const QString &usern
         content.append(buffer, static_cast<qsizetype>(count));
     }
     struct stat after;
-    const bool changed = ::fstat(fd, &after) != 0 || before.st_size != after.st_size
+    struct stat pathnameAfter;
+    const bool changed = ::fstat(fd, &after) != 0 || ::fstatat(parentFd, leafBytes.constData(), &pathnameAfter, AT_SYMLINK_NOFOLLOW) != 0
+        || !S_ISREG(after.st_mode) || !S_ISREG(pathnameAfter.st_mode)
+        || after.st_uid != pw->pw_uid || pathnameAfter.st_uid != pw->pw_uid
+        || after.st_nlink != 1 || pathnameAfter.st_nlink != 1
+        || after.st_dev != pathnameAfter.st_dev || after.st_ino != pathnameAfter.st_ino
+        || before.st_size != after.st_size
         || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
         || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
     ::close(fd); ::close(parentFd);

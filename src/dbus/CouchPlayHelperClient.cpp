@@ -12,6 +12,7 @@
 #include <QDBusReply>
 #include <QEventLoop>
 #include <QDebug>
+#include <QMetaType>
 #include <QTimer>
 
 static const QString SERVICE_NAME = QStringLiteral("io.github.hikaps.CouchPlayHelper");
@@ -339,9 +340,20 @@ bool CouchPlayHelperClient::readSteamLibraryFoldersForUser(const QString &userna
     QDBusReply<QVariantMap> reply = m_interface->call(QStringLiteral("ReadSteamLibraryFoldersForUser"), username);
     if (!reply.isValid()) return false;
     const QVariantMap snapshot = reply.value();
-    if (!snapshot.contains(QStringLiteral("exists")) || !snapshot.contains(QStringLiteral("content"))) return false;
-    *exists = snapshot.value(QStringLiteral("exists")).toBool();
-    *content = snapshot.value(QStringLiteral("content")).toByteArray();
+    const QVariant existsValue = snapshot.value(QStringLiteral("exists"));
+    const QVariant contentValue = snapshot.value(QStringLiteral("content"));
+    if (!snapshot.contains(QStringLiteral("exists")) || !snapshot.contains(QStringLiteral("content"))
+        || existsValue.metaType() != QMetaType::fromType<bool>()
+        || contentValue.metaType() != QMetaType::fromType<QByteArray>()) {
+        return false;
+    }
+    const bool snapshotExists = existsValue.value<bool>();
+    const QByteArray snapshotContent = contentValue.value<QByteArray>();
+    if (!snapshotExists && !snapshotContent.isEmpty()) {
+        return false;
+    }
+    *exists = snapshotExists;
+    *content = snapshotContent;
     return true;
 }
 

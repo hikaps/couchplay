@@ -305,10 +305,43 @@ int writeFileAt(int parentFd, const QString &name, const QByteArray &content, ui
     }
 
     const QByteArray nameBytes = name.toUtf8();
-    const int fileFd =
-        ::openat(parentFd, nameBytes.constData(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, mode);
+    int fileFd = ::openat(parentFd,
+                          nameBytes.constData(),
+                          O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
+                          mode);
+    bool created = fileFd >= 0;
+    if (fileFd < 0 && errno == EEXIST) {
+        fileFd = ::openat(parentFd,
+                          nameBytes.constData(),
+                          O_WRONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+        created = false;
+    }
     if (fileFd < 0) {
         return -errno;
+    }
+
+    struct stat opened;
+    if (::fstat(fileFd, &opened) != 0) {
+        const int error = errno;
+        ::close(fileFd);
+        return -error;
+    }
+    if (!S_ISREG(opened.st_mode)) {
+        ::close(fileFd);
+        return -EINVAL;
+    }
+    if (!created && opened.st_uid != uid) {
+        ::close(fileFd);
+        return -EPERM;
+    }
+    if (!created && opened.st_nlink != 1) {
+        ::close(fileFd);
+        return -EMLINK;
+    }
+    if (!created && ::ftruncate(fileFd, 0) != 0) {
+        const int error = errno;
+        ::close(fileFd);
+        return -error;
     }
 
     qsizetype offset = 0;

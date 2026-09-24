@@ -6,6 +6,7 @@
 #include <QByteArray>
 #include <QDeadlineTimer>
 #include <QList>
+#include <QPointer>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -74,6 +75,13 @@ private:
 
     enum class Phase { Idle, Probing, Prepared, ClosingSteam, Writing, ReopeningSteam };
 
+    struct HostProcessGroup {
+        quint64 generation = 0;
+        qint64 processGroupId = 0;
+        qint64 leaderStartTime = 0;
+        QPointer<QProcess> process;
+    };
+
     void setBusy(bool busy);
     void setGameMode(bool gameMode);
     void setStatus(const QString &status);
@@ -103,6 +111,14 @@ private:
     QString profileFilePath() const;
     QString launcherContents(const QString &gameModePath) const;
     void setPhase(Phase phase);
+    void detachHostProcessGroup(quint64 generation, qint64 processGroupId, QProcess *process);
+    void releaseHostProcessGroup(quint64 generation, qint64 processGroupId);
+    bool findHostProcessGroup(quint64 generation,
+                              qint64 processGroupId,
+                              HostProcessGroup *group = nullptr) const;
+    bool hostProcessGroupIdentityMatches(quint64 generation, qint64 processGroupId) const;
+    bool signalOwnedHostProcessGroup(quint64 generation, qint64 processGroupId, int signal);
+    void scheduleHostProcessGroupEscalation(quint64 generation, qint64 processGroupId, QProcess *process);
 
     SessionManager *m_sessionManager = nullptr;
     SessionRunner *m_sessionRunner = nullptr;
@@ -122,6 +138,10 @@ private:
     Phase m_phase = Phase::Idle;
     QProcess *m_process = nullptr;
     qint64 m_hostProcessGroupId = 0;
+    qint64 m_hostProcessGroupStartTime = 0;
+    quint64 m_hostProcessGeneration = 0;
+    quint64 m_hostOperationGeneration = 0;
+    QList<HostProcessGroup> m_pendingHostProcessGroups;
     QTimer *m_timeout = nullptr;
     QTimer *m_pollTimer = nullptr;
     std::function<void(int, const QByteArray &, const QString &)> m_hostCallback;

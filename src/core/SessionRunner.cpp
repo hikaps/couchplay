@@ -451,7 +451,7 @@ void SessionRunner::continueStart()
         }
     }
 
-    m_streamingInstances.clear();
+    teardownStreamingInstances();
     for (int idx : streamingIndices) {
         const InstanceConfig &instConfig = profile.instances[idx];
         QVariantMap streamConfig;
@@ -744,6 +744,7 @@ void SessionRunner::finishFinalization()
 void SessionRunner::stop()
 {
     if (!m_active) {
+        restoreDeviceOwnership();
         teardownSharingState();
         return;
     }
@@ -809,16 +810,29 @@ QVariantList SessionRunner::instancesAsVariant() const
 
 void SessionRunner::startNextInstance()
 {
+    if (!m_active || m_finalizing) {
+        return;
+    }
+
+    const quint64 startupGeneration = m_startupGeneration;
+    const auto isCurrentStartup = [this, startupGeneration] {
+        return startupGeneration == m_startupGeneration && m_active && !m_finalizing;
+    };
     if (m_nextInstanceToStart >= m_pendingInstanceConfigs.size()) {
         setStatus(QStringLiteral("Session running"));
+        if (!isCurrentStartup()) {
+            return;
+        }
         Q_EMIT runningChanged();
         Q_EMIT instancesChanged();
         Q_EMIT sessionStarted();
         return;
     }
 
-    int index = m_nextInstanceToStart;
-    const QVariantMap &config = m_pendingInstanceConfigs[index];
+    const int index = m_nextInstanceToStart;
+    // Keep an owned copy: GamescopeInstance::start() emits synchronous signals,
+    // whose handlers may stop/restart the session and clear pending configs.
+    const QVariantMap config = m_pendingInstanceConfigs.at(index);
 
     auto *instance = new GamescopeInstance(this);
     instance->setHelperClient(m_helperClient);
@@ -828,16 +842,29 @@ void SessionRunner::startNextInstance()
 
     m_instances.append(instance);
 
-    if (!instance->start(config, index)) {
+    const bool started = instance->start(config, index);
+    if (!started) {
+        if (!isCurrentStartup() || !m_instances.contains(instance)) {
+            return;
+        }
         qWarning() << "Failed to start instance" << index;
         beginFinalization(true, QStringLiteral("Failed to start instance %1").arg(index + 1));
         return;
     }
 
-    bool isStreamingInstance = config.value(QStringLiteral("outputMode")).toString() == QStringLiteral("streaming");
+    // start() may have synchronously finalized this session or launched a
+    // replacement session. Do not inspect mutable queues or recurse into it.
+    if (!isCurrentStartup() || !m_instances.contains(instance)) {
+        return;
+    }
+
+    const bool isStreamingInstance = config.value(QStringLiteral("outputMode")).toString() == QStringLiteral("streaming");
     // Streaming instances and absent window manager: start next immediately
     if (isStreamingInstance || !m_windowManager || !m_windowManager->isAvailable()) {
         ++m_nextInstanceToStart;
+        if (!isCurrentStartup()) {
+            return;
+        }
         startNextInstance();
     }
     // Otherwise wait for onWindowPositioned to trigger the next start
@@ -858,7 +885,7 @@ void SessionRunner::cleanupInstances()
     m_pendingInstanceConfigs.clear();
     m_layouts.clear();
     teardownStreamingInstances();
-    m_streamingInstances.clear();
+    m_pendingWindowRequests.clear();
     m_nextInstanceToStart = 0;
 }
 
@@ -1004,7 +1031,7 @@ void SessionRunner::restoreDeviceOwnership()
 
     if (!m_helperClient->isAvailable()) {
         qWarning() << "SessionRunner: Helper not available, cannot restore device ownership";
-        m_ownedDevicePaths.clear();
+        // Keep the paths so a later stop can retry once the helper returns.
         return;
     }
 
@@ -1199,7 +1226,7 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                     continue;
                 }
                 m_steamSharedUsers.insert(username);
-                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
+                if (!m_steamConfigManager->finalizeDataDir(dir, username, isCurrentStartup)) {
                     qCWarning(couchplaySteam) << "Steam library finalize failed for" << dir.path;
                     allSucceeded = false;
                 }
@@ -1325,7 +1352,7 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                 return false;
             }
             if (requiresSteam && m_steamConfigManager) {
-                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
+                if (!m_steamConfigManager->finalizeDataDir(dir, username, isCurrentStartup)) {
                     qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
                     allSucceeded = false;
                 }
@@ -1336,18 +1363,21 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
     return allSucceeded;
 }
 
-void SessionRunner::teardownSharedDirectories()
+bool SessionRunner::teardownSharedDirectories()
 {
     if (!m_helperClient) {
-        return;
+        return false;
     }
 
     if (!m_helperClient->isAvailable()) {
         qWarning() << "SessionRunner: Helper not available, cannot unmount shared directories";
-        return;
+        return false;
     }
 
-    m_helperClient->unmountAllSharedDirectories();
+    // A non-negative result means the helper handled the request. Zero is a
+    // successful no-op when no mounts remain; -1 denotes an unavailable or
+    // failed D-Bus call and must remain retryable.
+    return m_helperClient->unmountAllSharedDirectories() >= 0;
 }
 
 void SessionRunner::teardownSharingState()
@@ -1360,19 +1390,29 @@ void SessionRunner::teardownSharingState()
     if (!m_sharedStateActive) {
         return;
     }
-    m_sharedStateActive = false;
 
-    teardownSharedDirectories();
-
-    if (m_steamConfigManager && !m_steamSharedUsers.isEmpty()) {
-        const QSet<QString> sharedUsers = m_steamSharedUsers;
-        m_steamSharedUsers.clear();
-        for (const QString &username : sharedUsers) {
-            if (!m_steamConfigManager->cleanupLibrarySharing(username)) {
-                qCWarning(couchplaySteam) << "Failed to clean up Steam sharing for" << username;
+    bool allSucceeded = teardownSharedDirectories();
+    QSet<QString> remainingUsers;
+    if (!m_steamSharedUsers.isEmpty()) {
+        if (!m_steamConfigManager) {
+            allSucceeded = false;
+            remainingUsers = m_steamSharedUsers;
+        } else {
+            const QSet<QString> sharedUsers = m_steamSharedUsers;
+            for (const QString &username : sharedUsers) {
+                if (!m_steamConfigManager->cleanupLibrarySharing(username)) {
+                    qCWarning(couchplaySteam) << "Failed to clean up Steam sharing for" << username;
+                    remainingUsers.insert(username);
+                    allSucceeded = false;
+                }
             }
         }
     }
+
+    m_steamSharedUsers = remainingUsers;
+    // Keep the tracker armed whenever any privileged cleanup could not be
+    // confirmed. A later stop() retries both mount and Steam cleanup.
+    m_sharedStateActive = !allSucceeded;
 }
 
 bool SessionRunner::buildOverrideBinds()
@@ -1698,17 +1738,28 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
         return;
     }
 
-    QRect targetGeometry = instance->windowGeometry();
-    int instanceIndex = instance->index();
+    const QRect targetGeometry = instance->windowGeometry();
+    const int instanceIndex = instance->index();
+    const int requestId = ++m_nextWindowRequestId;
+    m_pendingWindowRequests.insert(requestId, PendingWindowRequest{m_startupGeneration, instanceIndex});
 
     const bool borderless = m_settingsManager && m_settingsManager->borderlessWindows();
-
-    m_windowManager->queuePositionRequest(instanceIndex, targetGeometry, m_positionedWindowIds, borderless, 60000);
+    m_windowManager->queuePositionRequest(requestId, targetGeometry, m_positionedWindowIds, borderless, 60000);
 }
 
 void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
 {
-    Q_UNUSED(requestId)
+    const auto requestIt = m_pendingWindowRequests.find(requestId);
+    if (requestIt == m_pendingWindowRequests.end()) {
+        return;
+    }
+    const PendingWindowRequest request = requestIt.value();
+    m_pendingWindowRequests.erase(requestIt);
+    if (request.startupGeneration != m_startupGeneration || !m_active || m_finalizing
+        || request.instanceIndex != m_nextInstanceToStart) {
+        return;
+    }
+
     if (!m_positionedWindowIds.contains(windowId)) {
         m_positionedWindowIds.append(windowId);
     }
@@ -1722,9 +1773,22 @@ void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
 
 void SessionRunner::onWindowPositioningTimeout(int requestId)
 {
-    qWarning() << "SessionRunner: Failed to position window for instance" << requestId
+    const auto requestIt = m_pendingWindowRequests.find(requestId);
+    if (requestIt == m_pendingWindowRequests.end()) {
+        return;
+    }
+    const PendingWindowRequest request = requestIt.value();
+    m_pendingWindowRequests.erase(requestIt);
+    if (request.startupGeneration != m_startupGeneration || !m_active || m_finalizing
+        || request.instanceIndex != m_nextInstanceToStart) {
+        return;
+    }
+
+    qWarning() << "SessionRunner: Failed to position window for instance" << request.instanceIndex
                << "after timeout - stopping session";
-    beginFinalization(true, QStringLiteral("Failed to position window for instance %1. Session stopped.").arg(requestId));
+    beginFinalization(true,
+                      QStringLiteral("Failed to position window for instance %1. Session stopped.")
+                          .arg(request.instanceIndex));
 }
 
 void SessionRunner::setupGlobalShortcut()
@@ -1897,6 +1961,14 @@ bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap 
         return false;
     }
 
+    if (m_streamingInstances.contains(instanceIndex)) {
+        cleanupStreamingInstance(instanceIndex);
+        if (m_streamingInstances.contains(instanceIndex)) {
+            qWarning() << "SessionRunner: Previous streaming resources still need cleanup for instance" << instanceIndex;
+            return false;
+        }
+    }
+
     const QString username = config.value(QStringLiteral("username")).toString();
     const auto destroyLocalResources = [helperClient, &username](const QString &displayContext, const QString &sinkName) {
         if (!helperClient || !helperClient->isAvailable()) {
@@ -1966,20 +2038,32 @@ void SessionRunner::cleanupStreamingInstance(int index)
         return;
     }
 
-    const StreamingInstanceInfo &info = m_streamingInstances[index];
+    StreamingInstanceInfo remaining = m_streamingInstances.value(index);
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
+        qWarning() << "SessionRunner: Helper not available, retaining streaming resources for retry" << index;
+        return;
+    }
 
-    if (m_helperClient && m_helperClient->isAvailable()) {
-        if (info.nullSinkCreated && !info.sinkName.isEmpty()) {
-            if (!m_helperClient->destroyNullSink(info.username, info.sinkName)) {
-                qWarning() << "SessionRunner: Failed to destroy null sink" << info.sinkName;
-            }
+    if (remaining.nullSinkCreated && !remaining.sinkName.isEmpty()) {
+        if (m_helperClient->destroyNullSink(remaining.username, remaining.sinkName)) {
+            remaining.nullSinkCreated = false;
+            remaining.sinkName.clear();
+        } else {
+            qWarning() << "SessionRunner: Failed to destroy null sink" << remaining.sinkName;
         }
-        if (info.virtualDisplayCreated && !info.displayContext.isEmpty()) {
-            if (!m_helperClient->destroyVirtualOutput(info.username, info.displayContext)) {
-                qWarning() << "SessionRunner: Failed to destroy virtual output" << info.displayContext;
-            }
+    }
+    if (remaining.virtualDisplayCreated && !remaining.displayContext.isEmpty()) {
+        if (m_helperClient->destroyVirtualOutput(remaining.username, remaining.displayContext)) {
+            remaining.virtualDisplayCreated = false;
+            remaining.displayContext.clear();
+        } else {
+            qWarning() << "SessionRunner: Failed to destroy virtual output" << remaining.displayContext;
         }
     }
 
-    m_streamingInstances.remove(index);
+    if (remaining.nullSinkCreated || remaining.virtualDisplayCreated) {
+        m_streamingInstances[index] = remaining;
+    } else {
+        m_streamingInstances.remove(index);
+    }
 }

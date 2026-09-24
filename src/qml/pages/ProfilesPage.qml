@@ -147,8 +147,14 @@ Kirigami.ScrollablePage {
                     }
                     onAddToSteam: {
                         if (modelData && steamShortcutManager) {
-                            if (steamShortcutManager.prepare(modelData.name)) {
+                            if (steamShortcutManager.busy) {
+                                applicationWindow().showPassiveNotification(
+                                    i18nc("@info", "Steam profile registration is already in progress."))
+                            } else if (steamShortcutManager.prepare(modelData.name)) {
                                 root.profileToAdd = modelData.name
+                            } else {
+                                applicationWindow().showPassiveNotification(
+                                    i18nc("@info", "The profile could not be prepared for Steam."))
                             }
                         }
                     }
@@ -184,6 +190,8 @@ Kirigami.ScrollablePage {
 
         required property var profile
         property bool isCurrentProfile: false
+
+        objectName: "profileCard_" + (profile?.name ?? "")
 
         signal loadProfile()
         signal addToSteam()

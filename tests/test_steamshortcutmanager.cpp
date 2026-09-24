@@ -383,6 +383,56 @@ private Q_SLOTS:
         QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
     }
 
+    void testDelayedEscalationCannotKillReusedNextOperationGroup()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("process-group identity requires Linux procfs");
+        }
+
+        QProcess nextOperation;
+        nextOperation.setProgram(QStringLiteral("/bin/bash"));
+        nextOperation.setArguments({QStringLiteral("-c"), QStringLiteral("exec /bin/sleep 30")});
+        nextOperation.setChildProcessModifier([] {
+            if (::setpgid(0, 0) != 0) {
+                ::_exit(127);
+            }
+        });
+        nextOperation.start();
+        QVERIFY(nextOperation.waitForStarted(3000));
+
+        {
+            SteamShortcutManager manager;
+            manager.m_process = &nextOperation;
+            manager.m_hostOperationGeneration = 2;
+            manager.m_hostProcessGeneration = 2;
+            manager.m_hostProcessGroupId = nextOperation.processId();
+            manager.m_phase = SteamShortcutManager::Phase::Probing;
+            manager.m_busy = true;
+
+            manager.detachHostProcessGroup(1, nextOperation.processId(), &nextOperation);
+            QVERIFY(!manager.m_pendingHostProcessGroups.isEmpty());
+            manager.m_pendingHostProcessGroups.last().leaderStartTime = 1;
+            manager.scheduleHostProcessGroupEscalation(1, nextOperation.processId(), &nextOperation);
+            QTest::qWait(1500);
+
+            QVERIFY(nextOperation.state() != QProcess::NotRunning);
+            QCOMPARE(manager.m_hostProcessGroupId, nextOperation.processId());
+
+            SteamShortcutManager::HostProcessGroup timedOut;
+            timedOut.generation = 3;
+            timedOut.processGroupId = nextOperation.processId();
+            timedOut.leaderStartTime = 1;
+            timedOut.process = &nextOperation;
+            manager.m_pendingHostProcessGroups.append(timedOut);
+            manager.scheduleHostProcessGroupEscalation(3, nextOperation.processId(), &nextOperation);
+            QTest::qWait(1500);
+
+            QVERIFY(nextOperation.state() != QProcess::NotRunning);
+            QCOMPARE(manager.m_hostProcessGroupId, nextOperation.processId());
+        }
+
+        QVERIFY(nextOperation.waitForFinished(3000));
+    }
     void testDestroyingManagerCancelsDelayedHostSideEffect()
     {
         if (QSysInfo::kernelType() != QStringLiteral("linux")) {
@@ -619,6 +669,166 @@ private Q_SLOTS:
         QVERIFY(symlinkRaceRead.readAllStandardError().contains("unsafe-shortcuts-file"));
         QCOMPARE(symlinkRaceRead.readAllStandardOutput(), QByteArray());
         QVERIFY(QFileInfo(home.shortcutsPath).isSymLink());
+    }
+
+    void testFlatpakProcessStatusReadFailureIsUnknown()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host operations require Linux procfs");
+        }
+        HostTestHome home;
+        QVERIFY(home.ready);
+        const QString root = home.home.path()
+            + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+        const QString configDir = root + QStringLiteral("/userdata/123/config");
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/config")));
+        QVERIFY(QDir().mkpath(configDir));
+        QVERIFY(writeFile(root + QStringLiteral("/config/libraryfolders.vdf"),
+                          "\"libraryfolders\" { }\n"));
+        const QString shortcutsPath = configDir + QStringLiteral("/shortcuts.vdf");
+        const QByteArray original = "existing flatpak shortcuts";
+        QVERIFY(writeFile(shortcutsPath, original));
+        if (::geteuid() == 0) {
+            const QStringList directories{
+                home.home.path() + QStringLiteral("/.var"),
+                home.home.path() + QStringLiteral("/.var/app"),
+                home.home.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam"),
+                home.home.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam/data"),
+                root, root + QStringLiteral("/userdata"), configDir};
+            for (const QString &directory : directories) {
+                const QByteArray path = directory.toLocal8Bit();
+                QVERIFY(::chown(path.constData(), 65534, 65534) == 0);
+                QVERIFY(::chmod(path.constData(), 0777) == 0);
+            }
+            const QByteArray shortcuts = shortcutsPath.toLocal8Bit();
+            QVERIFY(::chown(shortcuts.constData(), 65534, 65534) == 0);
+        }
+
+        QProcess fakeSteam;
+        fakeSteam.setProgram(QStringLiteral("/bin/sleep"));
+        fakeSteam.setArguments({QStringLiteral("30")});
+        fakeSteam.start();
+        QVERIFY(fakeSteam.waitForStarted(3000));
+
+        const QString binDir = home.home.path() + QStringLiteral("/bin");
+        QVERIFY(QDir().mkpath(binDir));
+        QVERIFY(writeFile(binDir + QStringLiteral("/flatpak"),
+                          "#!/bin/sh\n"
+                          "if [ \"$1\" = ps ]; then printf 'com.valvesoftware.Steam %s\n' \"$COUCHPLAY_FLATPAK_PID\"; exit 0; fi\n"
+                          "exit 1\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup
+                              | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                              | QFileDevice::ExeOther));
+        QVERIFY(writeFile(binDir + QStringLiteral("/awk"),
+                          "#!/bin/sh\n"
+                          "for argument; do [ \"$argument\" = \"/proc/$COUCHPLAY_FLATPAK_PID/status\" ] && exit 1; done\n"
+                          "exec /usr/bin/awk \"$@\"\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup
+                              | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                              | QFileDevice::ExeOther));
+
+        QProcess process;
+        home.configure(process, QStringLiteral("commit"), {root, QStringLiteral("123"), fileHash(original)});
+        QProcessEnvironment environment = process.processEnvironment();
+        environment.insert(QStringLiteral("PATH"),
+                           binDir + QLatin1Char(':') + environment.value(QStringLiteral("PATH")));
+        environment.insert(QStringLiteral("COUCHPLAY_FLATPAK_PID"), QString::number(fakeSteam.processId()));
+        process.setProcessEnvironment(environment);
+        process.start();
+        QVERIFY(process.waitForStarted(3000));
+        QVERIFY(process.waitForFinished(5000));
+        QCOMPARE(process.exitCode(), 3);
+        QVERIFY(process.readAllStandardError().contains("steam-process-state-unknown"));
+        QFile shortcuts(shortcutsPath);
+        QVERIFY(shortcuts.open(QIODevice::ReadOnly));
+        QCOMPARE(shortcuts.readAll(), original);
+        QVERIFY(!hasTemporaryFiles(configDir, QStringLiteral(".shortcuts.vdf.couchplay.*")));
+
+        fakeSteam.terminate();
+        QVERIFY(fakeSteam.waitForFinished(3000));
+    }
+
+    void testHostCommitBoundsFinalDigestAndBackupCopy()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("host operations require Linux procfs");
+        }
+        {
+            HostTestHome home;
+            QVERIFY(home.ready);
+            const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
+            QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
+            QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
+            QVERIFY(QFile::setPermissions(binary, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                                  | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                                  | QFileDevice::ReadOther | QFileDevice::ExeOther));
+            const QByteArray oversized(MaxHostDocumentSize + 1, 'x');
+            QVERIFY(writeFile(home.shortcutsPath, oversized));
+            QVERIFY(home.makeShortcutHostOwned());
+
+            QProcess process;
+            home.configure(process, QStringLiteral("commit"),
+                           {home.steamRoot, QStringLiteral("123"), fileHash(oversized)});
+            process.start();
+            QVERIFY(process.waitForStarted(3000));
+            QVERIFY(process.write("replacement shortcuts") > 0);
+            process.closeWriteChannel();
+            QVERIFY(process.waitForFinished(15000));
+            QCOMPARE(process.exitCode(), 4);
+            QVERIFY(process.readAllStandardError().contains("shortcuts-file-too-large"));
+            QFile shortcuts(home.shortcutsPath);
+            QVERIFY(shortcuts.open(QIODevice::ReadOnly));
+            QCOMPARE(shortcuts.readAll(), oversized);
+            QVERIFY(!hasTemporaryFiles(home.configDir, QStringLiteral(".shortcuts.vdf.couchplay.*")));
+        }
+
+        {
+            HostTestHome home;
+            QVERIFY(home.ready);
+            const QString binary = home.steamRoot + QStringLiteral("/ubuntu12_64/steam");
+            QVERIFY(QDir().mkpath(QFileInfo(binary).absolutePath()));
+            QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
+            QVERIFY(QFile::setPermissions(binary, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                                  | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                                  | QFileDevice::ReadOther | QFileDevice::ExeOther));
+            const QByteArray original = "stable shortcuts";
+            QVERIFY(writeFile(home.shortcutsPath, original));
+            QVERIFY(home.makeShortcutHostOwned());
+
+            const QString hookDir = home.home.path() + QStringLiteral("/python-hook");
+            QVERIFY(QDir().mkpath(hookDir));
+            QVERIFY(writeFile(hookDir + QStringLiteral("/sitecustomize.py"),
+                              "import os, sys\n"
+                              "if len(sys.argv) > 2 and '.shortcuts.vdf.couchplay-backup.' in sys.argv[2]:\n"
+                              "    _original_read = os.read\n"
+                              "    _done = False\n"
+                              "    def _read(fd, size):\n"
+                              "        global _done\n"
+                              "        if not _done:\n"
+                              "            _done = True\n"
+                              "            with open(os.environ['COUCHPLAY_GROW_PATH'], 'ab', buffering=0) as target:\n"
+                              "                target.write(b'x' * (int(os.environ['COUCHPLAY_READ_LIMIT']) + 1))\n"
+                              "        return _original_read(fd, size)\n"
+                              "    os.read = _read\n"));
+
+            QProcess process;
+            home.configure(process, QStringLiteral("commit"),
+                           {home.steamRoot, QStringLiteral("123"), fileHash(original)});
+            QProcessEnvironment environment = process.processEnvironment();
+            environment.insert(QStringLiteral("PYTHONPATH"), hookDir);
+            environment.insert(QStringLiteral("COUCHPLAY_GROW_PATH"), home.shortcutsPath);
+            environment.insert(QStringLiteral("COUCHPLAY_READ_LIMIT"), QString::number(MaxHostDocumentSize));
+            process.setProcessEnvironment(environment);
+            process.start();
+            QVERIFY(process.waitForStarted(3000));
+            QVERIFY(process.write("replacement shortcuts") > 0);
+            process.closeWriteChannel();
+            QVERIFY(process.waitForFinished(15000));
+            QCOMPARE(process.exitCode(), 4);
+            QVERIFY(process.readAllStandardError().contains("shortcuts-file-too-large"));
+            QVERIFY(!QFile::exists(home.configDir + QStringLiteral("/shortcuts.vdf.couchplay-backup")));
+            QVERIFY(!hasTemporaryFiles(home.configDir, QStringLiteral(".shortcuts.vdf.couchplay.*")));
+        }
     }
 
     void testHostReadBoundsDescriptorReadsAtMaximumDocumentSize()
@@ -1019,6 +1229,53 @@ private Q_SLOTS:
         QVERIFY(process.waitForFinished(2000));
         QCOMPARE(process.exitCode(), 143);
         QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(kwinPid)), 3000);
+    }
+
+    void testGameModeDesktopSignalForwardsToCouchplay()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("game mode process cleanup requires Linux");
+        }
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        const QString childPidPath = home.path() + QStringLiteral("/couchplay-pid");
+        const QString childTermPath = home.path() + QStringLiteral("/couchplay-term");
+        const QString childPath = home.path() + QStringLiteral("/couchplay-child");
+        QVERIFY(writeFile(childPath,
+                          "#!/bin/sh\n"
+                          "echo $$ > \"$COUCHPLAY_CHILD_PID\"\n"
+                          "trap 'printf terminated > \"$COUCHPLAY_CHILD_TERM\"; exit 0' TERM\n"
+                          "while :; do sleep 1; done\n",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                              | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                              | QFileDevice::ReadOther | QFileDevice::ExeOther));
+
+        QProcess process;
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("HOME"), home.path());
+        environment.remove(QStringLiteral("GAMESCOPE_WAYLAND_DISPLAY"));
+        environment.remove(QStringLiteral("SteamGamepadUI"));
+        environment.remove(QStringLiteral("XDG_CURRENT_DESKTOP"));
+        environment.insert(QStringLiteral("COUCHPLAY_CHILD_PID"), childPidPath);
+        environment.insert(QStringLiteral("COUCHPLAY_CHILD_TERM"), childTermPath);
+        process.setProcessEnvironment(environment);
+        process.setProgram(QStringLiteral("/bin/bash"));
+        process.setArguments({QStringLiteral("-c"), gameModeScript(), QStringLiteral("gamemode-test"),
+                              QStringLiteral("--couchplay-native"), childPath, QStringLiteral("--")});
+        process.start();
+        QVERIFY(process.waitForStarted(3000));
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(childPidPath), 3000);
+        QFile pidFile(childPidPath);
+        QVERIFY(pidFile.open(QIODevice::ReadOnly));
+        bool ok = false;
+        const pid_t childPid = static_cast<pid_t>(pidFile.readAll().trimmed().toLongLong(&ok));
+        QVERIFY(ok && childPid > 0);
+
+        QCOMPARE(::kill(static_cast<pid_t>(process.processId()), SIGTERM), 0);
+        QVERIFY(process.waitForFinished(3000));
+        QCOMPARE(process.exitCode(), 143);
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(childTermPath), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 3000);
     }
 
     void testInvalidProfileFailsBeforeHostProbe()

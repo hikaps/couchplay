@@ -57,8 +57,13 @@ public:
             ::fcntl(s_readFd, F_SETFL, readFlags | O_NONBLOCK);
             const int writeFlags = ::fcntl(s_writeFd, F_GETFL, 0);
             ::fcntl(s_writeFd, F_SETFL, writeFlags | O_NONBLOCK);
-            std::signal(SIGTERM, &TerminationNotifier::signalHandler);
-            std::signal(SIGINT, &TerminationNotifier::signalHandler);
+            if (!installSignalHandlers()) {
+                ::close(s_readFd);
+                ::close(s_writeFd);
+                s_readFd = -1;
+                s_writeFd = -1;
+                return;
+            }
         }
         if (s_readFd >= 0) {
             m_notifier = new QSocketNotifier(s_readFd, QSocketNotifier::Read, this);
@@ -77,10 +82,65 @@ public:
     {
         if (m_notifier) {
             m_notifier->setEnabled(false);
+            delete m_notifier;
+            m_notifier = nullptr;
+        }
+        // No notifier remains to consume bytes after this object is destroyed.
+        // Drop the pipe and restore the process signal handlers so a signal
+        // delivered between runs cannot be replayed by the next notifier.
+        const int writeFd = static_cast<int>(s_writeFd);
+        s_writeFd = -1;
+        drainPipe();
+        restoreSignalHandlers();
+
+        const int readFd = s_readFd;
+        s_readFd = -1;
+        if (readFd >= 0) {
+            ::close(readFd);
+        }
+        if (writeFd >= 0) {
+            ::close(writeFd);
         }
     }
 
 private:
+    static bool installSignalHandlers()
+    {
+        struct sigaction action {};
+        action.sa_flags = SA_RESTART;
+        sigemptyset(&action.sa_mask);
+        action.sa_handler = &TerminationNotifier::signalHandler;
+        if (::sigaction(SIGTERM, &action, &s_previousSigterm) != 0) {
+            return false;
+        }
+        if (::sigaction(SIGINT, &action, &s_previousSigint) != 0) {
+            ::sigaction(SIGTERM, &s_previousSigterm, nullptr);
+            return false;
+        }
+        s_handlersInstalled = true;
+        return true;
+    }
+
+    static void restoreSignalHandlers()
+    {
+        if (!s_handlersInstalled) {
+            return;
+        }
+        ::sigaction(SIGTERM, &s_previousSigterm, nullptr);
+        ::sigaction(SIGINT, &s_previousSigint, nullptr);
+        s_handlersInstalled = false;
+    }
+
+    static void drainPipe()
+    {
+        if (s_readFd < 0) {
+            return;
+        }
+        char signalBytes[64];
+        while (::read(s_readFd, signalBytes, sizeof(signalBytes)) > 0) {
+        }
+    }
+
     static void signalHandler(int signal)
     {
         if (s_writeFd >= 0) {
@@ -92,7 +152,10 @@ private:
     }
 
     static inline int s_readFd = -1;
-    static inline int s_writeFd = -1;
+    static inline volatile std::sig_atomic_t s_writeFd = -1;
+    static inline struct sigaction s_previousSigterm {};
+    static inline struct sigaction s_previousSigint {};
+    static inline bool s_handlersInstalled = false;
     QSocketNotifier *m_notifier = nullptr;
     std::function<void()> m_callback;
 };

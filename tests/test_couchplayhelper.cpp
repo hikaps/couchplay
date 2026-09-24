@@ -66,6 +66,10 @@ public:
     {
         m_truncateOnNextRead = path;
     }
+    void replaceOnNextRead(const QString &path)
+    {
+        m_replaceOnNextRead = path;
+    }
     void
     setUserExists(const QString &username, bool exists, uint uid = 0, gid_t gid = 0, const QString &home = QString())
     {
@@ -139,6 +143,7 @@ public:
         m_standardError.clear();
         m_beforeNextRenameAt = {};
         m_afterFirstExchange = {};
+        m_replaceOnNextRead.clear();
 
     }
     QStringList getLastProcessArgs() const
@@ -341,6 +346,25 @@ public:
             m_truncateOnNextRead.clear();
             ::truncate(path.constData(), 1);
         }
+        if (!m_replaceOnNextRead.isEmpty()) {
+            const QString path = m_replaceOnNextRead;
+            m_replaceOnNextRead.clear();
+            const QByteArray pathBytes = path.toLocal8Bit();
+            const QByteArray oldPathBytes = (path + QStringLiteral(".original")).toLocal8Bit();
+            ::unlink(oldPathBytes.constData());
+            if (::rename(pathBytes.constData(), oldPathBytes.constData()) != 0) {
+                return -1;
+            }
+            QFile replacement(path);
+            if (!replacement.open(QIODevice::WriteOnly)) {
+                return -1;
+            }
+            if (replacement.write("pathname replacement") < 0) {
+                replacement.close();
+                return -1;
+            }
+            replacement.close();
+        }
         return ::read(fd, buffer, count);
     }
 
@@ -446,6 +470,7 @@ private:
     QByteArray m_standardOutput;
     QByteArray m_standardError;
     QString m_truncateOnNextRead;
+    QString m_replaceOnNextRead;
 };
 
 class TestCouchPlayHelper : public QObject
@@ -1323,7 +1348,7 @@ void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
     QCOMPARE(unchanged.readAll(), externalReplacement);
     unchanged.close();
     const QStringList retainedNames = QDir(QFileInfo(shortcutsPath).absolutePath())
-        .entryList({QStringLiteral(".shortcuts.vdf.couchplay-*.tmp")}, QDir::Files);
+        .entryList({QStringLiteral(".shortcuts.vdf.couchplay-*.tmp")}, QDir::Files | QDir::Hidden);
     QCOMPARE(retainedNames.size(), 1);
     QFile retainedSnapshot(QFileInfo(shortcutsPath).absolutePath() + QLatin1Char('/') + retainedNames.first());
     QVERIFY(retainedSnapshot.open(QIODevice::ReadOnly));
@@ -1414,7 +1439,10 @@ void TestCouchPlayHelper::testReadSteamLibraryFoldersSecurely()
     QVERIFY2(snapshot.isValid(), qPrintable(snapshot.error().message()));
     QCOMPARE(snapshot.value().value(QStringLiteral("exists")).toBool(), true);
     QCOMPARE(snapshot.value().value(QStringLiteral("content")).toByteArray(), original);
-
+    m_ops->replaceOnNextRead(path);
+    QDBusReply<QVariantMap> replaced =
+        m_dbusInterface->call(QStringLiteral("ReadSteamLibraryFoldersForUser"), username);
+    QVERIFY(!replaced.isValid());
     const QByteArray sessionVdf = QByteArrayLiteral("temporary CouchPlay library entries");
     QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
     QCOMPARE(file.write(sessionVdf), sessionVdf.size());
@@ -1426,7 +1454,19 @@ void TestCouchPlayHelper::testReadSteamLibraryFoldersSecurely()
     QVERIFY(file.open(QIODevice::ReadOnly));
     QCOMPARE(file.readAll(), original);
     file.close();
-
+    const QString hardlink = home.path() + QStringLiteral("/hardlink.vdf");
+    QVERIFY(::link(path.toLocal8Bit().constData(), hardlink.toLocal8Bit().constData()) == 0);
+    QDBusReply<bool> hardlinkRejected =
+        m_dbusInterface->call(QStringLiteral("RestoreSteamLibraryFoldersForUser"),
+                               username,
+                               true,
+                               QByteArrayLiteral("must not truncate hardlinks"));
+    QVERIFY(!hardlinkRejected.isValid());
+    QFile hardlinkFile(hardlink);
+    QVERIFY(hardlinkFile.open(QIODevice::ReadOnly));
+    QCOMPARE(hardlinkFile.readAll(), original);
+    hardlinkFile.close();
+    QVERIFY(::unlink(hardlink.toLocal8Bit().constData()) == 0);
     QVERIFY(QFile::remove(path));
     const QString outside = home.path() + QStringLiteral("/outside.vdf");
     QFile outsideFile(outside);

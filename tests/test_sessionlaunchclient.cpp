@@ -237,6 +237,59 @@ private:
     int m_launchCalls = 0;
 };
 
+namespace {
+
+volatile std::sig_atomic_t restoredTerminationSignalCount = 0;
+
+void restoredTerminationSignalHandler(int)
+{
+    ++restoredTerminationSignalCount;
+}
+
+class DelayedFinishLauncherAdaptor final : public QDBusAbstractAdaptor
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
+
+public:
+    explicit DelayedFinishLauncherAdaptor(QObject *parent)
+        : QDBusAbstractAdaptor(parent)
+    {
+    }
+
+    int stopCalls() const
+    {
+        return m_stopCalls;
+    }
+
+public Q_SLOTS:
+    bool IsReady() const
+    {
+        return true;
+    }
+
+    bool LaunchProfile(const QString &, const QString &requestId, const QString &)
+    {
+        QTimer::singleShot(100, this, [this, requestId] { Q_EMIT LaunchFinished(requestId, 31); });
+        return true;
+    }
+
+    bool StopSession(const QString &requestId)
+    {
+        ++m_stopCalls;
+        Q_EMIT LaunchFinished(requestId, 99);
+        return true;
+    }
+
+Q_SIGNALS:
+    void LaunchFinished(const QString &requestId, int exitCode);
+
+private:
+    int m_stopCalls = 0;
+};
+
+} // namespace
+
 class TestSessionLaunchClient : public QObject
 {
     Q_OBJECT
@@ -526,6 +579,49 @@ private Q_SLOTS:
         replacementBus.unregisterObject(objectPath);
         QDBusConnection::disconnectFromBus(ownerConnectionName);
         QDBusConnection::disconnectFromBus(replacementConnectionName);
+    }
+    void testRunRestoresTerminationNotifierBetweenRuns()
+    {
+        auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
+        QVERIFY(application);
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        const QString service = QStringLiteral("com.github.CouchPlay.SessionLaunchNotifierLifecycleTest");
+        const QString objectPath = QStringLiteral("/SessionLauncher");
+        QObject serviceObject;
+        auto *adaptor = new DelayedFinishLauncherAdaptor(&serviceObject);
+        QVERIFY(bus.registerObject(objectPath, &serviceObject, QDBusConnection::ExportAdaptors));
+        QVERIFY(bus.registerService(service));
+
+        CommandLineRequest request;
+        request.profileName = QStringLiteral("Family");
+        request.start = true;
+        request.exitAfterSession = true;
+        restoredTerminationSignalCount = 0;
+        const auto previousHandler = std::signal(SIGTERM, &restoredTerminationSignalHandler);
+
+        std::atomic<int> firstExitCode{-1};
+        std::jthread firstClient([&] {
+            firstExitCode.store(SessionLaunchClient::run(*application, request, service));
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(firstExitCode.load() != -1, 5000);
+        firstClient.join();
+        QCOMPARE(firstExitCode.load(), 31);
+
+        std::raise(SIGTERM);
+        QCOMPARE(static_cast<int>(restoredTerminationSignalCount), 1);
+
+        std::atomic<int> secondExitCode{-1};
+        std::jthread secondClient([&] {
+            secondExitCode.store(SessionLaunchClient::run(*application, request, service));
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(secondExitCode.load() != -1, 5000);
+        secondClient.join();
+        QCOMPARE(secondExitCode.load(), 31);
+        QCOMPARE(adaptor->stopCalls(), 0);
+
+        std::signal(SIGTERM, previousHandler);
+        bus.unregisterObject(objectPath);
+        bus.unregisterService(service);
     }
     void testRunPreservesExitStatusAfterRejectedStop()
     {

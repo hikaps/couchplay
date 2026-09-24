@@ -94,6 +94,8 @@ public:
     }
 
     QList<QStringList> launchCommands;
+    std::function<void()> onLaunchInstance;
+
     qint64 nextPid = 1000;
     qint64 launchInstance(const QString &username,
                           const QString &displayContext,
@@ -112,6 +114,11 @@ public:
         Q_UNUSED(environment)
         Q_UNUSED(bindPaths)
         launchCommands.append(gameCommand);
+        if (onLaunchInstance) {
+            auto callback = onLaunchInstance;
+            onLaunchInstance = {};
+            callback();
+        }
         return nextPid++;
     }
 
@@ -355,6 +362,9 @@ private Q_SLOTS:
     void testActiveChangedRestartDoesNotEmitStaleFinalizationSignals();
     void testStaleHookEventsCannotAffectReplacementHook();
     void testInstanceStoppedReentrancyDoesNotFinalizeReplacementSession();
+    void testStartNextInstanceReentrancyDoesNotUseStaleConfig();
+    void testStaleWindowCallbacksCannotAffectReplacementSession();
+    void testTeardownRetainsResourcesForRetry();
     void testStreamingSetupFailureDoesNotFinalizeReplacementSession();
     void testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch();
 private:
@@ -1487,6 +1497,80 @@ void TestSessionRunner::testInstanceStoppedReentrancyDoesNotFinalizeReplacementS
     QVERIFY(m_runner->m_startupGeneration > stoppedGeneration);
 
     m_runner->stop();
+}
+
+void TestSessionRunner::testStartNextInstanceReentrancyDoesNotUseStaleConfig()
+{
+    QVariantMap config;
+    config.insert(QStringLiteral("username"), QStringLiteral("player1"));
+    config.insert(QStringLiteral("outputMode"), QStringLiteral("physical"));
+    config.insert(QStringLiteral("outputWidth"), 1280);
+    config.insert(QStringLiteral("outputHeight"), 720);
+    config.insert(QStringLiteral("gameCommand"), QStringList{QStringLiteral("game")});
+
+    m_runner->m_active = true;
+    m_runner->m_startupGeneration = 1;
+    m_runner->m_pendingInstanceConfigs.append(config);
+    m_helperClient->onLaunchInstance = [this] { m_runner->stop(); };
+
+    m_runner->startNextInstance();
+
+    QCOMPARE(m_helperClient->launchCommands.size(), 1);
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(m_runner->m_pendingInstanceConfigs.isEmpty());
+    QVERIFY(m_runner->m_instances.isEmpty());
+}
+
+void TestSessionRunner::testStaleWindowCallbacksCannotAffectReplacementSession()
+{
+    m_runner->m_active = true;
+    m_runner->m_startupGeneration = 2;
+    m_runner->m_nextInstanceToStart = 0;
+    m_runner->m_pendingInstanceConfigs.append(QVariantMap{});
+    m_runner->m_pendingWindowRequests.insert(41, SessionRunner::PendingWindowRequest{1, 0});
+
+    m_runner->onWindowPositioned(41, QStringLiteral("old-window"));
+    QCOMPARE(m_runner->m_nextInstanceToStart, 0);
+    QVERIFY(m_runner->m_positionedWindowIds.isEmpty());
+
+    m_runner->m_pendingWindowRequests.insert(42, SessionRunner::PendingWindowRequest{1, 0});
+    m_runner->onWindowPositioningTimeout(42);
+    QVERIFY(m_runner->isActive());
+    QCOMPARE(m_runner->m_startupGeneration, quint64(2));
+
+    m_runner->m_pendingWindowRequests.insert(43, SessionRunner::PendingWindowRequest{2, 0});
+    m_runner->onWindowPositioned(43, QStringLiteral("current-window"));
+    QCOMPARE(m_runner->m_nextInstanceToStart, 1);
+    QCOMPARE(m_runner->m_positionedWindowIds, QStringList{QStringLiteral("current-window")});
+}
+
+void TestSessionRunner::testTeardownRetainsResourcesForRetry()
+{
+    SessionRunner::StreamingInstanceInfo streamingInfo;
+    streamingInfo.username = QStringLiteral("player1");
+    streamingInfo.displayContext = QStringLiteral("wayland-99");
+    streamingInfo.sinkName = QStringLiteral("sink-99");
+    streamingInfo.virtualDisplayCreated = true;
+    streamingInfo.nullSinkCreated = true;
+    m_runner->m_streamingInstances.insert(7, streamingInfo);
+    m_runner->m_sharedStateActive = true;
+    m_runner->m_steamSharedUsers.insert(QStringLiteral("player1"));
+    m_runner->m_ownedDevicePaths.append(QStringLiteral("/dev/input/event-test"));
+    m_helperClient->m_available = false;
+
+    m_runner->cleanupStreamingInstance(7);
+    m_runner->stop();
+
+    QVERIFY(m_runner->m_streamingInstances.contains(7));
+    QVERIFY(m_runner->m_sharedStateActive);
+    QVERIFY(m_runner->m_steamSharedUsers.contains(QStringLiteral("player1")));
+    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event-test")));
+
+    m_runner->m_ownedDevicePaths.clear();
+    m_helperClient->m_available = true;
+    m_runner->stop();
+    QVERIFY(!m_runner->m_sharedStateActive);
+    QVERIFY(m_runner->m_steamSharedUsers.isEmpty());
 }
 
 QTEST_MAIN(TestSessionRunner)

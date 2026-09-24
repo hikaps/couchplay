@@ -115,10 +115,22 @@ steam_running() {
         while read -r candidate pid _; do
             [[ "$candidate" == "$STEAM_APP_ID" ]] || continue
             [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { fail 3 "steam-process-state-unknown"; return 3; }
-            [[ -e "/proc/$pid/status" ]] || continue
-            [[ -r "/proc/$pid/status" ]] || { fail 3 "steam-process-state-unknown"; return 3; }
-            process_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)
-            [[ -n "$process_uid" ]] || { fail 3 "steam-process-state-unknown"; return 3; }
+            if [[ ! -e "/proc/$pid/status" ]]; then
+                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+                continue
+            fi
+            if [[ ! -r "/proc/$pid/status" ]]; then
+                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+                continue
+            fi
+            if ! process_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null); then
+                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+                continue
+            fi
+            if [[ -z "$process_uid" ]]; then
+                [[ -e "/proc/$pid" ]] && { fail 3 "steam-process-state-unknown"; return 3; }
+                continue
+            fi
             [[ "$process_uid" == "$uid" ]] && return 0
         done <<< "$process_list"
         return 1
@@ -274,20 +286,158 @@ finally:
 PY
 }
 
+shortcuts_digest_matches() {
+    python3 - "$1" "$2" "$MAX_DOCUMENT_SIZE" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+path, expected, max_size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+
+def fail(code, message):
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+def snapshot(info):
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+try:
+    fd = os.open(path, flags)
+except FileNotFoundError:
+    fail(1, "shortcuts-file-changed")
+except OSError:
+    fail(1, "unsafe-shortcuts-file")
+
+try:
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1:
+        fail(1, "unsafe-shortcuts-file")
+    if before.st_size > max_size:
+        fail(2, "shortcuts-file-too-large")
+
+    digest = hashlib.sha256()
+    length = 0
+    while True:
+        block = os.read(fd, min(65536, max_size + 1 - length))
+        if not block:
+            break
+        length += len(block)
+        if length > max_size:
+            fail(2, "shortcuts-file-too-large")
+        digest.update(block)
+
+    after = os.fstat(fd)
+    try:
+        current_path = os.stat(path, follow_symlinks=False)
+    except OSError:
+        fail(1, "shortcuts-file-changed")
+    if snapshot(before) != snapshot(after) or snapshot(current_path) != snapshot(after):
+        fail(1, "shortcuts-file-changed")
+    if length != after.st_size or digest.hexdigest() != expected:
+        fail(1, "shortcuts-conflict")
+finally:
+    os.close(fd)
+PY
+}
+
 assert_expected() {
-    local path=$1 expected=$2 actual
+    local path=$1 expected=$2 state
     if [[ "$expected" == missing ]]; then
-        [[ ! -e "$path" ]] || fail 4 "shortcuts-conflict"
+        [[ ! -e "$path" && ! -L "$path" ]] || fail 4 "shortcuts-conflict"
         return
     fi
-    [[ -f "$path" && ! -L "$path" ]] || fail 4 "shortcuts-conflict"
-    actual=$(sha256sum -- "$path" | awk '{print $1}')
-    [[ "$actual" == "$expected" ]] || fail 4 "shortcuts-conflict"
+    if shortcuts_digest_matches "$path" "$expected"; then
+        return
+    else
+        state=$?
+    fi
+    [[ "$state" == 2 ]] && fail 4 "shortcuts-file-too-large"
+    fail 4 "shortcuts-conflict"
+}
+
+shortcuts_copy_bounded() {
+    python3 - "$1" "$2" "$MAX_DOCUMENT_SIZE" <<'PY'
+import os
+import stat
+import sys
+
+source_path, destination_path, max_size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+
+def fail(code, message):
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+def snapshot(info):
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+source_fd = None
+destination_fd = None
+try:
+    try:
+        source_fd = os.open(source_path, flags)
+    except FileNotFoundError:
+        fail(1, "shortcuts-file-changed")
+    except OSError:
+        fail(1, "unsafe-shortcuts-file")
+
+    before = os.fstat(source_fd)
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1:
+        fail(1, "unsafe-shortcuts-file")
+    if before.st_size > max_size:
+        fail(2, "shortcuts-file-too-large")
+
+    try:
+        destination_fd = os.open(destination_path,
+                                  os.O_WRONLY | os.O_TRUNC | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError:
+        fail(1, "unsafe-shortcuts-file")
+    destination_before = os.fstat(destination_fd)
+    if not stat.S_ISREG(destination_before.st_mode) or destination_before.st_uid != os.geteuid() \
+            or destination_before.st_nlink != 1:
+        fail(1, "unsafe-shortcuts-file")
+
+    length = 0
+    while True:
+        block = os.read(source_fd, min(65536, max_size + 1 - length))
+        if not block:
+            break
+        length += len(block)
+        if length > max_size:
+            fail(2, "shortcuts-file-too-large")
+        view = memoryview(block)
+        while view:
+            written = os.write(destination_fd, view)
+            if written <= 0:
+                fail(1, "shortcuts-file-changed")
+            view = view[written:]
+
+    after = os.fstat(source_fd)
+    try:
+        current_path = os.stat(source_path, follow_symlinks=False)
+    except OSError:
+        fail(1, "shortcuts-file-changed")
+    destination_after = os.fstat(destination_fd)
+    if snapshot(before) != snapshot(after) or snapshot(current_path) != snapshot(after):
+        fail(1, "shortcuts-file-changed")
+    if (not stat.S_ISREG(destination_after.st_mode)
+            or destination_after.st_size != length):
+        fail(1, "shortcuts-file-changed")
+finally:
+    if source_fd is not None:
+        os.close(source_fd)
+    if destination_fd is not None:
+        os.close(destination_fd)
+PY
 }
 
 commit_shortcuts() {
     require_user
-    local root=$1 account=$2 expected=$3 path config config_fd config_fd_identity config_path_identity temp backup_temp mode
+    local root=$1 account=$2 expected=$3 path config config_fd config_fd_identity config_path_identity temp backup_temp mode state
     account_valid "$root" "$account" || fail 3 "invalid-account"
     config="$root/userdata/$account/config"
     exec 9<"$config" || fail 3 "unsafe-account-path"
@@ -315,7 +465,13 @@ commit_shortcuts() {
         mode=$(stat -c '%a' -- "$path")
         ACTIVE_BACKUP_TEMP_FILE=$(mktemp "$config_fd/.shortcuts.vdf.couchplay-backup.XXXXXX")
         backup_temp=$ACTIVE_BACKUP_TEMP_FILE
-        cp -- "$path" "$backup_temp"
+        if shortcuts_copy_bounded "$path" "$backup_temp"; then
+            :
+        else
+            state=$?
+            [[ "$state" == 2 ]] && fail 4 "shortcuts-file-too-large"
+            fail 4 "shortcuts-conflict"
+        fi
         chmod 600 "$backup_temp"
         mv -fT -- "$backup_temp" "$config_fd/shortcuts.vdf.couchplay-backup"
         ACTIVE_BACKUP_TEMP_FILE=""

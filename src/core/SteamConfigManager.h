@@ -184,7 +184,9 @@ public:
     bool prepareDataDir(const DataDirectory &dir,
                         const QString &username,
                         std::function<bool()> shouldContinue = {});
-    bool finalizeDataDir(const DataDirectory &dir, const QString &username);
+    bool finalizeDataDir(const DataDirectory &dir,
+                         const QString &username,
+                         std::function<bool()> shouldContinue = {});
 
 Q_SIGNALS:
     void steamPathsChanged();
