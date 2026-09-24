@@ -4,6 +4,8 @@
 import pytest
 import uuid
 
+from selenium.common.exceptions import TimeoutException
+
 from appium.webdriver.common.appiumby import AppiumBy
 from helpers.base_test import BaseTest
 
@@ -39,7 +41,7 @@ class TestProfiles(BaseTest):
         dialogs = [
             dialog
             for dialog in driver.find_elements(
-                AppiumBy.ACCESSIBILITY_ID, "dialogAddToSteam"
+                AppiumBy.NAME, "Add Profile to Steam"
             )
             if dialog.is_displayed()
         ]
@@ -116,9 +118,19 @@ class TestProfiles(BaseTest):
             profile_card.find_element(
                 AppiumBy.ACCESSIBILITY_ID, "btnAddProfileToSteam"
             ).click()
-            dialog = self.wait_for_element(
-                driver, AppiumBy.ACCESSIBILITY_ID, "dialogAddToSteam", timeout=30
-            )
+            try:
+                dialog = self.wait_for_element(
+                    driver, AppiumBy.NAME, "Add Profile to Steam", timeout=30
+                )
+            except TimeoutException as error:
+                source = driver.page_source or ""
+                object_name_present = "dialogAddToSteam" in source
+                raise AssertionError(
+                    "Timed out waiting for the Add Profile to Steam dialog by "
+                    f"accessible name (objectName present: {object_name_present}). "
+                    "Page source (first 4000 characters):\n"
+                    f"{source[:4000]}"
+                ) from error
             assert dialog.is_displayed()
             profile_label = self.wait_for_element(
                 driver, AppiumBy.ACCESSIBILITY_ID, "labelProfileToAdd"
