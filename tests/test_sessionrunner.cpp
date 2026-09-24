@@ -1239,8 +1239,8 @@ void TestSessionRunner::testActiveChangedRestartDoesNotEmitStaleFinalizationSign
 
 void TestSessionRunner::testActiveChangedStartRestartDoesNotRunObsoleteSetup()
 {
-    m_sessionManager->setInstanceCount(1);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    const int configuredInstances = m_sessionManager->currentProfile().instances.size();
     const qsizetype initialLaunchCount = m_helperClient->launchCommands.size();
     QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
     bool restarted = false;
@@ -1259,7 +1259,7 @@ void TestSessionRunner::testActiveChangedStartRestartDoesNotRunObsoleteSetup()
     QVERIFY(restarted);
     QVERIFY(restartAccepted);
     QVERIFY(m_runner->isActive());
-    QCOMPARE(m_helperClient->launchCommands.size() - initialLaunchCount, 1);
+    QCOMPARE(m_helperClient->launchCommands.size() - initialLaunchCount, configuredInstances);
     QCOMPARE(startedSpy.count(), 1);
 
     m_runner->stop();

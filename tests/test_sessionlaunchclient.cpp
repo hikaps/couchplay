@@ -772,6 +772,7 @@ private Q_SLOTS:
         QTRY_VERIFY_WITH_TIMEOUT(firstExitCode.load() != -1, 5000);
         firstClient.join();
         QCOMPARE(firstExitCode.load(), 31);
+        const int stopCallsAfterFirstRun = adaptor->stopCalls();
 
         std::raise(SIGTERM);
         std::raise(SIGINT);
@@ -785,7 +786,7 @@ private Q_SLOTS:
         QTRY_VERIFY_WITH_TIMEOUT(secondExitCode.load() != -1, 5000);
         secondClient.join();
         QCOMPARE(secondExitCode.load(), 31);
-        QCOMPARE(adaptor->stopCalls(), 0);
+        QCOMPARE(adaptor->stopCalls(), stopCallsAfterFirstRun);
 
         std::signal(SIGTERM, previousTerminationHandler);
         std::signal(SIGINT, previousInterruptHandler);

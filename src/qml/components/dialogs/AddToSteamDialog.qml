@@ -115,6 +115,18 @@ Kirigami.Dialog {
             enabled: !root.manager?.busy && !root.completed
         }
 
+        Controls.Label {
+            objectName: "labelSelectedSteamAccountGuidance"
+            Accessible.name: text
+            Layout.fillWidth: true
+            visible: !(root.manager?.gameMode ?? false) && root.hasSteamAccounts
+            text: i18nc(
+                "@info",
+                "Sign in to the selected Steam account to see this shortcut. Reopening Steam does not switch accounts."
+            )
+            wrapMode: Text.WordWrap
+        }
+
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             visible: root.errorText !== ""

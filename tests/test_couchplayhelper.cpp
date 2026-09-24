@@ -522,6 +522,7 @@ private Q_SLOTS:
     void testGetUserInfoNotFound();
     void testIsSteamBootstrappedTrue();
     void testIsSteamBootstrappedFalse();
+    void testGetUserSteamRootFindsFlatpakDataOnly();
     void testGetUserSteamIdSelectsMostRecentAccount();
     void testGetUserSteamIdAmbiguousAccounts();
     void testGetUserSteamIdRejectsDuplicateMostRecentMarkers();
@@ -537,6 +538,7 @@ private Q_SLOTS:
     void testCopyDirectoryToUserSourceOutsideAllowedPrefixes();
     void testCopyDirectoryToUserSourceNotExists();
     void testCopyDirectoryToUserSuccessReplacesAndChowns();
+    void testCopyDirectoryToUserReplacesRegularTargetWithoutBackup();
     void testCopyDirectoryToUserPreservesTargetOnFailedCopy();
     void testCopyDirectoryToUserTargetSwapPreservesExternal();
     void testCopyDirectoryToUserDotDotNameAccepted();
@@ -1026,6 +1028,20 @@ void TestCouchPlayHelper::testIsSteamBootstrappedFalse()
     QVERIFY(reply.isValid());
     QVERIFY(!reply.value());
 }
+void TestCouchPlayHelper::testGetUserSteamRootFindsFlatpakDataOnly()
+{
+    m_ops->clear();
+    const QString home = QStringLiteral("/home/player1");
+    const QString flatpakRoot = home + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
+    m_ops->setFileExists(flatpakRoot + QStringLiteral("/config"), true);
+
+    QDBusReply<QString> reply = m_dbusInterface->call(QStringLiteral("GetUserSteamRoot"), QStringLiteral("player1"));
+    QVERIFY(reply.isValid());
+    QCOMPARE(reply.value(), flatpakRoot);
+}
+
+
 void TestCouchPlayHelper::testGetUserSteamIdSelectsMostRecentAccount()
 {
     QTemporaryDir home;
@@ -1508,6 +1524,7 @@ void TestCouchPlayHelper::testReadSteamLibraryFoldersSecurely()
     QCOMPARE(file.readAll(), concurrentReplacement);
     file.close();
     QFile::remove(path + QStringLiteral(".race-original"));
+    QVERIFY(QFile::remove(path));
     const QString outside = home.path() + QStringLiteral("/outside.vdf");
     QFile outsideFile(outside);
     QVERIFY(outsideFile.open(QIODevice::WriteOnly));
@@ -1637,6 +1654,11 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
         QVERIFY(stale.open(QIODevice::WriteOnly));
         stale.write("old");
     }
+    QVERIFY(targetDir.mkpath(QStringLiteral("old-subdir")));
+    QFile oldNested(targetDir.filePath(QStringLiteral("old-subdir/old.bin")));
+    QVERIFY(oldNested.open(QIODevice::WriteOnly));
+    QVERIFY(oldNested.write("old") == 3);
+    oldNested.close();
 
     QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
                                                    QStringLiteral("player1"),
@@ -1666,6 +1688,38 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSuccessReplacesAndChowns()
         QDir(homeDir.path()).entryList(QDir::Dirs | QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
     QCOMPARE(parentEntries.size(), 2); // source-game + games
 }
+
+void TestCouchPlayHelper::testCopyDirectoryToUserReplacesRegularTargetWithoutBackup()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, homeDir.path());
+    QDir sourceDir(homeDir.filePath(QStringLiteral("source-game")));
+    QVERIFY(sourceDir.mkpath(QStringLiteral(".")));
+    m_ops->setFileExists(sourceDir.path(), true);
+    m_ops->setDirectoryExists(sourceDir.path(), true);
+    QFile sourceFile(sourceDir.filePath(QStringLiteral("config.ini")));
+    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+    QCOMPARE(sourceFile.write("new"), qint64(3));
+    sourceFile.close();
+
+    QFile targetFile(homeDir.filePath(QStringLiteral("games")));
+    QVERIFY(targetFile.open(QIODevice::WriteOnly));
+    QCOMPARE(targetFile.write("old"), qint64(3));
+    targetFile.close();
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("CopyDirectoryToUser"),
+                                                   QStringLiteral("player1"), sourceDir.path(),
+                                                   QStringLiteral("games"));
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+    QFile replacement(homeDir.filePath(QStringLiteral("games/config.ini")));
+    QVERIFY(replacement.open(QIODevice::ReadOnly));
+    QCOMPARE(replacement.readAll(), QByteArrayLiteral("new"));
+    const QStringList entries = QDir(homeDir.path()).entryList(QDir::Dirs | QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+    QCOMPARE(entries.size(), 2); // source-game and games; no displaced regular file left behind
+}
+
 
 void TestCouchPlayHelper::testCopyDirectoryToUserTargetSwapPreservesExternal()
 {

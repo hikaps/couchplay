@@ -19,6 +19,8 @@
         "--system-talk-name=io.github.hikaps.CouchPlayHelper",
         "--filesystem=~/.local/share/Steam:ro",
         "--filesystem=~/.steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam:ro",
         "--filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam:ro",
         "--persist=.local/share/couchplay"
     ],

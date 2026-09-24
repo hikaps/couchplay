@@ -881,6 +881,7 @@ QString CouchPlayHelper::GetUserSteamRoot(const QString &username)
         userHome + QStringLiteral("/.steam/steam"),
         userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
         userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"),
+        userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam"),
     };
 
     for (const QString &candidate : candidates) {
@@ -2467,50 +2468,45 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
     return true;
 }
 
-// Remove an entry (recursively for directories) below an open parent FD,
-static bool sameFileIdentity(const struct stat &left, const struct stat &right)
+// Compare the inode observed before a potentially racy directory operation.
+static bool sameInodeIdentity(const struct stat &left, const struct stat &right)
 {
     return left.st_dev == right.st_dev && left.st_ino == right.st_ino && left.st_uid == right.st_uid
-        && left.st_nlink == right.st_nlink && (left.st_mode & S_IFMT) == (right.st_mode & S_IFMT);
+        && (left.st_mode & S_IFMT) == (right.st_mode & S_IFMT);
 }
 
-// never following symlinks: a leaf symlink is unlinked, not descended into
-static void removeEntryUnder(int parentFd, const char *name)
+static bool sameFileIdentity(const struct stat &left, const struct stat &right)
 {
-    struct stat st;
-    if (::fstatat(parentFd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-        return;
-    }
-    if (S_ISDIR(st.st_mode)) {
-        int fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (fd >= 0) {
-            SecureFs::removeTreeAt(fd);
-            ::close(fd);
-        }
-        ::unlinkat(parentFd, name, AT_REMOVEDIR);
-    } else {
-        ::unlinkat(parentFd, name, 0);
-    }
+    return sameInodeIdentity(left, right) && left.st_nlink == right.st_nlink;
 }
+
+// Recursively clean only a pinned prepared entry, never a swapped sibling.
 static void removeEntryUnderIdentity(int parentFd, const char *name, const struct stat &expected)
 {
-    const int fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) {
+    const int entryFd = ::openat(parentFd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    if (entryFd < 0) {
         return;
     }
     struct stat opened{};
-    const bool pinned = ::fstat(fd, &opened) == 0 && sameFileIdentity(expected, opened);
-    if (pinned) {
-        SecureFs::removeTreeAt(fd);
+    const bool pinned = ::fstat(entryFd, &opened) == 0 && sameFileIdentity(expected, opened);
+    if (pinned && S_ISDIR(opened.st_mode)) {
+        const int dirFd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (dirFd >= 0) {
+            struct stat dirStat{};
+            if (::fstat(dirFd, &dirStat) == 0 && sameInodeIdentity(opened, dirStat)) {
+                SecureFs::removeTreeAt(dirFd);
+            }
+            ::close(dirFd);
+        }
     }
-    ::close(fd);
+    ::close(entryFd);
     if (!pinned) {
         return;
     }
     struct stat current{};
     if (::fstatat(parentFd, name, &current, AT_SYMLINK_NOFOLLOW) == 0
-        && sameFileIdentity(expected, current)) {
-        (void)::unlinkat(parentFd, name, AT_REMOVEDIR);
+        && sameInodeIdentity(expected, current)) {
+        (void)::unlinkat(parentFd, name, S_ISDIR(expected.st_mode) ? AT_REMOVEDIR : 0);
     }
 }
 
@@ -2678,7 +2674,7 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     // Atomically exchange the prepared tree with the target. A no-replace
     // install is used when the target did not exist; an exchange is used for
     // an existing target so the previous inode remains available for an
-    // identity-checked cleanup or rollback.
+    // identity-checked cleanup. On conflict, preserve the displaced entry.
     struct stat existingSt{};
     const int existingResult = ::fstatat(parentFd, leafNameUtf8.constData(), &existingSt, AT_SYMLINK_NOFOLLOW);
     if (existingResult != 0 && errno != ENOENT) {
