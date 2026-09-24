@@ -407,8 +407,10 @@ void SteamShortcutManager::scheduleHostProcessGroupEscalation(quint64 generation
     QTimer::singleShot(HostTerminationGraceMs, this,
                        [this, generation, processGroupId, guardedProcess] {
         if (processGroupId > 0) {
-            const bool groupSignalled = signalOwnedHostProcessGroup(generation, processGroupId, SIGKILL);
-            if (!groupSignalled && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
+            const bool owned = findHostProcessGroup(generation, processGroupId)
+                && hostProcessGroupIdentityMatches(generation, processGroupId);
+            const bool groupSignalled = owned && signalOwnedHostProcessGroup(generation, processGroupId, SIGKILL);
+            if (!groupSignalled && owned && guardedProcess && guardedProcess->state() != QProcess::NotRunning) {
                 guardedProcess->kill();
             }
             releaseHostProcessGroup(generation, processGroupId);
