@@ -3115,7 +3115,7 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
     QProcess *steamProcess = m_ops->createProcess();
     m_ops->startProcess(steamProcess, QStringLiteral("pgrep"), {
         QStringLiteral("-u"), QString::number(userUid), QStringLiteral("-f"),
-        QStringLiteral("(^|/)(steam|steamwebhelper)([[:space:]]|$)")});
+        QStringLiteral("(^|/|[[:space:]])(steam|steamwebhelper|com[.]valvesoftware[.]Steam)([[:space:]]|$)")});
     const bool steamCheckFinished = m_ops->waitForFinished(steamProcess, 3000);
     const int steamCheckExitCode = steamCheckFinished ? m_ops->processExitCode(steamProcess) : -1;
     delete steamProcess;
