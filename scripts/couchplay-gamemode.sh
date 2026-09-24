@@ -83,31 +83,31 @@ run_couchplay() {
     fi
 }
 
+run_couchplay_forwarded() {
+    if [[ "$ROUTE" == flatpak ]]; then
+        if [[ "${COUCHPLAY_HOST_SPAWN:-0}" == 1 ]]; then
+            ( exec flatpak-spawn --host /usr/bin/flatpak run --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" --env=QT_QPA_PLATFORM="$QT_QPA_PLATFORM" io.github.hikaps.couchplay "$@" ) &
+        else
+            ( exec flatpak run io.github.hikaps.couchplay "$@" ) &
+        fi
+    else
+        ( exec "$COUCHPLAY_BIN" "$@" ) &
+    fi
+    COUCHPLAY_PID=$!
+    local status
+    if wait "$COUCHPLAY_PID"; then
+        status=0
+    else
+        status=$?
+    fi
+    COUCHPLAY_PID=""
+    return "$status"
+}
 if is_game_mode; then
     echo "Detected: SteamOS Game Mode (gamescope session)"
 else
     echo "Detected: Desktop Mode"
     echo "Launching CouchPlay directly..."
-    run_couchplay_forwarded() {
-        if [[ "$ROUTE" == flatpak ]]; then
-            if [[ "${COUCHPLAY_HOST_SPAWN:-0}" == 1 ]]; then
-                ( exec flatpak-spawn --host /usr/bin/flatpak run --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" --env=QT_QPA_PLATFORM="$QT_QPA_PLATFORM" io.github.hikaps.couchplay "$@" ) &
-            else
-                ( exec flatpak run io.github.hikaps.couchplay "$@" ) &
-            fi
-        else
-            ( exec "$COUCHPLAY_BIN" "$@" ) &
-        fi
-        COUCHPLAY_PID=$!
-        local status
-        if wait "$COUCHPLAY_PID"; then
-            status=0
-        else
-            status=$?
-        fi
-        COUCHPLAY_PID=""
-        return "$status"
-    }
     if run_couchplay_forwarded "$@"; then
         exit 0
     else
