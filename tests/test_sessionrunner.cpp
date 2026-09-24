@@ -137,6 +137,22 @@ public:
         ++restoreAllDevicesCalls;
         return restoreAllDevicesResult;
     }
+    std::function<void()> onCreateVirtualOutput;
+    int createdVirtualOutputs = 0;
+    QString createVirtualOutput(const QString &, int, int, int) override
+    {
+        const QString display = QStringLiteral("test-stream-%1").arg(++createdVirtualOutputs);
+        if (onCreateVirtualOutput) {
+            auto callback = std::move(onCreateVirtualOutput);
+            onCreateVirtualOutput = {};
+            callback();
+        }
+        return display;
+    }
+    QString createNullSink(const QString &, const QString &sinkName) override
+    {
+        return sinkName;
+    }
     bool destroyVirtualOutputResult = true;
     bool destroyNullSinkResult = true;
     int destroyVirtualOutputCalls = 0;
@@ -394,6 +410,7 @@ private Q_SLOTS:
     void testStaleWindowCallbacksCannotAffectReplacementSession();
     void testTeardownRetainsResourcesForRetry();
     void testStreamingSetupFailureDoesNotFinalizeReplacementSession();
+    void testStreamingSetupDefersReentrantRestartUntilRollback();
     void testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch();
 private:
     void createMockHeroicConfig(const QString &basePath);
@@ -1303,6 +1320,45 @@ void TestSessionRunner::testStreamingSetupFailureDoesNotFinalizeReplacementSessi
     m_runner->stop();
     QCOMPARE(stoppedSpy.count(), 2);
 }
+void TestSessionRunner::testStreamingSetupDefersReentrantRestartUntilRollback()
+{
+    m_sessionManager->setInstanceCount(1);
+    QVariantMap streamingConfig;
+    streamingConfig.insert(QStringLiteral("outputMode"), QStringLiteral("streaming"));
+    streamingConfig.insert(QStringLiteral("username"), QStringLiteral("player1"));
+    streamingConfig.insert(QStringLiteral("presetId"), QStringLiteral("lutris"));
+    m_sessionManager->setInstanceConfig(0, streamingConfig);
+
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+    bool stoppedInsideCreate = false;
+    bool restarted = false;
+    bool restartAccepted = false;
+    const QMetaObject::Connection restartConnection = connect(m_runner, &SessionRunner::sessionStopped, m_runner, [&] {
+        restarted = true;
+        QVariantMap physicalConfig;
+        physicalConfig.insert(QStringLiteral("outputMode"), QStringLiteral("physical"));
+        physicalConfig.insert(QStringLiteral("username"), QString());
+        m_sessionManager->setInstanceConfig(0, physicalConfig);
+        restartAccepted = m_runner->start();
+    });
+    m_helperClient->onCreateVirtualOutput = [&] {
+        m_runner->stop();
+        stoppedInsideCreate = stoppedSpy.count() != 0;
+    };
+
+    QVERIFY(m_runner->start());
+    QVERIFY(!stoppedInsideCreate);
+    QVERIFY(restarted);
+    QVERIFY(restartAccepted);
+    QVERIFY(m_runner->isActive());
+    QCOMPARE(stoppedSpy.count(), 1);
+    QCOMPARE(m_helperClient->createdVirtualOutputs, 1);
+    QCOMPARE(m_helperClient->destroyVirtualOutputCalls, 1);
+    QVERIFY(m_runner->m_streamingInstances.isEmpty());
+    QObject::disconnect(restartConnection);
+    m_runner->stop();
+}
+
 void TestSessionRunner::testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch()
 {
     QTemporaryDir tempDir;

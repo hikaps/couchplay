@@ -879,6 +879,7 @@ QString CouchPlayHelper::GetUserSteamRoot(const QString &username)
     for (const QString &candidate : candidates) {
         const bool rootIsDirectory = m_ops->isDirectory(candidate);
         const bool hasSteamMarker = m_ops->fileExists(candidate + QStringLiteral("/steam.sh"))
+            || m_ops->fileExists(candidate + QStringLiteral("/ubuntu12_32/steam"))
             || m_ops->fileExists(candidate + QStringLiteral("/userdata"))
             || m_ops->fileExists(candidate + QStringLiteral("/config"));
         if (!rootIsDirectory || !hasSteamMarker) {

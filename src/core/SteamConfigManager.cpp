@@ -445,8 +445,11 @@ QList<SteamGame> SteamConfigManager::parseInstalledGames() const
             if (!manifest.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 continue;
             }
-            const QString content = QString::fromUtf8(manifest.readAll());
-            manifest.close();
+            QByteArray manifestBytes;
+            if (!readBoundedManifestFile(manifest, &manifestBytes)) {
+                continue;
+            }
+            const QString content = QString::fromUtf8(manifestBytes);
 
             const auto appIdMatch = appIdPattern.match(content);
             const auto nameMatch = namePattern.match(content);

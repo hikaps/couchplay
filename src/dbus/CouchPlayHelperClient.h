@@ -228,11 +228,11 @@ public:
      */
     Q_INVOKABLE virtual bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
-    Q_INVOKABLE QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
+    Q_INVOKABLE virtual QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
 
     Q_INVOKABLE virtual bool destroyVirtualOutput(const QString &username, const QString &waylandSocketName);
 
-    Q_INVOKABLE QString createNullSink(const QString &username, const QString &sinkName);
+    Q_INVOKABLE virtual QString createNullSink(const QString &username, const QString &sinkName);
 
     Q_INVOKABLE virtual bool destroyNullSink(const QString &username, const QString &sinkName);
 

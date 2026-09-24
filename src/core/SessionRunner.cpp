@@ -471,7 +471,14 @@ void SessionRunner::continueStart()
         streamConfig[QStringLiteral("streamResolution")] = instConfig.streamResolution;
         streamConfig[QStringLiteral("refreshRate")] = instConfig.refreshRate;
         streamConfig[QStringLiteral("_startupGeneration")] = QVariant::fromValue(startupGeneration);
+        m_streamingSetupInProgress = true;
         const bool streamingSetupReady = setupStreamingInstance(idx, streamConfig);
+        m_streamingSetupInProgress = false;
+        if (m_finishAfterSessionResources) {
+            m_finishAfterSessionResources = false;
+            finishFinalization();
+            return;
+        }
         if (!isCurrentStartup()) {
             return;
         }
@@ -686,7 +693,7 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
 
 void SessionRunner::finishFinalization()
 {
-    if (m_sessionResourcesSetupInProgress) {
+    if (m_sessionResourcesSetupInProgress || m_streamingSetupInProgress) {
         m_finishAfterSessionResources = true;
         return;
     }

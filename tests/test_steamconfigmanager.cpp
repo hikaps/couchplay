@@ -1011,6 +1011,13 @@ private Q_SLOTS:
         }
         QVERIFY(foundNative);
         QVERIFY(foundShortcut);
+        QVERIFY(manifest.open(QIODevice::ReadWrite));
+        QVERIFY(manifest.resize(SteamShortcutsVdf::MaxDocumentSize + 1));
+        manifest.close();
+        manager.loadGames();
+        const QVariantList boundedGames = manager.gamesAsVariant();
+        QCOMPARE(boundedGames.size(), 1);
+        QCOMPARE(boundedGames.constFirst().toMap().value(QStringLiteral("source")).toString(), QStringLiteral("shortcut"));
 
         QVERIFY(shortcuts.open(QIODevice::WriteOnly | QIODevice::Truncate));
         QVERIFY(shortcuts.resize(SteamShortcutsVdf::MaxDocumentSize + 1));

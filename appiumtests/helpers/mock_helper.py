@@ -297,6 +297,7 @@ class MockHelper(dbus.service.Object):
             os.path.join(home, ".steam/steam"),
             os.path.join(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam"),
             os.path.join(home, ".var/app/com.valvesoftware.Steam/.steam/steam"),
+            os.path.join(home, ".var/app/com.valvesoftware.Steam/data/Steam"),
         ]
         for candidate in candidates:
             if not os.path.exists(candidate):

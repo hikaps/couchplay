@@ -12,6 +12,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTE=auto
 NATIVE_BIN=
+IN_FLATPAK=false
+
+if [[ -f /.flatpak-info ]]; then
+    IN_FLATPAK=true
+fi
 
 if [[ "${1:-}" == "--couchplay-native" ]]; then
     [[ $# -ge 3 && "$3" == "--" ]] || { echo "Error: --couchplay-native requires an executable and --." >&2; exit 2; }
@@ -22,6 +27,9 @@ elif [[ "${1:-}" == "--couchplay-flatpak" ]]; then
     [[ "${2:-}" == "--" ]] || { echo "Error: --couchplay-flatpak requires --." >&2; exit 2; }
     ROUTE=flatpak
     shift 2
+fi
+if [[ "$ROUTE" == auto && "$IN_FLATPAK" == true ]]; then
+    ROUTE=flatpak
 fi
 
 if [[ "$ROUTE" == native ]]; then
@@ -74,6 +82,8 @@ run_couchplay_forwarded() {
     if [[ "$ROUTE" == flatpak ]]; then
         if [[ "${COUCHPLAY_HOST_SPAWN:-0}" == 1 ]]; then
             ( exec flatpak-spawn --host --watch-bus /usr/bin/flatpak run --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" --env=QT_QPA_PLATFORM="$QT_QPA_PLATFORM" io.github.hikaps.couchplay "$@" ) &
+        elif [[ "$IN_FLATPAK" == true ]]; then
+            ( exec /app/bin/couchplay "$@" ) &
         else
             ( exec flatpak run io.github.hikaps.couchplay "$@" ) &
         fi

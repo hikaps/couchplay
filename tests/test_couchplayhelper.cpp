@@ -1045,8 +1045,12 @@ void TestCouchPlayHelper::testGetUserSteamRootFindsFlatpakDataOnly()
     QDBusReply<QString> reply = m_dbusInterface->call(QStringLiteral("GetUserSteamRoot"), QStringLiteral("player1"));
     QVERIFY(reply.isValid());
     QCOMPARE(reply.value(), flatpakRoot);
+    m_ops->setDirectoryExists(emptyEarlierRoot, true);
+    m_ops->setFileExists(emptyEarlierRoot + QStringLiteral("/ubuntu12_32/steam"), true);
+    reply = m_dbusInterface->call(QStringLiteral("GetUserSteamRoot"), QStringLiteral("player1"));
+    QVERIFY(reply.isValid());
+    QCOMPARE(reply.value(), emptyEarlierRoot);
 }
-
 
 void TestCouchPlayHelper::testGetUserSteamIdSelectsMostRecentAccount()
 {

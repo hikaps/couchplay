@@ -216,6 +216,9 @@ class TestSessionLifecycle(BaseTest):
         try:
             before = len(read_calls())
             self.navigate_to_session_setup(driver)
+            # The isolated E2E host has no Steam install. Use a launcher
+            # without Steam integration so this exercises streaming/Sunshine.
+            self.select_combo_option(driver, "comboLauncher", "Lutris")
             # Switch the first instance to streaming output.
             self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
             # Assign a user to the streaming instance (required by
