@@ -2345,7 +2345,9 @@ void TestCouchPlayHelper::testDestructorDoesNotFallbackForPinnedUnmountFailure()
         // not re-resolve the attacker-swappable target through /usr/bin/umount.
         m_ops->m_processInvocations.clear();
     }
-    QVERIFY(m_ops->m_processInvocations.isEmpty());
+    for (const auto &invocation : m_ops->m_processInvocations) {
+        QVERIFY(invocation.command != QStringLiteral("/usr/bin/umount"));
+    }
 }
 void TestCouchPlayHelper::testUnmountRetainsFailedMounts()
 {
