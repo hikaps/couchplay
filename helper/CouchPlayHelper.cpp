@@ -237,7 +237,7 @@ CouchPlayHelper::~CouchPlayHelper()
                 // Prefer the pinned FD: same race protections as explicit
                 // unmount, so shutdown cleanup cannot be redirected by an
                 // ancestor swap. Never re-resolve a path after a pinned-FD
-                unmount fails; the path may have been swapped meanwhile.
+                // unmount fails; the path may have been swapped meanwhile.
                 // Restored (post-restart) state has no FD and is handled by
                 // the safely re-opened-parent cleanup below.
                 if (mount.targetParentFd >= 0) {

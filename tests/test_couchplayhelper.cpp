@@ -1011,6 +1011,7 @@ void TestCouchPlayHelper::testIsSteamBootstrappedTrue()
 {
     m_ops->clear();
     m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setDirectoryExists(QStringLiteral("/home/player1/.local/share/Steam"), true);
     m_ops->setFileExists(QStringLiteral("/home/player1/.local/share/Steam/steam.sh"), true);
 
     QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("IsSteamBootstrapped"), QStringLiteral("player1"));
