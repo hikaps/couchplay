@@ -175,7 +175,7 @@ export QT_QPA_PLATFORM=wayland
 export QT_LOGGING_RULES="couchplay.*=true"
 export QT_MESSAGE_PATTERN="[%{time hh:mm:ss.zzz}] %{if-category}%{category}: %{endif}%{message}"
 
-if run_couchplay "$@"; then
+if run_couchplay_forwarded "$@"; then
     COUCHPLAY_EXIT=0
 else
     COUCHPLAY_EXIT=$?
