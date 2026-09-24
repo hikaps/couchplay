@@ -1114,7 +1114,7 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Target user has not set up Steam"));
         return false;
     }
-    QString targetSteamId = getTargetSteamUserId(targetUsername);
+    const QString targetSteamId = QFileInfo(targetPaths.userDataDir).fileName();
     if (targetSteamId.isEmpty()) {
         qCWarning(couchplaySteam) << "shareLibraryToUser failed - Target user" << targetUsername
                                    << "has not set up Steam (no userdata found). Launch Steam once first.";
@@ -1402,7 +1402,7 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
             return false;
         }
         QString targetHome = targetIdentity.home;
-        QString targetSteamId = getTargetSteamUserId(username);
+        const QString targetSteamId = QFileInfo(targetPaths.userDataDir).fileName();
         if (targetSteamId.isEmpty()) {
             qCWarning(couchplaySteam) << "finalizeDataDir: Target user has not set up Steam:" << username;
             return false;
