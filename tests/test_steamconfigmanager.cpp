@@ -277,6 +277,7 @@ private Q_SLOTS:
         QVERIFY(duringSession.contains(QByteArrayLiteral(".couchplay/steam-libs/0")));
         QVERIFY(!duringSession.contains(QByteArrayLiteral("/target/secondary-library")));
 
+        helper.steamIdLookups = 0;
         QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player1")));
         QVERIFY(target.open(QIODevice::ReadOnly));
         QCOMPARE(target.readAll(), original);
@@ -285,11 +286,13 @@ private Q_SLOTS:
 
         // A player edit made after the session write is a conflict, not a reason
         // to overwrite their new library configuration with our old snapshot.
+        helper.steamIdLookups = 0;
         QVERIFY(manager.finalizeDataDir(directory, QStringLiteral("player1")));
         const QByteArray playerEdit = QByteArrayLiteral("player-edited-libraryfolders");
         QVERIFY(target.open(QIODevice::WriteOnly | QIODevice::Truncate));
         QCOMPARE(target.write(playerEdit), qint64(playerEdit.size()));
         target.close();
+        helper.steamIdLookups = 0;
         QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player1")));
         QVERIFY(target.open(QIODevice::ReadOnly));
         QCOMPARE(target.readAll(), playerEdit);
