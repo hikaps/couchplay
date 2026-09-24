@@ -58,6 +58,14 @@ if [ "$mock_ready" -ne 1 ]; then
     cat /tmp/mock-helper.log >&2 || true
     exit 1
 fi
+# The test process is unprivileged: host useradd in test_users cannot create
+# accounts here. Populate the mock before the GUI loads its user list so
+# GetUserInfo and launch tests refer to the same fake identities.
+for username in player2 player3; do
+    dbus-send --system --dest=io.github.hikaps.CouchPlayHelper --print-reply \
+        /io/github/hikaps/CouchPlayHelper io.github.hikaps.CouchPlayHelper.CreateUser \
+        string:"$username" string:"$username" >/dev/null
+done
 
 export QT_QPA_PLATFORM=wayland
 export TEST_WITH_VIDEO_RECORDER=0

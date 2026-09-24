@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-import pytest
-from appium.webdriver.common.appiumby import AppiumBy
-from helpers.base_test import BaseTest
-
 import json
 import os
 import re
 import shutil
 import subprocess
 import time
+
+import pytest
+from appium.webdriver.common.appiumby import AppiumBy
+from helpers.base_test import BaseTest
+from selenium.webdriver.common.keys import Keys
 
 # These exercise the mock D-Bus helper (system bus) + pre-created users; skip in
 # the no-helper smoke tier.
@@ -216,9 +217,19 @@ class TestSessionLifecycle(BaseTest):
         try:
             before = len(read_calls())
             self.navigate_to_session_setup(driver)
-            # The isolated E2E host has no Steam install. Use a launcher
-            # without Steam integration so this exercises streaming/Sunshine.
-            self.select_combo_option(driver, "comboLauncher", "Lutris")
+            # Steam is absent here. The launcher's custom popup delegate does
+            # not reliably activate via text search in AT-SPI; select the third
+            # built-in preset (Steam, Heroic, Lutris) with keyboard navigation.
+            launcher = self.wait_for_element_clickable(
+                driver, AppiumBy.ACCESSIBILITY_ID, "comboLauncher", LONG_TIMEOUT
+            )
+            launcher.click()
+            time.sleep(0.4)
+            launcher.send_keys(Keys.HOME)
+            launcher.send_keys(Keys.ARROW_DOWN)
+            launcher.send_keys(Keys.ARROW_DOWN)
+            launcher.send_keys(Keys.ENTER)
+            time.sleep(0.3)
             # Switch the first instance to streaming output.
             self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
             # Assign a user to the streaming instance (required by
