@@ -15,9 +15,15 @@ export QT_QPA_PLATFORM=wayland
 export LIBGL_ALWAYS_SOFTWARE=1
 export QT_QUICK_BACKEND=software
 export TEST_WITH_VIDEO_RECORDER=0
-export COUCHPLAY_APP_ID=/src/couchplay/build/bin/couchplay
-# Runner writes kwin/app/pytest artifacts here (CWD /src/couchplay is root-owned
-# in the image, so redirect to a writable dir the user can read back).
+# The AT-SPI driver launches this executable and tracks its PID. Keep exec so
+# the observed process is CouchPlay, while preserving its Qt warnings in CI.
 export APPIUM_ARTIFACT_OUTPUT_PATH=/tmp/cp-out
+mkdir -p "$APPIUM_ARTIFACT_OUTPUT_PATH"
+export COUCHPLAY_APP_ID="$APPIUM_ARTIFACT_OUTPUT_PATH/couchplay-launch"
+cat > "$COUCHPLAY_APP_ID" <<'EOF'
+#!/bin/sh
+exec /src/couchplay/build/bin/couchplay "$@" >>/tmp/cp-out/couchplay-app.log 2>&1
+EOF
+chmod 700 "$COUCHPLAY_APP_ID"
 
 selenium-webdriver-at-spi-run /opt/e2e-venv/bin/pytest "$@"
