@@ -73,7 +73,7 @@ trap 'cleanup; exit 143' TERM
 run_couchplay_forwarded() {
     if [[ "$ROUTE" == flatpak ]]; then
         if [[ "${COUCHPLAY_HOST_SPAWN:-0}" == 1 ]]; then
-            ( exec flatpak-spawn --host /usr/bin/flatpak run --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" --env=QT_QPA_PLATFORM="$QT_QPA_PLATFORM" io.github.hikaps.couchplay "$@" ) &
+            ( exec flatpak-spawn --host --watch-bus /usr/bin/flatpak run --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" --env=QT_QPA_PLATFORM="$QT_QPA_PLATFORM" io.github.hikaps.couchplay "$@" ) &
         else
             ( exec flatpak run io.github.hikaps.couchplay "$@" ) &
         fi

@@ -10,9 +10,12 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QPair>
 #include <QProcess>
 #include <QPointer>
 #include <QTimer>
@@ -86,32 +89,97 @@ QString markerFor(const QString &path)
     return QStringLiteral("couchplay://profile/") + QString::fromLatin1(hash);
 }
 
-qint64 processStartTime(pid_t processId)
+struct ProcessIdentity {
+    qint64 processGroupId = 0;
+    qint64 startTime = 0;
+};
+
+ProcessIdentity processIdentity(pid_t processId)
 {
 #ifdef Q_OS_LINUX
     if (processId <= 0) {
-        return 0;
+        return {};
     }
     QFile statFile(QStringLiteral("/proc/%1/stat").arg(processId));
     if (!statFile.open(QIODevice::ReadOnly)) {
-        return 0;
+        return {};
     }
     const QByteArray stat = statFile.readAll();
     const qsizetype commandEnd = stat.lastIndexOf(')');
     if (commandEnd < 0) {
-        return 0;
+        return {};
     }
     const QList<QByteArray> fields = stat.mid(commandEnd + 2).simplified().split(' ');
     if (fields.size() <= 19) {
-        return 0;
+        return {};
     }
-    bool ok = false;
-    const qint64 startTime = fields.at(19).toLongLong(&ok);
-    return ok ? startTime : 0;
+    bool groupOk = false;
+    bool startOk = false;
+    const qint64 groupId = fields.at(2).toLongLong(&groupOk);
+    const qint64 startTime = fields.at(19).toLongLong(&startOk);
+    return groupOk && startOk ? ProcessIdentity{groupId, startTime} : ProcessIdentity{};
 #else
     Q_UNUSED(processId);
-    return 0;
+    return {};
 #endif
+}
+
+qint64 processStartTime(pid_t processId)
+{
+    return processIdentity(processId).startTime;
+}
+
+QList<QPair<qint64, qint64>> processGroupWitnesses(pid_t groupId)
+{
+    QList<QPair<qint64, qint64>> witnesses;
+#ifdef Q_OS_LINUX
+    if (groupId > 0) {
+        QDirIterator processes(QStringLiteral("/proc"), QDir::Dirs | QDir::NoDotAndDotDot);
+        while (processes.hasNext()) {
+            processes.next();
+            bool ok = false;
+            const qint64 pid = processes.fileName().toLongLong(&ok);
+            if (!ok || pid == groupId) {
+                continue;
+            }
+            const ProcessIdentity identity = processIdentity(static_cast<pid_t>(pid));
+            if (identity.processGroupId == groupId && identity.startTime > 0) {
+                witnesses.append({pid, identity.startTime});
+            }
+        }
+    }
+#else
+    Q_UNUSED(groupId);
+#endif
+    return witnesses;
+}
+
+bool processGroupIdentityMatches(qint64 groupId,
+                                 qint64 leaderStartTime,
+                                 bool termSignalled,
+                                 const QList<QPair<qint64, qint64>> &witnesses)
+{
+    if (leaderStartTime <= 0) {
+#ifdef Q_OS_LINUX
+        return false;
+#else
+        return true;
+#endif
+    }
+    const ProcessIdentity leader = processIdentity(static_cast<pid_t>(groupId));
+    if (leader.startTime > 0) {
+        return leader.startTime == leaderStartTime;
+    }
+    if (!termSignalled) {
+        return false;
+    }
+    for (const auto &[pid, startTime] : witnesses) {
+        const ProcessIdentity witness = processIdentity(static_cast<pid_t>(pid));
+        if (witness.processGroupId == groupId && witness.startTime == startTime) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -151,9 +219,10 @@ SteamShortcutManager::~SteamShortcutManager()
 
     QList<HostProcessGroup> signalledGroups;
     for (const HostProcessGroup &group : groups) {
-        const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
-        const bool identityMatches = group.leaderStartTime <= 0
-            || (currentStartTime > 0 && currentStartTime == group.leaderStartTime);
+        const bool identityMatches = processGroupIdentityMatches(group.processGroupId,
+                                                                 group.leaderStartTime,
+                                                                 group.termSignalled,
+                                                                 group.witnesses);
         const bool groupSignalled = group.processGroupId > 0 && identityMatches
             && ::kill(-static_cast<pid_t>(group.processGroupId), SIGTERM) == 0;
         if (groupSignalled) {
@@ -167,9 +236,10 @@ SteamShortcutManager::~SteamShortcutManager()
         QProcess *groupProcess = group.process.data();
         if (groupProcess && groupProcess->state() != QProcess::NotRunning) {
             if (!groupProcess->waitForFinished(HostTerminationGraceMs)) {
-                const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
-                const bool identityMatches = group.leaderStartTime <= 0
-                    || (currentStartTime > 0 && currentStartTime == group.leaderStartTime);
+                const bool identityMatches = processGroupIdentityMatches(group.processGroupId,
+                                                                         group.leaderStartTime,
+                                                                         group.termSignalled,
+                                                                         group.witnesses);
                 if (group.processGroupId > 0 && identityMatches) {
                     ::kill(-static_cast<pid_t>(group.processGroupId), SIGKILL);
                 }
@@ -188,9 +258,10 @@ SteamShortcutManager::~SteamShortcutManager()
                 }
                 ::usleep(PollIntervalUs);
             }
-            const qint64 currentStartTime = processStartTime(static_cast<pid_t>(group.processGroupId));
-            const bool identityMatches = group.leaderStartTime <= 0
-                || (currentStartTime > 0 && currentStartTime == group.leaderStartTime);
+            const bool identityMatches = processGroupIdentityMatches(group.processGroupId,
+                                                                     group.leaderStartTime,
+                                                                     group.termSignalled,
+                                                                     group.witnesses);
             if (identityMatches) {
                 ::kill(-static_cast<pid_t>(group.processGroupId), SIGKILL);
             }
@@ -378,11 +449,10 @@ bool SteamShortcutManager::hostProcessGroupIdentityMatches(quint64 generation, q
     if (!findHostProcessGroup(generation, processGroupId, &group)) {
         return false;
     }
-    if (group.leaderStartTime <= 0) {
-        return true;
-    }
-    const qint64 currentStartTime = processStartTime(static_cast<pid_t>(processGroupId));
-    return currentStartTime > 0 && currentStartTime == group.leaderStartTime;
+    return processGroupIdentityMatches(processGroupId,
+                                       group.leaderStartTime,
+                                       group.termSignalled,
+                                       group.witnesses);
 }
 
 bool SteamShortcutManager::signalOwnedHostProcessGroup(quint64 generation,
@@ -401,8 +471,19 @@ bool SteamShortcutManager::signalOwnedHostProcessGroup(quint64 generation,
 
 void SteamShortcutManager::scheduleHostProcessGroupEscalation(quint64 generation,
                                                                qint64 processGroupId,
-                                                               QProcess *process)
+                                                               QProcess *process,
+                                                               bool termSignalled,
+                                                               const QList<QPair<qint64, qint64>> &witnesses)
 {
+    if (termSignalled) {
+        for (HostProcessGroup &group : m_pendingHostProcessGroups) {
+            if (group.generation == generation && group.processGroupId == processGroupId) {
+                group.termSignalled = true;
+                group.witnesses = witnesses;
+                break;
+            }
+        }
+    }
     const QPointer<QProcess> guardedProcess(process);
     QTimer::singleShot(HostTerminationGraceMs, this,
                        [this, generation, processGroupId, guardedProcess] {
@@ -531,10 +612,14 @@ void SteamShortcutManager::runHost(const QString &operation,
         if (processGroupId > 0) {
             detachHostProcessGroup(generation, processGroupId, process);
         }
-        if (processGroupId <= 0 || !signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM)) {
+        const auto witnesses = processGroupWitnesses(static_cast<pid_t>(processGroupId));
+        const bool termSignalled = processGroupId > 0
+            && signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM);
+        if (!termSignalled) {
             process->terminate();
         }
-        scheduleHostProcessGroupEscalation(generation, processGroupId, process);
+        scheduleHostProcessGroupEscalation(generation, processGroupId, process,
+                                           termSignalled, witnesses);
     });
     connect(process, &QProcess::finished, this, [finish, process](int exitCode, QProcess::ExitStatus status) {
         finish(status == QProcess::NormalExit ? exitCode : -1,
@@ -564,10 +649,14 @@ void SteamShortcutManager::runHost(const QString &operation,
             }
             detachHostProcessGroup(generation, processGroupId, process);
         }
-        if (processGroupId <= 0 || !signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM)) {
+        const auto witnesses = processGroupWitnesses(static_cast<pid_t>(processGroupId));
+        const bool termSignalled = processGroupId > 0
+            && signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM);
+        if (!termSignalled) {
             process->terminate();
         }
-        scheduleHostProcessGroupEscalation(generation, processGroupId, process);
+        scheduleHostProcessGroupEscalation(generation, processGroupId, process,
+                                           termSignalled, witnesses);
     });
 
     const QString hostSupervisor = QString::fromLatin1(HostSupervisorScript);
@@ -1079,10 +1168,14 @@ void SteamShortcutManager::cancel()
     if (processGroupId > 0) {
         detachHostProcessGroup(generation, processGroupId, m_process);
     }
-    if (processGroupId <= 0 || !signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM)) {
+    const auto witnesses = processGroupWitnesses(static_cast<pid_t>(processGroupId));
+    const bool termSignalled = processGroupId > 0
+        && signalOwnedHostProcessGroup(generation, processGroupId, SIGTERM);
+    if (!termSignalled) {
         m_process->terminate();
     }
-    scheduleHostProcessGroupEscalation(generation, processGroupId, m_process);
+    scheduleHostProcessGroupEscalation(generation, processGroupId, m_process,
+                                       termSignalled, witnesses);
 }
 
 void SteamShortcutManager::openSteam(int accountIndex)

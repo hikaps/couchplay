@@ -758,6 +758,7 @@ void SessionRunner::stop()
     if (!m_active) {
         restoreDeviceOwnership();
         teardownSharingState();
+        teardownStreamingInstances();
         return;
     }
     beginFinalization(false);

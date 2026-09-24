@@ -122,6 +122,11 @@ public:
     {
         m_chmodResult = result;
     }
+    void setWriteFileResult(bool result)
+    {
+        m_writeFileResult = result;
+    }
+
 
     void clear()
     {
@@ -136,6 +141,7 @@ public:
         m_processExitCode = 0;
         m_chownResult = 0;
         m_chmodResult = 0;
+        m_writeFileResult = true;
         m_processArgs.clear();
         m_processInvocations.clear();
         m_mockProcessStart = false;
@@ -263,7 +269,7 @@ public:
     {
         Q_UNUSED(path)
         Q_UNUSED(content)
-        return true;
+        return m_writeFileResult;
     }
 
     bool statPath(const QString &path, struct stat *buf) override
@@ -463,6 +469,7 @@ private:
     int m_processExitCode = 0;
     int m_chownResult = 0;
     int m_chmodResult = 0;
+    bool m_writeFileResult = true;
     QString m_processCommand;
     QStringList m_processArgs;
 
@@ -568,6 +575,7 @@ private Q_SLOTS:
     void testResetAllDevicesEmpty();
     void testResetAllDevicesSuccess();
     void testResetAllDevicesPartialFailure();
+    void testResetAllDevicesRetainsFailedHid();
     void testChangeDeviceOwnerBatchEmpty();
     void testChangeDeviceOwnerBatchAllSuccess();
     void testChangeDeviceOwnerBatchPartialFailure();
@@ -1699,7 +1707,21 @@ void TestCouchPlayHelper::testCopyDirectoryToUserTargetSwapPreservesExternal()
                                                    sourceDir.path(),
                                                    QStringLiteral("games"));
     QVERIFY(!reply.isValid());
-    QFile preserved(homeDir.filePath(QStringLiteral("games/external.dat")));
+    QFile prepared(homeDir.filePath(QStringLiteral("games/new.dat")));
+    QVERIFY(prepared.open(QIODevice::ReadOnly));
+    QCOMPARE(prepared.readAll(), QByteArrayLiteral("new"));
+    prepared.close();
+    QVERIFY(!QFileInfo(homeDir.filePath(QStringLiteral("games/external.dat"))).exists());
+
+    QFile original(homeDir.filePath(QStringLiteral("moved-target/old.dat")));
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    QCOMPARE(original.readAll(), QByteArrayLiteral("old"));
+    original.close();
+
+    const QStringList retainedNames = QDir(homeDir.path()).entryList(
+        {QStringLiteral(".games.cptmp-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot);
+    QCOMPARE(retainedNames.size(), 1);
+    QFile preserved(homeDir.filePath(retainedNames.first() + QStringLiteral("/external.dat")));
     QVERIFY(preserved.open(QIODevice::ReadOnly));
     QCOMPARE(preserved.readAll(), QByteArrayLiteral("external"));
     preserved.close();
@@ -2123,7 +2145,9 @@ void TestCouchPlayHelper::testSecureWriteRejectsSymlinkLeaf()
     QVERIFY(file.open(QIODevice::WriteOnly));
     QVERIFY(file.write("original") == 8);
     file.close();
-    QVERIFY(QFile::link(protectedFile, tempDir.path() + QStringLiteral("/target")));
+    const QByteArray protectedBytes = QFile::encodeName(protectedFile);
+    const QByteArray targetBytes = QFile::encodeName(tempDir.path() + QStringLiteral("/target"));
+    QVERIFY(::symlink(protectedBytes.constData(), targetBytes.constData()) == 0);
 
     const int parentFd = SecureFs::openBaseDir(tempDir.path());
     QVERIFY(parentFd >= 0);
@@ -2137,6 +2161,9 @@ void TestCouchPlayHelper::testSecureWriteRejectsSymlinkLeaf()
 
     QVERIFY(file.open(QIODevice::ReadOnly));
     QCOMPARE(file.readAll(), QByteArrayLiteral("original"));
+    const QStringList namedTemps = QDir(tempDir.path()).entryList(
+        {QStringLiteral(".couchplay-write-*")}, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+    QCOMPARE(namedTemps.size(), 0);
 }
 
 void TestCouchPlayHelper::testMountSpecCodec()
@@ -2205,8 +2232,8 @@ void TestCouchPlayHelper::testUnmountRetainsFailedMounts()
     m_helper->m_activeMounts[QStringLiteral("player1")].append(info);
 
     QDBusReply<int> reply = m_dbusInterface->call(QStringLiteral("UnmountAllSharedDirectories"));
-    QVERIFY(reply.isValid());
-    QCOMPARE(reply.value(), 0);
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::Failed);
     QVERIFY(m_helper->m_activeMounts.contains(QStringLiteral("player1")));
     QCOMPARE(m_helper->m_activeMounts[QStringLiteral("player1")].size(), 1);
     const int pinnedFd = m_helper->m_activeMounts[QStringLiteral("player1")].first().targetParentFd;
@@ -2497,6 +2524,33 @@ void TestCouchPlayHelper::testResetAllDevicesPartialFailure()
 
     QVERIFY(!resetReply.isValid());
     QCOMPARE(resetReply.error().type(), QDBusError::Failed);
+}
+
+void TestCouchPlayHelper::testResetAllDevicesRetainsFailedHid()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setWriteFileResult(false);
+    const QString trackingId = QStringLiteral("hid|usb1|/sys/bus/usb/drivers/test|player1");
+    m_helper->m_modifiedHidDevices = {trackingId};
+
+    QDBusReply<int> reply = m_dbusInterface->call(QStringLiteral("ResetAllDevices"));
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::Failed);
+    QCOMPARE(m_helper->m_modifiedHidDevices, QStringList{trackingId});
+
+    m_ops->setWriteFileResult(true);
+    m_ops->setProcessExitCode(1);
+    QDBusReply<int> commandFailure = m_dbusInterface->call(QStringLiteral("ResetAllDevices"));
+    QVERIFY(!commandFailure.isValid());
+    QCOMPARE(commandFailure.error().type(), QDBusError::Failed);
+    QCOMPARE(m_helper->m_modifiedHidDevices, QStringList{trackingId});
+
+    m_ops->setProcessExitCode(0);
+    QDBusReply<int> recovered = m_dbusInterface->call(QStringLiteral("ResetAllDevices"));
+    QVERIFY(recovered.isValid());
+    QCOMPARE(recovered.value(), 0);
+    QVERIFY(m_helper->m_modifiedHidDevices.isEmpty());
 }
 
 void TestCouchPlayHelper::testChangeDeviceOwnerBatchEmpty()

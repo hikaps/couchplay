@@ -731,6 +731,12 @@ bool mergePreservingProfiles(const QByteArray &source,
         }
         profileMarkers.insert(shortcut.shortcutPath);
 
+        quint32 existingAppId = 0;
+        if (!readValidAppId(entry, existingAppId)) {
+            setError(errorMessage, QStringLiteral("Managed CouchPlay profile has an invalid AppId"));
+            return false;
+        }
+
         QString indexKey = entry.indexKey;
         if (usedIndices.contains(indexKey)) {
             int index = 0;
@@ -746,7 +752,7 @@ bool mergePreservingProfiles(const QByteArray &source,
         usedIndices.insert(indexKey);
 
         quint32 appId = 0;
-        if (!allocateUniqueAppId(shortcut.appId, shortcut, usedAppIds, appId)) {
+        if (!allocateUniqueAppId(existingAppId, shortcut, usedAppIds, appId)) {
             setError(errorMessage, QStringLiteral("No unique shortcut AppId is available"));
             return false;
         }

@@ -214,7 +214,12 @@ private:
     QString m_userHome;
     bool m_syncShortcutsEnabled = false;
     bool m_shareLibraryEnabled = false;
-    struct LibraryFoldersSnapshot { bool existed = false; QByteArray content; };
+    struct LibraryFoldersSnapshot {
+        bool existed = false;
+        QByteArray content;
+        bool sessionExisted = false;
+        QByteArray sessionContent;
+    };
     bool captureLibraryFoldersSnapshot(const QString &username);
     QHash<QString, LibraryFoldersSnapshot> m_libraryFoldersSnapshots;
 };

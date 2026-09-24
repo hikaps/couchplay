@@ -550,7 +550,7 @@ int CouchPlayHelper::ResetAllDevices()
         return 0;
     }
     const int resetCount = resetAllDevicesInternal();
-    if (!m_modifiedDevices.isEmpty()) {
+    if (!m_modifiedDevices.isEmpty() || !m_modifiedHidDevices.isEmpty()) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not reset all device ownership"));
         return 0;
     }
@@ -567,43 +567,64 @@ int CouchPlayHelper::resetAllDevicesInternal()
     struct group *inputGroup = m_ops->getgrnam("input");
     gid_t inputGid = inputGroup ? inputGroup->gr_gid : 0;
 
-    // Clean up temporary udev rules for physical HID devices and rebind to restore default ownership
+    // Clean up temporary udev rules for physical HID devices and rebind to restore default ownership.
+    // Keep entries whose cleanup is incomplete so a later ResetAllDevices call can retry them.
     QStringList hidDevices = m_modifiedHidDevices;
-    m_modifiedHidDevices.clear();
+    QStringList remainingHidDevices;
 
     bool needUdevReload = false;
 
     for (const QString &trackingId : hidDevices) {
         QStringList parts = trackingId.split(QLatin1Char('|'));
-        if (parts.size() < 3) continue;
+        if (parts.size() < 3) {
+            remainingHidDevices.append(trackingId);
+            continue;
+        }
 
         QString devId = parts.at(1);
         QString driverPath = parts.at(2);
 
-        if (removeTempUdevRule(devId)) {
+        const bool ruleRemoved = removeTempUdevRule(devId);
+        if (ruleRemoved) {
             needUdevReload = true;
         }
 
         QString unbindPath = driverPath + QStringLiteral("/unbind");
         qDebug() << "CouchPlayHelper: Reset - Unbinding device" << devId << "from driver" << driverPath;
-        m_ops->writeFile(unbindPath, devId.toLocal8Bit());
+        const bool unbound = m_ops->writeFile(unbindPath, devId.toLocal8Bit());
 
         QString bindPath = driverPath + QStringLiteral("/bind");
         qDebug() << "CouchPlayHelper: Reset - Rebinding device" << devId << "to driver" << driverPath;
-        m_ops->writeFile(bindPath, devId.toLocal8Bit());
+        const bool rebound = m_ops->writeFile(bindPath, devId.toLocal8Bit());
+        if (!ruleRemoved || !unbound || !rebound) {
+            remainingHidDevices.append(trackingId);
+        }
     }
+    m_modifiedHidDevices = remainingHidDevices;
 
+    bool udevCommandsSucceeded = true;
     if (needUdevReload) {
-        // Reload udev rules after removing all temporary rules
-        runCommand(QStringLiteral("udevadm"), {QStringLiteral("control"), QStringLiteral("--reload-rules")});
+        // Reload udev rules after removing all temporary rules.
+        udevCommandsSucceeded = runCommand(QStringLiteral("udevadm"),
+                                            {QStringLiteral("control"), QStringLiteral("--reload-rules")})
+            && udevCommandsSucceeded;
 
-        // Trigger udev to re-apply default rules to input and hidraw subsystems
-        runCommand(QStringLiteral("udevadm"),
-                   {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=input"),
-                    QStringLiteral("--action=change")});
-        runCommand(QStringLiteral("udevadm"),
-                   {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=hidraw"),
-                    QStringLiteral("--action=change")});
+        // Trigger udev to re-apply default rules to input and hidraw subsystems.
+        const bool inputTriggerSucceeded = runCommand(
+            QStringLiteral("udevadm"),
+            {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=input"), QStringLiteral("--action=change")});
+        udevCommandsSucceeded = inputTriggerSucceeded && udevCommandsSucceeded;
+        const bool hidrawTriggerSucceeded = runCommand(
+            QStringLiteral("udevadm"),
+            {QStringLiteral("trigger"), QStringLiteral("--subsystem-match=hidraw"), QStringLiteral("--action=change")});
+        udevCommandsSucceeded = hidrawTriggerSucceeded && udevCommandsSucceeded;
+    }
+    if (!udevCommandsSucceeded) {
+        for (const QString &trackingId : hidDevices) {
+            if (!m_modifiedHidDevices.contains(trackingId)) {
+                m_modifiedHidDevices.append(trackingId);
+            }
+        }
     }
 
     // Reset virtual/software devices via direct chown/chmod
@@ -2372,6 +2393,10 @@ int CouchPlayHelper::UnmountAllSharedDirectories()
     }
 
     saveState();
+    if (!m_activeMounts.isEmpty()) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not unmount all shared directories"));
+        return 0;
+    }
 
     return successCount;
 }
@@ -2465,6 +2490,27 @@ static void removeEntryUnder(int parentFd, const char *name)
         ::unlinkat(parentFd, name, AT_REMOVEDIR);
     } else {
         ::unlinkat(parentFd, name, 0);
+    }
+}
+static void removeEntryUnderIdentity(int parentFd, const char *name, const struct stat &expected)
+{
+    const int fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) {
+        return;
+    }
+    struct stat opened{};
+    const bool pinned = ::fstat(fd, &opened) == 0 && sameFileIdentity(expected, opened);
+    if (pinned) {
+        SecureFs::removeTreeAt(fd);
+    }
+    ::close(fd);
+    if (!pinned) {
+        return;
+    }
+    struct stat current{};
+    if (::fstatat(parentFd, name, &current, AT_SYMLINK_NOFOLLOW) == 0
+        && sameFileIdentity(expected, current)) {
+        (void)::unlinkat(parentFd, name, AT_REMOVEDIR);
     }
 }
 
@@ -2592,7 +2638,7 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     int dstFd = ::openat(parentFd, tempNameUtf8.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dstFd < 0) {
         int err = errno;
-        ::unlinkat(parentFd, tempNameUtf8.constData(), AT_REMOVEDIR);
+        // Preserve the sibling when it cannot be securely opened; its inode is unverified.
         ::close(parentFd);
         ::close(srcFd);
         qWarning() << "CopyDirectoryToUser: Could not open temporary copy directory:" << strerror(err);
@@ -2605,12 +2651,22 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     struct stat temporarySt{};
     const bool temporaryStatValid = ::fstat(dstFd, &temporarySt) == 0;
     ::close(dstFd);
+    auto cleanupPreparedTemporary = [&]() {
+        if (!temporaryStatValid) {
+            return;
+        }
+        struct stat current{};
+        if (::fstatat(parentFd, tempNameUtf8.constData(), &current, AT_SYMLINK_NOFOLLOW) == 0
+            && sameFileIdentity(temporarySt, current)) {
+            removeEntryUnderIdentity(parentFd, tempNameUtf8.constData(), temporarySt);
+        }
+    };
     if (copyResult == 0 && !temporaryStatValid) {
         copyResult = -EIO;
     }
     if (copyResult != 0) {
         // The player's previous tree is untouched — discard only the partial copy
-        removeEntryUnder(parentFd, tempNameUtf8.constData());
+        cleanupPreparedTemporary();
         ::close(parentFd);
         ::close(srcFd);
         qWarning() << "CopyDirectoryToUser: Failed to copy tree:" << strerror(-copyResult);
@@ -2627,7 +2683,7 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
     const int existingResult = ::fstatat(parentFd, leafNameUtf8.constData(), &existingSt, AT_SYMLINK_NOFOLLOW);
     if (existingResult != 0 && errno != ENOENT) {
         const int error = errno;
-        removeEntryUnder(parentFd, tempNameUtf8.constData());
+        cleanupPreparedTemporary();
         ::close(parentFd);
         ::close(srcFd);
         qWarning() << "CopyDirectoryToUser: Could not inspect target:" << targetPath << strerror(error);
@@ -2646,7 +2702,7 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         struct stat currentTemporary{};
         if (::fstatat(parentFd, tempNameUtf8.constData(), &currentTemporary, AT_SYMLINK_NOFOLLOW) == 0
             && sameFileIdentity(temporarySt, currentTemporary)) {
-            removeEntryUnder(parentFd, tempNameUtf8.constData());
+            cleanupPreparedTemporary();
         }
         ::close(parentFd);
         ::close(srcFd);
@@ -2663,49 +2719,12 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
         || (::fstatat(parentFd, tempNameUtf8.constData(), &displacedSt, AT_SYMLINK_NOFOLLOW) == 0
             && sameFileIdentity(existingSt, displacedSt));
     if (!installed || !displaced) {
-        // A target swap before the exchange leaves the external inode in the
-        // temporary name. Restore it only while the target still names our
-        // prepared inode; never overwrite a newer target during rollback.
-        bool rolledBack = false;
-        if (hadExisting && installed) {
-            struct stat currentTarget{};
-            struct stat currentTemporary{};
-            const bool targetStillOurs = ::fstatat(parentFd,
-                                                   leafNameUtf8.constData(),
-                                                   &currentTarget,
-                                                   AT_SYMLINK_NOFOLLOW) == 0
-                && sameFileIdentity(temporarySt, currentTarget);
-            const bool temporaryStable = ::fstatat(parentFd,
-                                                   tempNameUtf8.constData(),
-                                                   &currentTemporary,
-                                                   AT_SYMLINK_NOFOLLOW) == 0;
-            if (targetStillOurs && temporaryStable
-                && m_ops->renameAt(parentFd,
-                                   tempNameUtf8.constData(),
-                                   parentFd,
-                                   leafNameUtf8.constData(),
-                                   RENAME_EXCHANGE) == 0) {
-                struct stat restoredTarget{};
-                struct stat restoredTemporary{};
-                rolledBack = ::fstatat(parentFd,
-                                       leafNameUtf8.constData(),
-                                       &restoredTarget,
-                                       AT_SYMLINK_NOFOLLOW) == 0
-                    && ::fstatat(parentFd,
-                                 tempNameUtf8.constData(),
-                                 &restoredTemporary,
-                                 AT_SYMLINK_NOFOLLOW) == 0
-                    && sameFileIdentity(currentTemporary, restoredTarget)
-                    && sameFileIdentity(temporarySt, restoredTemporary);
-                if (rolledBack) {
-                    removeEntryUnder(parentFd, tempNameUtf8.constData());
-                }
-            }
-        }
+        // A concurrent directory swap can leave an external entry under the
+        // temporary name. Never exchange that unverified entry back over the
+        // target; retain both names for explicit recovery.
         ::close(parentFd);
         ::close(srcFd);
-        qWarning() << "CopyDirectoryToUser: Target changed during replacement:" << targetPath
-                   << (rolledBack ? "(restored)" : "(preserved)");
+        qWarning() << "CopyDirectoryToUser: Target changed during replacement:" << targetPath;
         sendErrorReply(QDBusError::Failed, QStringLiteral("Target directory changed during replacement"));
         return false;
     }
@@ -2719,7 +2738,7 @@ bool CouchPlayHelper::CopyDirectoryToUser(const QString &username,
             sendErrorReply(QDBusError::Failed, QStringLiteral("Target directory changed during replacement"));
             return false;
         }
-        removeEntryUnder(parentFd, tempNameUtf8.constData());
+        removeEntryUnderIdentity(parentFd, tempNameUtf8.constData(), existingSt);
     }
     ::close(parentFd);
     ::close(srcFd);
@@ -3174,9 +3193,22 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
         return false;
     }
 
-    struct stat helperInstalledStat{};
-    bool writeSucceeded = ::fchown(temporaryFd, userUid, userGid) == 0 && ::fchmod(temporaryFd, 0644) == 0
-        && ::fstat(temporaryFd, &helperInstalledStat) == 0;
+    struct stat temporaryStat{};
+    const bool temporaryStatValid = ::fstat(temporaryFd, &temporaryStat) == 0
+        && S_ISREG(temporaryStat.st_mode) && temporaryStat.st_nlink == 1;
+    auto cleanupTemporary = [&]() {
+        if (!temporaryStatValid) {
+            return;
+        }
+        struct stat current{};
+        if (::fstatat(parentFd, temporaryBytes.constData(), &current, AT_SYMLINK_NOFOLLOW) == 0
+            && current.st_dev == temporaryStat.st_dev && current.st_ino == temporaryStat.st_ino
+            && (current.st_mode & S_IFMT) == (temporaryStat.st_mode & S_IFMT)) {
+            (void)::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        }
+    };
+    bool writeSucceeded = temporaryStatValid && ::fchown(temporaryFd, userUid, userGid) == 0
+        && ::fchmod(temporaryFd, 0644) == 0;
     qsizetype offset = 0;
     while (writeSucceeded && offset < content.size()) {
         const ssize_t bytesWritten = ::write(temporaryFd,
@@ -3198,7 +3230,7 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
         writeSucceeded = false;
     }
     if (!writeSucceeded) {
-        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        cleanupTemporary();
         ::close(parentFd);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Could not write Steam shortcuts temporary file"));
         return false;
@@ -3206,7 +3238,17 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
 
     QByteArray confirmedDigest;
     if (!readDigestAt(leafBytes, confirmedDigest) || confirmedDigest != expectedDigest) {
-        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        cleanupTemporary();
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed during sync"));
+        return false;
+    }
+    struct stat expectedTargetStat{};
+    const bool expectedTargetStatValid = expectedDigest == QByteArrayLiteral("missing")
+        || (::fstatat(parentFd, leafBytes.constData(), &expectedTargetStat, AT_SYMLINK_NOFOLLOW) == 0
+            && S_ISREG(expectedTargetStat.st_mode) && expectedTargetStat.st_nlink == 1);
+    if (!expectedTargetStatValid) {
+        cleanupTemporary();
         ::close(parentFd);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Steam shortcuts file changed during sync"));
         return false;
@@ -3219,7 +3261,7 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
     const int steamCheckExitCode = steamCheckFinished ? m_ops->processExitCode(steamProcess) : -1;
     delete steamProcess;
     if (!steamCheckFinished || steamCheckExitCode != 1) {
-        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        cleanupTemporary();
         ::close(parentFd);
         sendErrorReply(QDBusError::Failed,
                        QStringLiteral("Steam must be verifiably stopped before updating shortcuts"));
@@ -3234,7 +3276,7 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
                         leafBytes.constData(),
                         replacementFlags) != 0) {
         const bool snapshotConflict = expectedDigest == QByteArrayLiteral("missing") && errno == EEXIST;
-        ::unlinkat(parentFd, temporaryBytes.constData(), 0);
+        cleanupTemporary();
         ::close(parentFd);
         sendErrorReply(QDBusError::Failed,
                        snapshotConflict ? QStringLiteral("Steam shortcuts file changed during sync")
@@ -3244,54 +3286,19 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
 
     if (expectedDigest != QByteArrayLiteral("missing")) {
         QByteArray displacedDigest;
+        struct stat displacedStat{};
         const bool displacedFileIsExpected = readDigestAt(temporaryBytes, displacedDigest)
-            && displacedDigest == expectedDigest;
+            && displacedDigest == expectedDigest
+            && ::fstatat(parentFd, temporaryBytes.constData(), &displacedStat, AT_SYMLINK_NOFOLLOW) == 0
+            && sameFileIdentity(expectedTargetStat, displacedStat);
         if (!displacedFileIsExpected) {
-            // Do not exchange the snapshot back over a newer inode. The
-            // first exchange installed our temporary inode; an external
-            // writer may have replaced the leaf again in the meantime.
-            // The temporary name held the displaced inode after the first
-            // exchange. Only roll back while the leaf still names the inode
-            // installed by this helper; otherwise preserve that snapshot.
-            bool leafStillHelperInstalled = false;
-            const int leafFd = ::openat(parentFd,
-                                        leafBytes.constData(),
-                                        O_PATH | O_NOFOLLOW | O_CLOEXEC);
-            if (leafFd >= 0) {
-                struct stat leafStat;
-                leafStillHelperInstalled = ::fstat(leafFd, &leafStat) == 0
-                    && helperInstalledStat.st_dev == leafStat.st_dev
-                    && helperInstalledStat.st_ino == leafStat.st_ino;
-                ::close(leafFd);
-            }
-            bool rollbackSnapshotRemoved = false;
-            const bool restored = leafStillHelperInstalled
-                && m_ops->renameAt(parentFd,
-                                   temporaryBytes.constData(),
-                                   parentFd,
-                                   leafBytes.constData(),
-                                   RENAME_EXCHANGE) == 0;
-            if (restored) {
-                const int installedFd = ::openat(parentFd,
-                                                 temporaryBytes.constData(),
-                                                 O_PATH | O_NOFOLLOW | O_CLOEXEC);
-                struct stat installedStat;
-                const bool temporaryStillHelperInstalled = installedFd >= 0
-                    && ::fstat(installedFd, &installedStat) == 0
-                    && helperInstalledStat.st_dev == installedStat.st_dev
-                    && helperInstalledStat.st_ino == installedStat.st_ino;
-                if (installedFd >= 0) ::close(installedFd);
-                if (temporaryStillHelperInstalled) {
-                    rollbackSnapshotRemoved = ::unlinkat(parentFd, temporaryBytes.constData(), 0) == 0;
-                }
-            }
-            if (!rollbackSnapshotRemoved) {
-                qWarning() << "WriteSteamShortcutsForUser: concurrent snapshot retained at" << temporaryName;
-            }
+            // The directory is writable by the target user. A second exchange
+            // cannot safely restore an inode after either name changed, so
+            // preserve both entries for explicit recovery.
+            qWarning() << "WriteSteamShortcutsForUser: concurrent snapshot retained at" << temporaryName;
             ::close(parentFd);
             sendErrorReply(QDBusError::Failed,
-                           rollbackSnapshotRemoved ? QStringLiteral("Steam shortcuts file changed during sync")
-                                                   : QStringLiteral("Steam shortcuts changed during sync; concurrent snapshot retained"));
+                           QStringLiteral("Steam shortcuts changed during sync; concurrent snapshot retained"));
             return false;
         }
         if (::unlinkat(parentFd, temporaryBytes.constData(), 0) != 0) {

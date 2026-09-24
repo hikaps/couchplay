@@ -6,6 +6,7 @@
 #include <QByteArray>
 #include <QDeadlineTimer>
 #include <QList>
+#include <QPair>
 #include <QPointer>
 #include <QObject>
 #include <QString>
@@ -79,6 +80,8 @@ private:
         quint64 generation = 0;
         qint64 processGroupId = 0;
         qint64 leaderStartTime = 0;
+        bool termSignalled = false;
+        QList<QPair<qint64, qint64>> witnesses;
         QPointer<QProcess> process;
     };
 
@@ -118,7 +121,11 @@ private:
                               HostProcessGroup *group = nullptr) const;
     bool hostProcessGroupIdentityMatches(quint64 generation, qint64 processGroupId) const;
     bool signalOwnedHostProcessGroup(quint64 generation, qint64 processGroupId, int signal);
-    void scheduleHostProcessGroupEscalation(quint64 generation, qint64 processGroupId, QProcess *process);
+    void scheduleHostProcessGroupEscalation(quint64 generation,
+                                            qint64 processGroupId,
+                                            QProcess *process,
+                                            bool termSignalled = false,
+                                            const QList<QPair<qint64, qint64>> &witnesses = {});
 
     SessionManager *m_sessionManager = nullptr;
     SessionRunner *m_sessionRunner = nullptr;

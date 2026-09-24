@@ -37,6 +37,20 @@
 namespace {
 
 constexpr qsizetype MaxHostDocumentSize = 16 * 1024 * 1024;
+qint64 observedProcessStartTime(qint64 pid)
+{
+    QFile statFile(QStringLiteral("/proc/%1/stat").arg(pid));
+    if (!statFile.open(QIODevice::ReadOnly)) {
+        return 0;
+    }
+    const QByteArray stat = statFile.readAll();
+    const qsizetype commandEnd = stat.lastIndexOf(')');
+    if (commandEnd < 0) {
+        return 0;
+    }
+    const QList<QByteArray> fields = stat.mid(commandEnd + 2).simplified().split(' ');
+    return fields.size() > 19 ? fields.at(19).toLongLong() : 0;
+}
 
 QString hostScript()
 {
@@ -392,12 +406,57 @@ private Q_SLOTS:
         SteamShortcutManager manager;
         manager.m_process = &process;
         manager.m_hostProcessGroupId = process.processId();
+        manager.m_hostProcessGroupStartTime = observedProcessStartTime(process.processId());
+        QVERIFY(manager.m_hostProcessGroupStartTime > 0);
         manager.m_phase = SteamShortcutManager::Phase::Probing;
         manager.m_busy = true;
         manager.cancel();
 
         QVERIFY(process.waitForFinished(3000));
         manager.m_process = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
+    }
+    void testDestructionKillsDescendantsAfterProcessLeaderExits()
+    {
+        if (QSysInfo::kernelType() != QStringLiteral("linux")) {
+            QSKIP("process-group cleanup requires Linux procfs");
+        }
+
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        const QString childPidPath = home.path() + QStringLiteral("/child.pid");
+        QProcess process;
+        process.setProgram(QStringLiteral("/bin/bash"));
+        process.setArguments({QStringLiteral("-c"),
+                              QStringLiteral("(trap '' TERM; echo $BASHPID > \"$1\"; exec /bin/sleep 30 >/dev/null 2>&1) & wait"),
+                              QStringLiteral("test-process"), childPidPath});
+        process.setChildProcessModifier([] {
+            if (::setpgid(0, 0) != 0) {
+                ::_exit(127);
+            }
+        });
+        process.start();
+        QVERIFY(process.waitForStarted(3000));
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(childPidPath), 3000);
+
+        QFile childPidFile(childPidPath);
+        QVERIFY(childPidFile.open(QIODevice::ReadOnly));
+        bool ok = false;
+        const pid_t childPid = static_cast<pid_t>(childPidFile.readAll().trimmed().toLongLong(&ok));
+        QVERIFY(ok && childPid > 0);
+
+        {
+            SteamShortcutManager manager;
+            manager.m_process = &process;
+            manager.m_hostProcessGroupId = process.processId();
+            manager.m_hostProcessGroupStartTime = observedProcessStartTime(process.processId());
+            QVERIFY(manager.m_hostProcessGroupStartTime > 0);
+            manager.m_phase = SteamShortcutManager::Phase::Probing;
+            manager.m_busy = true;
+            manager.cancel();
+            QVERIFY(process.waitForFinished(3000));
+            manager.m_process = nullptr;
+        }
         QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(QStringLiteral("/proc/%1/exe").arg(childPid)), 5000);
     }
 
@@ -424,6 +483,8 @@ private Q_SLOTS:
             manager.m_hostOperationGeneration = 2;
             manager.m_hostProcessGeneration = 2;
             manager.m_hostProcessGroupId = nextOperation.processId();
+            manager.m_hostProcessGroupStartTime = observedProcessStartTime(nextOperation.processId());
+            QVERIFY(manager.m_hostProcessGroupStartTime > 0);
             manager.m_phase = SteamShortcutManager::Phase::Probing;
             manager.m_busy = true;
 
@@ -449,7 +510,7 @@ private Q_SLOTS:
             QCOMPARE(manager.m_hostProcessGroupId, nextOperation.processId());
         }
 
-        QVERIFY(nextOperation.waitForFinished(3000));
+        QTRY_COMPARE_WITH_TIMEOUT(nextOperation.state(), QProcess::NotRunning, 3000);
     }
     void testDestroyingManagerCancelsDelayedHostSideEffect()
     {

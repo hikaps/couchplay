@@ -2,10 +2,12 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include <QApplication>
-#include <QDBusConnectionInterface>
-#include <QDBusConnection>
 #include <QCommandLineParser>
+#include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QDBusReply>
 #include <QIcon>
+#include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QtQml>
@@ -104,6 +106,25 @@ int main(int argc, char *argv[])
     }
     const bool waitingLaunch = initialRequest.start && initialRequest.exitAfterSession;
     const QString serviceName = QStringLiteral("com.github.CouchPlay");
+    if (waitingLaunch) {
+        // The Steam-owned process must remain the client until LaunchFinished.
+        // KDBusService forwards duplicate invocations and exits synchronously,
+        // so never construct it in this process. Start a plain GUI owner only
+        // when none exists; simultaneous clients may start extra GUI processes,
+        // but Unique registration leaves exactly one owner.
+        auto *busInterface = QDBusConnection::sessionBus().interface();
+        if (!busInterface) {
+            return 1;
+        }
+        const QDBusReply<bool> registered = busInterface->isServiceRegistered(serviceName);
+        if (!registered.isValid()) {
+            return 1;
+        }
+        if (!registered.value() && !QProcess::startDetached(QCoreApplication::applicationFilePath(), {})) {
+            return 1;
+        }
+        return SessionLaunchClient::run(app, initialRequest, serviceName);
+    }
     CommandLineBridge commandLineBridge;
     if (!QDBusConnection::sessionBus().registerObject(QStringLiteral("/SessionLauncher"),
                                                        &commandLineBridge,
@@ -112,14 +133,9 @@ int main(int argc, char *argv[])
                    << QDBusConnection::sessionBus().lastError().message();
         return 1;
     }
-    // Claim the well-known name atomically before KDBusService can forward
-    // command-line activation and exit this process on a duplicate instance.
-    if (waitingLaunch && !QDBusConnection::sessionBus().registerService(serviceName)) {
-        return SessionLaunchClient::run(app, initialRequest, serviceName);
-    }
     KDBusService service(KDBusService::Unique | KDBusService::NoExitOnFailure);
     if (!service.isRegistered()) {
-        return waitingLaunch ? SessionLaunchClient::run(app, initialRequest, serviceName) : 0;
+        return 0;
     }
 
     QApplication::setStyle(QStringLiteral("breeze"));

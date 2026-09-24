@@ -133,17 +133,16 @@ public Q_SLOTS:
 private:
     int m_launchCalls = 0;
 };
-class ReplacingLauncherAdaptor final : public QDBusAbstractAdaptor, protected QDBusContext
+class ReplacingLauncherService final : public QObject, protected QDBusContext
 {
     Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
 
 public:
-    ReplacingLauncherAdaptor(QObject *parent,
-                             QString serviceName,
+    ReplacingLauncherService(QString serviceName,
                              QDBusConnection ownerBus,
-                             QDBusConnection replacementBus)
-        : QDBusAbstractAdaptor(parent)
+                             QDBusConnection replacementBus,
+                             QObject *parent = nullptr)
+        : QObject(parent)
         , m_serviceName(std::move(serviceName))
         , m_ownerBus(std::move(ownerBus))
         , m_replacementBus(std::move(replacementBus))
@@ -165,13 +164,7 @@ public:
         return m_replacementRegistered;
     }
 
-public Q_SLOTS:
-    bool IsReady() const
-    {
-        return true;
-    }
-
-    bool LaunchProfile(const QString &, const QString &requestId, const QString &)
+    bool launchProfile(const QString &requestId)
     {
         ++m_launchCalls;
         m_requestId = requestId;
@@ -190,7 +183,7 @@ public Q_SLOTS:
         return false;
     }
 
-    bool StopSession(const QString &requestId)
+    bool stopSession(const QString &requestId)
     {
         if (requestId != m_requestId) {
             return false;
@@ -211,6 +204,60 @@ private:
     int m_launchCalls = 0;
     int m_stopCalls = 0;
     bool m_replacementRegistered = false;
+};
+
+class ReplacingLauncherAdaptor final : public QDBusAbstractAdaptor
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.CouchPlay.SessionLauncher")
+
+public:
+    explicit ReplacingLauncherAdaptor(ReplacingLauncherService *service)
+        : QDBusAbstractAdaptor(service)
+        , m_service(service)
+    {
+        connect(m_service,
+                &ReplacingLauncherService::LaunchFinished,
+                this,
+                &ReplacingLauncherAdaptor::LaunchFinished);
+    }
+
+    int launchCalls() const
+    {
+        return m_service->launchCalls();
+    }
+
+    int stopCalls() const
+    {
+        return m_service->stopCalls();
+    }
+
+    bool replacementRegistered() const
+    {
+        return m_service->replacementRegistered();
+    }
+
+public Q_SLOTS:
+    bool IsReady() const
+    {
+        return true;
+    }
+
+    bool LaunchProfile(const QString &, const QString &requestId, const QString &)
+    {
+        return m_service->launchProfile(requestId);
+    }
+
+    bool StopSession(const QString &requestId)
+    {
+        return m_service->stopSession(requestId);
+    }
+
+Q_SIGNALS:
+    void LaunchFinished(const QString &requestId, int exitCode);
+
+private:
+    ReplacingLauncherService *m_service;
 };
 
 class ReplacementLauncherAdaptor final : public QDBusAbstractAdaptor
@@ -624,11 +671,11 @@ private Q_SLOTS:
         QDBusConnection replacementBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus, replacementConnectionName);
         QVERIFY(ownerBus.isConnected());
         QVERIFY(replacementBus.isConnected());
-        QObject ownerObject;
-        ReplacingLauncherAdaptor owner(&ownerObject, service, ownerBus, replacementBus);
+        ReplacingLauncherService ownerService(service, ownerBus, replacementBus);
+        ReplacingLauncherAdaptor owner(&ownerService);
         QObject replacementObject;
         ReplacementLauncherAdaptor replacement(&replacementObject);
-        QVERIFY(ownerBus.registerObject(objectPath, &ownerObject, QDBusConnection::ExportAdaptors));
+        QVERIFY(ownerBus.registerObject(objectPath, &ownerService, QDBusConnection::ExportAdaptors));
         QVERIFY(replacementBus.registerObject(objectPath, &replacementObject, QDBusConnection::ExportAdaptors));
         QVERIFY(ownerBus.registerService(service));
 

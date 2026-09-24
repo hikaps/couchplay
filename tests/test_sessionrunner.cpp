@@ -137,6 +137,20 @@ public:
         ++restoreAllDevicesCalls;
         return restoreAllDevicesResult;
     }
+    bool destroyVirtualOutputResult = true;
+    bool destroyNullSinkResult = true;
+    int destroyVirtualOutputCalls = 0;
+    int destroyNullSinkCalls = 0;
+    bool destroyVirtualOutput(const QString &, const QString &) override
+    {
+        ++destroyVirtualOutputCalls;
+        return destroyVirtualOutputResult;
+    }
+    bool destroyNullSink(const QString &, const QString &) override
+    {
+        ++destroyNullSinkCalls;
+        return destroyNullSinkResult;
+    }
 
     bool killInstance(qint64 pid) override
     {
@@ -186,11 +200,14 @@ public:
     }
 
     int unmountAllCalls = 0;
+    int unmountAllResult = 0;
     int unmountAllSharedDirectories() override
     {
-        unmountAllCalls++;
-        mountedOverlayAliases.clear();
-        return 0;
+        ++unmountAllCalls;
+        if (unmountAllResult >= 0) {
+            mountedOverlayAliases.clear();
+        }
+        return unmountAllResult;
     }
 
     bool setDeviceOwner(const QString &devicePath, int uid) override
@@ -1372,7 +1389,9 @@ void TestSessionRunner::testCancelSteamLibraryPreparationRollsBackMounts()
     m_helperClient->player1Home = player1Home;
     m_helperClient->player1SteamRoot = player1SteamRoot;
 
-    auto *steamManager = new SteamConfigManager(m_runner);
+    delete m_steamConfigManager;
+    m_steamConfigManager = new SteamConfigManager(this);
+    auto *steamManager = m_steamConfigManager;
     steamManager->setHelperClient(m_helperClient);
     steamManager->setShareLibraryEnabled(true);
     m_runner->setSteamConfigManager(steamManager);
@@ -1614,17 +1633,32 @@ void TestSessionRunner::testTeardownRetainsResourcesForRetry()
     QVERIFY(!m_runner->start());
 
     m_helperClient->m_available = true;
+    m_helperClient->destroyVirtualOutputResult = false;
+    m_helperClient->destroyNullSinkResult = false;
     m_helperClient->restoreAllDevicesResult = false;
+    m_helperClient->unmountAllResult = -1;
     m_runner->stop();
     // A successful D-Bus connection does not imply ResetAllDevices succeeded.
     // Keep the path for a later retry when the helper reports failure.
     QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event-test")));
+    QVERIFY(m_runner->m_streamingInstances.contains(7));
+    QCOMPARE(m_helperClient->destroyVirtualOutputCalls, 1);
+    QCOMPARE(m_helperClient->destroyNullSinkCalls, 1);
+    QVERIFY(m_runner->m_sharedStateActive);
+    QCOMPARE(m_helperClient->unmountAllCalls, 1);
 
+    m_helperClient->destroyVirtualOutputResult = true;
+    m_helperClient->destroyNullSinkResult = true;
     m_helperClient->restoreAllDevicesResult = true;
+    m_helperClient->unmountAllResult = 0;
     m_runner->stop();
     QCOMPARE(m_helperClient->restoreAllDevicesCalls, 2);
     QVERIFY(m_runner->m_ownedDevicePaths.isEmpty());
+    QVERIFY(m_runner->m_streamingInstances.isEmpty());
+    QCOMPARE(m_helperClient->destroyVirtualOutputCalls, 2);
+    QCOMPARE(m_helperClient->destroyNullSinkCalls, 2);
     QVERIFY(!m_runner->m_sharedStateActive);
+    QCOMPARE(m_helperClient->unmountAllCalls, 2);
     QVERIFY(m_runner->m_steamSharedUsers.isEmpty());
 }
 

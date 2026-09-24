@@ -21,7 +21,9 @@
 #include "../src/dbus/CouchPlayHelperClient.h"
 #undef private
 
+#define private public
 #include "SteamConfigManager.h"
+#undef private
 #include "SteamShortcutsVdf.h"
 #include "PresetManager.h"
 
@@ -280,6 +282,18 @@ private Q_SLOTS:
         QCOMPARE(target.readAll(), original);
         target.close();
         QVERIFY(original.contains(QByteArrayLiteral("/target/secondary-library")));
+
+        // A player edit made after the session write is a conflict, not a reason
+        // to overwrite their new library configuration with our old snapshot.
+        QVERIFY(manager.finalizeDataDir(directory, QStringLiteral("player1")));
+        const QByteArray playerEdit = QByteArrayLiteral("player-edited-libraryfolders");
+        QVERIFY(target.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(target.write(playerEdit), qint64(playerEdit.size()));
+        target.close();
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player1")));
+        QVERIFY(target.open(QIODevice::ReadOnly));
+        QCOMPARE(target.readAll(), playerEdit);
+        target.close();
 
         if (previousHome.isNull()) qunsetenv("HOME");
         else qputenv("HOME", previousHome);
@@ -569,6 +583,12 @@ private Q_SLOTS:
             QByteArray result("unchanged");
             QVERIFY2(!SteamShortcutsVdf::upsert(corrupt, profile, &result, &error), qPrintable(error));
             QCOMPARE(result, QByteArray("unchanged"));
+
+            QByteArray merged("unchanged");
+            QVERIFY2(!SteamShortcutsVdf::mergePreservingProfiles(documentWithForeignEntry(), corrupt,
+                                                                   &merged, &error), qPrintable(error));
+            QCOMPARE(merged, QByteArray("unchanged"));
+            QVERIFY(error.contains(QStringLiteral("invalid AppId")));
         }
     }
 
@@ -715,6 +735,39 @@ private Q_SLOTS:
         QVERIFY(!error.isEmpty());
     }
 
+    void testFlatpakTargetSteamRootFallback()
+    {
+        QTemporaryDir hostHome;
+        QTemporaryDir targetHome;
+        QVERIFY(hostHome.isValid());
+        QVERIFY(targetHome.isValid());
+
+        const QByteArray previousHome = qgetenv("HOME");
+        qputenv("HOME", hostHome.path().toLocal8Bit());
+        QStandardPaths::setTestModeEnabled(true);
+
+        const QString targetRoot =
+            targetHome.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+        QVERIFY(QDir().mkpath(targetRoot + QStringLiteral("/config")));
+
+        SteamConfigManager manager;
+        MockShortcutSyncHelper helper;
+        helper.userHome = targetHome.path();
+        helper.steamRoot.clear();
+        manager.setHelperClient(&helper);
+
+        const SteamPaths paths = manager.getTargetSteamPaths(QStringLiteral("player1"));
+        QVERIFY(paths.valid);
+        QCOMPARE(paths.steamRoot, targetRoot);
+        QCOMPARE(paths.configDir, targetRoot + QStringLiteral("/config"));
+        QCOMPARE(paths.userDataDir, targetRoot + QStringLiteral("/userdata/") + helper.steamId);
+        QCOMPARE(paths.libraryFoldersVdf, targetRoot + QStringLiteral("/config/libraryfolders.vdf"));
+
+        if (previousHome.isNull()) qunsetenv("HOME");
+        else qputenv("HOME", previousHome);
+        QStandardPaths::setTestModeEnabled(false);
+    }
+
     void testLoadGamesMergesNativeAndShortcut()
     {
         QTemporaryDir home;
@@ -723,7 +776,7 @@ private Q_SLOTS:
         qputenv("HOME", home.path().toLocal8Bit());
         QStandardPaths::setTestModeEnabled(true);
 
-        const QString steamRoot = home.path() + QStringLiteral("/.steam/steam");
+        const QString steamRoot = home.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
         const QString libraryRoot = home.path() + QStringLiteral("/library");
         const QString configDir = steamRoot + QStringLiteral("/config");
         const QString userConfigDir = steamRoot + QStringLiteral("/userdata/76561198000000000/config");
@@ -790,6 +843,12 @@ private Q_SLOTS:
         QVERIFY(foundNative);
         QVERIFY(foundShortcut);
 
+        QVERIFY(shortcuts.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QVERIFY(shortcuts.resize(SteamShortcutsVdf::MaxDocumentSize + 1));
+        shortcuts.close();
+        manager.loadShortcuts();
+        QCOMPARE(manager.shortcutCount(), 0);
+
         if (oldHome.isNull()) {
             qunsetenv("HOME");
         } else {
@@ -831,16 +890,30 @@ private Q_SLOTS:
 
         const QString sourceRoot = sourceHome.path() + QStringLiteral("/.local/share/Steam");
         const QString sourceConfig = sourceRoot + QStringLiteral("/config");
-        const QString sourceSteamId = QStringLiteral("76561198000000002");
-        const QString sourceUserConfig = sourceRoot + QStringLiteral("/userdata/") + sourceSteamId
+        const QString sourceInactiveSteamId = QStringLiteral("76561198000000002");
+        const QString sourceActiveSteamId = QStringLiteral("76561198000000003");
+        const QString sourceInactiveUserConfig = sourceRoot + QStringLiteral("/userdata/")
+            + sourceInactiveSteamId + QStringLiteral("/config");
+        const QString sourceUserConfig = sourceRoot + QStringLiteral("/userdata/") + sourceActiveSteamId
             + QStringLiteral("/config");
         QVERIFY(QDir().mkpath(sourceConfig));
+        QVERIFY(QDir().mkpath(sourceInactiveUserConfig));
         QVERIFY(QDir().mkpath(sourceUserConfig));
         QFile sourceLibraryFolders(sourceConfig + QStringLiteral("/libraryfolders.vdf"));
         QVERIFY(sourceLibraryFolders.open(QIODevice::WriteOnly));
         const QByteArray sourceLibraryData = QByteArrayLiteral("\"libraryfolders\"\n{\n}\n");
         QCOMPARE(sourceLibraryFolders.write(sourceLibraryData), sourceLibraryData.size());
         sourceLibraryFolders.close();
+        QFile sourceLoginUsers(sourceConfig + QStringLiteral("/loginusers.vdf"));
+        QVERIFY(sourceLoginUsers.open(QIODevice::WriteOnly));
+        const QByteArray loginUsers = QByteArrayLiteral(
+            "\"users\"\n{\n"
+            "\t\"76561198000000002\"\n\t{\n\t\t\"MostRecent\"\t\"0\"\n\t}\n"
+            "\t\"76561198000000003\"\n\t{\n\t\t\"MostRecent\"\t\"1\"\n\t}\n"
+            "}\n");
+        QCOMPARE(sourceLoginUsers.write(loginUsers), loginUsers.size());
+        sourceLoginUsers.close();
+
         QFile sourceShortcuts(sourceUserConfig + QStringLiteral("/shortcuts.vdf"));
         const QByteArray sourceData = documentWithForeignEntry();
         QVERIFY(sourceShortcuts.open(QIODevice::WriteOnly));
@@ -871,6 +944,7 @@ private Q_SLOTS:
         alternateAccountFile.close();
 
         SteamConfigManager manager;
+        QCOMPARE(manager.getSteamUserId(), sourceActiveSteamId);
         manager.setHelperClient(&helper);
         QSignalSpy failed(&manager, &SteamConfigManager::syncFailed);
         QSignalSpy completed(&manager, &SteamConfigManager::syncCompleted);

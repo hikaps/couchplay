@@ -17,6 +17,9 @@
         "--talk-name=com.github.CouchPlay",
         "--system-talk-name=org.freedesktop.login1",
         "--system-talk-name=io.github.hikaps.CouchPlayHelper",
+        "--filesystem=~/.local/share/Steam:ro",
+        "--filesystem=~/.steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam:ro",
         "--persist=.local/share/couchplay"
     ],
     "modules": [
