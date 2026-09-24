@@ -217,9 +217,14 @@ private:
     struct LibraryFoldersSnapshot {
         bool existed = false;
         QByteArray content;
+        QString steamRoot;
+        QString libraryFoldersPath;
+        QString steamUserId;
         bool sessionExisted = false;
         QByteArray sessionContent;
     };
-    bool captureLibraryFoldersSnapshot(const QString &username);
+    bool captureLibraryFoldersSnapshot(const QString &username,
+                                       const SteamPaths &targetPaths,
+                                       const QString &steamUserId);
     QHash<QString, LibraryFoldersSnapshot> m_libraryFoldersSnapshots;
 };

@@ -295,6 +295,34 @@ private Q_SLOTS:
         QCOMPARE(target.readAll(), playerEdit);
         target.close();
 
+        // A changed Steam account must not receive the original account's rollback.
+        helper.steamIdLookups = 0;
+        QVERIFY(manager.finalizeDataDir(directory, QStringLiteral("player1")));
+        helper.steamIdLookups = 1;
+        QVERIFY(!manager.finalizeDataDir(directory, QStringLiteral("player1")));
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player1")));
+        QVERIFY(target.open(QIODevice::ReadOnly));
+        const QByteArray accountChangedContent = target.readAll();
+        target.close();
+        QVERIFY(accountChangedContent.contains(QByteArrayLiteral(".couchplay/steam-libs/0")));
+
+        // A changed Steam root must likewise be preserved rather than restored into.
+        helper.steamIdLookups = 1;
+        QVERIFY(manager.finalizeDataDir(directory, QStringLiteral("player1")));
+        const QString changedRoot = targetHome.path() + QStringLiteral("/.local/share/Steam-other");
+        const QString changedConfig = changedRoot + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(changedConfig));
+        const QByteArray changedRootContent = QByteArrayLiteral("changed-root-libraryfolders");
+        QFile changedTarget(changedConfig + QStringLiteral("/libraryfolders.vdf"));
+        QVERIFY(changedTarget.open(QIODevice::WriteOnly));
+        QCOMPARE(changedTarget.write(changedRootContent), qint64(changedRootContent.size()));
+        changedTarget.close();
+        helper.steamRoot = changedRoot;
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player1")));
+        QVERIFY(changedTarget.open(QIODevice::ReadOnly));
+        QCOMPARE(changedTarget.readAll(), changedRootContent);
+        changedTarget.close();
+
         if (previousHome.isNull()) qunsetenv("HOME");
         else qputenv("HOME", previousHome);
         QStandardPaths::setTestModeEnabled(false);
@@ -733,6 +761,144 @@ private Q_SLOTS:
         QVERIFY(!SteamShortcutsVdf::upsert(replacementSource, shortcut, &result, &error));
         QCOMPARE(result, QByteArray("unchanged"));
         QVERIFY(!error.isEmpty());
+    }
+
+    void testFinalizeRejectsOversizedLibraryManifest()
+    {
+        QTemporaryDir hostHome;
+        QTemporaryDir targetHome;
+        QTemporaryDir library;
+        QVERIFY(hostHome.isValid());
+        QVERIFY(targetHome.isValid());
+        QVERIFY(library.isValid());
+
+        const QByteArray previousHome = qgetenv("HOME");
+        qputenv("HOME", hostHome.path().toLocal8Bit());
+        QStandardPaths::setTestModeEnabled(true);
+
+        const QString ownRoot = hostHome.path() + QStringLiteral("/.local/share/Steam");
+        const QString configDir = ownRoot + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(configDir));
+        QFile source(configDir + QStringLiteral("/libraryfolders.vdf"));
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        const QByteArray sourceBytes = QByteArrayLiteral("\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\"")
+            + library.path().toUtf8() + QByteArrayLiteral("\"\n\t}\n}\n");
+        QCOMPARE(source.write(sourceBytes), qint64(sourceBytes.size()));
+        source.close();
+
+        const QString manifestPath = library.path() + QStringLiteral("/steamapps/appmanifest_123.acf");
+        QVERIFY(QDir().mkpath(QFileInfo(manifestPath).absolutePath()));
+        QFile manifest(manifestPath);
+        QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Text));
+        QVERIFY(manifest.resize(SteamShortcutsVdf::MaxDocumentSize + 1));
+        manifest.close();
+
+        SteamConfigManager manager;
+        manager.detectSteamPaths();
+        manager.loadLibraryFolders();
+        QCOMPARE(manager.libraryCount(), 1);
+
+        MockShortcutSyncHelper helper;
+        helper.userHome = targetHome.path();
+        helper.steamRoot = targetHome.path() + QStringLiteral("/.local/share/Steam");
+        manager.setHelperClient(&helper);
+
+        DataDirectory directory;
+        directory.path = ownRoot;
+        directory.mode = QStringLiteral("overlay");
+        QVERIFY(!manager.finalizeDataDir(directory, QStringLiteral("player1")));
+        const QString targetManifestPath = targetHome.path()
+            + QStringLiteral("/.couchplay/steam-libs/0/steamapps/appmanifest_123.acf");
+        QVERIFY(!helper.writePaths.contains(targetManifestPath));
+        QCOMPARE(helper.writePaths.size(), 1);
+        QVERIFY(helper.writePaths.constFirst().endsWith(QStringLiteral("/config/libraryfolders.vdf")));
+
+        if (previousHome.isNull()) qunsetenv("HOME");
+        else qputenv("HOME", previousHome);
+        QStandardPaths::setTestModeEnabled(false);
+    }
+
+    void testLibraryFoldersRespectHelperSizeLimit()
+    {
+        QTemporaryDir hostHome;
+        QTemporaryDir targetHome;
+        QTemporaryDir library;
+        QVERIFY(hostHome.isValid());
+        QVERIFY(targetHome.isValid());
+        QVERIFY(library.isValid());
+
+        const QByteArray previousHome = qgetenv("HOME");
+        qputenv("HOME", hostHome.path().toLocal8Bit());
+        QStandardPaths::setTestModeEnabled(true);
+
+        constexpr qsizetype maxLibraryFoldersSize = 4 * 1024 * 1024;
+        const QString ownRoot = hostHome.path() + QStringLiteral("/.local/share/Steam");
+        const QString configDir = ownRoot + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(configDir));
+        const QString sourcePath = configDir + QStringLiteral("/libraryfolders.vdf");
+        QFile source(sourcePath);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        QVERIFY(source.resize(maxLibraryFoldersSize + 1));
+        source.close();
+
+        SteamConfigManager manager;
+        manager.detectSteamPaths();
+        manager.loadLibraryFolders();
+        QCOMPARE(manager.libraryCount(), 0);
+
+        const QByteArray prefix = QByteArrayLiteral("\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\"")
+            + library.path().toUtf8() + QByteArrayLiteral("\"\n\t\t\"label\"\t\"");
+        const QByteArray suffix = QByteArrayLiteral("\"\n\t}\n}\n");
+        const QByteArray sourceBytes = prefix
+            + QByteArray(maxLibraryFoldersSize - prefix.size() - suffix.size() - 64, 'x') + suffix;
+        QVERIFY(sourceBytes.size() < maxLibraryFoldersSize);
+        QVERIFY(source.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(source.write(sourceBytes), qint64(sourceBytes.size()));
+        source.close();
+        manager.loadLibraryFolders();
+        QCOMPARE(manager.libraryCount(), 1);
+
+        MockShortcutSyncHelper helper;
+        helper.userHome = targetHome.path();
+        helper.steamRoot = targetHome.path() + QStringLiteral("/.local/share/Steam");
+        manager.setHelperClient(&helper);
+        DataDirectory directory;
+        directory.path = ownRoot;
+        directory.mode = QStringLiteral("overlay");
+        QVERIFY(!manager.finalizeDataDir(directory, QStringLiteral("player1")));
+        QVERIFY(helper.writePaths.isEmpty());
+
+        if (previousHome.isNull()) qunsetenv("HOME");
+        else qputenv("HOME", previousHome);
+        QStandardPaths::setTestModeEnabled(false);
+    }
+
+    void testDetectSteamPathsMatchesHostSteamRootPriority()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        const QByteArray previousHome = qgetenv("HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        QStandardPaths::setTestModeEnabled(true);
+
+        const QString nativeRoot = home.path() + QStringLiteral("/.steam/steam");
+        const QString flatpakRoot = home.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+        const QByteArray libraryVdf = QByteArrayLiteral("\"libraryfolders\"\n{\n}\n");
+        for (const QString &root : {nativeRoot, flatpakRoot}) {
+            QVERIFY(QDir().mkpath(root + QStringLiteral("/config")));
+            QFile file(root + QStringLiteral("/config/libraryfolders.vdf"));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(libraryVdf), qint64(libraryVdf.size()));
+            file.close();
+        }
+
+        SteamConfigManager manager;
+        manager.detectSteamPaths();
+        QCOMPARE(manager.steamPaths().steamRoot, nativeRoot);
+
+        if (previousHome.isNull()) qunsetenv("HOME");
+        else qputenv("HOME", previousHome);
+        QStandardPaths::setTestModeEnabled(false);
     }
 
     void testFlatpakTargetSteamRootFallback()

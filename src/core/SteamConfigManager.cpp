@@ -192,6 +192,26 @@ bool readBoundedShortcutFile(QFile &file, QByteArray *contents)
     *contents = file.read(SteamShortcutsVdf::MaxDocumentSize + 1);
     return file.error() == QFileDevice::NoError && contents->size() <= SteamShortcutsVdf::MaxDocumentSize;
 }
+
+bool readBoundedManifestFile(QFile &file, QByteArray *contents)
+{
+    if (file.size() > SteamShortcutsVdf::MaxDocumentSize) {
+        return false;
+    }
+    *contents = file.read(SteamShortcutsVdf::MaxDocumentSize + 1);
+    return file.error() == QFileDevice::NoError && contents->size() <= SteamShortcutsVdf::MaxDocumentSize;
+}
+constexpr qsizetype MaxLibraryFoldersSize = 4 * 1024 * 1024;
+
+bool readBoundedLibraryFoldersFile(QFile &file, QByteArray *contents)
+{
+    if (file.size() > MaxLibraryFoldersSize) {
+        return false;
+    }
+    *contents = file.read(MaxLibraryFoldersSize + 1);
+    return file.error() == QFileDevice::NoError && contents->size() <= MaxLibraryFoldersSize;
+}
+
 }
 
 SteamConfigManager::SteamConfigManager(QObject *parent)
@@ -263,9 +283,9 @@ void SteamConfigManager::detectSteamPaths()
     QStringList possibleRoots = {
         m_userHome + QStringLiteral("/.steam/steam"),
         m_userHome + QStringLiteral("/.local/share/Steam"),
-        m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam"), // Flatpak
         m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"), // Flatpak
         m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
+        m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam"), // Flatpak
     };
     for (const QString &root : possibleRoots) {
         QString configDir = root + QStringLiteral("/config");
@@ -859,7 +879,12 @@ QList<SteamLibraryFolder> SteamConfigManager::parseLibraryFoldersVdf(const QStri
         return result;
     }
     
-    QString content = QString::fromUtf8(file.readAll());
+    QByteArray bytes;
+    if (!readBoundedLibraryFoldersFile(file, &bytes)) {
+        qCWarning(couchplaySteam) << "Failed to read libraryfolders.vdf (file is too large or unreadable):" << path;
+        return result;
+    }
+    QString content = QString::fromUtf8(bytes);
     file.close();
     
     if (content.isEmpty()) {
@@ -1020,12 +1045,27 @@ QString SteamConfigManager::generateLibraryFoldersVdf(const QList<SteamLibraryFo
     return vdf;
 }
 
-bool SteamConfigManager::captureLibraryFoldersSnapshot(const QString &username)
+bool SteamConfigManager::captureLibraryFoldersSnapshot(const QString &username,
+                                                       const SteamPaths &targetPaths,
+                                                       const QString &steamUserId)
 {
-    if (m_libraryFoldersSnapshots.contains(username)) return true;
     if (!m_helperClient || !m_helperClient->isAvailable()) return false;
+    if (!targetPaths.valid || targetPaths.steamRoot.isEmpty() || targetPaths.libraryFoldersVdf.isEmpty()
+        || steamUserId.isEmpty()) {
+        return false;
+    }
+    if (const auto existing = m_libraryFoldersSnapshots.constFind(username);
+        existing != m_libraryFoldersSnapshots.cend()) {
+        return existing->steamRoot == targetPaths.steamRoot
+            && existing->libraryFoldersPath == targetPaths.libraryFoldersVdf
+            && existing->steamUserId == steamUserId;
+    }
     LibraryFoldersSnapshot snapshot;
-    if (!m_helperClient->readSteamLibraryFoldersForUser(username, &snapshot.content, &snapshot.existed)) {
+    snapshot.steamRoot = targetPaths.steamRoot;
+    snapshot.libraryFoldersPath = targetPaths.libraryFoldersVdf;
+    snapshot.steamUserId = steamUserId;
+    if (!m_helperClient->readSteamLibraryFoldersForUser(username, &snapshot.content, &snapshot.existed)
+        || snapshot.content.size() > MaxLibraryFoldersSize) {
         qCWarning(couchplaySteam) << "Could not snapshot target libraryfolders.vdf for" << username;
         return false;
     }
@@ -1082,7 +1122,7 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         return false;
     }
     
-    if (!captureLibraryFoldersSnapshot(targetUsername)) {
+    if (!captureLibraryFoldersSnapshot(targetUsername, targetPaths, targetSteamId)) {
         return false;
     }
     QList<SteamLibraryFolder> targetLibraries;
@@ -1120,7 +1160,14 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
             const QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
             QFile manifestFile(manifestPath);
             if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                const QByteArray content = manifestFile.readAll();
+                QByteArray content;
+                if (!readBoundedManifestFile(manifestFile, &content)) {
+                    qCWarning(couchplaySteam) << "Failed to read Steam manifest (file is too large or unreadable):"
+                                               << manifestPath;
+                    anyFailure = true;
+                    manifestFile.close();
+                    continue;
+                }
                 manifestFile.close();
 
                 const QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
@@ -1146,7 +1193,10 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
     targetLibraries.prepend(ownRoot);
     
     const QByteArray vdfBytes = generateLibraryFoldersVdf(targetLibraries).toUtf8();
-
+    if (vdfBytes.size() > MaxLibraryFoldersSize) {
+        qCWarning(couchplaySteam) << "Generated libraryfolders.vdf exceeds the helper size limit for" << targetUsername;
+        return false;
+    }
     qCDebug(couchplaySteam) << "Writing libraryfolders.vdf to" << targetPaths.libraryFoldersVdf;
     if (!m_helperClient->writeFileToUser(vdfBytes, targetPaths.libraryFoldersVdf, targetUsername)) {
         qCWarning(couchplaySteam) << "Failed to write libraryfolders.vdf for" << targetUsername;
@@ -1174,6 +1224,18 @@ bool SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
 
     auto snapshot = m_libraryFoldersSnapshots.constFind(targetUsername);
     if (snapshot == m_libraryFoldersSnapshots.cend()) return true;
+
+    const SteamPaths currentPaths = getTargetSteamPaths(targetUsername);
+    const QString currentSteamUserId = QFileInfo(currentPaths.userDataDir).fileName();
+    if (!currentPaths.valid || currentPaths.steamRoot != snapshot->steamRoot
+        || currentPaths.libraryFoldersVdf != snapshot->libraryFoldersPath
+        || currentSteamUserId != snapshot->steamUserId) {
+        qCWarning(couchplaySteam)
+            << "Preserving target libraryfolders.vdf because Steam root or account changed during session for"
+            << targetUsername;
+        m_libraryFoldersSnapshots.remove(targetUsername);
+        return true;
+    }
 
     QByteArray currentContent;
     bool currentExisted = false;
@@ -1348,7 +1410,7 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
         if (abortIfCancelled()) {
             return false;
         }
-        if (!captureLibraryFoldersSnapshot(username)) {
+        if (!captureLibraryFoldersSnapshot(username, targetPaths, targetSteamId)) {
             return false;
         }
         if (abortIfCancelled()) {
@@ -1375,7 +1437,15 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
                 QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
                 QFile manifestFile(manifestPath);
                 if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    QByteArray content = manifestFile.readAll();
+                    QByteArray content;
+                    if (!readBoundedManifestFile(manifestFile, &content)) {
+                        qCWarning(couchplaySteam)
+                            << "finalizeDataDir: Failed to read Steam manifest (file is too large or unreadable):"
+                            << manifestPath;
+                        anyFailure = true;
+                        manifestFile.close();
+                        continue;
+                    }
                     manifestFile.close();
 
                     QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
@@ -1407,7 +1477,9 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
         targetLibraries.prepend(ownRoot);
 
         const QByteArray vdfBytes = generateLibraryFoldersVdf(targetLibraries).toUtf8();
-        if (abortIfCancelled()) {
+        if (vdfBytes.size() > MaxLibraryFoldersSize) {
+            qCWarning(couchplaySteam) << "finalizeDataDir: Generated libraryfolders.vdf exceeds the helper size limit for"
+                                       << username;
             return false;
         }
         const bool vdfWritten =

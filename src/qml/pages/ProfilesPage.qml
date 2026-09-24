@@ -152,9 +152,6 @@ Kirigami.ScrollablePage {
                                     i18nc("@info", "Steam profile registration is already in progress."))
                             } else if (steamShortcutManager.prepare(modelData.name)) {
                                 root.profileToAdd = modelData.name
-                            } else {
-                                applicationWindow().showPassiveNotification(
-                                    i18nc("@info", "The profile could not be prepared for Steam."))
                             }
                         }
                     }

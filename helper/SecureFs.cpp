@@ -714,8 +714,8 @@ int umountAtFd(int targetParentFd, const QString &leafName)
 {
     const QString procPath =
         QStringLiteral("/proc/self/fd/%1/%2").arg(QString::number(targetParentFd), leafName);
-    if (::umount2(procPath.toLocal8Bit().constData(), 0) != 0) {
-        if (::umount2(procPath.toLocal8Bit().constData(), MNT_DETACH) != 0) {
+    if (::umount2(procPath.toLocal8Bit().constData(), UMOUNT_NOFOLLOW) != 0) {
+        if (::umount2(procPath.toLocal8Bit().constData(), MNT_DETACH | UMOUNT_NOFOLLOW) != 0) {
             return -errno;
         }
     }

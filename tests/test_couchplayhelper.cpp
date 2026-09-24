@@ -212,7 +212,7 @@ public:
 
     bool isDirectory(const QString &path) override
     {
-        return m_directories.value(path, false);
+        return m_directories.contains(path) ? m_directories.value(path) : QFileInfo(path).isDir();
     }
 
     bool isSymLink(const QString &path) override
@@ -530,6 +530,7 @@ private Q_SLOTS:
     void testGetUserSteamIdDoesNotFallbackForUnsafeLoginUsers();
     void testReadSteamShortcutsForUser();
     void testWriteSteamShortcutsRejectsConcurrentEdit();
+    void testWriteSteamShortcutsRejectsInstalledLeafSwap();
     void testReadSteamLibraryFoldersSecurely();
     void testReadSteamShortcutsMissingSteamDirectories();
     // Copy directory tests
@@ -553,6 +554,7 @@ private Q_SLOTS:
     void testIsPathWithinAllowedPrefixMountRoots();
     void testComputeMountTargetDotDotNames();
     void testUnmountRetainsFailedMounts();
+    void testDestructorDoesNotFallbackForPinnedUnmountFailure();
     void testMountSpecCodec();
     void testSetPathAclWithParentsSymlinkEscapeRejected();
     void testSetDirectoryAclSymlinkEscapeRejected();
@@ -1032,8 +1034,11 @@ void TestCouchPlayHelper::testGetUserSteamRootFindsFlatpakDataOnly()
 {
     m_ops->clear();
     const QString home = QStringLiteral("/home/player1");
+    const QString emptyEarlierRoot = home + QStringLiteral("/.local/share/Steam");
     const QString flatpakRoot = home + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
     m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
+    m_ops->setFileExists(emptyEarlierRoot, true);
+    m_ops->setDirectoryExists(flatpakRoot, true);
     m_ops->setFileExists(flatpakRoot + QStringLiteral("/config"), true);
 
     QDBusReply<QString> reply = m_dbusInterface->call(QStringLiteral("GetUserSteamRoot"), QStringLiteral("player1"));
@@ -1448,6 +1453,62 @@ void TestCouchPlayHelper::testWriteSteamShortcutsRejectsConcurrentEdit()
     QFile createdFile(shortcutsPath);
     QVERIFY(createdFile.open(QIODevice::ReadOnly));
     QCOMPARE(createdFile.readAll(), concurrentEdit);
+}
+void TestCouchPlayHelper::testWriteSteamShortcutsRejectsInstalledLeafSwap()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    const QString username = QStringLiteral("player1");
+    const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
+    const QString userdataPath = steamRoot + QStringLiteral("/userdata");
+    const QString steamId = QStringLiteral("76561198000000000");
+    const QString shortcutsPath = userdataPath + QLatin1Char('/') + steamId
+        + QStringLiteral("/config/shortcuts.vdf");
+    QVERIFY(QDir().mkpath(userdataPath + QLatin1Char('/') + steamId + QStringLiteral("/config")));
+
+    m_ops->clear();
+    m_ops->setUserExists(username, true, ::getuid(), ::getgid(), home.path());
+    m_ops->setFileExists(userdataPath, true);
+    m_ops->setMockProcessStart(true);
+    m_ops->setProcessExitCode(1);
+    m_ops->setEntryList(userdataPath, {steamId});
+
+    const QByteArray original = QByteArrayLiteral("stable shortcuts");
+    const QByteArray replacement = QByteArrayLiteral("CouchPlay replacement");
+    const QByteArray external = QByteArrayLiteral("attacker replacement");
+    QFile file(shortcutsPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(original), original.size());
+    file.close();
+
+    const QString externalTempPath = QFileInfo(shortcutsPath).absolutePath() + QStringLiteral("/external.vdf");
+    m_ops->setAfterFirstExchange([&] {
+        QFile racedFile(externalTempPath);
+        if (!racedFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+        (void)racedFile.write(external);
+        racedFile.close();
+        QVERIFY(::rename(externalTempPath.toLocal8Bit().constData(), shortcutsPath.toLocal8Bit().constData()) == 0);
+    });
+
+    const QByteArray expectedDigest = QCryptographicHash::hash(original, QCryptographicHash::Sha256).toHex();
+    QDBusReply<bool> rejected = m_dbusInterface->call(QStringLiteral("WriteSteamShortcutsForUser"),
+                                                      username,
+                                                      steamId,
+                                                      expectedDigest,
+                                                      replacement);
+    QVERIFY(!rejected.isValid());
+
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), external);
+    file.close();
+
+    const QStringList retainedNames = QDir(QFileInfo(shortcutsPath).absolutePath())
+        .entryList({QStringLiteral(".shortcuts.vdf.couchplay-*.tmp")}, QDir::Files | QDir::Hidden);
+    QCOMPARE(retainedNames.size(), 1);
+    QFile retained(QFileInfo(shortcutsPath).absolutePath() + QLatin1Char('/') + retainedNames.first());
+    QVERIFY(retained.open(QIODevice::ReadOnly));
+    QCOMPARE(retained.readAll(), original);
 }
 void TestCouchPlayHelper::testReadSteamLibraryFoldersSecurely()
 {
@@ -2260,6 +2321,31 @@ void TestCouchPlayHelper::testMountSpecCodec()
     QVERIFY(!decodeMountSpec(QStringLiteral("/mnt/Game|Saves|extra"), source, alias));
 }
 
+void TestCouchPlayHelper::testDestructorDoesNotFallbackForPinnedUnmountFailure()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("target")));
+
+    {
+        CouchPlayHelper helper(m_ops);
+        helper.m_activeMounts.clear();
+        m_ops->clear();
+
+        const int fd = ::open(QFile::encodeName(dir.path()).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        QVERIFY(fd >= 0);
+        CouchPlayHelper::MountInfo info;
+        info.target = dir.filePath(QStringLiteral("target"));
+        info.targetParentFd = fd;
+        info.targetLeaf = QStringLiteral("target");
+        helper.m_activeMounts[QStringLiteral("player1")].append(info);
+
+        // The pinned FD operation fails because this is not a mount. Shutdown must
+        // not re-resolve the attacker-swappable target through /usr/bin/umount.
+        m_ops->m_processInvocations.clear();
+    }
+    QVERIFY(m_ops->m_processInvocations.isEmpty());
+}
 void TestCouchPlayHelper::testUnmountRetainsFailedMounts()
 {
     // A failed unmount (persistent EBUSY, post-restart stale path…) must keep

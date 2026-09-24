@@ -236,8 +236,10 @@ CouchPlayHelper::~CouchPlayHelper()
             for (MountInfo &mount : m_activeMounts[username]) {
                 // Prefer the pinned FD: same race protections as explicit
                 // unmount, so shutdown cleanup cannot be redirected by an
-                // ancestor swap. Restored (post-restart) state has no FD and
-                // falls back to the path-based lazy umount.
+                // ancestor swap. Never re-resolve a path after a pinned-FD
+                unmount fails; the path may have been swapped meanwhile.
+                // Restored (post-restart) state has no FD and is handled by
+                // the safely re-opened-parent cleanup below.
                 if (mount.targetParentFd >= 0) {
                     int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
                     ::close(mount.targetParentFd);
@@ -245,22 +247,13 @@ CouchPlayHelper::~CouchPlayHelper()
                     if (result != 0) {
                         qWarning() << "CouchPlayHelper: FD umount failed during shutdown for" << mount.target
                                    << ":" << strerror(-result);
-                        runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 5000);
                     }
                     continue;
                 }
-                QProcess *umountProc = m_ops->createProcess();
-                m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
-                m_ops->waitForFinished(umountProc, 5000);
-                if (m_ops->processExitCode(umountProc) != 0) {
-                    QProcess *lazyProc = m_ops->createProcess();
-                    m_ops->startProcess(lazyProc,
-                                        QStringLiteral("/usr/bin/umount"),
-                                        {QStringLiteral("-l"), mount.target});
-                    m_ops->waitForFinished(lazyProc, 5000);
-                    delete lazyProc;
+                if (!unmountMountInfo(mount)) {
+                    qWarning() << "CouchPlayHelper: restored mount cleanup failed during shutdown for"
+                               << mount.target;
                 }
-                delete umountProc;
             }
         }
         m_activeMounts.clear();
@@ -883,13 +876,12 @@ QString CouchPlayHelper::GetUserSteamRoot(const QString &username)
         userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"),
         userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam"),
     };
-
     for (const QString &candidate : candidates) {
-        const bool rootExists = m_ops->fileExists(candidate) || m_ops->fileExists(candidate + QStringLiteral("/steam.sh"))
-            || m_ops->fileExists(candidate + QStringLiteral("/ubuntu12_32/steam"))
+        const bool rootIsDirectory = m_ops->isDirectory(candidate);
+        const bool hasSteamMarker = m_ops->fileExists(candidate + QStringLiteral("/steam.sh"))
             || m_ops->fileExists(candidate + QStringLiteral("/userdata"))
             || m_ops->fileExists(candidate + QStringLiteral("/config"));
-        if (!rootExists) {
+        if (!rootIsDirectory || !hasSteamMarker) {
             continue;
         }
 
@@ -2323,10 +2315,26 @@ bool CouchPlayHelper::unmountMountInfo(MountInfo &mount)
         return true;
     }
 
-    // No pinned FD (post-restart state): path-based umount with lazy fallback
-    if (!runCommand(QStringLiteral("/usr/bin/umount"), {mount.target}, 10000)) {
-        qWarning() << "unmountMountInfo: umount failed for" << mount.target << "- trying lazy unmount";
-        return runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 10000);
+    // No pinned FD (post-restart state): safely re-open the parent and use
+    // the FD-anchored unmount. Never pass the restored pathname to umount(8).
+    const qsizetype separator = mount.target.lastIndexOf(QLatin1Char('/'));
+    if (separator < 0 || separator == mount.target.size() - 1) {
+        qWarning() << "unmountMountInfo: invalid restored mount target" << mount.target;
+        return false;
+    }
+    const QString parentPath = mount.target.left(separator);
+    const QByteArray leaf = mount.target.mid(separator + 1).toLocal8Bit();
+    const int parentFd = SecureFs::openExistingDirNoFollow(parentPath.isEmpty() ? QStringLiteral("/") : parentPath);
+    if (parentFd < 0) {
+        qWarning() << "unmountMountInfo: could not safely reopen parent for" << mount.target;
+        return false;
+    }
+    const int result = SecureFs::umountAtFd(parentFd, QString::fromLocal8Bit(leaf));
+    ::close(parentFd);
+    if (result != 0) {
+        qWarning() << "unmountMountInfo: restored FD umount failed for" << mount.target << ":"
+                   << strerror(-result);
+        return false;
     }
     return true;
 }
@@ -3105,12 +3113,15 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
     }
 
     const QByteArray leafBytes = leafName.toLocal8Bit();
-    auto readDigestAt = [&](const QByteArray &name, QByteArray &digest) {
+    auto readDigestAt = [&](const QByteArray &name, QByteArray &digest, const struct stat *expected = nullptr) {
         const int fileFd = ::openat(parentFd,
                                     name.constData(),
                                     O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
         if (fileFd < 0) {
             if (errno == ENOENT) {
+                if (expected) {
+                    return false;
+                }
                 digest = QByteArrayLiteral("missing");
                 return true;
             }
@@ -3119,7 +3130,8 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
 
         struct stat before;
         if (::fstat(fileFd, &before) != 0 || !S_ISREG(before.st_mode) || before.st_uid != userUid
-            || before.st_nlink != 1 || before.st_size <= 0 || before.st_size > maxShortcutsSize) {
+            || before.st_nlink != 1 || before.st_size <= 0 || before.st_size > maxShortcutsSize
+            || (expected && !sameFileIdentity(*expected, before))) {
             ::close(fileFd);
             return false;
         }
@@ -3145,6 +3157,7 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
         const bool changedWhileReading = ::fstat(fileFd, &after) != 0
             || ::fstatat(parentFd, name.constData(), &pathnameAfter, AT_SYMLINK_NOFOLLOW) != 0
             || !sameFileIdentity(after, pathnameAfter)
+            || (expected && !sameFileIdentity(*expected, after))
             || before.st_size != after.st_size
             || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
             || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
@@ -3222,6 +3235,14 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
     if (writeSucceeded && ::fsync(temporaryFd) != 0) {
         writeSucceeded = false;
     }
+    if (writeSucceeded) {
+        struct stat finalStat{};
+        writeSucceeded = ::fstat(temporaryFd, &finalStat) == 0 && S_ISREG(finalStat.st_mode)
+            && finalStat.st_nlink == 1;
+        if (writeSucceeded) {
+            temporaryStat = finalStat;
+        }
+    }
     if (::close(temporaryFd) != 0) {
         writeSucceeded = false;
     }
@@ -3280,6 +3301,21 @@ bool CouchPlayHelper::WriteSteamShortcutsForUser(const QString &username,
         return false;
     }
 
+    const QByteArray replacementDigest = QCryptographicHash::hash(content, QCryptographicHash::Sha256).toHex();
+    QByteArray installedDigest;
+    const bool installedFileIsExpected = readDigestAt(leafBytes, installedDigest, &temporaryStat)
+        && installedDigest == replacementDigest;
+    if (!installedFileIsExpected) {
+        // The directory is writable by the target user. Do not report success
+        // after the installed leaf has been swapped; retain the displaced
+        // snapshot for explicit recovery.
+        qWarning() << "WriteSteamShortcutsForUser: installed shortcuts leaf changed during sync; snapshot retained at"
+                   << temporaryName;
+        ::close(parentFd);
+        sendErrorReply(QDBusError::Failed,
+                       QStringLiteral("Steam shortcuts changed during sync; concurrent snapshot retained"));
+        return false;
+    }
     if (expectedDigest != QByteArrayLiteral("missing")) {
         QByteArray displacedDigest;
         struct stat displacedStat{};
@@ -4823,45 +4859,92 @@ void CouchPlayHelper::loadAndReconcileState()
 
     QJsonObject mountsObject = root.value(QStringLiteral("activeMounts")).toObject();
     QMap<QString, QList<MountInfo>> loadedMounts;
+    QByteArray mountsData;
+    QFile mountsFile(QStringLiteral("/proc/mounts"));
+    if (mountsFile.open(QIODevice::ReadOnly)) {
+        mountsData = mountsFile.readAll();
+    }
+    const auto decodeProcMountField = [](const QByteArray &encoded) {
+        QByteArray decoded;
+        decoded.reserve(encoded.size());
+        for (qsizetype i = 0; i < encoded.size(); ++i) {
+            if (encoded.at(i) == '\\' && i + 3 < encoded.size()) {
+                int value = 0;
+                bool octal = true;
+                for (qsizetype j = 1; j <= 3; ++j) {
+                    const char digit = encoded.at(i + j);
+                    if (digit < '0' || digit > '7') {
+                        octal = false;
+                        break;
+                    }
+                    value = value * 8 + (digit - '0');
+                }
+                if (octal) {
+                    decoded.append(static_cast<char>(value));
+                    i += 3;
+                    continue;
+                }
+            }
+            decoded.append(encoded.at(i));
+        }
+        return decoded;
+    };
+    const auto isMountedTarget = [&](const QString &target) {
+        const QByteArray targetBytes = target.toUtf8();
+        for (const QByteArray &line : mountsData.split('\n')) {
+            const QList<QByteArray> fields = line.simplified().split(' ');
+            if (fields.size() >= 2 && decodeProcMountField(fields.at(1)) == targetBytes) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     for (auto it = mountsObject.constBegin(); it != mountsObject.constEnd(); ++it) {
-        QString username = it.key();
-        QJsonArray mountsArray = it.value().toArray();
+        const QString username = it.key();
+        const QJsonArray mountsArray = it.value().toArray();
         QList<MountInfo> userMounts;
         for (const QJsonValue &mountVal : mountsArray) {
-            QJsonObject mountObj = mountVal.toObject();
-            QString target = mountObj.value(QStringLiteral("target")).toString();
+            const QJsonObject mountObj = mountVal.toObject();
+            const QString target = mountObj.value(QStringLiteral("target")).toString();
+            const bool isMounted = isMountedTarget(target);
 
-            QFile mountsFile(QStringLiteral("/proc/mounts"));
-            bool isMounted = false;
-            if (mountsFile.open(QIODevice::ReadOnly)) {
-                QByteArray mountsData = mountsFile.readAll();
-                mountsFile.close();
-                isMounted = mountsData.contains(target.toUtf8());
-            }
+            MountInfo info;
+            info.source = mountObj.value(QStringLiteral("source")).toString();
+            info.target = target;
+            info.mountType = mountObj.value(QStringLiteral("mountType")).toString();
+            info.upperDir = mountObj.value(QStringLiteral("upperDir")).toString();
+            info.workDir = mountObj.value(QStringLiteral("workDir")).toString();
 
             if (!activeUsernames.contains(username)) {
-                // Session gone: umount the orphan instead of re-tracking it.
+                // Session gone: safely unmount an orphan. If reopening the
+                // parent or the FD-anchored unmount fails, retain the record
+                // for a later retry instead of resolving the live pathname.
+                bool cleaned = !isMounted;
                 if (isMounted) {
-                    qDebug() << "loadAndReconcileState: Umounting orphaned mount" << target << "for gone session" << username;
-                    QProcess *umountProc = m_ops->createProcess();
-                    m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {target});
-                    m_ops->waitForFinished(umountProc, 5000);
-                    if (m_ops->processExitCode(umountProc) != 0) {
-                        QProcess *lazyProc = m_ops->createProcess();
-                        m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), target});
-                        m_ops->waitForFinished(lazyProc, 5000);
-                        delete lazyProc;
+                    const qsizetype separator = target.lastIndexOf(QLatin1Char('/'));
+                    const QString parentPath = separator > 0 ? target.left(separator) : QStringLiteral("/");
+                    const QString leaf = separator >= 0 ? target.mid(separator + 1) : QString();
+                    const int parentFd = leaf.isEmpty() ? -1 : SecureFs::openExistingDirNoFollow(parentPath);
+                    if (parentFd >= 0) {
+                        const int result = SecureFs::umountAtFd(parentFd, leaf);
+                        ::close(parentFd);
+                        cleaned = result == 0;
+                        if (!cleaned) {
+                            qWarning() << "loadAndReconcileState: orphan FD umount failed for" << target << ":"
+                                       << strerror(-result);
+                        }
+                    } else {
+                        qWarning() << "loadAndReconcileState: could not safely reopen orphan mount parent for"
+                                   << target;
                     }
-                    delete umountProc;
                 }
-                changed = true;
+                if (cleaned) {
+                    changed = true;
+                } else {
+                    userMounts.append(info);
+                }
             } else if (isMounted) {
-                MountInfo info;
-                info.source = mountObj.value(QStringLiteral("source")).toString();
-                info.target = target;
-                info.mountType = mountObj.value(QStringLiteral("mountType")).toString();
-                info.upperDir = mountObj.value(QStringLiteral("upperDir")).toString();
-                info.workDir = mountObj.value(QStringLiteral("workDir")).toString();
                 userMounts.append(info);
             } else {
                 qDebug() << "loadAndReconcileState: Removing inactive mount" << target;

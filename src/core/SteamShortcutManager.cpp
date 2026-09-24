@@ -1045,7 +1045,9 @@ void SteamShortcutManager::commitShortcut()
     shortcut.appName = QStringLiteral("CouchPlay - ") + m_selectedProfile;
     shortcut.exe = m_kind == QStringLiteral("flatpak") ? vdfQuotePath(QStringLiteral("/usr/bin/flatpak-spawn"))
                                                         : vdfQuotePath(m_launcherPath);
-    shortcut.startDir = vdfQuotePath(QFileInfo(m_launcherPath).absolutePath());
+    shortcut.startDir = vdfQuotePath(m_kind == QStringLiteral("flatpak")
+                                         ? m_root
+                                         : QFileInfo(m_launcherPath).absolutePath());
     shortcut.icon = m_iconPath;
     shortcut.shortcutPath = markerFor(m_profilePath);
     shortcut.launchOptions = m_kind == QStringLiteral("flatpak")
