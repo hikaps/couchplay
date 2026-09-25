@@ -32,3 +32,9 @@ class TestSettings(BaseTest):
         self.click_by_name(driver, "Reset to Defaults")
         dialog = self.wait_for_element(driver, AppiumBy.NAME, "Reset Settings")
         assert dialog.is_displayed()
+
+    def test_update_section_visible(self, driver):
+        self.navigate_to_settings(driver)
+        self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "labelUpdateStatus")
+        self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "btnCheckUpdates")
+        self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "checkUpdateAutomatically")
