@@ -80,9 +80,6 @@ target_sources(couchplay PRIVATE
     core/CommandLineOptions.cpp
     core/CommandLineOptions.h
     core/CommandLineBridge.h
-    core/CommandLineBridge.cpp
-    core/SessionLaunchClient.cpp
-    core/SessionLaunchClient.h
     core/SessionManager.h
     core/LaunchTypes.h
     core/SessionRunner.cpp
@@ -103,18 +100,17 @@ target_sources(couchplay PRIVATE
      core/HeroicConfigManager.cpp
      core/HeroicConfigManager.h
      core/SteamConfigManager.cpp
-     core/SteamShortcutManager.cpp
-     core/SteamShortcutManager.h
-     core/SteamShortcutsVdf.cpp
-     core/SteamShortcutsVdf.h
      core/SteamConfigManager.h
+    core/SteamShortcutManager.cpp
+    core/SteamShortcutManager.h
+    core/SteamShortcutsVdf.cpp
+    core/SteamShortcutsVdf.h
     core/SettingsManager.cpp
     core/SettingsManager.h
     core/SunshineConfig.cpp
     core/SunshineConfig.h
     core/StreamManager.cpp
     core/StreamManager.h
-    steam-integration.qrc
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )

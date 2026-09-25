@@ -204,13 +204,10 @@ private Q_SLOTS:
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
     void startNextInstance();
+    void onHookFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onHookError(QProcess::ProcessError error);
 
 private:
-    void onHookFinished(QProcess *process,
-                        quint64 generation,
-                        int exitCode,
-                        QProcess::ExitStatus exitStatus);
-    void onHookError(QProcess *process, quint64 generation, QProcess::ProcessError error);
     void setStatus(const QString &status);
     void cleanupInstances();
     void continueStart();
@@ -222,8 +219,8 @@ private:
     bool prepareLaunchCommands();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
-    bool setupSessionResources(quint64 startupGeneration = 0);
-    bool teardownSharedDirectories();
+    bool setupSessionResources();
+    void teardownSharedDirectories();
     void teardownSharingState();
     bool buildOverrideBinds();
     QRect getScreenGeometry() const;
@@ -243,11 +240,6 @@ private:
         bool virtualDisplayCreated = false;
         bool nullSinkCreated = false;
     };
-    struct PendingWindowRequest {
-        quint64 startupGeneration = 0;
-        int instanceIndex = -1;
-    };
-
 
     QMap<int, QStringList> m_instanceBindPaths;
     QMap<int, QStringList> m_instanceSharedRoots;
@@ -259,7 +251,6 @@ private:
     SessionManager *m_sessionManager = nullptr;
     SessionProfile m_startingProfile;
     bool m_hasStartingProfile = false;
-    quint64 m_startupGeneration = 0;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
     PresetManager *m_presetManager = nullptr;
@@ -273,9 +264,6 @@ private:
     QString m_status;
     bool m_active = false;
     bool m_finalizing = false;
-    bool m_sessionResourcesSetupInProgress = false;
-    bool m_streamingSetupInProgress = false;
-    bool m_finishAfterSessionResources = false;
     bool m_startupFailure = false;
     bool m_preHookCompleted = false;
     bool m_postHookArmed = false;
@@ -292,9 +280,6 @@ private:
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
-    QMap<int, PendingWindowRequest> m_pendingWindowRequests;
-    int m_nextWindowRequestId = 0;
-
 
     // Privileged sharing state (mounts, Steam library sharing) is active from
     // setup until teardown — natural instance exit must release it too

@@ -5,139 +5,117 @@
 # CouchPlay Game Mode Launcher
 #
 # Launches CouchPlay inside SteamOS Game Mode by starting a nested KWin Wayland
-# compositor. It is also safe to use as a normal Desktop Mode launcher.
+# compositor. This provides the org.kde.KWin D-Bus interface that CouchPlay's
+# WindowManager requires for positioning gamescope windows side-by-side.
+#
+# Usage:
+#   Add this script as a Non-Steam Game in Steam, or run it from a terminal:
+#     ./couchplay-gamemode.sh
+#
+# How it works:
+#   1. Detects whether we are inside SteamOS Game Mode (gamescope session).
+#   2. Starts a nested kwin_wayland compositor that renders as a Wayland subsurface
+#      inside the parent gamescope session.
+#   3. Launches CouchPlay inside that nested compositor.
+#   4. Controller isolation uses the D-Bus helper's driver unbind/rebind + temporary
+#      udev rules to block the host Steam client from reading physical controllers.
+#   5. On exit, kwin_wayland is terminated and controllers are automatically restored
+#      by the D-Bus helper's ResetAllDevices().
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTE=auto
-NATIVE_BIN=
-IN_FLATPAK=false
 
-if [[ -f /.flatpak-info ]]; then
+IN_FLATPAK=false
+if [ -f /.flatpak-info ]; then
     IN_FLATPAK=true
 fi
 
-if [[ "${1:-}" == "--couchplay-native" ]]; then
-    [[ $# -ge 3 && "$3" == "--" ]] || { echo "Error: --couchplay-native requires an executable and --." >&2; exit 2; }
-    ROUTE=native
-    NATIVE_BIN=$2
-    shift 3
-elif [[ "${1:-}" == "--couchplay-flatpak" ]]; then
-    [[ "${2:-}" == "--" ]] || { echo "Error: --couchplay-flatpak requires --." >&2; exit 2; }
-    ROUTE=flatpak
-    shift 2
-fi
-if [[ "$ROUTE" == auto && "$IN_FLATPAK" == true ]]; then
-    ROUTE=flatpak
+# --- Configuration ---
+
+# CouchPlay binary: use the packaged Flatpak executable when running there;
+# otherwise prefer build dir (development), then PATH, then /usr/local/bin.
+if [ "$IN_FLATPAK" = true ] && [ -x /app/bin/couchplay ]; then
+    COUCHPLAY_BIN=/app/bin/couchplay
+elif [ -x "$SCRIPT_DIR/../build/bin/couchplay" ]; then
+    COUCHPLAY_BIN="$SCRIPT_DIR/../build/bin/couchplay"
+elif command -v couchplay &>/dev/null; then
+    COUCHPLAY_BIN="$(command -v couchplay)"
+elif [ -x /usr/local/bin/couchplay ]; then
+    COUCHPLAY_BIN="/usr/local/bin/couchplay"
+else
+    echo "Error: CouchPlay binary not found."
+    echo "Install CouchPlay or build it first."
+    exit 1
 fi
 
-if [[ "$ROUTE" == native ]]; then
-    [[ -x "$NATIVE_BIN" ]] || { echo "Error: CouchPlay binary is not executable: $NATIVE_BIN" >&2; exit 1; }
-    COUCHPLAY_BIN=$NATIVE_BIN
-elif [[ "$ROUTE" == auto ]]; then
-    if [ -x "$SCRIPT_DIR/../build/bin/couchplay" ]; then
-        COUCHPLAY_BIN="$SCRIPT_DIR/../build/bin/couchplay"
-    elif command -v couchplay &>/dev/null; then
-        COUCHPLAY_BIN="$(command -v couchplay)"
-    elif [ -x /usr/local/bin/couchplay ]; then
-        COUCHPLAY_BIN="/usr/local/bin/couchplay"
-    else
-        COUCHPLAY_BIN=
-    fi
-fi
+# --- Environment detection ---
 
 is_game_mode() {
+    # SteamOS Game Mode runs inside a gamescope session.
+    # Check for the gamescope-specific env var or the session type.
     if [ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ]; then
         return 0
     fi
+    # Alternative: check if the parent compositor is gamescope
     if [ -n "${SteamGamepadUI:-}" ] || [ "${XDG_CURRENT_DESKTOP:-}" = "gamescope" ]; then
         return 0
     fi
     return 1
 }
 
+# --- Cleanup ---
+
 KWIN_PID=""
-COUCHPLAY_PID=""
+
 cleanup() {
     echo "CouchPlay Game Mode: Cleaning up..."
-    if [ -n "$COUCHPLAY_PID" ] && kill -0 "$COUCHPLAY_PID" 2>/dev/null; then
-        kill "$COUCHPLAY_PID" 2>/dev/null || true
-        wait "$COUCHPLAY_PID" 2>/dev/null || true
-        COUCHPLAY_PID=""
-    fi
     if [ -n "$KWIN_PID" ] && kill -0 "$KWIN_PID" 2>/dev/null; then
         kill "$KWIN_PID" 2>/dev/null || true
         wait "$KWIN_PID" 2>/dev/null || true
-        KWIN_PID=""
     fi
 }
-trap cleanup EXIT
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
 
+trap cleanup EXIT INT TERM
 
+# --- Main ---
 
-run_couchplay_forwarded() {
-    if [[ "$ROUTE" == flatpak ]]; then
-        if [[ "${COUCHPLAY_HOST_SPAWN:-0}" == 1 ]]; then
-            ( exec flatpak-spawn --host --watch-bus /usr/bin/flatpak run --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" --env=QT_QPA_PLATFORM="$QT_QPA_PLATFORM" io.github.hikaps.couchplay "$@" ) &
-        elif [[ "$IN_FLATPAK" == true ]]; then
-            ( exec /app/bin/couchplay "$@" ) &
-        else
-            ( exec flatpak run io.github.hikaps.couchplay "$@" ) &
-        fi
-    else
-        ( exec "$COUCHPLAY_BIN" "$@" ) &
-    fi
-    COUCHPLAY_PID=$!
-    local status
-    if wait "$COUCHPLAY_PID"; then
-        status=0
-    else
-        status=$?
-    fi
-    COUCHPLAY_PID=""
-    return "$status"
-}
+echo "CouchPlay Game Mode Launcher"
+echo "============================="
+
 if is_game_mode; then
     echo "Detected: SteamOS Game Mode (gamescope session)"
 else
     echo "Detected: Desktop Mode"
+    echo "Game Mode launcher is not required in Desktop Mode."
     echo "Launching CouchPlay directly..."
-    if run_couchplay_forwarded "$@"; then
-        exit 0
-    else
-        exit $?
-    fi
+    exec "$COUCHPLAY_BIN" "$@"
 fi
-
-if [[ "$ROUTE" == flatpak && -z "$(command -v kwin_wayland 2>/dev/null || true)" ]]; then
-    if command -v flatpak-spawn >/dev/null 2>&1; then
-        KWIN_COMMAND=(flatpak-spawn --host --watch-bus kwin_wayland)
-        COUCHPLAY_HOST_SPAWN=1
-    else
-        echo "Error: kwin_wayland is unavailable in the Flatpak and flatpak-spawn is unavailable." >&2
-        exit 1
-    fi
+# Game Mode requires kwin_wayland in the current runtime. Do not guess at host paths.
+if command -v kwin_wayland &>/dev/null; then
+    KWIN_BIN="$(command -v kwin_wayland)"
 else
-    command -v kwin_wayland >/dev/null 2>&1 || { echo "Error: kwin_wayland not found." >&2; exit 1; }
-    KWIN_COMMAND=("$(command -v kwin_wayland)")
-    COUCHPLAY_HOST_SPAWN=0
+    echo "Error: kwin_wayland is not available in this runtime."
+    echo "Game Mode requires a runtime-provided kwin_wayland or an installed host launcher."
+    exit 1
 fi
-
-CP_WAYLAND_DISPLAY="couchplay-$$"
-export CP_WAYLAND_DISPLAY
 
 echo "Starting nested KWin Wayland compositor..."
-"${KWIN_COMMAND[@]}" \
+
+CP_WAYLAND_DISPLAY="couchplay-$$"
+
+# Start kwin as a nested compositor on a known socket so CouchPlay connects to it.
+"$KWIN_BIN" \
     --no-lockscreen \
     --no-global-shortcuts \
     --wayland-display "$CP_WAYLAND_DISPLAY" \
     --width "${GAMESCOPE_WIDTH:-1920}" \
-    --height "${GAMESCOPE_HEIGHT:-1080}" &
+    --height "${GAMESCOPE_HEIGHT:-1080}" \
+    &
+
 KWIN_PID=$!
 
+# Wait for KWin to register on D-Bus (up to 10 seconds)
 echo "Waiting for KWin D-Bus interface..."
 KWIN_READY=false
 for _ in $(seq 1 20); do
@@ -148,11 +126,14 @@ for _ in $(seq 1 20); do
     fi
     sleep 0.5
 done
+
 if [ "$KWIN_READY" = false ]; then
-    echo "Error: KWin did not start within 10 seconds." >&2
+    echo "Error: KWin did not start within 10 seconds."
+    echo "Check that kwin_wayland is installed and working."
     exit 1
 fi
 
+# Wait for kwin's Wayland socket to appear.
 SOCKET_READY=false
 for _ in $(seq 1 20); do
     if [ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${CP_WAYLAND_DISPLAY}" ]; then
@@ -162,20 +143,24 @@ for _ in $(seq 1 20); do
     sleep 0.5
 done
 if [ "$SOCKET_READY" = false ]; then
-    echo "Error: kwin Wayland socket ${CP_WAYLAND_DISPLAY} did not appear." >&2
+    echo "Error: kwin Wayland socket ${CP_WAYLAND_DISPLAY} did not appear."
     exit 1
 fi
 
 echo "KWin is ready (PID: $KWIN_PID)"
+echo "Launching CouchPlay..."
+
+# Point CouchPlay at kwin's nested socket (not the parent gamescope display).
 export WAYLAND_DISPLAY="$CP_WAYLAND_DISPLAY"
 export QT_QPA_PLATFORM=wayland
+
+# Enable CouchPlay debug logging for troubleshooting
 export QT_LOGGING_RULES="couchplay.*=true"
 export QT_MESSAGE_PATTERN="[%{time hh:mm:ss.zzz}] %{if-category}%{category}: %{endif}%{message}"
 
-if run_couchplay_forwarded "$@"; then
-    COUCHPLAY_EXIT=0
-else
-    COUCHPLAY_EXIT=$?
-fi
+# Launch CouchPlay, blocking until it exits
+"$COUCHPLAY_BIN" "$@"
+COUCHPLAY_EXIT=$?
+
 echo "CouchPlay exited with code $COUCHPLAY_EXIT"
-exit "$COUCHPLAY_EXIT"
+exit $COUCHPLAY_EXIT

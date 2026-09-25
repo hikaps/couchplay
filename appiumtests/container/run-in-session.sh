@@ -16,9 +16,8 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export QT_QUICK_BACKEND=software
 export TEST_WITH_VIDEO_RECORDER=0
 export COUCHPLAY_APP_ID=/src/couchplay/build/bin/couchplay
-# The AT-SPI driver controls the app's environment separately. Its capabilities
-# set COUCHPLAY_LOG and XDG_DATA_HOME to this uploaded artifact directory.
+# Runner writes kwin/app/pytest artifacts here (CWD /src/couchplay is root-owned
+# in the image, so redirect to a writable dir the user can read back).
 export APPIUM_ARTIFACT_OUTPUT_PATH=/tmp/cp-out
-mkdir -p "$APPIUM_ARTIFACT_OUTPUT_PATH/couchplay"
 
 selenium-webdriver-at-spi-run /opt/e2e-venv/bin/pytest "$@"

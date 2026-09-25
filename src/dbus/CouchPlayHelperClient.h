@@ -3,15 +3,12 @@
 
 #pragma once
 
-#include <QByteArray>
 #include <QDBusInterface>
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
-
-#include <functional>
 
 /**
  * @brief D-Bus client for the privileged CouchPlay helper
@@ -40,7 +37,7 @@ public:
 
     Q_INVOKABLE virtual bool watchDevice(const QString &devicePath);
 
-    Q_INVOKABLE virtual bool restoreAllDevices();
+    Q_INVOKABLE void restoreAllDevices();
 
     Q_INVOKABLE bool createUser(const QString &username);
 
@@ -82,28 +79,6 @@ public:
      * when Steam has not been bootstrapped for that user.
      */
     Q_INVOKABLE virtual QString getUserSteamRoot(const QString &username);
-    /** Empty content means the selected Steam account has no shortcuts.vdf. */
-    virtual bool readSteamShortcutsForUser(const QString &username,
-                                           const QString &steamId,
-                                           QByteArray *content,
-                                           std::function<bool()> shouldContinue = {},
-                                           QString *errorMessage = nullptr);
-    virtual bool writeSteamShortcutsForUser(const QString &username,
-                                            const QString &steamId,
-                                            const QByteArray &expectedDigest,
-                                            const QByteArray &content,
-                                            QString *errorMessage = nullptr);
-
-    /**
-     * Return the target user's existing libraryfolders.vdf bytes and whether
-     * the file existed, using a bounded no-follow helper-side read.
-     */
-    virtual bool readSteamLibraryFoldersForUser(const QString &username,
-                                                QByteArray *content,
-                                                bool *exists);
-    virtual bool restoreSteamLibraryFoldersForUser(const QString &username,
-                                                   bool existed,
-                                                   const QByteArray &content);
 
     /**
      * @brief Launch a gamescope instance as a specified user
@@ -228,13 +203,13 @@ public:
      */
     Q_INVOKABLE virtual bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
-    Q_INVOKABLE virtual QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
+    Q_INVOKABLE QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
 
-    Q_INVOKABLE virtual bool destroyVirtualOutput(const QString &username, const QString &waylandSocketName);
+    Q_INVOKABLE bool destroyVirtualOutput(const QString &username, const QString &waylandSocketName);
 
-    Q_INVOKABLE virtual QString createNullSink(const QString &username, const QString &sinkName);
+    Q_INVOKABLE QString createNullSink(const QString &username, const QString &sinkName);
 
-    Q_INVOKABLE virtual bool destroyNullSink(const QString &username, const QString &sinkName);
+    Q_INVOKABLE bool destroyNullSink(const QString &username, const QString &sinkName);
 
     /**
      * @brief Set up an overlay mount for a user's instance

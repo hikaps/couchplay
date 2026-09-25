@@ -4,7 +4,6 @@
 #pragma once
 
 #include <QDBusContext>
-#include <QByteArray>
 #include <QMap>
 #include <QObject>
 #include <QProcess>
@@ -394,9 +393,6 @@ public Q_SLOTS:
      */
     bool IsSteamBootstrapped(const QString &username);
 
-    QVariantMap ReadSteamLibraryFoldersForUser(const QString &username);
-    bool RestoreSteamLibraryFoldersForUser(const QString &username, bool existed, const QByteArray &content);
-
     /**
      * Write content directly to a file in a user's directory
      *
@@ -409,24 +405,7 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
-    /**
-     * Read the selected Steam account's shortcuts file for profile sync.
-     * The helper refuses unsafe paths and symlinks; empty means the file is absent.
-     */
-    QByteArray ReadSteamShortcutsForUser(const QString &username, const QString &steamId);
 
-    /**
-     * Best-effort snapshot validation: atomic exchange detects edits present
-     * at the exchange point but does not lock out later external Steam writes.
-     * The helper checks the target user's Steam process immediately before
-     * committing and refuses when it is running or its state is unknown. This
-     * check cannot prevent Steam starting after that boundary. Use "missing"
-     * when no file existed; otherwise pass its lowercase SHA-256 digest.
-     */
-    bool WriteSteamShortcutsForUser(const QString &username,
-                                    const QString &steamId,
-                                    const QByteArray &expectedDigest,
-                                    const QByteArray &content);
     /**
      * Create a virtual Wayland output for streaming capture
      *

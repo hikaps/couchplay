@@ -134,44 +134,33 @@ void SessionRunner::runHook(const QString &path, bool postHook)
         return;
     }
 
-    const quint64 hookGeneration = m_startupGeneration;
-    QProcess *const process = new QProcess(this);
-    m_hookProcess = process;
-    process->setProcessChannelMode(QProcess::MergedChannels);
-    connect(process, &QProcess::finished, this,
-            [this, process, hookGeneration](int exitCode, QProcess::ExitStatus exitStatus) {
-        onHookFinished(process, hookGeneration, exitCode, exitStatus);
-    });
-    connect(process, &QProcess::errorOccurred, this,
-            [this, process, hookGeneration](QProcess::ProcessError error) {
-        onHookError(process, hookGeneration, error);
-    });
+    m_hookProcess = new QProcess(this);
+    m_hookProcess->setProcessChannelMode(QProcess::MergedChannels);
+    connect(m_hookProcess, &QProcess::finished, this, &SessionRunner::onHookFinished);
+    connect(m_hookProcess, &QProcess::errorOccurred, this, &SessionRunner::onHookError);
 
     if (isFlatpak) {
-        process->setProgram(QStringLiteral("/usr/bin/flatpak-spawn"));
-        process->setArguments({QStringLiteral("--host"), QStringLiteral("--watch-bus"), path});
+        m_hookProcess->setProgram(QStringLiteral("/usr/bin/flatpak-spawn"));
+        m_hookProcess->setArguments({QStringLiteral("--host"), QStringLiteral("--watch-bus"), path});
     } else {
-        process->setProgram(path);
-        process->setArguments({});
+        m_hookProcess->setProgram(path);
+        m_hookProcess->setArguments({});
     }
-    process->start();
+    m_hookProcess->start();
 }
 
-void SessionRunner::onHookFinished(QProcess *process,
-                                   quint64 generation,
-                                   int exitCode,
-                                   QProcess::ExitStatus exitStatus)
+void SessionRunner::onHookFinished(int exitCode, QProcess::ExitStatus exitStatus)
 {
-    if (m_hookProcess != process || generation != m_startupGeneration) {
+    if (!m_hookProcess) {
         return;
     }
-    const QByteArray output = process->readAll();
+    const QByteArray output = m_hookProcess->readAll();
     if (!output.isEmpty()) {
         qCDebug(couchplayCore) << "Session hook output:" << output.trimmed();
     }
     const bool postHook = m_hookIsPost;
-    const QString program = process->program();
-    process->deleteLater();
+    const QString program = m_hookProcess->program();
+    m_hookProcess->deleteLater();
     m_hookProcess = nullptr;
 
     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
@@ -196,14 +185,14 @@ void SessionRunner::onHookFinished(QProcess *process,
     }
 }
 
-void SessionRunner::onHookError(QProcess *process, quint64 generation, QProcess::ProcessError error)
+void SessionRunner::onHookError(QProcess::ProcessError error)
 {
-    if (m_hookProcess != process || generation != m_startupGeneration || error != QProcess::FailedToStart) {
+    if (!m_hookProcess || error != QProcess::FailedToStart) {
         return;
     }
     const bool postHook = m_hookIsPost;
-    const QString program = process->program();
-    process->deleteLater();
+    const QString program = m_hookProcess->program();
+    m_hookProcess->deleteLater();
     m_hookProcess = nullptr;
     const QString message = QStringLiteral("%1-session script failed to start: %2")
         .arg(postHook ? QStringLiteral("Post") : QStringLiteral("Pre"), program);
@@ -300,27 +289,7 @@ bool SessionRunner::start()
         return false;
     }
 
-    // A previous session may have finished while helper cleanup was
-    // unavailable. Retry before arming a replacement session; otherwise the
-    // new setup would overwrite the pending Steam snapshots or mount state.
-    restoreDeviceOwnership();
-    teardownSharingState();
-    teardownStreamingInstances();
-    if (m_sharedStateActive || !m_steamSharedUsers.isEmpty() || !m_ownedDevicePaths.isEmpty()
-        || !m_streamingInstances.isEmpty()) {
-        Q_EMIT errorOccurred(QStringLiteral("Previous session resources are still pending cleanup"));
-        return false;
-    }
-
-    const quint64 startupGeneration = ++m_startupGeneration;
-    const auto isCurrentStart = [this, startupGeneration] {
-        return startupGeneration == m_startupGeneration && !m_finalizing;
-    };
-
     cleanupInstances();
-    if (!isCurrentStart()) {
-        return false;
-    }
     m_finalizing = false;
     m_startupFailure = false;
     m_preHookCompleted = false;
@@ -333,9 +302,6 @@ bool SessionRunner::start()
     const int instanceCount = profile.instances.size();
     if (instanceCount < 1) {
         Q_EMIT errorOccurred(QStringLiteral("No instances configured"));
-        if (!isCurrentStart()) {
-            return false;
-        }
         setStatus(QStringLiteral("Error"));
         return false;
     }
@@ -350,9 +316,6 @@ bool SessionRunner::start()
             Q_EMIT errorOccurred(
                 QStringLiteral("User '%1' is assigned to multiple instances. Each instance needs a unique user.")
                     .arg(username));
-            if (!isCurrentStart()) {
-                return false;
-            }
             setStatus(QStringLiteral("Error"));
             return false;
         }
@@ -372,16 +335,10 @@ bool SessionRunner::start()
         const bool inGroup = (m_helperClient && m_helperClient->isAvailable())
             ? m_helperClient->isInCouchPlayGroup(username)
             : isUserInCouchPlayGroup(username);
-        if (!isCurrentStart()) {
-            return false;
-        }
         if (!inGroup) {
             Q_EMIT errorOccurred(QStringLiteral("User '%1' is not a CouchPlay managed user. Please create the user via "
                                                 "CouchPlay or add them to the 'couchplay' group.")
                                      .arg(username));
-            if (!isCurrentStart()) {
-                return false;
-            }
             setStatus(QStringLiteral("Error"));
             return false;
         }
@@ -398,34 +355,21 @@ bool SessionRunner::start()
             command.program = QStringLiteral("steam");
             command.arguments = {QStringLiteral("-bigpicture")};
         }
-        if (!isCurrentStart()) {
-            return false;
-        }
         if (!command.isValid()) {
             const QString message = QStringLiteral("Invalid launch command for player %1: %2")
                 .arg(i + 1)
                 .arg(command.errorMessage);
             Q_EMIT errorOccurred(message);
-            if (!isCurrentStart()) {
-                return false;
-            }
             setStatus(QStringLiteral("Error"));
             return false;
         }
         m_launchCommands.append(command);
     }
-
     m_startingProfile = profile;
     m_hasStartingProfile = true;
 
     setActive(true);
-    if (!isCurrentStart()) {
-        return true;
-    }
     setStatus(QStringLiteral("Starting session..."));
-    if (!isCurrentStart()) {
-        return true;
-    }
     if (!profile.preSessionExecutable.isEmpty()) {
         runHook(profile.preSessionExecutable, false);
         return true;
@@ -441,18 +385,12 @@ void SessionRunner::continueStart()
     if (!m_active || m_finalizing) {
         return;
     }
-    const quint64 startupGeneration = m_startupGeneration;
-    const auto isCurrentStartup = [this, startupGeneration] {
-        return startupGeneration == m_startupGeneration && m_active && !m_finalizing;
-    };
 
     const SessionProfile &profile = activeProfile();
     const int instanceCount = profile.instances.size();
     m_postHookArmed = true;
     inhibitScreenSaver();
-    if (!isCurrentStartup()) {
-        return;
-    }
+
     QList<int> physicalIndices;
     QList<int> streamingIndices;
     for (int i = 0; i < instanceCount; ++i) {
@@ -463,26 +401,14 @@ void SessionRunner::continueStart()
         }
     }
 
-    teardownStreamingInstances();
+    m_streamingInstances.clear();
     for (int idx : streamingIndices) {
         const InstanceConfig &instConfig = profile.instances[idx];
         QVariantMap streamConfig;
         streamConfig[QStringLiteral("username")] = instConfig.username;
         streamConfig[QStringLiteral("streamResolution")] = instConfig.streamResolution;
         streamConfig[QStringLiteral("refreshRate")] = instConfig.refreshRate;
-        streamConfig[QStringLiteral("_startupGeneration")] = QVariant::fromValue(startupGeneration);
-        m_streamingSetupInProgress = true;
-        const bool streamingSetupReady = setupStreamingInstance(idx, streamConfig);
-        m_streamingSetupInProgress = false;
-        if (m_finishAfterSessionResources) {
-            m_finishAfterSessionResources = false;
-            finishFinalization();
-            return;
-        }
-        if (!isCurrentStartup()) {
-            return;
-        }
-        if (!streamingSetupReady) {
+        if (!setupStreamingInstance(idx, streamConfig)) {
             beginFinalization(true, QStringLiteral("Failed to set up streaming instance %1").arg(idx + 1));
             return;
         }
@@ -501,36 +427,17 @@ void SessionRunner::continueStart()
         ? calculateLayout(profile.layout, physicalCount, screenGeometry, profile.gridSubLayout)
         : QList<QRect>();
 
-    const bool deviceOwnershipReady = setupDeviceOwnership();
-    if (!isCurrentStartup()) {
-        return;
-    }
-    if (!deviceOwnershipReady) {
+    if (!setupDeviceOwnership()) {
         beginFinalization(true, QStringLiteral("Failed to set up device ownership"));
         return;
     }
 
 
-    m_sessionResourcesSetupInProgress = true;
-    const bool sessionResourcesReady = setupSessionResources(startupGeneration);
-    m_sessionResourcesSetupInProgress = false;
-    if (m_finishAfterSessionResources) {
-        m_finishAfterSessionResources = false;
-        finishFinalization();
-        return;
-    }
-    if (!isCurrentStartup()) {
-        return;
-    }
-    if (!sessionResourcesReady) {
+    if (!setupSessionResources()) {
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
         return;
     }
-    const bool overrideBindsReady = buildOverrideBinds();
-    if (!isCurrentStartup()) {
-        return;
-    }
-    if (!overrideBindsReady) {
+    if (!buildOverrideBinds()) {
         beginFinalization(true, QStringLiteral("Failed to prepare override binds"));
         return;
     }
@@ -621,7 +528,6 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
         return;
     }
 
-    ++m_startupGeneration;
     m_finalizing = true;
     m_startupFailure = startupFailure;
     m_finalizationMessage = message;
@@ -693,25 +599,24 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
 
 void SessionRunner::finishFinalization()
 {
-    if (m_sessionResourcesSetupInProgress || m_streamingSetupInProgress) {
-        m_finishAfterSessionResources = true;
-        return;
-    }
     if (m_hookProcess) {
         m_hookProcess->deleteLater();
         m_hookProcess = nullptr;
     }
     const bool startupFailure = m_startupFailure;
     const QString message = m_finalizationMessage;
-    const bool wasActive = m_active;
-    const QString finalStatus = startupFailure ? QStringLiteral("Error") : QStringLiteral("Stopped");
-    const bool statusDidChange = m_status != finalStatus;
-    const quint64 finalizationGeneration = m_startupGeneration;
-
-    // Commit the complete stopped state before notifying observers: direct
-    // signal handlers may synchronously start a new session.
-    m_active = false;
-    m_status = finalStatus;
+    setActive(false);
+    setStatus(startupFailure ? QStringLiteral("Error") : QStringLiteral("Stopped"));
+    Q_EMIT runningChanged();
+    Q_EMIT instancesChanged();
+    if (startupFailure) {
+        if (!message.isEmpty()) {
+            Q_EMIT errorOccurred(message);
+        }
+        Q_EMIT sessionStartFailed(message);
+    } else {
+        Q_EMIT sessionStopped();
+    }
     m_finalizing = false;
     m_startupFailure = false;
     m_preHookCompleted = false;
@@ -721,51 +626,12 @@ void SessionRunner::finishFinalization()
     m_finalizationMessage.clear();
     m_hasStartingProfile = false;
     m_startingProfile = SessionProfile{};
-
-    const auto isCurrentFinalization = [this, finalizationGeneration] {
-        return m_startupGeneration == finalizationGeneration;
-    };
-
-    if (startupFailure) {
-        if (!message.isEmpty()) {
-            Q_EMIT errorOccurred(message);
-            if (!isCurrentFinalization()) {
-                return;
-            }
-        }
-        Q_EMIT sessionStartFailed(message);
-    } else {
-        Q_EMIT sessionStopped();
-    }
-    if (!isCurrentFinalization()) {
-        return;
-    }
-
-    if (wasActive) {
-        Q_EMIT activeChanged();
-        if (!isCurrentFinalization()) {
-            return;
-        }
-    }
-    if (statusDidChange) {
-        Q_EMIT statusChanged();
-        if (!isCurrentFinalization()) {
-            return;
-        }
-    }
-    Q_EMIT runningChanged();
-    if (!isCurrentFinalization()) {
-        return;
-    }
-    Q_EMIT instancesChanged();
 }
 
 void SessionRunner::stop()
 {
     if (!m_active) {
-        restoreDeviceOwnership();
         teardownSharingState();
-        teardownStreamingInstances();
         return;
     }
     beginFinalization(false);
@@ -773,28 +639,15 @@ void SessionRunner::stop()
 
 void SessionRunner::stopInstance(int index)
 {
-    if (index < 0 || index >= m_instances.size()) {
-        return;
-    }
-
-    GamescopeInstance *const instance = m_instances.at(index);
-    const bool isStreaming = m_streamingInstances.contains(index);
-    const quint64 stopGeneration = m_startupGeneration;
-    if (isStreaming) {
-        m_streamManager->stopStream(index);
-    }
-    if (stopGeneration != m_startupGeneration || !m_instances.contains(instance)
-        || m_instances.value(index) != instance) {
-        return;
-    }
-
-    instance->stop();
-    if (stopGeneration != m_startupGeneration || !m_instances.contains(instance)
-        || m_instances.value(index) != instance) {
-        return;
-    }
-    if (isStreaming) {
-        cleanupStreamingInstance(index);
+    if (index >= 0 && index < m_instances.size()) {
+        bool isStreaming = m_streamingInstances.contains(index);
+        if (isStreaming) {
+            m_streamManager->stopStream(index);
+        }
+        m_instances[index]->stop();
+        if (isStreaming) {
+            cleanupStreamingInstance(index);
+        }
     }
 }
 
@@ -843,29 +696,16 @@ QVariantList SessionRunner::instancesAsVariant() const
 
 void SessionRunner::startNextInstance()
 {
-    if (!m_active || m_finalizing) {
-        return;
-    }
-
-    const quint64 startupGeneration = m_startupGeneration;
-    const auto isCurrentStartup = [this, startupGeneration] {
-        return startupGeneration == m_startupGeneration && m_active && !m_finalizing;
-    };
     if (m_nextInstanceToStart >= m_pendingInstanceConfigs.size()) {
         setStatus(QStringLiteral("Session running"));
-        if (!isCurrentStartup()) {
-            return;
-        }
         Q_EMIT runningChanged();
         Q_EMIT instancesChanged();
         Q_EMIT sessionStarted();
         return;
     }
 
-    const int index = m_nextInstanceToStart;
-    // Keep an owned copy: GamescopeInstance::start() emits synchronous signals,
-    // whose handlers may stop/restart the session and clear pending configs.
-    const QVariantMap config = m_pendingInstanceConfigs.at(index);
+    int index = m_nextInstanceToStart;
+    const QVariantMap &config = m_pendingInstanceConfigs[index];
 
     auto *instance = new GamescopeInstance(this);
     instance->setHelperClient(m_helperClient);
@@ -875,29 +715,16 @@ void SessionRunner::startNextInstance()
 
     m_instances.append(instance);
 
-    const bool started = instance->start(config, index);
-    if (!started) {
-        if (!isCurrentStartup() || !m_instances.contains(instance)) {
-            return;
-        }
+    if (!instance->start(config, index)) {
         qWarning() << "Failed to start instance" << index;
         beginFinalization(true, QStringLiteral("Failed to start instance %1").arg(index + 1));
         return;
     }
 
-    // start() may have synchronously finalized this session or launched a
-    // replacement session. Do not inspect mutable queues or recurse into it.
-    if (!isCurrentStartup() || !m_instances.contains(instance)) {
-        return;
-    }
-
-    const bool isStreamingInstance = config.value(QStringLiteral("outputMode")).toString() == QStringLiteral("streaming");
+    bool isStreamingInstance = config.value(QStringLiteral("outputMode")).toString() == QStringLiteral("streaming");
     // Streaming instances and absent window manager: start next immediately
     if (isStreamingInstance || !m_windowManager || !m_windowManager->isAvailable()) {
         ++m_nextInstanceToStart;
-        if (!isCurrentStartup()) {
-            return;
-        }
         startNextInstance();
     }
     // Otherwise wait for onWindowPositioned to trigger the next start
@@ -918,7 +745,7 @@ void SessionRunner::cleanupInstances()
     m_pendingInstanceConfigs.clear();
     m_layouts.clear();
     teardownStreamingInstances();
-    m_pendingWindowRequests.clear();
+    m_streamingInstances.clear();
     m_nextInstanceToStart = 0;
 }
 
@@ -938,10 +765,6 @@ void SessionRunner::cleanupOverrideDirs(const QStringList &overridePaths)
 
 bool SessionRunner::setupDeviceOwnership()
 {
-    const quint64 startupGeneration = m_startupGeneration;
-    const auto isCurrentStartup = [this, startupGeneration] {
-        return startupGeneration == m_startupGeneration;
-    };
     if (!m_deviceManager || !m_helperClient) {
         return true;
     }
@@ -950,27 +773,12 @@ bool SessionRunner::setupDeviceOwnership()
         qWarning() << "SessionRunner: Helper not available, skipping device ownership setup";
         return true;
     }
-    if (!isCurrentStartup()) {
-        return false;
-    }
 
     m_ownedDevicePaths.clear();
 
     if (!m_sessionManager) {
         return true;
     }
-    QStringList acquiredDevicePaths;
-    const auto rollbackStaleSetup = [this, &acquiredDevicePaths] {
-        for (const QString &path : acquiredDevicePaths) {
-            if (m_ownedDevicePaths.contains(path)) {
-                continue;
-            }
-            if (!m_helperClient || !m_helperClient->isAvailable()
-                || !m_helperClient->restoreDeviceOwner(path)) {
-                m_ownedDevicePaths.append(path);
-            }
-        }
-    };
 
     const auto &profile = activeProfile();
     bool allSucceeded = true;
@@ -982,13 +790,9 @@ bool SessionRunner::setupDeviceOwnership()
         if (username.isEmpty()) {
             for (const QString &path : devicePaths) {
                 if (path.startsWith(QLatin1String("/dev/input/event"))) {
-                    const bool watched = m_helperClient->watchDevice(path);
-                    if (watched && !acquiredDevicePaths.contains(path)) {
-                        acquiredDevicePaths.append(path);
-                    }
-                    if (!isCurrentStartup()) {
-                        rollbackStaleSetup();
-                        return false;
+                    m_helperClient->watchDevice(path);
+                    if (!m_ownedDevicePaths.contains(path)) {
+                        m_ownedDevicePaths.append(path);
                     }
                 }
             }
@@ -997,10 +801,6 @@ bool SessionRunner::setupDeviceOwnership()
 
 
         const UserIdentity id = resolveUserIdentity(username, m_helperClient);
-        if (!isCurrentStartup()) {
-            rollbackStaleSetup();
-            return false;
-        }
         if (!id.valid) {
             qWarning() << "SessionRunner: User" << username << "not found, skipping device ownership for instance" << i;
             continue;
@@ -1010,49 +810,32 @@ bool SessionRunner::setupDeviceOwnership()
 
 
         for (const QString &path : devicePaths) {
-            const bool ownershipSet = m_helperClient->setDeviceOwner(path, uid);
-            if (ownershipSet && !acquiredDevicePaths.contains(path)) {
-                acquiredDevicePaths.append(path);
-            }
-            if (!isCurrentStartup()) {
-                rollbackStaleSetup();
-                return false;
-            }
-            if (!ownershipSet) {
-                qWarning() << "SessionRunner: Failed to set ownership of" << path;
-                allSucceeded = false;
-                Q_EMIT errorOccurred(QStringLiteral("Failed to set device ownership for %1").arg(path));
-                if (!isCurrentStartup()) {
-                    rollbackStaleSetup();
-                    return false;
+            if (m_helperClient->setDeviceOwner(path, uid)) {
+                if (!m_ownedDevicePaths.contains(path)) {
+                    m_ownedDevicePaths.append(path);
                 }
+            } else {
+                qWarning() << "SessionRunner: Failed to set ownership of" << path;
+                Q_EMIT errorOccurred(QStringLiteral("Failed to set device ownership for %1").arg(path));
+                allSucceeded = false;
             }
         }
 
         QStringList hidrawPaths = m_deviceManager->getHidrawPathsForInstance(i);
         for (const QString &hidrawPath : hidrawPaths) {
-            const bool ownershipSet = m_helperClient->setDeviceOwner(hidrawPath, uid);
-            if (ownershipSet && !acquiredDevicePaths.contains(hidrawPath)) {
-                acquiredDevicePaths.append(hidrawPath);
-            }
-            if (!isCurrentStartup()) {
-                rollbackStaleSetup();
-                return false;
-            }
-            if (!ownershipSet) {
+            if (m_helperClient->setDeviceOwner(hidrawPath, uid)) {
+                if (!m_ownedDevicePaths.contains(hidrawPath)) {
+                    m_ownedDevicePaths.append(hidrawPath);
+                }
+                qDebug() << "SessionRunner: Set hidraw ownership" << hidrawPath << "for user" << username;
+
+            } else {
                 qWarning() << "SessionRunner: Failed to set hidraw ownership" << hidrawPath;
                 allSucceeded = false;
-            } else {
-                qDebug() << "SessionRunner: Set hidraw ownership" << hidrawPath << "for user" << username;
             }
         }
     }
 
-    if (!isCurrentStartup()) {
-        rollbackStaleSetup();
-        return false;
-    }
-    m_ownedDevicePaths = acquiredDevicePaths;
     return allSucceeded;
 
 }
@@ -1065,27 +848,18 @@ void SessionRunner::restoreDeviceOwnership()
 
     if (!m_helperClient->isAvailable()) {
         qWarning() << "SessionRunner: Helper not available, cannot restore device ownership";
-        // Keep the paths so a later stop can retry once the helper returns.
+        m_ownedDevicePaths.clear();
         return;
     }
 
-    if (m_helperClient->restoreAllDevices()) {
-        m_ownedDevicePaths.clear();
-    } else {
-        qWarning() << "SessionRunner: Device ownership restoration failed, retaining paths for retry";
-    }
+    m_helperClient->restoreAllDevices();
+
+    m_ownedDevicePaths.clear();
 }
 
-bool SessionRunner::setupSessionResources(quint64 startupGeneration)
+bool SessionRunner::setupSessionResources()
 {
     if (!m_helperClient || !m_sessionManager || !m_presetManager) {
-        return false;
-    }
-    const auto isCurrentStartup = [this, startupGeneration] {
-        return startupGeneration == 0
-            || (startupGeneration == m_startupGeneration && m_active && !m_finalizing);
-    };
-    if (!isCurrentStartup()) {
         return false;
     }
 
@@ -1105,9 +879,6 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
     // Helper-first resolution: the Flatpak sandbox's getpwuid(getuid()) cannot
     // see host accounts, which would misroute home-relative copy/mount targets
     QString compositorHome = resolveCompositorHome(m_helperClient);
-    if (!isCurrentStartup()) {
-        return false;
-    }
 
     const auto &profile = activeProfile();
     bool allSucceeded = true;
@@ -1140,26 +911,13 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
             && (m_steamConfigManager->syncShortcutsEnabled() || selectedSteamShortcut)) {
             qCDebug(couchplaySteam) << "Syncing Steam shortcuts for user" << username;
             m_steamConfigManager->loadShortcuts();
-            if (!isCurrentStartup()) {
-                return false;
-            }
             const QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
             for (const QString &dir : shortcutDirs) {
-                if (QDir(dir).exists()) {
-                    const bool aclSet = m_helperClient->setPathAclWithParents(dir, username);
-                    if (!isCurrentStartup()) {
-                        return false;
-                    }
-                    if (!aclSet) {
-                        qCWarning(couchplaySteam) << "Failed to set ACL on shortcut directory" << dir;
-                    }
+                if (QDir(dir).exists() && !m_helperClient->setPathAclWithParents(dir, username)) {
+                    qCWarning(couchplaySteam) << "Failed to set ACL on shortcut directory" << dir;
                 }
             }
-            const bool synced = m_steamConfigManager->syncShortcutsToUser(username, isCurrentStartup);
-            if (!isCurrentStartup()) {
-                return false;
-            }
-            if (!synced) {
+            if (!m_steamConfigManager->syncShortcutsToUser(username)) {
                 qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
                 allSucceeded = false;
             }
@@ -1174,21 +932,13 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
         }
         if (requiresHeroic && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
             qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
-            const bool configSynced = m_heroicConfigManager->syncConfigToUser(username);
-            if (!isCurrentStartup()) {
-                return false;
-            }
-            if (!configSynced) {
+            if (!m_heroicConfigManager->syncConfigToUser(username)) {
                 qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
                 allSucceeded = false;
             }
             if (m_heroicConfigManager->syncShortcutsEnabled()) {
                 qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
-                const bool shortcutsSynced = m_heroicConfigManager->syncShortcutsToUser(username);
-                if (!isCurrentStartup()) {
-                    return false;
-                }
-                if (!shortcutsSynced) {
+                if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
                     qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
                     allSucceeded = false;
                 }
@@ -1226,9 +976,6 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
         qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
 
         for (const DataDirectory &dir : dataDirs) {
-            if (!isCurrentStartup()) {
-                return false;
-            }
             // Library sharing is opt-in: the steamRoot overlay entry is a
             // marker handled entirely by prepareDataDir (libraries are
             // alias-mounted under ~/.couchplay/steam-libs/<i> so the player's
@@ -1251,23 +998,15 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                 // Finalization writes manifests and libraryfolders.vdf
                 // entries for the alias mounts — skip it when preparation
                 // failed, or it would advertise libraries that never mounted.
-                const bool steamLibraryPrepared =
-                    m_steamConfigManager->prepareDataDir(dir, username, isCurrentStartup);
-                if (!isCurrentStartup()) {
-                    return false;
-                }
-                if (!steamLibraryPrepared) {
+                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
                     allSucceeded = false;
                     continue;
                 }
                 m_steamSharedUsers.insert(username);
-                if (!m_steamConfigManager->finalizeDataDir(dir, username, isCurrentStartup)) {
+                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam library finalize failed for" << dir.path;
                     allSucceeded = false;
-                }
-                if (!isCurrentStartup()) {
-                    return false;
                 }
                 continue;
             }
@@ -1281,12 +1020,7 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
             }
 
             if (requiresSteam && m_steamConfigManager) {
-                const bool steamDataPrepared =
-                    m_steamConfigManager->prepareDataDir(dir, username, isCurrentStartup);
-                if (!isCurrentStartup()) {
-                    return false;
-                }
-                if (!steamDataPrepared) {
+                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam prepareDataDir failed for" << dir.path;
                     allSucceeded = false;
                 }
@@ -1305,11 +1039,7 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                     relativePath = QStringLiteral(".couchplay/copies/")
                         + dataDirectoryStagingSlug(dir.path, compositorHome);
                 }
-                const bool copied = m_helperClient->copyDirectoryToUser(username, dir.path, relativePath);
-                if (!isCurrentStartup()) {
-                    return false;
-                }
-                if (!copied) {
+                if (!m_helperClient->copyDirectoryToUser(username, dir.path, relativePath)) {
                     qWarning() << "SessionRunner: Failed to copy directory" << dir.path << "for user" << username;
                     allSucceeded = false;
                 } else {
@@ -1351,9 +1081,6 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                 }
             } else if (dir.mode == QStringLiteral("acl")) {
                 const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
-                if (!isCurrentStartup()) {
-                    return false;
-                }
                 const bool contentsOk = m_helperClient->setDirectoryAcl(dir.path, username, true);
                 if (!parentsOk || !contentsOk) {
                     qWarning() << "SessionRunner: Failed to set recursive ACL for" << dir.path << "user" << username;
@@ -1361,9 +1088,6 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                 }
             }
 
-            if (!isCurrentStartup()) {
-                return false;
-            }
             // Merge hand-staged per-player files into the player's view (after
             // the mount/copy). Only copy and overlay qualify: both give the
             // player a private tree, while bind mounts have no upper layer —
@@ -1384,11 +1108,8 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
                 }
             }
 
-            if (!isCurrentStartup()) {
-                return false;
-            }
             if (requiresSteam && m_steamConfigManager) {
-                if (!m_steamConfigManager->finalizeDataDir(dir, username, isCurrentStartup)) {
+                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
                     qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
                     allSucceeded = false;
                 }
@@ -1399,21 +1120,18 @@ bool SessionRunner::setupSessionResources(quint64 startupGeneration)
     return allSucceeded;
 }
 
-bool SessionRunner::teardownSharedDirectories()
+void SessionRunner::teardownSharedDirectories()
 {
     if (!m_helperClient) {
-        return false;
+        return;
     }
 
     if (!m_helperClient->isAvailable()) {
         qWarning() << "SessionRunner: Helper not available, cannot unmount shared directories";
-        return false;
+        return;
     }
 
-    // A non-negative result means the helper handled the request. Zero is a
-    // successful no-op when no mounts remain; -1 denotes an unavailable or
-    // failed D-Bus call and must remain retryable.
-    return m_helperClient->unmountAllSharedDirectories() >= 0;
+    m_helperClient->unmountAllSharedDirectories();
 }
 
 void SessionRunner::teardownSharingState()
@@ -1426,29 +1144,19 @@ void SessionRunner::teardownSharingState()
     if (!m_sharedStateActive) {
         return;
     }
+    m_sharedStateActive = false;
 
-    bool allSucceeded = teardownSharedDirectories();
-    QSet<QString> remainingUsers;
-    if (!m_steamSharedUsers.isEmpty()) {
-        if (!m_steamConfigManager) {
-            allSucceeded = false;
-            remainingUsers = m_steamSharedUsers;
-        } else {
-            const QSet<QString> sharedUsers = m_steamSharedUsers;
-            for (const QString &username : sharedUsers) {
-                if (!m_steamConfigManager->cleanupLibrarySharing(username)) {
-                    qCWarning(couchplaySteam) << "Failed to clean up Steam sharing for" << username;
-                    remainingUsers.insert(username);
-                    allSucceeded = false;
-                }
+    teardownSharedDirectories();
+
+    if (m_steamConfigManager && !m_steamSharedUsers.isEmpty()) {
+        const QSet<QString> sharedUsers = m_steamSharedUsers;
+        m_steamSharedUsers.clear();
+        for (const QString &username : sharedUsers) {
+            if (!m_steamConfigManager->cleanupLibrarySharing(username)) {
+                qCWarning(couchplaySteam) << "Failed to clean up Steam sharing for" << username;
             }
         }
     }
-
-    m_steamSharedUsers = remainingUsers;
-    // Keep the tracker armed whenever any privileged cleanup could not be
-    // confirmed. A later stop() retries both mount and Steam cleanup.
-    m_sharedStateActive = !allSucceeded;
 }
 
 bool SessionRunner::buildOverrideBinds()
@@ -1701,77 +1409,39 @@ QList<QRect> SessionRunner::calculateLayout(const QString &layout,
 void SessionRunner::onInstanceStarted()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
-    if (!instance) {
-        return;
-    }
-    if (!m_active || m_finalizing || !m_instances.contains(instance)) {
-        instance->stop();
-        return;
-    }
+    if (instance) {
+        int idx = instance->index();
 
-    const quint64 startupGeneration = m_startupGeneration;
-    const auto isCurrentStartup = [this, startupGeneration, instance] {
-        return startupGeneration == m_startupGeneration && m_active && !m_finalizing
-            && m_instances.contains(instance);
-    };
-    const int idx = instance->index();
-    if (m_streamingInstances.contains(idx)) {
-        if (idx < m_pendingInstanceConfigs.size()) {
-            m_streamManager->startStream(idx, m_pendingInstanceConfigs.at(idx));
+        if (m_streamingInstances.contains(idx)) {
+            if (idx < m_pendingInstanceConfigs.size()) {
+                m_streamManager->startStream(idx, m_pendingInstanceConfigs[idx]);
+            }
+        } else {
+            positionInstanceWindow(instance);
         }
-    } else {
-        positionInstanceWindow(instance);
-    }
-    if (!isCurrentStartup()) {
-        instance->stop();
-        return;
-    }
 
-    Q_EMIT instanceStarted(idx);
-    if (!isCurrentStartup()) {
-        instance->stop();
-        return;
+        Q_EMIT instanceStarted(idx);
+        Q_EMIT instancesChanged();
+        Q_EMIT runningInstanceCountChanged();
     }
-    Q_EMIT instancesChanged();
-    if (!isCurrentStartup()) {
-        instance->stop();
-        return;
-    }
-    Q_EMIT runningInstanceCountChanged();
 }
 
 void SessionRunner::onInstanceStopped()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
-    if (!instance || !m_instances.contains(instance)) {
+    if (!instance) {
         return;
     }
 
-    const quint64 stopGeneration = m_startupGeneration;
     const int idx = instance->index();
     if (m_streamingInstances.contains(idx)) {
         m_streamManager->stopStream(idx);
-        if (stopGeneration != m_startupGeneration) {
-            return;
-        }
         cleanupStreamingInstance(idx);
-        if (stopGeneration != m_startupGeneration) {
-            return;
-        }
     }
 
     Q_EMIT instanceStopped(idx);
-    if (stopGeneration != m_startupGeneration) {
-        return;
-    }
     Q_EMIT instancesChanged();
-    if (stopGeneration != m_startupGeneration) {
-        return;
-    }
     Q_EMIT runningInstanceCountChanged();
-    if (stopGeneration != m_startupGeneration) {
-        return;
-    }
 
     if (!m_finalizing && !isRunning()) {
         beginFinalization(false);
@@ -1796,28 +1466,17 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
         return;
     }
 
-    const QRect targetGeometry = instance->windowGeometry();
-    const int instanceIndex = instance->index();
-    const int requestId = ++m_nextWindowRequestId;
-    m_pendingWindowRequests.insert(requestId, PendingWindowRequest{m_startupGeneration, instanceIndex});
+    QRect targetGeometry = instance->windowGeometry();
+    int instanceIndex = instance->index();
 
     const bool borderless = m_settingsManager && m_settingsManager->borderlessWindows();
-    m_windowManager->queuePositionRequest(requestId, targetGeometry, m_positionedWindowIds, borderless, 60000);
+
+    m_windowManager->queuePositionRequest(instanceIndex, targetGeometry, m_positionedWindowIds, borderless, 60000);
 }
 
 void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
 {
-    const auto requestIt = m_pendingWindowRequests.find(requestId);
-    if (requestIt == m_pendingWindowRequests.end()) {
-        return;
-    }
-    const PendingWindowRequest request = requestIt.value();
-    m_pendingWindowRequests.erase(requestIt);
-    if (request.startupGeneration != m_startupGeneration || !m_active || m_finalizing
-        || request.instanceIndex != m_nextInstanceToStart) {
-        return;
-    }
-
+    Q_UNUSED(requestId)
     if (!m_positionedWindowIds.contains(windowId)) {
         m_positionedWindowIds.append(windowId);
     }
@@ -1831,22 +1490,9 @@ void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
 
 void SessionRunner::onWindowPositioningTimeout(int requestId)
 {
-    const auto requestIt = m_pendingWindowRequests.find(requestId);
-    if (requestIt == m_pendingWindowRequests.end()) {
-        return;
-    }
-    const PendingWindowRequest request = requestIt.value();
-    m_pendingWindowRequests.erase(requestIt);
-    if (request.startupGeneration != m_startupGeneration || !m_active || m_finalizing
-        || request.instanceIndex != m_nextInstanceToStart) {
-        return;
-    }
-
-    qWarning() << "SessionRunner: Failed to position window for instance" << request.instanceIndex
+    qWarning() << "SessionRunner: Failed to position window for instance" << requestId
                << "after timeout - stopping session";
-    beginFinalization(true,
-                      QStringLiteral("Failed to position window for instance %1. Session stopped.")
-                          .arg(request.instanceIndex));
+    beginFinalization(true, QStringLiteral("Failed to position window for instance %1. Session stopped.").arg(requestId));
 }
 
 void SessionRunner::setupGlobalShortcut()
@@ -2008,41 +1654,12 @@ void SessionRunner::uninhibitScreenSaver()
 
 bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap &config)
 {
-    CouchPlayHelperClient *const helperClient = m_helperClient;
-    const quint64 startupGeneration = config.value(QStringLiteral("_startupGeneration")).toULongLong();
-    const auto isCurrentStartup = [this, startupGeneration] {
-        return startupGeneration == 0
-            || (startupGeneration == m_startupGeneration && m_active && !m_finalizing);
-    };
-    if (!helperClient || !helperClient->isAvailable()) {
+    if (!m_helperClient || !m_helperClient->isAvailable()) {
         Q_EMIT errorOccurred(QStringLiteral("Helper service required for streaming instance %1").arg(instanceIndex));
         return false;
     }
 
-    if (m_streamingInstances.contains(instanceIndex)) {
-        cleanupStreamingInstance(instanceIndex);
-        if (m_streamingInstances.contains(instanceIndex)) {
-            qWarning() << "SessionRunner: Previous streaming resources still need cleanup for instance" << instanceIndex;
-            return false;
-        }
-    }
     const QString username = config.value(QStringLiteral("username")).toString();
-    const auto destroyLocalResources = [this, helperClient, &username, instanceIndex](
-                                           const QString &displayContext, const QString &sinkName) {
-        if (displayContext.isEmpty() && sinkName.isEmpty()) {
-            return;
-        }
-        StreamingInstanceInfo remaining;
-        remaining.username = username;
-        remaining.displayContext = displayContext;
-        remaining.sinkName = sinkName;
-        remaining.virtualDisplayCreated = !displayContext.isEmpty();
-        remaining.nullSinkCreated = !sinkName.isEmpty();
-        m_streamingInstances[instanceIndex] = remaining;
-        if (helperClient && helperClient->isAvailable()) {
-            cleanupStreamingInstance(instanceIndex);
-        }
-    };
     if (username.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Streaming instance %1 requires a username").arg(instanceIndex));
         return false;
@@ -2055,10 +1672,6 @@ bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap 
     int refreshRate = config.value(QStringLiteral("refreshRate")).toInt();
 
     QString displayContext = m_helperClient->createVirtualOutput(username, width, height, refreshRate);
-    if (!isCurrentStartup()) {
-        destroyLocalResources(displayContext, QString());
-        return false;
-    }
     if (displayContext.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Failed to create virtual output for streaming instance %1").arg(instanceIndex));
         return false;
@@ -2066,10 +1679,6 @@ bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap 
 
     QString sinkName = QStringLiteral("couchplay-sunshine-%1").arg(instanceIndex);
     QString createdSinkName = m_helperClient->createNullSink(username, sinkName);
-    if (!isCurrentStartup()) {
-        destroyLocalResources(displayContext, createdSinkName);
-        return false;
-    }
     if (createdSinkName.isEmpty()) {
         qWarning() << "SessionRunner: Failed to create null sink for streaming instance" << instanceIndex;
     }
@@ -2100,32 +1709,20 @@ void SessionRunner::cleanupStreamingInstance(int index)
         return;
     }
 
-    StreamingInstanceInfo remaining = m_streamingInstances.value(index);
-    if (!m_helperClient || !m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, retaining streaming resources for retry" << index;
-        return;
-    }
+    const StreamingInstanceInfo &info = m_streamingInstances[index];
 
-    if (remaining.nullSinkCreated && !remaining.sinkName.isEmpty()) {
-        if (m_helperClient->destroyNullSink(remaining.username, remaining.sinkName)) {
-            remaining.nullSinkCreated = false;
-            remaining.sinkName.clear();
-        } else {
-            qWarning() << "SessionRunner: Failed to destroy null sink" << remaining.sinkName;
+    if (m_helperClient && m_helperClient->isAvailable()) {
+        if (info.nullSinkCreated && !info.sinkName.isEmpty()) {
+            if (!m_helperClient->destroyNullSink(info.username, info.sinkName)) {
+                qWarning() << "SessionRunner: Failed to destroy null sink" << info.sinkName;
+            }
         }
-    }
-    if (remaining.virtualDisplayCreated && !remaining.displayContext.isEmpty()) {
-        if (m_helperClient->destroyVirtualOutput(remaining.username, remaining.displayContext)) {
-            remaining.virtualDisplayCreated = false;
-            remaining.displayContext.clear();
-        } else {
-            qWarning() << "SessionRunner: Failed to destroy virtual output" << remaining.displayContext;
+        if (info.virtualDisplayCreated && !info.displayContext.isEmpty()) {
+            if (!m_helperClient->destroyVirtualOutput(info.username, info.displayContext)) {
+                qWarning() << "SessionRunner: Failed to destroy virtual output" << info.displayContext;
+            }
         }
     }
 
-    if (remaining.nullSinkCreated || remaining.virtualDisplayCreated) {
-        m_streamingInstances[index] = remaining;
-    } else {
-        m_streamingInstances.remove(index);
-    }
+    m_streamingInstances.remove(index);
 }

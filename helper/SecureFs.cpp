@@ -4,7 +4,6 @@
 #include "SecureFs.h"
 
 #include <QDebug>
-#include <QRandomGenerator>
 
 #include <dirent.h>
 #include <errno.h>
@@ -14,15 +13,7 @@
 #include <sys/mount.h>
 #include <sys/syscall.h>
 #include <vector>
-#ifndef O_PATH
-#define O_PATH 010000000
-#endif
-#ifndef O_TMPFILE
-#define O_TMPFILE (020000000 | O_DIRECTORY)
-#endif
-#ifndef AT_EMPTY_PATH
-#define AT_EMPTY_PATH 0x1000
-#endif
+
 namespace SecureFs
 {
 
@@ -313,59 +304,13 @@ int writeFileAt(int parentFd, const QString &name, const QByteArray &content, ui
         return -EINVAL;
     }
 
-    const auto sameInodeIdentity = [](const struct stat &left, const struct stat &right) {
-        return left.st_dev == right.st_dev && left.st_ino == right.st_ino && left.st_uid == right.st_uid
-            && (left.st_mode & S_IFMT) == (right.st_mode & S_IFMT);
-    };
-    const auto sameFileIdentity = [&](const struct stat &left, const struct stat &right) {
-        return sameInodeIdentity(left, right) && left.st_nlink == right.st_nlink;
-    };
-
-    // Build the replacement in an anonymous inode. Unlike a named O_EXCL
-    // temporary, O_TMPFILE cannot be hard-linked by a user between creation
-    // and the write, so no root-owned write can be redirected through a raced
-    // hardlink. A bounded named fallback is used only on filesystems without
-    // O_TMPFILE; it remains root-owned and mode 0600 until all writes finish.
-    bool namedTemporary = false;
-    QByteArray temporaryName;
-    int fileFd = ::openat(parentFd, ".", O_TMPFILE | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, mode);
-    if (fileFd < 0 && (errno == EOPNOTSUPP || errno == ENOTSUP || errno == EINVAL)) {
-        for (int attempt = 0; attempt < 8 && fileFd < 0; ++attempt) {
-            temporaryName = QStringLiteral(".couchplay-write-%1-%2-%3")
-                                 .arg(static_cast<qulonglong>(::getpid()))
-                                 .arg(QRandomGenerator::global()->generate64(), 0, 16)
-                                 .arg(attempt)
-                                 .toLocal8Bit();
-            fileFd = ::openat(parentFd,
-                              temporaryName.constData(),
-                              O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-                              0600);
-        }
-        namedTemporary = fileFd >= 0;
-    }
+    const QByteArray nameBytes = name.toUtf8();
+    const int fileFd =
+        ::openat(parentFd, nameBytes.constData(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, mode);
     if (fileFd < 0) {
         return -errno;
     }
 
-    struct stat temporaryStat;
-    if (::fstat(fileFd, &temporaryStat) != 0 || !S_ISREG(temporaryStat.st_mode)
-        || (namedTemporary && temporaryStat.st_nlink != 1)) {
-        const int error = errno;
-        ::close(fileFd);
-        // Preserve the named sibling when its inode cannot be validated.
-        return error != 0 ? -error : -EINVAL;
-    }
-    auto cleanupTemporaryEntry = [&]() {
-        struct stat current{};
-        if (::fstatat(parentFd, temporaryName.constData(), &current, AT_SYMLINK_NOFOLLOW) == 0
-            && sameInodeIdentity(temporaryStat, current)) {
-            (void)::unlinkat(parentFd, temporaryName.constData(), 0);
-        }
-    };
-    auto cleanupNamedTemporary = [&]() {
-        if (!namedTemporary) return;
-        cleanupTemporaryEntry();
-    };
     qsizetype offset = 0;
     while (offset < content.size()) {
         const ssize_t written = ::write(fileFd, content.constData() + offset, content.size() - offset);
@@ -374,179 +319,24 @@ int writeFileAt(int parentFd, const QString &name, const QByteArray &content, ui
                 continue;
             }
             const int error = errno;
-            cleanupNamedTemporary();
             ::close(fileFd);
             return -error;
         }
         offset += written;
     }
 
-    if (::fstat(fileFd, &temporaryStat) != 0 || (namedTemporary && temporaryStat.st_nlink != 1)) {
-        const int error = errno != 0 ? errno : EMLINK;
-        cleanupNamedTemporary();
-        ::close(fileFd);
-        return -error;
-    }
-    if (::fchown(fileFd, uid, gid) != 0 || ::fchmod(fileFd, mode) != 0) {
+    if (::fchown(fileFd, uid, gid) != 0) {
         const int error = errno;
-        cleanupNamedTemporary();
         ::close(fileFd);
         return -error;
     }
-    if (::fstat(fileFd, &temporaryStat) != 0 || (namedTemporary && temporaryStat.st_nlink != 1)) {
-        const int error = errno != 0 ? errno : EMLINK;
-        cleanupNamedTemporary();
-        ::close(fileFd);
-        return -error;
-    }
-
-    const QByteArray nameBytes = name.toUtf8();
-    const int targetFd = ::openat(parentFd, nameBytes.constData(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
-    if (targetFd < 0 && errno != ENOENT) {
+    if (::fchmod(fileFd, mode) != 0) {
         const int error = errno;
-        cleanupNamedTemporary();
         ::close(fileFd);
         return -error;
     }
 
-    struct stat targetStat{};
-    const bool targetExists = targetFd >= 0;
-    if (targetExists) {
-        if (::fstat(targetFd, &targetStat) != 0) {
-            const int error = errno;
-            cleanupNamedTemporary();
-            ::close(targetFd);
-            ::close(fileFd);
-            return -error;
-        }
-        if (S_ISLNK(targetStat.st_mode)) {
-            cleanupNamedTemporary();
-            ::close(targetFd);
-            ::close(fileFd);
-            return -ELOOP;
-        }
-        if (!S_ISREG(targetStat.st_mode)) {
-            cleanupNamedTemporary();
-            ::close(targetFd);
-            ::close(fileFd);
-            return -EINVAL;
-        }
-        if (targetStat.st_uid != uid) {
-            cleanupNamedTemporary();
-            ::close(targetFd);
-            ::close(fileFd);
-            return -EPERM;
-        }
-        if (targetStat.st_nlink != 1) {
-            cleanupNamedTemporary();
-            ::close(targetFd);
-            ::close(fileFd);
-            return -EMLINK;
-        }
-    }
-
-    if (!targetExists) {
-        // Atomic no-follow, no-replace install. A target created concurrently
-        // yields EEXIST without touching it.
-        const int installResult = namedTemporary
-            ? static_cast<int>(::syscall(SYS_renameat2,
-                                          parentFd,
-                                          temporaryName.constData(),
-                                          parentFd,
-                                          nameBytes.constData(),
-                                          RENAME_NOREPLACE))
-            : ::linkat(fileFd, "", parentFd, nameBytes.constData(), AT_EMPTY_PATH);
-        if (installResult != 0) {
-            const int error = errno;
-            cleanupNamedTemporary();
-            ::close(fileFd);
-            return -error;
-        }
-        ::close(fileFd);
-        (void)::fsync(parentFd);
-        return 0;
-    }
-
-    // Link the prepared inode under a private name, then exchange it with the
-    // validated target. Post-exchange identity checks make a target swap
-    // observable. If the writable directory changed either name, preserve the
-    // entries for explicit recovery rather than attempting a racy rollback.
-    bool linked = namedTemporary;
-    for (int attempt = 0; attempt < 8 && !linked; ++attempt) {
-        temporaryName = QStringLiteral(".couchplay-write-%1-%2-%3")
-                             .arg(static_cast<qulonglong>(::getpid()))
-                             .arg(QRandomGenerator::global()->generate64(), 0, 16)
-                             .arg(attempt)
-                             .toLocal8Bit();
-        if (::linkat(fileFd, "", parentFd, temporaryName.constData(), AT_EMPTY_PATH) == 0) {
-            linked = true;
-            break;
-        }
-        if (errno != EEXIST) {
-            const int error = errno;
-            cleanupNamedTemporary();
-            ::close(targetFd);
-            ::close(fileFd);
-            return -error;
-        }
-    }
     ::close(fileFd);
-    if (!linked) {
-        ::close(targetFd);
-        return -EEXIST;
-    }
-
-    struct stat linkedStat{};
-    if (::fstatat(parentFd, temporaryName.constData(), &linkedStat, AT_SYMLINK_NOFOLLOW) != 0
-        || !sameInodeIdentity(temporaryStat, linkedStat)) {
-        const int error = errno;
-        cleanupTemporaryEntry();
-        ::close(targetFd);
-        return error != 0 ? -error : -EAGAIN;
-    }
-
-    const int exchangeResult = static_cast<int>(::syscall(SYS_renameat2,
-                                                           parentFd,
-                                                           temporaryName.constData(),
-                                                           parentFd,
-                                                           nameBytes.constData(),
-                                                           RENAME_EXCHANGE));
-    if (exchangeResult != 0) {
-        const int error = errno;
-        cleanupTemporaryEntry();
-        ::close(targetFd);
-        return -error;
-    }
-
-    struct stat installedStat{};
-    struct stat displacedStat{};
-    const bool targetHasReplacement = ::fstatat(parentFd, nameBytes.constData(), &installedStat, AT_SYMLINK_NOFOLLOW) == 0
-        && sameInodeIdentity(temporaryStat, installedStat);
-    const bool targetWasDisplaced = ::fstatat(parentFd,
-                                              temporaryName.constData(),
-                                              &displacedStat,
-                                              AT_SYMLINK_NOFOLLOW) == 0
-        && sameFileIdentity(targetStat, displacedStat);
-    if (!targetHasReplacement || !targetWasDisplaced) {
-        // The directory is writable by the target user. A second exchange
-        // cannot safely restore an inode after either name changed: the user
-        // could replace the temporary entry before the exchange. Preserve
-        // both names for explicit recovery instead of moving an unverified
-        // entry over the target.
-        ::close(targetFd);
-        return -EAGAIN;
-    }
-
-    struct stat currentTemporary{};
-    if (::fstatat(parentFd, temporaryName.constData(), &currentTemporary, AT_SYMLINK_NOFOLLOW) != 0
-        || !sameFileIdentity(targetStat, currentTemporary)
-        || ::unlinkat(parentFd, temporaryName.constData(), 0) != 0) {
-        const int error = errno;
-        ::close(targetFd);
-        return error != 0 ? -error : -EAGAIN;
-    }
-    ::close(targetFd);
-    (void)::fsync(parentFd);
     return 0;
 }
 
@@ -714,8 +504,8 @@ int umountAtFd(int targetParentFd, const QString &leafName)
 {
     const QString procPath =
         QStringLiteral("/proc/self/fd/%1/%2").arg(QString::number(targetParentFd), leafName);
-    if (::umount2(procPath.toLocal8Bit().constData(), UMOUNT_NOFOLLOW) != 0) {
-        if (::umount2(procPath.toLocal8Bit().constData(), MNT_DETACH | UMOUNT_NOFOLLOW) != 0) {
+    if (::umount2(procPath.toLocal8Bit().constData(), 0) != 0) {
+        if (::umount2(procPath.toLocal8Bit().constData(), MNT_DETACH) != 0) {
             return -errno;
         }
     }

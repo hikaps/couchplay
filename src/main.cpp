@@ -3,11 +3,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
-#include <QDBusConnection>
-#include <QDBusConnectionInterface>
-#include <QDBusReply>
 #include <QIcon>
-#include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QtQml>
@@ -29,7 +25,6 @@
 #include "core/UserManager.h"
 #include "dbus/CouchPlayHelperClient.h"
 #include "core/CommandLineBridge.h"
-#include "core/SessionLaunchClient.h"
 #include "core/CommandLineOptions.h"
 
 #include <QFile>
@@ -104,38 +99,9 @@ int main(int argc, char *argv[])
         qCritical().noquote() << parseError;
         return 2;
     }
-    const bool waitingLaunch = initialRequest.start && initialRequest.exitAfterSession;
-    const QString serviceName = QStringLiteral("com.github.CouchPlay");
-    if (waitingLaunch) {
-        // The Steam-owned process must remain the client until LaunchFinished.
-        // KDBusService forwards duplicate invocations and exits synchronously,
-        // so never construct it in this process. Start a plain GUI owner only
-        // when none exists; simultaneous clients may start extra GUI processes,
-        // but Unique registration leaves exactly one owner.
-        auto *busInterface = QDBusConnection::sessionBus().interface();
-        if (!busInterface) {
-            return 1;
-        }
-        const QDBusReply<bool> registered = busInterface->isServiceRegistered(serviceName);
-        if (!registered.isValid()) {
-            return 1;
-        }
-        if (!registered.value() && !QProcess::startDetached(QCoreApplication::applicationFilePath(), {})) {
-            return 1;
-        }
-        return SessionLaunchClient::run(app, initialRequest, serviceName);
-    }
-    CommandLineBridge commandLineBridge;
-    if (!QDBusConnection::sessionBus().registerObject(QStringLiteral("/SessionLauncher"),
-                                                       &commandLineBridge,
-                                                       QDBusConnection::ExportAdaptors)) {
-        qWarning() << "Failed to register session launch bridge:"
-                   << QDBusConnection::sessionBus().lastError().message();
-        return 1;
-    }
-    KDBusService service(KDBusService::Unique | KDBusService::NoExitOnFailure);
+    KDBusService service(KDBusService::Unique);
     if (!service.isRegistered()) {
-        return 0;
+        qWarning() << "CouchPlay singleton unavailable:" << service.errorMessage();
     }
 
     QApplication::setStyle(QStringLiteral("breeze"));
@@ -144,6 +110,7 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    CommandLineBridge commandLineBridge;
     engine.rootContext()->setContextProperty(QStringLiteral("commandLineBridge"), &commandLineBridge);
     engine.setInitialProperties({
         {QStringLiteral("startupProfileName"), initialRequest.profileName},
@@ -156,10 +123,6 @@ int main(int argc, char *argv[])
         qCritical() << "CouchPlay QML root failed to load";
         return -1;
     }
-    auto *terminationNotifier = SessionLaunchClient::watchTermination(&app, [&commandLineBridge] {
-        commandLineBridge.requestStop();
-    });
-    Q_UNUSED(terminationNotifier);
 
     QObject *root = engine.rootObjects().constFirst();
     QObject::connect(root, SIGNAL(startupFailed(int)), &app, SLOT(exit(int)));
@@ -186,15 +149,11 @@ int main(int argc, char *argv[])
                          if (!request.requested()) {
                              return;
                          }
-                         if (request.start && request.exitAfterSession) {
-                             return;
-                         }
                          commandLineBridge.setRequestAccepted(false);
                          Q_EMIT commandLineBridge.launchRequested(request.profileName, request.start, request.exitAfterSession);
                          service.setExitValue(commandLineBridge.requestAccepted() ? 0 : 2);
                      },
                      Qt::DirectConnection);
 
-    commandLineBridge.setReady(true);
     return app.exec();
 }

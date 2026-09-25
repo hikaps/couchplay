@@ -6,14 +6,8 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
-#include <QDBusPendingCall>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
 #include <QDBusReply>
-#include <QEventLoop>
 #include <QDebug>
-#include <QMetaType>
-#include <QTimer>
 
 static const QString SERVICE_NAME = QStringLiteral("io.github.hikaps.CouchPlayHelper");
 static const QString OBJECT_PATH = QStringLiteral("/io/github/hikaps/CouchPlayHelper");
@@ -121,20 +115,13 @@ bool CouchPlayHelperClient::watchDevice(const QString &devicePath)
 }
 
 
-bool CouchPlayHelperClient::restoreAllDevices()
+void CouchPlayHelperClient::restoreAllDevices()
 {
     if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
+        return;
     }
 
-    QDBusReply<int> reply = m_interface->call(QStringLiteral("ResetAllDevices"));
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return false;
-    }
-
-    return true;
+    m_interface->call(QStringLiteral("ResetAllDevices"));
 }
 
 bool CouchPlayHelperClient::createUser(const QString &username)
@@ -248,130 +235,6 @@ QString CouchPlayHelperClient::getUserSteamRoot(const QString &username)
         return {};
     }
     return reply.value();
-}
-bool CouchPlayHelperClient::readSteamShortcutsForUser(const QString &username,
-                                                      const QString &steamId,
-                                                      QByteArray *content,
-                                                      std::function<bool()> shouldContinue,
-                                                      QString *errorMessage)
-{
-    if (errorMessage) {
-        errorMessage->clear();
-    }
-    auto fail = [&](const QString &message) {
-        if (errorMessage) {
-            *errorMessage = message;
-        }
-        Q_EMIT errorOccurred(message);
-        return false;
-    };
-    if (shouldContinue && !shouldContinue()) {
-        return false;
-    }
-    if (!m_available || !m_interface || !content) {
-        return fail(QStringLiteral("Helper unavailable or invalid shortcuts result"));
-    }
-
-    QDBusMessage message = QDBusMessage::createMethodCall(
-        SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, QStringLiteral("ReadSteamShortcutsForUser"));
-    message << username << steamId;
-    QDBusPendingCall pending = m_interface->connection().asyncCall(message, 30000);
-    QDBusPendingCallWatcher watcher(pending);
-    QEventLoop waitForReply;
-    bool cancelled = false;
-    QTimer cancellationPoll;
-    cancellationPoll.setInterval(20);
-    QObject::connect(&watcher, &QDBusPendingCallWatcher::finished, &waitForReply, &QEventLoop::quit);
-    QObject::connect(&cancellationPoll, &QTimer::timeout, &waitForReply, [&] {
-        if (shouldContinue && !shouldContinue()) {
-            cancelled = true;
-            waitForReply.quit();
-        }
-    });
-    if (!watcher.isFinished()) {
-        if (shouldContinue) {
-            cancellationPoll.start();
-        }
-        waitForReply.exec();
-    }
-    cancellationPoll.stop();
-
-    if (cancelled || (shouldContinue && !shouldContinue())) {
-        return false;
-    }
-    QDBusPendingReply<QByteArray> reply = watcher;
-    if (reply.isError()) {
-        return fail(reply.error().message());
-    }
-    *content = reply.value();
-    return true;
-}
-
-bool CouchPlayHelperClient::writeSteamShortcutsForUser(const QString &username,
-                                                       const QString &steamId,
-                                                       const QByteArray &expectedDigest,
-                                                       const QByteArray &content,
-                                                       QString *errorMessage)
-{
-    if (errorMessage) {
-        errorMessage->clear();
-    }
-    auto fail = [&](const QString &message) {
-        if (errorMessage) {
-            *errorMessage = message;
-        }
-        Q_EMIT errorOccurred(message);
-        return false;
-    };
-    if (!m_available || !m_interface) {
-        return fail(QStringLiteral("Helper unavailable"));
-    }
-
-    QDBusReply<bool> reply = m_interface->call(QStringLiteral("WriteSteamShortcutsForUser"),
-                                               username,
-                                               steamId,
-                                               expectedDigest,
-                                               content);
-    if (!reply.isValid()) {
-        return fail(reply.error().message());
-    }
-    if (!reply.value()) {
-        return fail(QStringLiteral("Helper rejected the Steam shortcuts update"));
-    }
-    return true;
-}
-
-bool CouchPlayHelperClient::readSteamLibraryFoldersForUser(const QString &username, QByteArray *content, bool *exists)
-{
-    if (!m_available || !m_interface || !content || !exists) return false;
-    QDBusReply<QVariantMap> reply = m_interface->call(QStringLiteral("ReadSteamLibraryFoldersForUser"), username);
-    if (!reply.isValid()) return false;
-    const QVariantMap snapshot = reply.value();
-    const QVariant existsValue = snapshot.value(QStringLiteral("exists"));
-    const QVariant contentValue = snapshot.value(QStringLiteral("content"));
-    if (!snapshot.contains(QStringLiteral("exists")) || !snapshot.contains(QStringLiteral("content"))
-        || existsValue.metaType() != QMetaType::fromType<bool>()
-        || contentValue.metaType() != QMetaType::fromType<QByteArray>()) {
-        return false;
-    }
-    const bool snapshotExists = existsValue.value<bool>();
-    const QByteArray snapshotContent = contentValue.value<QByteArray>();
-    if (!snapshotExists && !snapshotContent.isEmpty()) {
-        return false;
-    }
-    *exists = snapshotExists;
-    *content = snapshotContent;
-    return true;
-}
-
-bool CouchPlayHelperClient::restoreSteamLibraryFoldersForUser(const QString &username,
-                                                               bool existed,
-                                                               const QByteArray &content)
-{
-    if (!m_available || !m_interface) return false;
-    QDBusReply<bool> reply = m_interface->call(QStringLiteral("RestoreSteamLibraryFoldersForUser"),
-                                               username, existed, content);
-    return reply.isValid() && reply.value();
 }
 
 qint64 CouchPlayHelperClient::launchInstance(const QString &username,
@@ -536,13 +399,7 @@ bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath,
         return false;
     }
 
-    const QVariantList replyArguments = replyMsg.arguments();
-    if (replyArguments.size() != 1 || replyArguments.constFirst().metaType() != QMetaType::fromType<bool>()) {
-        qCWarning(couchplayHelper) << "copyFileToUser: Malformed D-Bus boolean reply";
-        Q_EMIT errorOccurred(QStringLiteral("Malformed D-Bus reply"));
-        return false;
-    }
-    const bool result = replyArguments.constFirst().toBool();
+    bool result = replyMsg.arguments().value(0).toBool();
     if (!result) {
         qCWarning(couchplayHelper) << "copyFileToUser: Helper returned false";
     }
@@ -635,7 +492,6 @@ bool CouchPlayHelperClient::isSteamBootstrapped(const QString &username)
     return reply.value();
 }
 
-
 bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
                                             const QString &targetPath,
                                             const QString &username)
@@ -667,13 +523,7 @@ bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
         return false;
     }
 
-    const QVariantList replyArguments = replyMsg.arguments();
-    if (replyArguments.size() != 1 || replyArguments.constFirst().metaType() != QMetaType::fromType<bool>()) {
-        qCWarning(couchplayHelper) << "writeFileToUser: Malformed D-Bus boolean reply";
-        Q_EMIT errorOccurred(QStringLiteral("Malformed D-Bus reply"));
-        return false;
-    }
-    const bool result = replyArguments.constFirst().toBool();
+    bool result = replyMsg.arguments().value(0).toBool();
     if (!result) {
         qCWarning(couchplayHelper) << "writeFileToUser: Helper returned false";
     }

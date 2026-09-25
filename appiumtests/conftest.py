@@ -39,20 +39,14 @@ DEFAULT_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_TIMEOUT") or "10")
 @pytest.fixture(scope="session")
 def driver(mock_helper):
     app_id = os.environ.get("COUCHPLAY_APP_ID", "io.github.hikaps.couchplay")
-    app_environ = {"QT_LINUX_ACCESSIBILITY_ALWAYS_ON": "1"}
-    artifact_dir = os.environ.get("APPIUM_ARTIFACT_OUTPUT_PATH")
-    if artifact_dir:
-        app_environ.update({
-            "COUCHPLAY_LOG": "1",
-            "QT_LOGGING_RULES": "couchplay.*=true",
-            "XDG_DATA_HOME": artifact_dir,
-        })
 
     options = AppiumOptions()
     options.load_capabilities(
         {
             "app": app_id,
-            "environ": app_environ,
+            "environ": {
+                "QT_LINUX_ACCESSIBILITY_ALWAYS_ON": "1",
+            },
             "timeout": 30000,
         }
     )

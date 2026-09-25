@@ -21,6 +21,7 @@ Kirigami.ScrollablePage {
             sessionManager.refreshProfiles()
         }
     }
+
     Dialogs.AddToSteamDialog {
         id: addToSteamDialog
         manager: root.steamShortcutManager
@@ -30,10 +31,15 @@ Kirigami.ScrollablePage {
     Connections {
         target: root.steamShortcutManager
         function onPrepared() {
-            addToSteamDialog.restartConfirmed = false
-            addToSteamDialog.completed = false
-            addToSteamDialog.errorText = ""
             addToSteamDialog.open()
+        }
+        function onRegistrationFinished(profileName, updated) {
+            if (profileName !== root.profileToAdd) return
+            addToSteamDialog.close()
+            applicationWindow().showPassiveNotification(
+                updated
+                    ? i18nc("@info", "Steam shortcut saved: %1", profileName)
+                    : i18nc("@info", "Steam shortcut already present: %1", profileName))
         }
         function onErrorOccurred(message) {
             if (!addToSteamDialog.visible) {
@@ -147,12 +153,8 @@ Kirigami.ScrollablePage {
                     }
                     onAddToSteam: {
                         if (modelData && steamShortcutManager) {
-                            if (steamShortcutManager.busy) {
-                                applicationWindow().showPassiveNotification(
-                                    i18nc("@info", "Steam profile registration is already in progress."))
-                            } else if (steamShortcutManager.prepare(modelData.name)) {
-                                root.profileToAdd = modelData.name
-                            }
+                            root.profileToAdd = modelData.name
+                            steamShortcutManager.prepare(modelData.name)
                         }
                     }
                 }
@@ -184,17 +186,16 @@ Kirigami.ScrollablePage {
 
     component ProfileCard: Kirigami.AbstractCard {
         id: profileCard
+        objectName: "profileCard_" + (profile?.name ?? "")
 
         required property var profile
         property bool isCurrentProfile: false
 
-        objectName: "profileCard_" + (profile?.name ?? "")
-
         signal loadProfile()
-        signal addToSteam()
         signal duplicateProfile()
         signal launchProfile()
         signal deleteProfile()
+        signal addToSteam()
 
         background: Rectangle {
             color: profileCard.isCurrentProfile 
@@ -287,7 +288,7 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            Flow {
+            RowLayout {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
 
@@ -301,13 +302,14 @@ Kirigami.ScrollablePage {
                     highlighted: true
                     onClicked: profileCard.launchProfile()
                 }
+
                 Controls.Button {
                     objectName: "btnAddProfileToSteam"
                     Accessible.role: Accessible.Button
-                    Accessible.name: i18nc("@action:button", "Add to Steam…")
+                    Accessible.name: i18nc("@action:button", "Add to Steam")
                     Accessible.onPressAction: clicked()
-                    text: i18nc("@action:button", "Add to Steam…")
-                    icon.name: "steam"
+                    text: i18nc("@action:button", "Add to Steam")
+                    icon.name: "application-x-executable"
                     flat: true
                     onClicked: profileCard.addToSteam()
                 }
@@ -334,6 +336,7 @@ Kirigami.ScrollablePage {
                     onClicked: profileCard.loadProfile()
                 }
 
+                Item { Layout.fillWidth: true }
 
                 Controls.Button {
                     objectName: "btnDeleteProfile"

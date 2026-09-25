@@ -1,16 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-import json
-import os
-import shutil
-import subprocess
-import time
-
 import pytest
 from appium.webdriver.common.appiumby import AppiumBy
 from helpers.base_test import BaseTest
-from selenium.webdriver.common.keys import Keys
+
+import json
+import os
+import time
 
 # These exercise the mock D-Bus helper (system bus) + pre-created users; skip in
 # the no-helper smoke tier.
@@ -22,18 +19,6 @@ LONG_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_LONG_TIMEOUT") or "20")
 
 
 class TestSessionLifecycle(BaseTest):
-    def _stop_session_if_running(self, driver):
-        """Leave the shared Appium session in the idle state after a launch test."""
-        stop_buttons = [
-            button
-            for button in driver.find_elements(AppiumBy.NAME, "Stop Session")
-            if button.is_displayed()
-        ]
-        if not stop_buttons:
-            return
-        self.click_by_name(driver, "Stop Session", LONG_TIMEOUT)
-        self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
-
     def test_session_setup_with_helper(self, driver, mock_helper, test_users):
         self.navigate_to_session_setup(driver)
         title = self.wait_for_element(
@@ -53,19 +38,16 @@ class TestSessionLifecycle(BaseTest):
     )
     def test_start_and_stop_session(self, driver, mock_helper, test_users):
         self.navigate_to_session_setup(driver)
-        try:
-            self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
-            self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
-            # mock helper returns a fake PID; the toolbar flips to "Stop Session"
-            self.wait_for_element(driver, AppiumBy.NAME, "Stop Session", LONG_TIMEOUT)
-            stop_btn = self.wait_for_element_clickable(
-                driver, AppiumBy.NAME, "Stop Session", LONG_TIMEOUT
-            )
-            assert stop_btn.is_displayed()
-            stop_btn.click()
-            self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
-        finally:
-            self._stop_session_if_running(driver)
+        self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
+        self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
+        # mock helper returns a fake PID; the toolbar flips to "Stop Session"
+        self.wait_for_element(driver, AppiumBy.NAME, "Stop Session", LONG_TIMEOUT)
+        stop_btn = self.wait_for_element_clickable(
+            driver, AppiumBy.NAME, "Stop Session", LONG_TIMEOUT
+        )
+        assert stop_btn.is_displayed()
+        stop_btn.click()
+        self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
 
     @pytest.mark.xfail(
         reason="The mock helper always allows LaunchInstance, so Start does "
@@ -77,15 +59,12 @@ class TestSessionLifecycle(BaseTest):
     )
     def test_session_without_users_shows_error(self, driver, mock_helper):
         self.navigate_to_session_setup(driver)
-        try:
-            self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
-            self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
-            start_btn = self.wait_for_element(
-                driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT
-            )
-            assert start_btn.is_displayed()
-        finally:
-            self._stop_session_if_running(driver)
+        self.wait_for_element(driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT)
+        self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
+        start_btn = self.wait_for_element(
+            driver, AppiumBy.NAME, "Start Session", LONG_TIMEOUT
+        )
+        assert start_btn.is_displayed()
 
     def test_two_instances_launch(self, driver, mock_helper, test_users):
         """A 2-player session issues two distinct LaunchInstance calls.
@@ -116,37 +95,37 @@ class TestSessionLifecycle(BaseTest):
             except FileNotFoundError:
                 return []
 
-        try:
-            before = len(read_launches())
-            self.navigate_to_session_setup(driver)  # default player count is 2
-            self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
+        before = len(read_launches())
+        self.navigate_to_session_setup(driver)  # default player count is 2
+        self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
 
-            launches = []
-            for _ in range(LONG_TIMEOUT):
-                launches = read_launches()[before:]
-                if len(launches) >= 2:
-                    break
-                time.sleep(1)
+        launches = []
+        for _ in range(LONG_TIMEOUT):
+            launches = read_launches()[before:]
+            if len(launches) >= 2:
+                break
+            time.sleep(1)
 
-            assert len(launches) >= 2, (
-                f"expected >=2 LaunchInstance calls for a 2-player session, got {len(launches)}"
+        assert len(launches) >= 2, (
+            f"expected >=2 LaunchInstance calls for a 2-player session, got {len(launches)}"
+        )
+        # Two distinct instances (distinct PIDs).
+        assert launches[0]["pid"] != launches[1]["pid"]
+        # Each carries a game command and gamescope output geometry args.
+        for entry in launches[:2]:
+            assert entry.get("gameCommand"), "LaunchInstance had no game command"
+            args = entry.get("gamescopeArgs", [])
+            assert "-W" in args and "-H" in args, (
+                "LaunchInstance missing output geometry (-W/-H)"
             )
-            # Two distinct instances (distinct PIDs).
-            assert launches[0]["pid"] != launches[1]["pid"]
-            # Each carries a game command and gamescope output geometry args.
-            for entry in launches[:2]:
-                assert entry.get("gameCommand"), "LaunchInstance had no game command"
-                args = entry.get("gamescopeArgs", [])
-                assert "-W" in args and "-H" in args, (
-                    "LaunchInstance missing output geometry (-W/-H)"
-                )
-        finally:
-            self._stop_session_if_running(driver)
 
     def test_streaming_session_calls_helper(self, driver, mock_helper, test_users):
-        """A streaming instance provisions a virtual display and null sink,
-        then launches Sunshine with its generated config. Verify all three
-        helper operations through the mock's D-Bus call log.
+        """A streaming instance provisions a virtual display + null sink via the
+        helper before launch. Verified via the mock launch log (not the UI):
+        setting an instance's output mode to 'Moonlight Stream' and starting the
+        session must produce CreateVirtualOutput + CreateNullSink D-Bus calls --
+        the part that proves the streaming orchestration actually reaches the
+        privileged helper.
         """
         log_path = os.environ.get(
             "COUCHPLAY_MOCK_LAUNCH_LOG", "/tmp/couchplay-mock-launch.jsonl"
@@ -168,84 +147,56 @@ class TestSessionLifecycle(BaseTest):
             except FileNotFoundError:
                 return []
 
-        def copy_launch_artifact():
-            artifact_dir = os.environ.get("APPIUM_ARTIFACT_OUTPUT_PATH")
-            if not artifact_dir:
-                return
-            try:
-                shutil.copyfile(log_path, os.path.join(artifact_dir, "couchplay-mock-launch.jsonl"))
-            except OSError:
-                pass
+        before = len(read_calls())
+        self.navigate_to_session_setup(driver)
+        # Switch the first instance to streaming output.
+        self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
+        # Assign a user to the streaming instance (required by
+        # SessionRunner::setupStreamingInstance, which aborts on empty username).
+        self.select_combo_option(driver, "comboUser", "player2")
+        self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
 
-
-        try:
-            before = len(read_calls())
-            self.navigate_to_session_setup(driver)
-            # Steam is absent here. The launcher's custom popup delegate does
-            # not reliably activate via text search in AT-SPI; select the third
-            # built-in preset (Steam, Heroic, Lutris) with keyboard navigation.
-            launcher = self.wait_for_element_clickable(
-                driver, AppiumBy.ACCESSIBILITY_ID, "comboLauncher", LONG_TIMEOUT
-            )
-            launcher.click()
-            time.sleep(0.4)
-            launcher.send_keys(Keys.HOME)
-            launcher.send_keys(Keys.ARROW_DOWN)
-            launcher.send_keys(Keys.ARROW_DOWN)
-            launcher.send_keys(Keys.ENTER)
-            time.sleep(0.3)
-            # Switch the first instance to streaming output.
-            self.select_combo_option(driver, "comboOutputMode", "Moonlight Stream")
-            # Assign a user to the streaming instance (required by
-            # SessionRunner::setupStreamingInstance, which aborts on empty username).
-            self.select_combo_option(driver, "comboUser", "player2")
-            self.click_by_name(driver, "Start Session", LONG_TIMEOUT)
-
-            new_entries = []
-            for _ in range(LONG_TIMEOUT):
-                new_entries = read_calls()[before:]
-                methods = {e.get("method") or "LaunchInstance" for e in new_entries}
-                setup_done = {"CreateVirtualOutput", "CreateNullSink"} <= methods
-                sunshine_launched = any(
-                    e.get("method") is None
-                    and "sunshine" in str(e.get("gameCommand", "")).lower()
-                    for e in new_entries
-                )
-                if setup_done and sunshine_launched:
-                    break
-                time.sleep(1)
-
+        new_entries = []
+        for _ in range(LONG_TIMEOUT):
+            new_entries = read_calls()[before:]
             methods = {e.get("method") or "LaunchInstance" for e in new_entries}
-            assert "CreateVirtualOutput" in methods, (
-                "streaming session did not call CreateVirtualOutput on the helper"
-            )
-            assert "CreateNullSink" in methods, (
-                "streaming session did not call CreateNullSink on the helper"
-            )
-            # The streaming path must also launch Sunshine itself: a LaunchInstance
-            # whose gameCommand is the sunshine binary + generated config path. This
-            # comes from StreamManager::startStream (run instead of window positioning
-            # for streaming instances, so it is not affected by the physical-session
-            # window-class xfail).
-            sunshine_launches = [
-                e
-                for e in new_entries
-                if e.get("method") is None
+            setup_done = {"CreateVirtualOutput", "CreateNullSink"} <= methods
+            sunshine_launched = any(
+                e.get("method") is None
                 and "sunshine" in str(e.get("gameCommand", "")).lower()
-            ]
-            assert sunshine_launches, (
-                "streaming session did not issue a sunshine LaunchInstance; "
-                f"helper calls: {[entry.get('method') or 'LaunchInstance' for entry in new_entries[:8]]}"
+                for e in new_entries
             )
-            # And the generated config path must be the per-instance sunshine.conf.
-            command = " ".join(sunshine_launches[0]["gameCommand"])
-            assert "/sunshine.conf" in command, (
-                "sunshine LaunchInstance did not reference a sunshine.conf config: "
-                + command
-            )
-        finally:
-            copy_launch_artifact()
-            self._stop_session_if_running(driver)
+            if setup_done and sunshine_launched:
+                break
+            time.sleep(1)
+
+        methods = {e.get("method") or "LaunchInstance" for e in new_entries}
+        assert "CreateVirtualOutput" in methods, (
+            "streaming session did not call CreateVirtualOutput on the helper"
+        )
+        assert "CreateNullSink" in methods, (
+            "streaming session did not call CreateNullSink on the helper"
+        )
+        # The streaming path must also launch Sunshine itself: a LaunchInstance
+        # whose gameCommand is the sunshine binary + generated config path. This
+        # comes from StreamManager::startStream (run instead of window positioning
+        # for streaming instances, so it is not affected by the physical-session
+        # window-class xfail).
+        sunshine_launches = [
+            e
+            for e in new_entries
+            if e.get("method") is None
+            and "sunshine" in str(e.get("gameCommand", "")).lower()
+        ]
+        assert sunshine_launches, (
+            "streaming session did not issue a sunshine LaunchInstance"
+        )
+        # And the generated config path must be the per-instance sunshine.conf.
+        command = " ".join(sunshine_launches[0]["gameCommand"])
+        assert "/sunshine.conf" in command, (
+            "sunshine LaunchInstance did not reference a sunshine.conf config: "
+            + command
+        )
 
     def test_device_assignment_page_with_helper(self, driver, mock_helper):
         self.navigate_to_device_assignment(driver)
@@ -275,24 +226,3 @@ class TestSessionLifecycle(BaseTest):
         # Dialog + field don't expose objectName -> NAME (confirm button + label)
         self.wait_for_element(driver, AppiumBy.NAME, "Create User", LONG_TIMEOUT)
         self.wait_for_element(driver, AppiumBy.NAME, "Username", LONG_TIMEOUT)
-
-    def test_duplicate_waiting_launch_uses_running_instance(self, driver, mock_helper):
-        executable = os.environ.get("COUCHPLAY_APP_ID")
-        assert executable and os.path.isfile(executable)
-        completed = subprocess.run(
-            [
-                executable,
-                "--profile",
-                "Missing Steam Shortcut Profile",
-                "--start",
-                "--exit-after-session",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=LONG_TIMEOUT,
-        )
-        assert completed.returncode == 2, (
-            f"duplicate launch returned {completed.returncode}; stdout={completed.stdout!r} "
-            f"stderr={completed.stderr!r}"
-        )

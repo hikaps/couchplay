@@ -47,7 +47,6 @@ SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 
 # Polkit actions usually reside in /usr/share/polkit-1/actions.
 # On immutable systems, we try /etc/polkit-1/actions if /usr is read-only.
-POLKIT_DIR_NEEDS_CREATE=false
 if [ -z "${POLKIT_DIR:-}" ]; then
     if [ -w "/usr/share/polkit-1/actions" ]; then
         POLKIT_DIR="/usr/share/polkit-1/actions"
@@ -56,9 +55,7 @@ if [ -z "${POLKIT_DIR:-}" ]; then
         # Note: If /etc/polkit-1/actions is not scanned by your Polkit version, 
         # you may need to use 'rpm-ostree install' or an overlay.
         POLKIT_DIR="/etc/polkit-1/actions"
-        # Defer creation until the root-only install path; export, status, and
-        # help must not touch host-only directories from inside a sandbox.
-        POLKIT_DIR_NEEDS_CREATE=true
+        mkdir -p "$POLKIT_DIR"
     fi
 fi
 
@@ -232,10 +229,6 @@ export_helper() {
 install_helper() {
     check_root
     check_binary
-
-    if [[ "$POLKIT_DIR_NEEDS_CREATE" == "true" ]]; then
-        mkdir -p "$POLKIT_DIR"
-    fi
 
     print_info "Installing CouchPlay helper daemon..."
 

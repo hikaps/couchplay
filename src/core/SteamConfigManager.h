@@ -3,15 +3,12 @@
 
 #pragma once
 
-#include <QByteArray>
-#include <QHash>
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
-#include <functional>
 
 class CouchPlayHelperClient;
 struct DataDirectory;
@@ -178,15 +175,11 @@ public:
     Q_INVOKABLE QVariantList gamesAsVariant() const;
     Q_INVOKABLE QStringList extractShortcutDirectories() const;
 
-    bool syncShortcutsToUser(const QString &targetUsername, std::function<bool()> shouldContinue = {});
+    bool syncShortcutsToUser(const QString &targetUsername);
     bool shareLibraryToUser(const QString &targetUsername);
     bool cleanupLibrarySharing(const QString &targetUsername);
-    bool prepareDataDir(const DataDirectory &dir,
-                        const QString &username,
-                        std::function<bool()> shouldContinue = {});
-    bool finalizeDataDir(const DataDirectory &dir,
-                         const QString &username,
-                         std::function<bool()> shouldContinue = {});
+    bool prepareDataDir(const DataDirectory &dir, const QString &username);
+    bool finalizeDataDir(const DataDirectory &dir, const QString &username);
 
 Q_SIGNALS:
     void steamPathsChanged();
@@ -201,6 +194,7 @@ Q_SIGNALS:
     void errorOccurred(const QString &message);
 
 private:
+    QList<SteamShortcut> parseShortcutsVdf(const QString &path);
     QList<SteamLibraryFolder> parseLibraryFoldersVdf(const QString &path);
     QList<SteamGame> parseInstalledGames() const;
     QString generateLibraryFoldersVdf(const QList<SteamLibraryFolder> &libraries);
@@ -214,17 +208,4 @@ private:
     QString m_userHome;
     bool m_syncShortcutsEnabled = false;
     bool m_shareLibraryEnabled = false;
-    struct LibraryFoldersSnapshot {
-        bool existed = false;
-        QByteArray content;
-        QString steamRoot;
-        QString libraryFoldersPath;
-        QString steamUserId;
-        bool sessionExisted = false;
-        QByteArray sessionContent;
-    };
-    bool captureLibraryFoldersSnapshot(const QString &username,
-                                       const SteamPaths &targetPaths,
-                                       const QString &steamUserId);
-    QHash<QString, LibraryFoldersSnapshot> m_libraryFoldersSnapshots;
 };

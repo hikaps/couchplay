@@ -83,9 +83,8 @@ int copyTreeContents(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid);
 
 /**
  * Write a file below an already-open directory without following a leaf
- * symlink. Existing targets are opened without truncation and must be regular,
- * owned by uid, and singly linked before replacement; ownership and permissions
- * are applied to the opened FD.
+ * symlink. The file is truncated only after O_NOFOLLOW has accepted the
+ * target, then ownership and permissions are applied to the opened FD.
  *
  * @return 0 on success, -errno on failure
  */

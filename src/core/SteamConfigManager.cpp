@@ -2,14 +2,12 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SteamConfigManager.h"
-#include "SteamShortcutsVdf.h"
 #include <algorithm>
 #include "PresetManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
 #include "UserLookup.h"
 
-#include <QCryptographicHash>
 #include <QDataStream>
 #include <QDebug>
 #include <QDir>
@@ -25,194 +23,6 @@
 
 #include <pwd.h>
 #include <unistd.h>
-
-namespace
-{
-enum class LoginUsersToken { String, OpenBrace, CloseBrace, End, Invalid };
-
-LoginUsersToken nextLoginUsersToken(const QByteArray &source, qsizetype &position, QByteArray &value)
-{
-    if (position == 0 && source.size() >= 3 && static_cast<unsigned char>(source.at(0)) == 0xef
-        && static_cast<unsigned char>(source.at(1)) == 0xbb && static_cast<unsigned char>(source.at(2)) == 0xbf) {
-        position = 3;
-    }
-    while (position < source.size()) {
-        const char ch = source.at(position);
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
-            ++position;
-            continue;
-        }
-        if (ch == '/' && position + 1 < source.size() && source.at(position + 1) == '/') {
-            while (position < source.size() && source.at(position) != '\n') {
-                ++position;
-            }
-            continue;
-        }
-        break;
-    }
-    if (position == source.size()) {
-        return LoginUsersToken::End;
-    }
-    const char ch = source.at(position++);
-    if (ch == '{') {
-        return LoginUsersToken::OpenBrace;
-    }
-    if (ch == '}') {
-        return LoginUsersToken::CloseBrace;
-    }
-    if (ch != '"') {
-        return LoginUsersToken::Invalid;
-    }
-    value.clear();
-    while (position < source.size()) {
-        const char next = source.at(position++);
-        if (next == '"') {
-            return LoginUsersToken::String;
-        }
-        if (next == '\\') {
-            if (position == source.size()) {
-                return LoginUsersToken::Invalid;
-            }
-            value.append(source.at(position++));
-        } else {
-            value.append(next);
-        }
-    }
-    return LoginUsersToken::Invalid;
-}
-
-QString mostRecentSteamUserId(const QByteArray &contents, bool *valid)
-{
-    *valid = false;
-    QStringList objectPath;
-    QByteArray pendingKey;
-    bool expectingValue = false;
-    QString activeId;
-    qsizetype position = 0;
-    QByteArray tokenValue;
-    while (true) {
-        switch (nextLoginUsersToken(contents, position, tokenValue)) {
-        case LoginUsersToken::String:
-            if (!expectingValue) {
-                pendingKey = tokenValue;
-                expectingValue = true;
-                break;
-            }
-            if (objectPath.size() == 2 && objectPath.at(0) == QStringLiteral("users")
-                && pendingKey == QByteArrayLiteral("MostRecent")) {
-                if (tokenValue == QByteArrayLiteral("1")) {
-                    if (!activeId.isEmpty()) {
-                        return {};
-                    }
-                    activeId = objectPath.at(1);
-                } else if (tokenValue != QByteArrayLiteral("0")) {
-                    return {};
-                }
-            }
-            pendingKey.clear();
-            expectingValue = false;
-            break;
-        case LoginUsersToken::OpenBrace:
-            if (!expectingValue) {
-                return {};
-            }
-            objectPath.append(QString::fromUtf8(pendingKey));
-            pendingKey.clear();
-            expectingValue = false;
-            break;
-        case LoginUsersToken::CloseBrace:
-            if (expectingValue || objectPath.isEmpty()) {
-                return {};
-            }
-            objectPath.removeLast();
-            break;
-        case LoginUsersToken::End:
-            if (expectingValue || !objectPath.isEmpty()) {
-                return {};
-            }
-            *valid = true;
-            return activeId;
-        case LoginUsersToken::Invalid:
-            return {};
-        }
-    }
-}
-
-QString selectSteamUserId(const QString &userDataBase, const QString &loginUsersPath)
-{
-    QDir userDataDir(userDataBase);
-    QStringList numericIds;
-    if (userDataDir.exists()) {
-        const QStringList entries = userDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-        for (const QString &entry : entries) {
-            bool ok = false;
-            entry.toULongLong(&ok);
-            if (ok) {
-                numericIds.append(entry);
-            }
-        }
-    }
-    if (!QFile::exists(loginUsersPath)) {
-        return numericIds.size() == 1 ? numericIds.constFirst() : QString();
-    }
-
-    QFile loginUsers(loginUsersPath);
-    if (!loginUsers.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-    constexpr qint64 maxLoginUsersSize = 1024 * 1024;
-    const QByteArray contents = loginUsers.read(maxLoginUsersSize + 1);
-    if (loginUsers.error() != QFileDevice::NoError || contents.size() > maxLoginUsersSize) {
-        return {};
-    }
-    bool valid = false;
-    const QString activeId = mostRecentSteamUserId(contents, &valid);
-    if (!valid) {
-        return {};
-    }
-    if (!activeId.isEmpty()) {
-        bool allDigits = true;
-        for (const QChar ch : activeId) {
-            if (ch < QLatin1Char('0') || ch > QLatin1Char('9')) {
-                allDigits = false;
-                break;
-            }
-        }
-        bool fitsInSteamId = false;
-        activeId.toULongLong(&fitsInSteamId);
-        return allDigits && fitsInSteamId ? activeId : QString();
-    }
-    return numericIds.size() == 1 ? numericIds.constFirst() : QString();
-}
-bool readBoundedShortcutFile(QFile &file, QByteArray *contents)
-{
-    if (file.size() > SteamShortcutsVdf::MaxDocumentSize) {
-        return false;
-    }
-    *contents = file.read(SteamShortcutsVdf::MaxDocumentSize + 1);
-    return file.error() == QFileDevice::NoError && contents->size() <= SteamShortcutsVdf::MaxDocumentSize;
-}
-
-bool readBoundedManifestFile(QFile &file, QByteArray *contents)
-{
-    if (file.size() > SteamShortcutsVdf::MaxDocumentSize) {
-        return false;
-    }
-    *contents = file.read(SteamShortcutsVdf::MaxDocumentSize + 1);
-    return file.error() == QFileDevice::NoError && contents->size() <= SteamShortcutsVdf::MaxDocumentSize;
-}
-constexpr qsizetype MaxLibraryFoldersSize = 4 * 1024 * 1024;
-
-bool readBoundedLibraryFoldersFile(QFile &file, QByteArray *contents)
-{
-    if (file.size() > MaxLibraryFoldersSize) {
-        return false;
-    }
-    *contents = file.read(MaxLibraryFoldersSize + 1);
-    return file.error() == QFileDevice::NoError && contents->size() <= MaxLibraryFoldersSize;
-}
-
-}
 
 SteamConfigManager::SteamConfigManager(QObject *parent)
     : QObject(parent)
@@ -285,8 +95,8 @@ void SteamConfigManager::detectSteamPaths()
         m_userHome + QStringLiteral("/.local/share/Steam"),
         m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"), // Flatpak
         m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
-        m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam"), // Flatpak
     };
+
     for (const QString &root : possibleRoots) {
         QString configDir = root + QStringLiteral("/config");
         QString libraryVdf = configDir + QStringLiteral("/libraryfolders.vdf");
@@ -296,12 +106,21 @@ void SteamConfigManager::detectSteamPaths()
             m_steamPaths.configDir = configDir;
             m_steamPaths.libraryFoldersVdf = libraryVdf;
 
-            const QString userDataBase = root + QStringLiteral("/userdata");
-            const QString steamUserId =
-                selectSteamUserId(userDataBase, configDir + QStringLiteral("/loginusers.vdf"));
-            if (!steamUserId.isEmpty()) {
-                m_steamPaths.userDataDir = userDataBase + QStringLiteral("/") + steamUserId;
-                m_steamPaths.shortcutsVdf = m_steamPaths.userDataDir + QStringLiteral("/config/shortcuts.vdf");
+            // Find userdata directory (contains Steam user ID subdirectories)
+            QString userDataBase = root + QStringLiteral("/userdata");
+            QDir userDataDir(userDataBase);
+            if (userDataDir.exists()) {
+                // Get first numeric subdirectory (Steam user ID)
+                QStringList entries = userDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+                for (const QString &entry : entries) {
+                    bool ok;
+                    entry.toULongLong(&ok);
+                    if (ok) {
+                        m_steamPaths.userDataDir = userDataBase + QStringLiteral("/") + entry;
+                        m_steamPaths.shortcutsVdf = m_steamPaths.userDataDir + QStringLiteral("/config/shortcuts.vdf");
+                        break;
+                    }
+                }
             }
 
             m_steamPaths.valid = true;
@@ -352,21 +171,27 @@ QString SteamConfigManager::getTargetSteamUserId(const QString &username) const
 
     QString targetHome = id.home;
 
-    const QStringList possibleRoots = {
-        targetHome + QStringLiteral("/.local/share/Steam"),
-        targetHome + QStringLiteral("/.steam/steam"),
-        targetHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam"),
-        targetHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
-        targetHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"),
+    // Check for Steam userdata in common locations
+    QStringList possibleRoots = {
+        targetHome + QStringLiteral("/.steam/steam/userdata"),
+        targetHome + QStringLiteral("/.local/share/Steam/userdata"),
     };
 
-    for (const QString &root : possibleRoots) {
-        const QString userDataBase = root + QStringLiteral("/userdata");
-        const QString steamId = selectSteamUserId(
-            userDataBase, root + QStringLiteral("/config/loginusers.vdf"));
-        if (!steamId.isEmpty()) {
-            qDebug() << "SteamConfigManager: Found Steam ID" << steamId << "for user" << username;
-            return steamId;
+    for (const QString &userDataBase : possibleRoots) {
+        QDir userDataDir(userDataBase);
+        if (!userDataDir.exists()) {
+            continue;
+        }
+
+        // Find first numeric directory (Steam user ID)
+        QStringList entries = userDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &entry : entries) {
+            bool ok;
+            entry.toULongLong(&ok);
+            if (ok) {
+                qDebug() << "SteamConfigManager: Found Steam ID" << entry << "for user" << username;
+                return entry;
+            }
         }
     }
 
@@ -403,25 +228,8 @@ void SteamConfigManager::loadShortcuts()
             return;
         }
     }
-    QFile shortcutFile(sourceFile);
-    if (!shortcutFile.open(QIODevice::ReadOnly)) {
-        qCWarning(couchplaySteam) << "Failed to read shortcuts:" << sourceFile;
-        Q_EMIT shortcutsLoaded();
-        return;
-    }
-    QByteArray shortcutBytes;
-    if (!readBoundedShortcutFile(shortcutFile, &shortcutBytes)) {
-        qCWarning(couchplaySteam) << "Failed to read shortcuts (file is too large or unreadable):" << sourceFile;
-        Q_EMIT shortcutsLoaded();
-        return;
-    }
-    QString parseError;
-    if (!SteamShortcutsVdf::decode(shortcutBytes, &m_shortcuts, &parseError)) {
-        qCWarning(couchplaySteam) << "Failed to parse shortcuts:" << parseError;
-        m_shortcuts.clear();
-        Q_EMIT shortcutsLoaded();
-        return;
-    }
+
+    m_shortcuts = parseShortcutsVdf(sourceFile);
     qCDebug(couchplaySteam) << "Loaded" << m_shortcuts.size() << "shortcuts from" << sourceFile;
 
     Q_EMIT shortcutsLoaded();
@@ -445,11 +253,8 @@ QList<SteamGame> SteamConfigManager::parseInstalledGames() const
             if (!manifest.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 continue;
             }
-            QByteArray manifestBytes;
-            if (!readBoundedManifestFile(manifest, &manifestBytes)) {
-                continue;
-            }
-            const QString content = QString::fromUtf8(manifestBytes);
+            const QString content = QString::fromUtf8(manifest.readAll());
+            manifest.close();
 
             const auto appIdMatch = appIdPattern.match(content);
             const auto nameMatch = namePattern.match(content);
@@ -489,7 +294,7 @@ void SteamConfigManager::loadGames()
 
     QSet<QString> keys;
     for (const SteamShortcut &shortcut : std::as_const(m_shortcuts)) {
-        if (SteamShortcutsVdf::isProfileShortcut(shortcut) || shortcut.appId == 0 || shortcut.appName.isEmpty()) {
+        if (shortcut.appId == 0 || shortcut.appName.isEmpty()) {
             continue;
         }
         const quint64 shortcutId = (static_cast<quint64>(shortcut.appId) << 32) | 0x02000000ULL;
@@ -546,9 +351,7 @@ QStringList SteamConfigManager::extractShortcutDirectories() const
     QSet<QString> dirs;
 
     for (const SteamShortcut &sc : m_shortcuts) {
-        if (SteamShortcutsVdf::isProfileShortcut(sc)) {
-            continue;
-        }
+        // Extract exe directory
         if (!sc.exe.isEmpty()) {
             QString exePath = sc.exe;
             // Remove quotes if present
@@ -593,12 +396,9 @@ QStringList SteamConfigManager::extractShortcutDirectories() const
     return dirs.values();
 }
 
-bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername, std::function<bool()> shouldContinue)
+bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
 {
     qCDebug(couchplaySteam) << "syncShortcutsToUser called for" << targetUsername;
-    if (shouldContinue && !shouldContinue()) {
-        return false;
-    }
 
     if (!m_helperClient || !m_helperClient->isAvailable()) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Helper not available";
@@ -606,50 +406,47 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername, std:
         return false;
     }
 
+    // Get source shortcuts.vdf path
     if (!m_steamPaths.valid || m_steamPaths.shortcutsVdf.isEmpty()) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not detected";
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Steam not detected"));
         return false;
     }
 
-    const QString sourceFile = m_steamPaths.shortcutsVdf;
+    QString sourceFile = m_steamPaths.shortcutsVdf;
     if (!QFile::exists(sourceFile)) {
         qCDebug(couchplaySteam) << "No shortcuts.vdf to sync";
-        return true;
+        return true; // Not an error, just nothing to do
     }
 
     qCDebug(couchplaySteam) << "Source file:" << sourceFile;
-    const bool targetSteamBootstrapped = m_helperClient->isSteamBootstrapped(targetUsername);
-    if (shouldContinue && !shouldContinue()) {
-        return false;
-    }
-    if (!targetSteamBootstrapped) {
+
+    if (m_helperClient && m_helperClient->isAvailable()
+        && !m_helperClient->isSteamBootstrapped(targetUsername)) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not set up for user" << targetUsername;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Steam not set up for user (run Steam once first)"));
         return false;
     }
-
-    const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
-    if (shouldContinue && !shouldContinue()) {
+    // Get target user's Steam ID
+    QString targetSteamId = getTargetSteamUserId(targetUsername);
+    if (targetSteamId.isEmpty()) {
+        qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not set up for user" << targetUsername;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Steam not set up for user (run Steam once first)"));
         return false;
     }
-    if (!targetPaths.valid || targetPaths.shortcutsVdf.isEmpty() || targetPaths.userDataDir.isEmpty()) {
+    qCDebug(couchplaySteam) << "Target Steam ID:" << targetSteamId;
+
+    const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
+    if (!targetPaths.valid || targetPaths.shortcutsVdf.isEmpty()) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Could not resolve target Steam paths for"
                                    << targetUsername;
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Could not resolve target Steam paths"));
         return false;
     }
-    const QString targetSteamId = QFileInfo(targetPaths.userDataDir).fileName();
-    bool targetSteamIdIsNumeric = !targetSteamId.isEmpty() && targetSteamId.size() <= 20;
-    for (const QChar ch : targetSteamId) {
-        targetSteamIdIsNumeric = targetSteamIdIsNumeric && ch.unicode() >= '0' && ch.unicode() <= '9';
-    }
-    if (!targetSteamIdIsNumeric) {
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Could not resolve target Steam account"));
-        return false;
-    }
     const QString targetVdf = targetPaths.shortcutsVdf;
 
+    // Direct byte copy - preserves exact Steam format including all end markers
+    // This is the preferred approach as it avoids any serialization differences
     QFile sourceFileHandle(sourceFile);
     if (!sourceFileHandle.open(QIODevice::ReadOnly)) {
         qCWarning(couchplaySteam) << "Failed to open source file:" << sourceFile;
@@ -657,79 +454,23 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername, std:
         return false;
     }
 
-    QByteArray sourceVdfData;
-    if (!readBoundedShortcutFile(sourceFileHandle, &sourceVdfData)) {
-        sourceFileHandle.close();
-        qCWarning(couchplaySteam) << "Failed to read source shortcuts.vdf (file is too large or unreadable):" << sourceFile;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to read source shortcuts.vdf"));
-        return false;
-    }
+    QByteArray vdfData = sourceFileHandle.readAll();
     sourceFileHandle.close();
-    if (shouldContinue && !shouldContinue()) {
-        return false;
-    }
 
-    QByteArray targetVdfData;
-    QString helperError;
-    if (!m_helperClient->readSteamShortcutsForUser(targetUsername,
-                                                  targetSteamId,
-                                                  &targetVdfData,
-                                                  shouldContinue,
-                                                  &helperError)) {
-        if (shouldContinue && !shouldContinue()) {
-            return false;
-        }
-        const QString message = helperError.isEmpty()
-            ? QStringLiteral("Failed to read target shortcuts.vdf")
-            : QStringLiteral("Failed to read target shortcuts.vdf: %1").arg(helperError);
-        qCWarning(couchplaySteam) << message;
-        Q_EMIT syncFailed(targetUsername, message);
-        return false;
-    }
-    if (shouldContinue && !shouldContinue()) {
-        return false;
-    }
+    qCDebug(couchplaySteam) << "Read" << vdfData.size() << "bytes from source, writing directly to" << targetVdf;
 
-    const QByteArray expectedDigest = targetVdfData.isEmpty()
-        ? QByteArrayLiteral("missing")
-        : QCryptographicHash::hash(targetVdfData, QCryptographicHash::Sha256).toHex();
-    if (targetVdfData.isEmpty()) {
-        targetVdfData = SteamShortcutsVdf::emptyDocument();
-    }
+    // Write directly to target user via helper (avoids PrivateTmp issues)
+    bool success = m_helperClient->writeFileToUser(vdfData, targetVdf, targetUsername);
 
-    QByteArray vdfData;
-    QString mergeError;
-    if (!SteamShortcutsVdf::mergePreservingProfiles(sourceVdfData, targetVdfData, &vdfData, &mergeError)) {
-        qCWarning(couchplaySteam) << "Failed to preserve target CouchPlay shortcuts:" << mergeError;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Invalid source or target shortcuts.vdf"));
-        return false;
-    }
-    if (shouldContinue && !shouldContinue()) {
-        return false;
-    }
-
-    qCDebug(couchplaySteam) << "Read" << vdfData.size() << "bytes from source, conditionally writing to" << targetVdf;
-    helperError.clear();
-    const bool success = m_helperClient->writeSteamShortcutsForUser(targetUsername,
-                                                                    targetSteamId,
-                                                                    expectedDigest,
-                                                                    vdfData,
-                                                                    &helperError);
     if (success) {
         qCDebug(couchplaySteam) << "Synced shortcuts to" << targetUsername;
         Q_EMIT syncCompleted(targetUsername);
-        return true;
-    }
-    if (shouldContinue && !shouldContinue()) {
-        return false;
+    } else {
+        qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Failed to write shortcuts.vdf to" << targetVdf;
+        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to write shortcuts.vdf"));
     }
 
-    const QString message = helperError.isEmpty()
-        ? QStringLiteral("Failed to write shortcuts.vdf")
-        : QStringLiteral("Failed to write shortcuts.vdf: %1").arg(helperError);
-    qCWarning(couchplaySteam) << "syncShortcutsToUser failed -" << message;
-    Q_EMIT syncFailed(targetUsername, message);
-    return false;
+    return success;
 }
 
 // Get target Steam paths for a user (uses target user's Steam ID)
@@ -773,9 +514,6 @@ SteamPaths SteamConfigManager::getTargetSteamPaths(const QString &username) cons
     const QStringList possibleRoots = {
         targetHome + QStringLiteral("/.local/share/Steam"),
         targetHome + QStringLiteral("/.steam/steam"),
-        targetHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam"),
-        targetHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
-        targetHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"),
     };
 
     for (const QString &candidateRoot : possibleRoots) {
@@ -829,6 +567,174 @@ SteamPaths SteamConfigManager::getTargetSteamPaths(const QString &username) cons
     return paths;
 }
 
+// ============================================================================
+// Binary VDF Parsing
+// ============================================================================
+
+// Binary VDF type markers
+constexpr char VDF_TYPE_OBJECT = 0x00;
+constexpr char VDF_TYPE_STRING = 0x01;
+constexpr char VDF_TYPE_INT32 = 0x02;
+constexpr char VDF_TYPE_END = 0x08;
+
+QList<SteamShortcut> SteamConfigManager::parseShortcutsVdf(const QString &path)
+{
+    QList<SteamShortcut> result;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "SteamConfigManager: Failed to open" << path;
+        return result;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    if (data.isEmpty()) {
+        return result;
+    }
+
+    // Parse binary VDF
+    int pos = 0;
+
+    // Read root object marker and "shortcuts" key
+    if (pos >= data.size() || data[pos] != VDF_TYPE_OBJECT) {
+        qWarning() << "SteamConfigManager: Invalid VDF format - expected object marker";
+        return result;
+    }
+    pos++;
+
+    // Read "shortcuts" string
+    QString rootKey;
+    while (pos < data.size() && data[pos] != '\0') {
+        rootKey += QChar::fromLatin1(data[pos]);
+        pos++;
+    }
+    pos++; // Skip null terminator
+
+    if (rootKey != QStringLiteral("shortcuts")) {
+        qWarning() << "SteamConfigManager: Unexpected root key:" << rootKey;
+        return result;
+    }
+
+    // Now parse each shortcut (numbered 0, 1, 2, ...)
+    while (pos < data.size()) {
+        if (data[pos] == VDF_TYPE_END) {
+            break; // End of shortcuts object
+        }
+
+        if (data[pos] != VDF_TYPE_OBJECT) {
+            break; // Unexpected type
+        }
+        pos++;
+
+        // Read shortcut index key
+        QString indexKey;
+        while (pos < data.size() && data[pos] != '\0') {
+            indexKey += QChar::fromLatin1(data[pos]);
+            pos++;
+        }
+        pos++; // Skip null terminator
+
+        SteamShortcut shortcut;
+
+        // Parse shortcut properties
+        while (pos < data.size()) {
+            char type = data[pos];
+            if (type == VDF_TYPE_END) {
+                pos++;
+                break; // End of this shortcut
+            }
+            pos++;
+
+            // Read key
+            QString key;
+            while (pos < data.size() && data[pos] != '\0') {
+                key += QChar::fromLatin1(data[pos]);
+                pos++;
+            }
+            pos++; // Skip null terminator
+
+            if (type == VDF_TYPE_STRING) {
+                QString value;
+                while (pos < data.size() && data[pos] != '\0') {
+                    value += QChar::fromLatin1(data[pos]);
+                    pos++;
+                }
+                pos++; // Skip null terminator
+
+                if (key == QStringLiteral("AppName")) {
+                    shortcut.appName = value;
+                } else if (key == QStringLiteral("exe") || key == QStringLiteral("Exe")) {
+                    shortcut.exe = value;
+                } else if (key == QStringLiteral("StartDir")) {
+                    shortcut.startDir = value;
+                } else if (key == QStringLiteral("icon")) {
+                    shortcut.icon = value;
+                } else if (key == QStringLiteral("ShortcutPath")) {
+                    shortcut.shortcutPath = value;
+                } else if (key == QStringLiteral("LaunchOptions")) {
+                    shortcut.launchOptions = value;
+                } else if (key == QStringLiteral("DevkitGameID")) {
+                    shortcut.devkitGameId = value;
+                } else if (key == QStringLiteral("FlatpakAppID")) {
+                    shortcut.flatpakAppId = value;
+                } else if (key == QStringLiteral("sortas")) {
+                    shortcut.sortAs = value;
+                }
+            } else if (type == VDF_TYPE_INT32) {
+                if (pos + 4 > data.size())
+                    break;
+                quint32 value = 0;
+                value |= static_cast<quint8>(data[pos++]);
+                value |= static_cast<quint8>(data[pos++]) << 8;
+                value |= static_cast<quint8>(data[pos++]) << 16;
+                value |= static_cast<quint8>(data[pos++]) << 24;
+
+                if (key == QStringLiteral("appid") || key == QStringLiteral("AppId")) {
+                    shortcut.appId = value;
+                } else if (key == QStringLiteral("IsHidden")) {
+                    shortcut.isHidden = (value != 0);
+                } else if (key == QStringLiteral("AllowDesktopConfig")) {
+                    shortcut.allowDesktopConfig = (value != 0);
+                } else if (key == QStringLiteral("AllowOverlay")) {
+                    shortcut.allowOverlay = (value != 0);
+                } else if (key == QStringLiteral("OpenVR")) {
+                    shortcut.openVR = (value != 0);
+                } else if (key == QStringLiteral("Devkit")) {
+                    shortcut.devkit = (value != 0);
+                } else if (key == QStringLiteral("DevkitOverrideAppID")) {
+                    shortcut.devkitOverrideAppId = value;
+                } else if (key == QStringLiteral("LastPlayTime")) {
+                    shortcut.lastPlayTime = value;
+                }
+            } else if (type == VDF_TYPE_OBJECT) {
+                // Handle nested objects like "tags"
+                if (key == QStringLiteral("tags")) {
+                    // Skip tags for now - just consume until end marker
+                    while (pos < data.size() && data[pos] != VDF_TYPE_END) {
+                        // Skip type marker
+                        pos++;
+                        // Skip key
+                        while (pos < data.size() && data[pos] != '\0')
+                            pos++;
+                        pos++;
+                        // Skip value based on type (assume string)
+                        while (pos < data.size() && data[pos] != '\0')
+                            pos++;
+                        pos++;
+                    }
+                    if (pos < data.size())
+                        pos++; // Skip end marker
+                }
+            }
+        }
+
+        result.append(shortcut);
+    }
+
+    return result;
+}
 
 void SteamConfigManager::loadLibraryFolders()
 {
@@ -882,12 +788,7 @@ QList<SteamLibraryFolder> SteamConfigManager::parseLibraryFoldersVdf(const QStri
         return result;
     }
     
-    QByteArray bytes;
-    if (!readBoundedLibraryFoldersFile(file, &bytes)) {
-        qCWarning(couchplaySteam) << "Failed to read libraryfolders.vdf (file is too large or unreadable):" << path;
-        return result;
-    }
-    QString content = QString::fromUtf8(bytes);
+    QString content = QString::fromUtf8(file.readAll());
     file.close();
     
     if (content.isEmpty()) {
@@ -1048,36 +949,6 @@ QString SteamConfigManager::generateLibraryFoldersVdf(const QList<SteamLibraryFo
     return vdf;
 }
 
-bool SteamConfigManager::captureLibraryFoldersSnapshot(const QString &username,
-                                                       const SteamPaths &targetPaths,
-                                                       const QString &steamUserId)
-{
-    if (!m_helperClient || !m_helperClient->isAvailable()) return false;
-    if (!targetPaths.valid || targetPaths.steamRoot.isEmpty() || targetPaths.libraryFoldersVdf.isEmpty()
-        || steamUserId.isEmpty()) {
-        return false;
-    }
-    if (const auto existing = m_libraryFoldersSnapshots.constFind(username);
-        existing != m_libraryFoldersSnapshots.cend()) {
-        return existing->steamRoot == targetPaths.steamRoot
-            && existing->libraryFoldersPath == targetPaths.libraryFoldersVdf
-            && existing->steamUserId == steamUserId;
-    }
-    LibraryFoldersSnapshot snapshot;
-    snapshot.steamRoot = targetPaths.steamRoot;
-    snapshot.libraryFoldersPath = targetPaths.libraryFoldersVdf;
-    snapshot.steamUserId = steamUserId;
-    if (!m_helperClient->readSteamLibraryFoldersForUser(username, &snapshot.content, &snapshot.existed)
-        || snapshot.content.size() > MaxLibraryFoldersSize) {
-        qCWarning(couchplaySteam) << "Could not snapshot target libraryfolders.vdf for" << username;
-        return false;
-    }
-    snapshot.sessionExisted = snapshot.existed;
-    snapshot.sessionContent = snapshot.content;
-    m_libraryFoldersSnapshots.insert(username, std::move(snapshot));
-    return true;
-}
-
 bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
 {
     qCDebug(couchplaySteam) << "shareLibraryToUser called for" << targetUsername;
@@ -1117,7 +988,7 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         Q_EMIT syncFailed(targetUsername, QStringLiteral("Target user has not set up Steam"));
         return false;
     }
-    const QString targetSteamId = QFileInfo(targetPaths.userDataDir).fileName();
+    QString targetSteamId = getTargetSteamUserId(targetUsername);
     if (targetSteamId.isEmpty()) {
         qCWarning(couchplaySteam) << "shareLibraryToUser failed - Target user" << targetUsername
                                    << "has not set up Steam (no userdata found). Launch Steam once first.";
@@ -1125,9 +996,6 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
         return false;
     }
     
-    if (!captureLibraryFoldersSnapshot(targetUsername, targetPaths, targetSteamId)) {
-        return false;
-    }
     QList<SteamLibraryFolder> targetLibraries;
     bool anyFailure = false;
     
@@ -1163,14 +1031,7 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
             const QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
             QFile manifestFile(manifestPath);
             if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QByteArray content;
-                if (!readBoundedManifestFile(manifestFile, &content)) {
-                    qCWarning(couchplaySteam) << "Failed to read Steam manifest (file is too large or unreadable):"
-                                               << manifestPath;
-                    anyFailure = true;
-                    manifestFile.close();
-                    continue;
-                }
+                const QByteArray content = manifestFile.readAll();
                 manifestFile.close();
 
                 const QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
@@ -1195,21 +1056,14 @@ bool SteamConfigManager::shareLibraryToUser(const QString &targetUsername)
     ownRoot.path = targetPaths.steamRoot;
     targetLibraries.prepend(ownRoot);
     
-    const QByteArray vdfBytes = generateLibraryFoldersVdf(targetLibraries).toUtf8();
-    if (vdfBytes.size() > MaxLibraryFoldersSize) {
-        qCWarning(couchplaySteam) << "Generated libraryfolders.vdf exceeds the helper size limit for" << targetUsername;
-        return false;
-    }
+    QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
+    
     qCDebug(couchplaySteam) << "Writing libraryfolders.vdf to" << targetPaths.libraryFoldersVdf;
-    if (!m_helperClient->writeFileToUser(vdfBytes, targetPaths.libraryFoldersVdf, targetUsername)) {
+    if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername)) {
         qCWarning(couchplaySteam) << "Failed to write libraryfolders.vdf for" << targetUsername;
         return false;
     }
-    auto snapshot = m_libraryFoldersSnapshots.find(targetUsername);
-    if (snapshot != m_libraryFoldersSnapshots.end()) {
-        snapshot->sessionExisted = true;
-        snapshot->sessionContent = vdfBytes;
-    }
+    
     if (anyFailure) {
         qCWarning(couchplaySteam) << "Partially failed sharing Steam library to" << targetUsername;
     } else {
@@ -1225,52 +1079,25 @@ bool SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
         return false;
     }
 
-    auto snapshot = m_libraryFoldersSnapshots.constFind(targetUsername);
-    if (snapshot == m_libraryFoldersSnapshots.cend()) return true;
-
-    const SteamPaths currentPaths = getTargetSteamPaths(targetUsername);
-    const QString currentSteamUserId = QFileInfo(currentPaths.userDataDir).fileName();
-    if (!currentPaths.valid || currentPaths.steamRoot != snapshot->steamRoot
-        || currentPaths.libraryFoldersVdf != snapshot->libraryFoldersPath
-        || currentSteamUserId != snapshot->steamUserId) {
-        qCWarning(couchplaySteam)
-            << "Preserving target libraryfolders.vdf because Steam root or account changed during session for"
-            << targetUsername;
-        m_libraryFoldersSnapshots.remove(targetUsername);
-        return true;
-    }
-
-    QByteArray currentContent;
-    bool currentExisted = false;
-    if (!m_helperClient->readSteamLibraryFoldersForUser(targetUsername, &currentContent, &currentExisted)) {
-        qCWarning(couchplaySteam) << "Could not inspect target libraryfolders.vdf before cleanup for" << targetUsername;
+    const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
+    if (!targetPaths.valid || targetPaths.libraryFoldersVdf.isEmpty()) {
         return false;
     }
-    if (currentExisted != snapshot->sessionExisted || currentContent != snapshot->sessionContent) {
-        qCWarning(couchplaySteam) << "Preserving target libraryfolders.vdf changed during session for" << targetUsername;
-        m_libraryFoldersSnapshots.remove(targetUsername);
-        return true;
-    }
-    if (!m_helperClient->restoreSteamLibraryFoldersForUser(targetUsername,
-                                                           snapshot->existed,
-                                                           snapshot->content)) {
-        qCWarning(couchplaySteam) << "Failed to restore target libraryfolders.vdf for" << targetUsername;
+
+    // Restore minimal libraryfolders.vdf — clears shared library entries
+    // so Steam doesn't reference bind-mounted paths that no longer exist.
+    const QString emptyVdf = QStringLiteral("\"libraryfolders\"\n{\n}\n");
+    if (!m_helperClient->writeFileToUser(emptyVdf.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername)) {
+        qCWarning(couchplaySteam) << "Failed to clean up library sharing for" << targetUsername;
         return false;
     }
-    m_libraryFoldersSnapshots.remove(targetUsername);
-    qCDebug(couchplaySteam) << "Restored target libraryfolders.vdf for" << targetUsername;
+
+    qCDebug(couchplaySteam) << "Cleaned up library sharing for" << targetUsername;
     return true;
 }
 
-bool SteamConfigManager::prepareDataDir(const DataDirectory &dir,
-                                        const QString &username,
-                                        std::function<bool()> shouldContinue)
+bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString &username)
 {
-    const auto canContinue = [&shouldContinue] { return !shouldContinue || shouldContinue(); };
-    if (!canContinue()) {
-        return false;
-    }
-
     // Library sharing: overlay mode on steamRoot
     if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
         && dir.path == m_steamPaths.steamRoot) {
@@ -1281,9 +1108,6 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir,
 
         if (m_libraries.isEmpty()) {
             loadLibraryFolders();
-        }
-        if (!canContinue()) {
-            return false;
         }
         if (m_libraries.isEmpty()) {
             qCWarning(couchplaySteam) << "prepareDataDir: No Steam libraries loaded";
@@ -1296,19 +1120,10 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir,
 
         bool anyFailure = false;
         for (const SteamLibraryFolder &library : m_libraries) {
-            if (!canContinue()) {
-                return false;
-            }
             const QString sourceCommon = library.path + QStringLiteral("/steamapps/common");
             qCDebug(couchplaySteam) << "prepareDataDir: Setting ACL on" << sourceCommon << "for" << username;
             const bool parentAclOk = m_helperClient->setPathAclWithParents(sourceCommon, username);
-            if (!canContinue()) {
-                return false;
-            }
             const bool contentAclOk = m_helperClient->setDirectoryAcl(sourceCommon, username, true);
-            if (!canContinue()) {
-                return false;
-            }
             if (!parentAclOk || !contentAclOk) {
                 qCWarning(couchplaySteam) << "prepareDataDir: Failed to set recursive ACL on" << sourceCommon;
                 anyFailure = true;
@@ -1318,31 +1133,12 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir,
         // Mount only game content. The library root can contain the
         // compositor's Steam account, userdata, and configuration, none of
         // which should be exposed to a player.
-        bool mountedAnyLibrary = false;
-        const auto rollbackMounts = [&] {
-            if (mountedAnyLibrary && m_helperClient && m_helperClient->isAvailable()) {
-                m_helperClient->unmountAllSharedDirectories();
-                mountedAnyLibrary = false;
-            }
-        };
         for (int i = 0; i < m_libraries.size(); ++i) {
-            if (!canContinue()) {
-                rollbackMounts();
-                return false;
-            }
             const QString sourceCommon = m_libraries[i].path + QStringLiteral("/steamapps/common");
             const QString alias =
                 QStringLiteral(".couchplay/steam-libs/%1/steamapps/common").arg(QString::number(i));
             qCDebug(couchplaySteam) << "prepareDataDir: Overlaying" << sourceCommon << "at" << alias << "for" << username;
-            const bool mounted = m_helperClient->setupOverlayMount(username, sourceCommon, alias);
-            if (mounted) {
-                mountedAnyLibrary = true;
-            }
-            if (!canContinue()) {
-                rollbackMounts();
-                return false;
-            }
-            if (!mounted) {
+            if (!m_helperClient->setupOverlayMount(username, sourceCommon, alias)) {
                 qCWarning(couchplaySteam) << "prepareDataDir: Failed to mount library content" << sourceCommon;
                 anyFailure = true;
             }
@@ -1353,31 +1149,8 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir,
     return true;
 }
 
-bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
-                                         const QString &username,
-                                         std::function<bool()> shouldContinue)
+bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString &username)
 {
-    const auto canContinue = [&shouldContinue] {
-        return !shouldContinue || shouldContinue();
-    };
-    const auto rollbackSnapshot = [&] {
-        if (!m_libraryFoldersSnapshots.contains(username)) {
-            return;
-        }
-        if (!cleanupLibrarySharing(username)) {
-            qCWarning(couchplaySteam) << "finalizeDataDir: Failed to restore target libraryfolders.vdf for" << username;
-        }
-    };
-    const auto abortIfCancelled = [&] {
-        if (canContinue()) {
-            return false;
-        }
-        rollbackSnapshot();
-        return true;
-    };
-    if (abortIfCancelled()) {
-        return false;
-    }
     // Library sharing: overlay mode on steamRoot
     if (dir.mode == QStringLiteral("overlay") && !m_steamPaths.steamRoot.isEmpty()
         && dir.path == m_steamPaths.steamRoot) {
@@ -1405,20 +1178,12 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
             return false;
         }
         QString targetHome = targetIdentity.home;
-        const QString targetSteamId = QFileInfo(targetPaths.userDataDir).fileName();
+        QString targetSteamId = getTargetSteamUserId(username);
         if (targetSteamId.isEmpty()) {
             qCWarning(couchplaySteam) << "finalizeDataDir: Target user has not set up Steam:" << username;
             return false;
         }
-        if (abortIfCancelled()) {
-            return false;
-        }
-        if (!captureLibraryFoldersSnapshot(username, targetPaths, targetSteamId)) {
-            return false;
-        }
-        if (abortIfCancelled()) {
-            return false;
-        }
+
         QList<SteamLibraryFolder> targetLibraries;
         bool anyFailure = false;
 
@@ -1440,27 +1205,13 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
                 QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
                 QFile manifestFile(manifestPath);
                 if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    QByteArray content;
-                    if (!readBoundedManifestFile(manifestFile, &content)) {
-                        qCWarning(couchplaySteam)
-                            << "finalizeDataDir: Failed to read Steam manifest (file is too large or unreadable):"
-                            << manifestPath;
-                        anyFailure = true;
-                        manifestFile.close();
-                        continue;
-                    }
+                    QByteArray content = manifestFile.readAll();
                     manifestFile.close();
 
                     QString targetManifestPath = targetSteamApps + QLatin1Char('/') + manifest;
-                    if (abortIfCancelled()) {
-                        return false;
-                    }
                     if (!m_helperClient->writeFileToUser(content, targetManifestPath, username)) {
                         qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write manifest" << manifest;
                         anyFailure = true;
-                    }
-                    if (abortIfCancelled()) {
-                        return false;
                     }
                 }
             }
@@ -1479,25 +1230,8 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir,
         ownRoot.path = targetPaths.steamRoot;
         targetLibraries.prepend(ownRoot);
 
-        const QByteArray vdfBytes = generateLibraryFoldersVdf(targetLibraries).toUtf8();
-        if (vdfBytes.size() > MaxLibraryFoldersSize) {
-            qCWarning(couchplaySteam) << "finalizeDataDir: Generated libraryfolders.vdf exceeds the helper size limit for"
-                                       << username;
-            return false;
-        }
-        const bool vdfWritten =
-            m_helperClient->writeFileToUser(vdfBytes, targetPaths.libraryFoldersVdf, username);
-        if (vdfWritten) {
-            auto snapshot = m_libraryFoldersSnapshots.find(username);
-            if (snapshot != m_libraryFoldersSnapshots.end()) {
-                snapshot->sessionExisted = true;
-                snapshot->sessionContent = vdfBytes;
-            }
-        }
-        if (abortIfCancelled()) {
-            return false;
-        }
-        if (!vdfWritten) {
+        QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
+        if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, username)) {
             qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write libraryfolders.vdf for" << username;
             return false;
         }

@@ -27,9 +27,6 @@ set(TEST_MANAGER_SOURCES
     ../src/core/LaunchTypes.h
     ../src/core/CommandLineOptions.cpp
     ../src/core/CommandLineOptions.h
-    ../src/core/CommandLineBridge.cpp
-    ../src/core/SessionLaunchClient.cpp
-    ../src/core/SessionLaunchClient.h
     ../src/core/GamescopeInstance.cpp
     ../src/core/GamescopeInstance.h
     ../src/core/UserManager.cpp
@@ -42,14 +39,14 @@ set(TEST_MANAGER_SOURCES
     ../src/core/WindowManager.h
     ../src/core/PresetManager.cpp
     ../src/core/PresetManager.h
-     ../src/core/HeroicConfigManager.cpp
-     ../src/core/HeroicConfigManager.h
-     ../src/core/SteamConfigManager.cpp
+    ../src/core/HeroicConfigManager.cpp
+    ../src/core/HeroicConfigManager.h
+    ../src/core/SteamConfigManager.cpp
+    ../src/core/SteamConfigManager.h
     ../src/core/SteamShortcutManager.cpp
     ../src/core/SteamShortcutManager.h
     ../src/core/SteamShortcutsVdf.cpp
     ../src/core/SteamShortcutsVdf.h
-     ../src/core/SteamConfigManager.h
     ../src/core/SettingsManager.cpp
     ../src/core/SettingsManager.h
     ../src/core/Logging.cpp
@@ -61,7 +58,6 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SunshineConfig.h
     ../src/core/StreamManager.cpp
     ../src/core/StreamManager.h
-    ../src/steam-integration.qrc
     ../src/dbus/CouchPlayHelperClient.cpp
     ../src/dbus/CouchPlayHelperClient.h
 )
@@ -162,9 +158,9 @@ target_include_directories(sunshine_config_generator PRIVATE
 set_target_properties(sunshine_config_generator PROPERTIES AUTOMOC ON)
 
 add_couchplay_test(test_commandlineoptions)
-add_couchplay_test(test_steamshortcutmanager)
-add_couchplay_test(test_sessionlaunchclient)
 # Add test executables
+add_couchplay_test(test_steamshortcutmanager)
+add_couchplay_test(test_steamregistration)
 add_couchplay_test(test_steamconfigmanager)
 add_couchplay_test(test_audiomanager)
 add_couchplay_test(test_commandverifier)

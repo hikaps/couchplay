@@ -3,18 +3,14 @@
 
 #include <pwd.h>
 #include <QDir>
-#include <QEventLoop>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QList>
-#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
-#include <functional>
-#include <utility>
 #include <unistd.h>
 
 #define private public
@@ -24,7 +20,6 @@
 #include "HeroicConfigManager.h"
 #include "SessionManager.h"
 #include "SteamConfigManager.h"
-#include "SteamShortcutsVdf.h"
 #define private public
 #include "CouchPlayHelperClient.h"
 
@@ -83,11 +78,7 @@ public:
     QList<OverlayCall> overlayCalls;
     QList<CopyDirCall> copyDirCalls;
     QList<MirrorCall> mirrorCalls;
-    int shortcutReadCalls = 0;
-    int shortcutWriteCalls = 0;
-    std::function<void()> onShortcutRead;
-    QStringList mountedOverlayAliases;
-    std::function<void()> onOverlayMount;
+
     explicit MockCouchPlayHelperClient(QObject *parent = nullptr)
         : CouchPlayHelperClient(parent)
     {
@@ -95,8 +86,6 @@ public:
     }
 
     QList<QStringList> launchCommands;
-    std::function<void()> onLaunchInstance;
-
     qint64 nextPid = 1000;
     qint64 launchInstance(const QString &username,
                           const QString &displayContext,
@@ -115,58 +104,13 @@ public:
         Q_UNUSED(environment)
         Q_UNUSED(bindPaths)
         launchCommands.append(gameCommand);
-        if (onLaunchInstance) {
-            auto callback = onLaunchInstance;
-            onLaunchInstance = {};
-            callback();
-        }
         return nextPid++;
     }
 
-    int stopInstanceCalls = 0;
     bool stopInstance(qint64 pid) override
     {
         Q_UNUSED(pid)
-        ++stopInstanceCalls;
         return true;
-    }
-
-    bool restoreAllDevicesResult = true;
-    int restoreAllDevicesCalls = 0;
-    bool restoreAllDevices() override
-    {
-        ++restoreAllDevicesCalls;
-        return restoreAllDevicesResult;
-    }
-    std::function<void()> onCreateVirtualOutput;
-    int createdVirtualOutputs = 0;
-    QString createVirtualOutput(const QString &, int, int, int) override
-    {
-        const QString display = QStringLiteral("test-stream-%1").arg(++createdVirtualOutputs);
-        if (onCreateVirtualOutput) {
-            auto callback = std::move(onCreateVirtualOutput);
-            onCreateVirtualOutput = {};
-            callback();
-        }
-        return display;
-    }
-    QString createNullSink(const QString &, const QString &sinkName) override
-    {
-        return sinkName;
-    }
-    bool destroyVirtualOutputResult = true;
-    bool destroyNullSinkResult = true;
-    int destroyVirtualOutputCalls = 0;
-    int destroyNullSinkCalls = 0;
-    bool destroyVirtualOutput(const QString &, const QString &) override
-    {
-        ++destroyVirtualOutputCalls;
-        return destroyVirtualOutputResult;
-    }
-    bool destroyNullSink(const QString &, const QString &) override
-    {
-        ++destroyNullSinkCalls;
-        return destroyNullSinkResult;
     }
 
     bool killInstance(qint64 pid) override
@@ -189,12 +133,6 @@ public:
     bool setupOverlayMount(const QString &username, const QString &sourceDir, const QString &targetAlias) override
     {
         overlayCalls.append({username, sourceDir, targetAlias});
-        if (onOverlayMount) {
-            auto callback = onOverlayMount;
-            onOverlayMount = {};
-            callback();
-        }
-        mountedOverlayAliases.append(targetAlias);
         return true;
     }
 
@@ -217,14 +155,10 @@ public:
     }
 
     int unmountAllCalls = 0;
-    int unmountAllResult = 0;
     int unmountAllSharedDirectories() override
     {
-        ++unmountAllCalls;
-        if (unmountAllResult >= 0) {
-            mountedOverlayAliases.clear();
-        }
-        return unmountAllResult;
+        unmountAllCalls++;
+        return 0;
     }
 
     bool setDeviceOwner(const QString &devicePath, int uid) override
@@ -268,56 +202,9 @@ public:
     {
         return username == QStringLiteral("player1") ? player1SteamRoot : QString();
     }
-    bool isSteamBootstrapped(const QString &username) override
-    {
-        return username == QStringLiteral("player1");
-    }
 
-    bool readSteamShortcutsForUser(const QString &username,
-                                   const QString &steamId,
-                                   QByteArray *content,
-                                   std::function<bool()> shouldContinue,
-                                   QString *) override
-    {
-        if (username != QStringLiteral("player1") || steamId != QStringLiteral("12345") || !content
-            || (shouldContinue && !shouldContinue())) {
-            return false;
-        }
-        ++shortcutReadCalls;
-        if (onShortcutRead) {
-            QEventLoop waitForRead;
-            QTimer::singleShot(0, &waitForRead, [this, &waitForRead] {
-                onShortcutRead();
-                waitForRead.quit();
-            });
-            waitForRead.exec();
-        }
-        if (shouldContinue && !shouldContinue()) {
-            return false;
-        }
-        *content = SteamShortcutsVdf::emptyDocument();
-        return true;
-    }
-    bool writeSteamShortcutsForUser(const QString &username,
-                                    const QString &steamId,
-                                    const QByteArray &expectedDigest,
-                                    const QByteArray &content,
-                                    QString *errorMessage) override
-    {
-        Q_UNUSED(expectedDigest)
-        Q_UNUSED(content)
-        if (username != QStringLiteral("player1") || steamId != QStringLiteral("12345")) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("unexpected Steam account");
-            }
-            return false;
-        }
-        ++shortcutWriteCalls;
-        return true;
-    }
     bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username) override
     {
-        ++shortcutWriteCalls;
         Q_UNUSED(username)
         if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) {
             return false;
@@ -328,36 +215,6 @@ public:
         }
         f.write(content);
         return true;
-    }
-    bool readSteamLibraryFoldersForUser(const QString &username, QByteArray *content, bool *exists) override
-    {
-        if (username != QStringLiteral("player1") || !content || !exists || player1SteamRoot.isEmpty()) {
-            return false;
-        }
-        QFile file(player1SteamRoot + QStringLiteral("/config/libraryfolders.vdf"));
-        *exists = file.exists();
-        if (!*exists) {
-            content->clear();
-            return true;
-        }
-        if (!file.open(QIODevice::ReadOnly)) {
-            return false;
-        }
-        *content = file.readAll();
-        return true;
-    }
-
-    bool restoreSteamLibraryFoldersForUser(const QString &username, bool existed, const QByteArray &content) override
-    {
-        if (username != QStringLiteral("player1") || player1SteamRoot.isEmpty()) {
-            return false;
-        }
-        const QString path = player1SteamRoot + QStringLiteral("/config/libraryfolders.vdf");
-        if (!existed) {
-            return !QFile::exists(path) || QFile::remove(path);
-        }
-        QFile file(path);
-        return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(content) == content.size();
     }
 
     bool isInCouchPlayGroup(const QString &username) override
@@ -390,7 +247,6 @@ private Q_SLOTS:
     void testSetupDataDirectoriesMirrorsStagedData();
     void testSetupDataDirectoriesLibrarySharingGate();
     void testSetupDataDirectoriesSecondaryLibrariesMounted();
-    void testCancelSteamLibraryPreparationRollsBackMounts();
     void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
@@ -401,18 +257,7 @@ private Q_SLOTS:
     void testPreHookUsesStartingProfileSnapshot();
     void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
-    void testSessionStoppedHandlerCanStartNewSession();
-    void testActiveChangedStartRestartDoesNotRunObsoleteSetup();
-    void testActiveChangedRestartDoesNotEmitStaleFinalizationSignals();
-    void testStaleHookEventsCannotAffectReplacementHook();
-    void testInstanceStoppedReentrancyDoesNotFinalizeReplacementSession();
-    void testStartNextInstanceReentrancyDoesNotUseStaleConfig();
-    void testStopInstanceReentrancyDoesNotTouchReplacement();
-    void testStaleWindowCallbacksCannotAffectReplacementSession();
-    void testTeardownRetainsResourcesForRetry();
-    void testStreamingSetupFailureDoesNotFinalizeReplacementSession();
-    void testStreamingSetupDefersReentrantRestartUntilRollback();
-    void testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch();
+
 private:
     void createMockHeroicConfig(const QString &basePath);
     void createMockLegendaryConfig(const QString &basePath);
@@ -836,15 +681,6 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesMounted()
                      "}\n");
     libraryVdf.close();
 
-    // Finalization snapshots the target user's libraryfolders.vdf through the
-    // helper. Keep that target root in the isolated fixture so the test does
-    // not depend on a real /home/player1 installation.
-    const QString player1Home = homeDir.path() + QStringLiteral("/player1");
-    const QString player1SteamRoot = player1Home + QStringLiteral("/.steam/steam");
-    QVERIFY(QDir().mkpath(player1SteamRoot + QStringLiteral("/config")));
-    m_helperClient->player1Home = player1Home;
-    m_helperClient->player1SteamRoot = player1SteamRoot;
-
     auto *steamManager = new SteamConfigManager(this);
     steamManager->setHelperClient(m_helperClient); // prepareDataDir ACLs/mounts via the manager's own client
     m_runner->setSteamConfigManager(steamManager);
@@ -1078,60 +914,6 @@ void TestSessionRunner::testPostSessionRunsOnceAfterStop()
     QCOMPARE(marker.readAll(), QByteArray("post\n"));
 }
 
-void TestSessionRunner::testSessionStoppedHandlerCanStartNewSession()
-{
-    QTemporaryDir scriptDir;
-    QVERIFY(scriptDir.isValid());
-    const QString postPath = scriptDir.filePath(QStringLiteral("post-new-session.sh"));
-    const QString markerPath = scriptDir.filePath(QStringLiteral("post-new-session.log"));
-    QFile postScript(postPath);
-    QVERIFY(postScript.open(QIODevice::WriteOnly | QIODevice::Text));
-    postScript.write("#!/bin/sh\necho new-session >> \"" + markerPath.toUtf8() + "\"\n");
-    postScript.close();
-    QVERIFY(postScript.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
-
-    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Reentrant restart game"),
-                                                              QStringLiteral("/bin/true"));
-    QVERIFY(!presetId.isEmpty());
-    m_sessionManager->setInstanceCount(1);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    m_sessionManager->setInstancePreset(0, presetId);
-    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
-    bool restarted = false;
-    bool restartAccepted = false;
-    bool restartStateInitialized = false;
-    connect(m_runner, &SessionRunner::sessionStopped, m_runner,
-            [this, postPath, &restarted, &restartAccepted, &restartStateInitialized] {
-        if (restarted) {
-            return;
-        }
-        restarted = true;
-        m_sessionManager->setPostSessionExecutable(postPath);
-        restartAccepted = m_runner->start();
-        restartStateInitialized = m_runner->isActive() && m_runner->m_hasStartingProfile
-            && m_runner->m_startingProfile.postSessionExecutable == postPath && m_runner->m_postHookArmed;
-    });
-
-    QVERIFY(m_runner->start());
-    m_runner->stop();
-
-    QVERIFY(restarted);
-    QVERIFY(restartAccepted);
-    QVERIFY(restartStateInitialized);
-    QVERIFY(m_runner->isActive());
-    QVERIFY(m_runner->m_hasStartingProfile);
-    QCOMPARE(m_runner->m_startingProfile.postSessionExecutable, postPath);
-    QVERIFY(m_runner->m_postHookArmed);
-    QVERIFY(!m_runner->m_finalizing);
-    QCOMPARE(stoppedSpy.count(), 1);
-
-    m_runner->stop();
-    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 2, 2000);
-    QFile marker(markerPath);
-    QVERIFY(marker.open(QIODevice::ReadOnly | QIODevice::Text));
-    QCOMPARE(marker.readAll(), QByteArray("new-session\n"));
-}
-
 void TestSessionRunner::testResolveCompositorHomeViaHelper()
 {
     // Under Flatpak the sandbox's getpwuid cannot see host accounts; the
@@ -1164,31 +946,24 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
         manifest.write("\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n}\n");
     }
 
-    const QByteArray originalLibraryFolders =
-        QByteArrayLiteral("\"libraryfolders\"\n"
-                          "{\n"
-                          "  \"0\"\n"
-                          "  {\n"
-                          "    \"path\"\t\t\"" )
-        + steamRoot.toUtf8()
-        + QByteArrayLiteral("\"\n"
-                            "  }\n"
-                            "  \"1\"\n"
-                            "  {\n"
-                            "    \"path\"\t\t\"")
-        + externalLib.toUtf8()
-        + QByteArrayLiteral("\"\n"
-                            "  }\n"
-                            "}\n");
     QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
     QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
-    QCOMPARE(libraryVdf.write(originalLibraryFolders), originalLibraryFolders.size());
+    libraryVdf.write("\"libraryfolders\"\n"
+                     "{\n"
+                     "  \"0\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
+                     "  }\n"
+                     "  \"1\"\n"
+                     "  {\n"
+                     "    \"path\"\t\t\"" + externalLib.toUtf8() + "\"\n"
+                     "  }\n"
+                     "}\n");
     libraryVdf.close();
 
     // The helper-resolved home points at the temp dir; no passwd entry for
     // player1 exists in the test environment
     m_helperClient->player1Home = homeDir.path();
-    m_helperClient->player1SteamRoot = steamRoot;
 
     auto *steamManager = new SteamConfigManager(this);
     steamManager->setHelperClient(m_helperClient);
@@ -1216,508 +991,6 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     const QByteArray vdfContent = vdf.readAll();
     QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
     QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
-    QVERIFY(steamManager->cleanupLibrarySharing(QStringLiteral("player1")));
-    QFile restoredVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
-    QVERIFY(restoredVdf.open(QIODevice::ReadOnly));
-    QCOMPARE(restoredVdf.readAll(), originalLibraryFolders);
-}
-void TestSessionRunner::testActiveChangedRestartDoesNotEmitStaleFinalizationSignals()
-{
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-
-    QStringList events;
-    bool restarted = false;
-    bool restartAccepted = false;
-    connect(m_runner, &SessionRunner::sessionStopped, this, [&events] { events.append(QStringLiteral("stopped")); });
-    connect(m_runner, &SessionRunner::activeChanged, this, [this, &events, &restarted, &restartAccepted] {
-        events.append(m_runner->isActive() ? QStringLiteral("active") : QStringLiteral("inactive"));
-        if (!m_runner->isActive() && !restarted) {
-            restarted = true;
-            events.append(QStringLiteral("restart-entry"));
-            restartAccepted = m_runner->start();
-            events.append(QStringLiteral("restart-returned"));
-        }
-    });
-    connect(m_runner, &SessionRunner::statusChanged, this, [&events] { events.append(QStringLiteral("status")); });
-    connect(m_runner, &SessionRunner::runningChanged, this, [&events] { events.append(QStringLiteral("running")); });
-    connect(m_runner, &SessionRunner::instancesChanged, this, [&events] { events.append(QStringLiteral("instances")); });
-
-    QVERIFY(m_runner->start());
-    m_runner->stop();
-
-    QVERIFY(restarted);
-    QVERIFY(restartAccepted);
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(events.count(QStringLiteral("stopped")), 1);
-    QVERIFY(events.indexOf(QStringLiteral("stopped")) < events.indexOf(QStringLiteral("restart-entry")));
-    QCOMPARE(events.last(), QStringLiteral("restart-returned"));
-
-    m_runner->stop();
-}
-
-void TestSessionRunner::testActiveChangedStartRestartDoesNotRunObsoleteSetup()
-{
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    const int configuredInstances = m_sessionManager->currentProfile().instances.size();
-    const qsizetype initialLaunchCount = m_helperClient->launchCommands.size();
-    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
-    bool restarted = false;
-    bool restartAccepted = false;
-    connect(m_runner, &SessionRunner::activeChanged, this, [this, &restarted, &restartAccepted] {
-        if (!m_runner->isActive() || restarted) {
-            return;
-        }
-        restarted = true;
-        m_runner->stop();
-        restartAccepted = m_runner->start();
-    });
-
-    QVERIFY(m_runner->start());
-
-    QVERIFY(restarted);
-    QVERIFY(restartAccepted);
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(m_helperClient->launchCommands.size() - initialLaunchCount, configuredInstances);
-    QCOMPARE(startedSpy.count(), 1);
-
-    m_runner->stop();
-}
-
-void TestSessionRunner::testStreamingSetupFailureDoesNotFinalizeReplacementSession()
-{
-    QVariantMap streamingConfig;
-    streamingConfig.insert(QStringLiteral("outputMode"), QStringLiteral("streaming"));
-    m_sessionManager->setInstanceConfig(0, streamingConfig);
-    m_helperClient->m_available = false;
-
-    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
-    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
-    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
-    bool restarted = false;
-    bool restartAccepted = false;
-    connect(m_runner, &SessionRunner::errorOccurred, m_runner, [this, &restarted] {
-        if (restarted) {
-            return;
-        }
-        restarted = true;
-        m_runner->stop();
-        m_helperClient->m_available = true;
-        QVariantMap physicalConfig;
-        physicalConfig.insert(QStringLiteral("outputMode"), QStringLiteral("physical"));
-        m_sessionManager->setInstanceConfig(0, physicalConfig);
-    });
-    const QMetaObject::Connection restartConnection = connect(m_runner, &SessionRunner::sessionStopped, m_runner,
-                                                              [this, &restartAccepted] { restartAccepted = m_runner->start(); });
-
-    QVERIFY(m_runner->start());
-
-    QVERIFY(restarted);
-    QVERIFY(restartAccepted);
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(stoppedSpy.count(), 1);
-    QCOMPARE(startedSpy.count(), 1);
-    QCOMPARE(failedSpy.count(), 0);
-
-    QObject::disconnect(restartConnection);
-    m_runner->stop();
-    QCOMPARE(stoppedSpy.count(), 2);
-}
-void TestSessionRunner::testStreamingSetupDefersReentrantRestartUntilRollback()
-{
-    m_sessionManager->setInstanceCount(1);
-    QVariantMap streamingConfig;
-    streamingConfig.insert(QStringLiteral("outputMode"), QStringLiteral("streaming"));
-    streamingConfig.insert(QStringLiteral("username"), QStringLiteral("player1"));
-    streamingConfig.insert(QStringLiteral("presetId"), QStringLiteral("lutris"));
-    m_sessionManager->setInstanceConfig(0, streamingConfig);
-
-    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
-    bool stoppedInsideCreate = false;
-    bool restarted = false;
-    bool restartAccepted = false;
-    const QMetaObject::Connection restartConnection = connect(m_runner, &SessionRunner::sessionStopped, m_runner, [&] {
-        restarted = true;
-        QVariantMap physicalConfig;
-        physicalConfig.insert(QStringLiteral("outputMode"), QStringLiteral("physical"));
-        physicalConfig.insert(QStringLiteral("username"), QString());
-        m_sessionManager->setInstanceConfig(0, physicalConfig);
-        restartAccepted = m_runner->start();
-    });
-    m_helperClient->onCreateVirtualOutput = [&] {
-        m_runner->stop();
-        stoppedInsideCreate = stoppedSpy.count() != 0;
-    };
-
-    QVERIFY(m_runner->start());
-    QVERIFY(!stoppedInsideCreate);
-    QVERIFY(restarted);
-    QVERIFY(restartAccepted);
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(stoppedSpy.count(), 1);
-    QCOMPARE(m_helperClient->createdVirtualOutputs, 1);
-    QCOMPARE(m_helperClient->destroyVirtualOutputCalls, 1);
-    QVERIFY(m_runner->m_streamingInstances.isEmpty());
-    QObject::disconnect(restartConnection);
-    m_runner->stop();
-}
-
-void TestSessionRunner::testStopDuringSteamShortcutSyncDoesNotWriteOrLaunch()
-{
-    QTemporaryDir tempDir;
-    QVERIFY(tempDir.isValid());
-
-    const QString sourceRoot = tempDir.path() + QStringLiteral("/source-steam");
-    const QString sourceShortcuts = sourceRoot + QStringLiteral("/userdata/12345/config/shortcuts.vdf");
-    QVERIFY(QDir().mkpath(QFileInfo(sourceShortcuts).absolutePath()));
-    QFile sourceFile(sourceShortcuts);
-    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
-    sourceFile.write(SteamShortcutsVdf::emptyDocument());
-    sourceFile.close();
-
-    const QString targetHome = tempDir.path() + QStringLiteral("/player-home");
-    QVERIFY(QDir().mkpath(targetHome));
-    m_helperClient->player1Home = targetHome;
-    m_helperClient->player1SteamRoot = tempDir.path() + QStringLiteral("/target-steam");
-
-    SteamPaths paths;
-    paths.valid = true;
-    paths.steamRoot = sourceRoot;
-    paths.configDir = sourceRoot + QStringLiteral("/config");
-    paths.userDataDir = sourceRoot + QStringLiteral("/userdata/12345");
-    paths.libraryFoldersVdf = paths.configDir + QStringLiteral("/libraryfolders.vdf");
-    paths.shortcutsVdf = sourceShortcuts;
-    m_steamConfigManager->m_steamPaths = paths;
-    m_steamConfigManager->setHelperClient(m_helperClient);
-    m_steamConfigManager->setSyncShortcutsEnabled(true);
-
-    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
-    m_sessionManager->setInstanceCount(1);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
-
-    m_runner->m_startingProfile = m_sessionManager->currentProfile();
-    m_runner->m_hasStartingProfile = true;
-    m_runner->m_startupGeneration = 7;
-    m_runner->m_active = true;
-    LaunchCommand launchCommand;
-    launchCommand.program = QStringLiteral("/bin/true");
-    m_runner->m_launchCommands.append(launchCommand);
-    m_helperClient->onShortcutRead = [this] { m_runner->stop(); };
-
-    m_runner->continueStart();
-
-    QCOMPARE(m_helperClient->shortcutReadCalls, 1);
-    QCOMPARE(m_helperClient->shortcutWriteCalls, 0);
-    QVERIFY(m_helperClient->launchCommands.isEmpty());
-    QVERIFY(!m_runner->isActive());
-    QVERIFY(m_runner->m_startupGeneration > 7);
-}
-
-void TestSessionRunner::testCancelSteamLibraryPreparationRollsBackMounts()
-{
-    QTemporaryDir homeDir;
-    QVERIFY(homeDir.isValid());
-    qputenv("HOME", homeDir.path().toLocal8Bit());
-
-    const QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
-    QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
-    const QString secondaryLibrary = homeDir.path() + QStringLiteral("/secondary-library");
-    QVERIFY(QDir().mkpath(secondaryLibrary + QStringLiteral("/steamapps")));
-    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
-    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
-    libraryVdf.write("\"libraryfolders\"\n{\n"
-                     "  \"0\"\n  {\n"
-                     "    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n"
-                     "  }\n  \"1\"\n  {\n"
-                     "    \"path\"\t\t\"" + secondaryLibrary.toUtf8() + "\"\n"
-                     "  }\n}\n");
-    libraryVdf.close();
-    const QString player1Home = homeDir.path() + QStringLiteral("/player1");
-    const QString player1SteamRoot = player1Home + QStringLiteral("/.steam/steam");
-    const QString player1Config = player1SteamRoot + QStringLiteral("/config");
-    QVERIFY(QDir().mkpath(player1Config));
-    QVERIFY(QDir().mkpath(player1SteamRoot + QStringLiteral("/userdata/12345/config")));
-    const QByteArray originalPlayerLibraryFolders =
-        QByteArrayLiteral("\"libraryfolders\" { \"1\" { \"path\" \"/mnt/player-library\" } }\n");
-    QFile playerLibraryFolders(player1Config + QStringLiteral("/libraryfolders.vdf"));
-    QVERIFY(playerLibraryFolders.open(QIODevice::WriteOnly));
-    QCOMPARE(playerLibraryFolders.write(originalPlayerLibraryFolders), originalPlayerLibraryFolders.size());
-    playerLibraryFolders.close();
-
-    m_helperClient->player1Home = player1Home;
-    m_helperClient->player1SteamRoot = player1SteamRoot;
-
-    delete m_steamConfigManager;
-    m_steamConfigManager = new SteamConfigManager(this);
-    auto *steamManager = m_steamConfigManager;
-    steamManager->setHelperClient(m_helperClient);
-    steamManager->setShareLibraryEnabled(true);
-    m_runner->setSteamConfigManager(steamManager);
-    QVERIFY(steamManager->isSteamDetected());
-    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
-    m_sessionManager->setInstanceCount(1);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
-    QVariantMap steamRootDir;
-    steamRootDir.insert(QStringLiteral("path"), steamRoot);
-    steamRootDir.insert(QStringLiteral("mode"), QStringLiteral("overlay"));
-    QVariantList dataDirectories;
-    dataDirectories.append(steamRootDir);
-    m_sessionManager->setInstanceDataDirectories(0, dataDirectories);
-
-    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
-    bool restarted = false;
-    bool restartAccepted = false;
-    connect(m_runner, &SessionRunner::sessionStopped, m_runner, [this, &restarted, &restartAccepted] {
-        if (!restarted) {
-            restarted = true;
-            restartAccepted = m_runner->start();
-        }
-    });
-    m_helperClient->onOverlayMount = [this] { m_runner->stop(); };
-    QVERIFY(m_runner->start());
-
-    QVERIFY(restarted);
-    QVERIFY(restartAccepted);
-    QCOMPARE(m_helperClient->overlayCalls.size(), 3);
-    QCOMPARE(m_helperClient->mountedOverlayAliases.size(), 2);
-    QCOMPARE(startedSpy.count(), 1);
-    QVERIFY(m_runner->isActive());
-    QVERIFY(!m_runner->m_finalizing);
-    m_runner->stop();
-    QFile restoredLibraryFolders(player1Config + QStringLiteral("/libraryfolders.vdf"));
-    QVERIFY(restoredLibraryFolders.open(QIODevice::ReadOnly));
-    QCOMPARE(restoredLibraryFolders.readAll(), originalPlayerLibraryFolders);
-}
-
-void TestSessionRunner::testStaleHookEventsCannotAffectReplacementHook()
-{
-    QTemporaryDir scriptDir;
-    QVERIFY(scriptDir.isValid());
-    const QString scriptPath = scriptDir.filePath(QStringLiteral("blocking-hook.sh"));
-    QFile script(scriptPath);
-    QVERIFY(script.open(QIODevice::WriteOnly | QIODevice::Text));
-    script.write("#!/bin/sh\nexec sleep 20\n");
-    script.close();
-    QVERIFY(script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
-
-    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
-    m_runner->runHook(scriptPath, false);
-    QProcess *staleErrorProcess = m_runner->m_hookProcess;
-    QVERIFY(staleErrorProcess);
-    QTRY_COMPARE_WITH_TIMEOUT(staleErrorProcess->state(), QProcess::Running, 2000);
-    auto *replacementHook = new QProcess(m_runner);
-    m_runner->m_hookProcess = replacementHook;
-    QVERIFY(QMetaObject::invokeMethod(staleErrorProcess,
-                                      "errorOccurred",
-                                      Qt::DirectConnection,
-                                      Q_ARG(QProcess::ProcessError, QProcess::FailedToStart)));
-    QCOMPARE(m_runner->m_hookProcess, replacementHook);
-    QCOMPARE(failedSpy.count(), 0);
-    QVERIFY(QMetaObject::invokeMethod(staleErrorProcess,
-                                      "finished",
-                                      Qt::DirectConnection,
-                                      Q_ARG(int, 0),
-                                      Q_ARG(QProcess::ExitStatus, QProcess::NormalExit)));
-    QCOMPARE(m_runner->m_hookProcess, replacementHook);
-    staleErrorProcess->kill();
-    staleErrorProcess->waitForFinished(2000);
-
-    m_runner->m_hookProcess = nullptr;
-    m_runner->runHook(scriptPath, false);
-    QProcess *staleGenerationProcess = m_runner->m_hookProcess;
-    QVERIFY(staleGenerationProcess);
-    QTRY_COMPARE_WITH_TIMEOUT(staleGenerationProcess->state(), QProcess::Running, 2000);
-    ++m_runner->m_startupGeneration;
-    QVERIFY(QMetaObject::invokeMethod(staleGenerationProcess,
-                                      "finished",
-                                      Qt::DirectConnection,
-                                      Q_ARG(int, 0),
-                                      Q_ARG(QProcess::ExitStatus, QProcess::NormalExit)));
-    QCOMPARE(m_runner->m_hookProcess, staleGenerationProcess);
-    QVERIFY(!m_runner->m_preHookCompleted);
-    QCOMPARE(failedSpy.count(), 0);
-    QVERIFY(QMetaObject::invokeMethod(staleGenerationProcess,
-                                      "errorOccurred",
-                                      Qt::DirectConnection,
-                                      Q_ARG(QProcess::ProcessError, QProcess::FailedToStart)));
-    QCOMPARE(m_runner->m_hookProcess, staleGenerationProcess);
-    QVERIFY(!m_runner->m_preHookCompleted);
-    staleGenerationProcess->kill();
-    staleGenerationProcess->waitForFinished(2000);
-    m_runner->m_hookProcess = nullptr;
-}
-
-void TestSessionRunner::testInstanceStoppedReentrancyDoesNotFinalizeReplacementSession()
-{
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    int startedCount = 0;
-    connect(m_runner, &SessionRunner::sessionStarted, m_runner, [this, &startedCount] {
-        ++startedCount;
-        if (startedCount == 2 && !m_runner->m_instances.isEmpty()) {
-            m_runner->m_instances.first()->m_helperPid = 0;
-        }
-    });
-
-    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
-    bool restartFromStop = false;
-    bool restartAccepted = false;
-    connect(m_runner, &SessionRunner::sessionStopped, m_runner, [this, &restartFromStop, &restartAccepted] {
-        if (!restartFromStop) {
-            restartFromStop = true;
-            restartAccepted = m_runner->start();
-        }
-    });
-
-    bool stopFromInstanceSignal = false;
-    connect(m_runner, &SessionRunner::instanceStopped, m_runner, [this, &stopFromInstanceSignal](int) {
-        if (!stopFromInstanceSignal) {
-            stopFromInstanceSignal = true;
-            m_runner->stop();
-        }
-    });
-
-    QVERIFY(m_runner->start());
-    QCOMPARE(startedCount, 1);
-    QVERIFY(!m_runner->m_instances.isEmpty());
-    GamescopeInstance *stoppedInstance = m_runner->m_instances.first();
-    stoppedInstance->m_helperPid = 0;
-    const quint64 stoppedGeneration = m_runner->m_startupGeneration;
-    QVERIFY(QMetaObject::invokeMethod(stoppedInstance, "stopped", Qt::DirectConnection));
-
-    QVERIFY(stopFromInstanceSignal);
-    QVERIFY(restartFromStop);
-    QVERIFY(restartAccepted);
-    QCOMPARE(startedCount, 2);
-    QCOMPARE(stoppedSpy.count(), 1);
-    QVERIFY(m_runner->isActive());
-    QVERIFY(!m_runner->m_finalizing);
-    QVERIFY(m_runner->m_startupGeneration > stoppedGeneration);
-
-    m_runner->stop();
-}
-
-void TestSessionRunner::testStartNextInstanceReentrancyDoesNotUseStaleConfig()
-{
-    QVariantMap config;
-    config.insert(QStringLiteral("username"), QStringLiteral("player1"));
-    config.insert(QStringLiteral("outputMode"), QStringLiteral("physical"));
-    config.insert(QStringLiteral("outputWidth"), 1280);
-    config.insert(QStringLiteral("outputHeight"), 720);
-    config.insert(QStringLiteral("gameCommand"), QStringList{QStringLiteral("game")});
-
-    m_runner->m_active = true;
-    m_runner->m_startupGeneration = 1;
-    m_runner->m_pendingInstanceConfigs.append(config);
-    m_helperClient->onLaunchInstance = [this] { m_runner->stop(); };
-
-    m_runner->startNextInstance();
-
-    QCOMPARE(m_helperClient->launchCommands.size(), 1);
-    // The launch callback stopped the session before start() returned. The
-    // synchronous started signal is stale and must stop that launched helper
-    // process instead of leaving it orphaned.
-    QCOMPARE(m_helperClient->stopInstanceCalls, 1);
-    QVERIFY(!m_runner->isActive());
-    QVERIFY(m_runner->m_pendingInstanceConfigs.isEmpty());
-    QVERIFY(m_runner->m_instances.isEmpty());
-}
-void TestSessionRunner::testStopInstanceReentrancyDoesNotTouchReplacement()
-{
-    auto *instance = new GamescopeInstance(m_runner);
-    instance->m_index = 0;
-    instance->m_helperPid = 100;
-    m_runner->m_instances.append(instance);
-    auto *replacement = new GamescopeInstance(m_runner);
-    replacement->m_index = 0;
-
-    // Run before SessionRunner's stopped handler to model synchronous
-    // replacement during stop().
-    connect(instance, &GamescopeInstance::stopped, m_runner, [this, replacement] {
-        m_runner->m_instances[0] = replacement;
-    });
-    connect(instance, &GamescopeInstance::stopped, m_runner, &SessionRunner::onInstanceStopped);
-
-    m_runner->stopInstance(0);
-    QCOMPARE(m_runner->m_instances.value(0), replacement);
-}
-
-
-void TestSessionRunner::testStaleWindowCallbacksCannotAffectReplacementSession()
-{
-    m_runner->m_active = true;
-    m_runner->m_startupGeneration = 2;
-    m_runner->m_nextInstanceToStart = 0;
-    m_runner->m_pendingInstanceConfigs.append(QVariantMap{});
-    m_runner->m_pendingWindowRequests.insert(41, SessionRunner::PendingWindowRequest{1, 0});
-
-    m_runner->onWindowPositioned(41, QStringLiteral("old-window"));
-    QCOMPARE(m_runner->m_nextInstanceToStart, 0);
-    QVERIFY(m_runner->m_positionedWindowIds.isEmpty());
-
-    m_runner->m_pendingWindowRequests.insert(42, SessionRunner::PendingWindowRequest{1, 0});
-    m_runner->onWindowPositioningTimeout(42);
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(m_runner->m_startupGeneration, quint64(2));
-
-    m_runner->m_pendingWindowRequests.insert(43, SessionRunner::PendingWindowRequest{2, 0});
-    m_runner->onWindowPositioned(43, QStringLiteral("current-window"));
-    QCOMPARE(m_runner->m_nextInstanceToStart, 1);
-    QCOMPARE(m_runner->m_positionedWindowIds, QStringList{QStringLiteral("current-window")});
-}
-
-void TestSessionRunner::testTeardownRetainsResourcesForRetry()
-{
-    SessionRunner::StreamingInstanceInfo streamingInfo;
-    streamingInfo.username = QStringLiteral("player1");
-    streamingInfo.displayContext = QStringLiteral("wayland-99");
-    streamingInfo.sinkName = QStringLiteral("sink-99");
-    streamingInfo.virtualDisplayCreated = true;
-    streamingInfo.nullSinkCreated = true;
-    m_runner->m_streamingInstances.insert(7, streamingInfo);
-    m_runner->m_sharedStateActive = true;
-    m_runner->m_steamSharedUsers.insert(QStringLiteral("player1"));
-    m_runner->m_ownedDevicePaths.append(QStringLiteral("/dev/input/event-test"));
-    m_steamConfigManager->setHelperClient(m_helperClient);
-    m_helperClient->m_available = false;
-
-    m_runner->cleanupStreamingInstance(7);
-    m_runner->stop();
-
-    QVERIFY(m_runner->m_streamingInstances.contains(7));
-    QVERIFY(m_runner->m_sharedStateActive);
-    QVERIFY(m_runner->m_steamSharedUsers.contains(QStringLiteral("player1")));
-    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event-test")));
-    QVERIFY(!m_runner->start());
-
-    m_helperClient->m_available = true;
-    m_helperClient->destroyVirtualOutputResult = false;
-    m_helperClient->destroyNullSinkResult = false;
-    m_helperClient->restoreAllDevicesResult = false;
-    m_helperClient->unmountAllResult = -1;
-    m_runner->stop();
-    // A successful D-Bus connection does not imply ResetAllDevices succeeded.
-    // Keep the path for a later retry when the helper reports failure.
-    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event-test")));
-    QVERIFY(m_runner->m_streamingInstances.contains(7));
-    QCOMPARE(m_helperClient->destroyVirtualOutputCalls, 1);
-    QCOMPARE(m_helperClient->destroyNullSinkCalls, 1);
-    QVERIFY(m_runner->m_sharedStateActive);
-    QCOMPARE(m_helperClient->unmountAllCalls, 1);
-
-    m_helperClient->destroyVirtualOutputResult = true;
-    m_helperClient->destroyNullSinkResult = true;
-    m_helperClient->restoreAllDevicesResult = true;
-    m_helperClient->unmountAllResult = 0;
-    m_runner->stop();
-    QCOMPARE(m_helperClient->restoreAllDevicesCalls, 2);
-    QVERIFY(m_runner->m_ownedDevicePaths.isEmpty());
-    QVERIFY(m_runner->m_streamingInstances.isEmpty());
-    QCOMPARE(m_helperClient->destroyVirtualOutputCalls, 2);
-    QCOMPARE(m_helperClient->destroyNullSinkCalls, 2);
-    QVERIFY(!m_runner->m_sharedStateActive);
-    QCOMPARE(m_helperClient->unmountAllCalls, 2);
-    QVERIFY(m_runner->m_steamSharedUsers.isEmpty());
 }
 
 QTEST_MAIN(TestSessionRunner)

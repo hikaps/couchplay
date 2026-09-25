@@ -69,10 +69,9 @@ Save a session configuration as a profile to reload it later without reconfiguri
 
 ### Adding a Profile to Steam
 
-Save the session profile, then open **Profiles** in Desktop Mode and choose **Add to Steam** on its card. Select a Steam account; if Steam is running, finish any games before approving its close and reopen. Sign in to the selected account to see the shortcut—reopening Steam does not switch accounts.
+Save the session profile, then open **Profiles** in Desktop Mode and choose **Add to Steam** on its card. Select a Steam account and close Steam manually before adding the shortcut. Reopen Steam manually afterward to refresh its shortcut list; reopening it does not switch accounts.
 
-Launching the shortcut starts the saved profile and its configured games. Steam tracks CouchPlay until the session stops; use **Stop Session** or the controller exit chord to finish it.
-
+The shortcut launches the installed `couchplay-gamemode` command with `--profile NAME --start --exit-after-session`, starting the saved profile and its configured games. If CouchPlay is already open, close it first: the current singleton does not forward shortcut arguments to an existing instance.
 
 ### Managing Users
 

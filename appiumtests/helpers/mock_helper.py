@@ -104,8 +104,6 @@ class MockHelper(dbus.service.Object):
 
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="b")
     def IsInCouchPlayGroup(self, username):
-        if FAKE_USERS:
-            return username in self._created_users
         result = subprocess.run(["groups", username], capture_output=True, text=True)
         return "couchplay" in result.stdout
 
@@ -239,13 +237,7 @@ class MockHelper(dbus.service.Object):
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="s")
     def GetUserSteamId(self, username):
         return ""
-    @dbus.service.method(INTERFACE_NAME, in_signature="ss", out_signature="ay")
-    def ReadSteamShortcutsForUser(self, username, steamId):
-        return dbus.ByteArray(b"")
 
-    @dbus.service.method(INTERFACE_NAME, in_signature="ssayay", out_signature="b")
-    def WriteSteamShortcutsForUser(self, username, steamId, expectedDigest, content):
-        return True
     @dbus.service.method(INTERFACE_NAME, in_signature="s", out_signature="b")
     def IsSteamBootstrapped(self, username):
         return True
@@ -299,7 +291,6 @@ class MockHelper(dbus.service.Object):
             os.path.join(home, ".steam/steam"),
             os.path.join(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam"),
             os.path.join(home, ".var/app/com.valvesoftware.Steam/.steam/steam"),
-            os.path.join(home, ".var/app/com.valvesoftware.Steam/data/Steam"),
         ]
         for candidate in candidates:
             if not os.path.exists(candidate):

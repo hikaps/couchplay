@@ -19,10 +19,16 @@
         "--system-talk-name=org.freedesktop.login1",
         "--system-talk-name=io.github.hikaps.CouchPlayHelper",
         "--filesystem=~/.local/share/Steam:ro",
+        "--filesystem=~/.local/share/Steam/userdata:rw",
         "--filesystem=~/.steam:ro",
-        "--filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam:ro",
-        "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam:ro",
+        "--filesystem=~/.steam/steam:ro",
+        "--filesystem=~/.steam/steam/userdata:rw",
         "--filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam/userdata:rw",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata:rw",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam/userdata:rw",
         "--persist=.local/share/couchplay"
     ],
     "modules": [
