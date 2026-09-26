@@ -193,6 +193,11 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    SteamShortcutManager {
+        id: steamShortcutManager
+        sessionManager: sessionManager
+    }
+
     AudioManager {
         id: audioManager
     }
@@ -326,7 +331,8 @@ Kirigami.ApplicationWindow {
         pageStack.clear()
         pageStack.push(profilesPage, {
             sessionManager: sessionManager,
-            sessionRunner: sessionRunner
+            sessionRunner: sessionRunner,
+            steamShortcutManager: steamShortcutManager
         })
     }
 

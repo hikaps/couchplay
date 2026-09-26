@@ -67,6 +67,12 @@ Alternatively, use the **Stop Session** button in the CouchPlay UI.
 
 Save a session configuration as a profile to reload it later without reconfiguring everything. Profiles are stored as JSON files in `~/.local/share/couchplay/profiles/` and can be loaded from the **Profiles** page.
 
+### Adding a Profile to Steam
+
+Save the session profile, then open **Profiles** in Desktop Mode and choose **Add to Steam** on its card. Select a Steam account and close Steam manually before adding the shortcut. Reopen Steam manually afterward to refresh its shortcut list; reopening it does not switch accounts.
+
+The shortcut launches the installed `couchplay-gamemode` command with `--profile NAME --start --exit-after-session`, starting the saved profile and its configured games. If CouchPlay is already open, close it first: the current singleton does not forward shortcut arguments to an existing instance.
+
 ### Managing Users
 
 CouchPlay creates temporary Linux user accounts so each player gets isolated save data and settings. Open the **Users** page to view and manage these accounts. The helper service handles the privileged operations behind the scenes.

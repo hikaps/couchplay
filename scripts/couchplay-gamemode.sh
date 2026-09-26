@@ -26,10 +26,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+IN_FLATPAK=false
+if [ -f /.flatpak-info ]; then
+    IN_FLATPAK=true
+fi
+
 # --- Configuration ---
 
-# CouchPlay binary: prefer build dir (development), then PATH, then /usr/local/bin
-if [ -x "$SCRIPT_DIR/../build/bin/couchplay" ]; then
+# CouchPlay binary: use the packaged Flatpak executable when running there;
+# otherwise prefer build dir (development), then PATH, then /usr/local/bin.
+if [ "$IN_FLATPAK" = true ] && [ -x /app/bin/couchplay ]; then
+    COUCHPLAY_BIN=/app/bin/couchplay
+elif [ -x "$SCRIPT_DIR/../build/bin/couchplay" ]; then
     COUCHPLAY_BIN="$SCRIPT_DIR/../build/bin/couchplay"
 elif command -v couchplay &>/dev/null; then
     COUCHPLAY_BIN="$(command -v couchplay)"
@@ -38,15 +46,6 @@ elif [ -x /usr/local/bin/couchplay ]; then
 else
     echo "Error: CouchPlay binary not found."
     echo "Install CouchPlay or build it first."
-    exit 1
-fi
-
-# kwin_wayland binary: prefer system, then Flatpak
-if command -v kwin_wayland &>/dev/null; then
-    KWIN_BIN="$(command -v kwin_wayland)"
-else
-    echo "Error: kwin_wayland not found."
-    echo "Install kwin_wayland (usually part of kwin or plasma-workspace)."
     exit 1
 fi
 
@@ -91,6 +90,14 @@ else
     echo "Game Mode launcher is not required in Desktop Mode."
     echo "Launching CouchPlay directly..."
     exec "$COUCHPLAY_BIN" "$@"
+fi
+# Game Mode requires kwin_wayland in the current runtime. Do not guess at host paths.
+if command -v kwin_wayland &>/dev/null; then
+    KWIN_BIN="$(command -v kwin_wayland)"
+else
+    echo "Error: kwin_wayland is not available in this runtime."
+    echo "Game Mode requires a runtime-provided kwin_wayland or an installed host launcher."
+    exit 1
 fi
 
 echo "Starting nested KWin Wayland compositor..."
