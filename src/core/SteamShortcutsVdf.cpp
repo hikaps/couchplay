@@ -26,7 +26,7 @@ constexpr quint8 VdfUint64 = 0x07;
 constexpr quint8 VdfEnd = 0x08;
 constexpr quint8 VdfInt64 = 0x0a;
 
-constexpr qsizetype MaxDocumentSize = 16 * 1024 * 1024;
+constexpr qsizetype MaxDocumentSize = SteamShortcutsVdf::MaxDocumentSize;
 constexpr qsizetype MaxNesting = 32;
 constexpr qsizetype MaxParserRecords = 50'000;
 constexpr qsizetype MaxShortcutTextSize = 1 * 1024 * 1024;
@@ -172,7 +172,9 @@ bool parseRecord(const QByteArray &data,
 
 bool isDecimalKey(const QByteArray &key)
 {
-        if (key.isEmpty() || (key.size() > 1 && key.at(0) == '0')) {
+    if (key.isEmpty() || (key.size() > 1 && key.at(0) == '0')) {
+        return false;
+    }
     for (const unsigned char character : key) {
         if (character < '0' || character > '9') {
             return false;

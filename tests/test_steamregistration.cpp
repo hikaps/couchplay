@@ -118,10 +118,9 @@ private Q_SLOTS:
                  QStringLiteral("CouchPlay - ") + profileName);
         QCOMPARE(shortcut.value(QStringLiteral("exe")).toString(), QStringLiteral("\"/usr/bin/flatpak\""));
         const QString launchOptions = shortcut.value(QStringLiteral("launchOptions")).toString();
-        QCOMPARE(launchOptions,
-                 QStringLiteral("run --command=couchplay-gamemode io.github.hikaps.couchplay --profile "
-                                R"("Party \"Profile\"")"
-                                " --start --exit-after-session"));
+        const QString expectedOptions = QStringLiteral("run --command=couchplay-gamemode io.github.hikaps.couchplay --profile ")
+            + QStringLiteral("\"Party \\\"Profile\\\"\"") + QStringLiteral(" --start --exit-after-session");
+        QCOMPARE(launchOptions, expectedOptions);
         QVERIFY(QFileInfo::exists(accountConfig + QStringLiteral("/shortcuts.vdf.backup")));
 
         QStandardPaths::setTestModeEnabled(false);

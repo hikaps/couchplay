@@ -10,6 +10,8 @@ struct SteamShortcut;
 
 namespace SteamShortcutsVdf {
 
+constexpr qsizetype MaxDocumentSize = 16 * 1024 * 1024;
+
 bool upsert(const QByteArray &bytes,
             const SteamShortcut &shortcut,
             QByteArray *result,

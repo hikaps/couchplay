@@ -37,7 +37,9 @@ QString quoteVdf(const QString &value)
     escaped += QLatin1Char('"');
     for (const QChar character : value) {
         if (character == QLatin1Char('\\') || character == QLatin1Char('"')
-                    || character == QLatin1Char('$') || character.unicode() == 0x60) {
+            || character == QLatin1Char('$') || character.unicode() == 0x60) {
+            escaped += QLatin1Char('\\');
+        }
         escaped += character;
     }
     escaped += QLatin1Char('"');
