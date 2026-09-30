@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import "../components/dialogs" as Dialogs
 
 Kirigami.ScrollablePage {
     id: root
@@ -12,10 +13,38 @@ Kirigami.ScrollablePage {
 
     required property var sessionManager
     required property var sessionRunner
+    required property var steamShortcutManager
+    property string profileToAdd: ""
 
     Component.onCompleted: {
         if (sessionManager) {
             sessionManager.refreshProfiles()
+        }
+    }
+
+    Dialogs.AddToSteamDialog {
+        id: addToSteamDialog
+        manager: root.steamShortcutManager
+        profileName: root.profileToAdd
+    }
+
+    Connections {
+        target: root.steamShortcutManager
+        function onPrepared() {
+            addToSteamDialog.open()
+        }
+        function onRegistrationFinished(profileName, updated) {
+            if (profileName !== root.profileToAdd) return
+            addToSteamDialog.close()
+            applicationWindow().showPassiveNotification(
+                updated
+                    ? i18nc("@info", "Steam shortcut saved: %1", profileName)
+                    : i18nc("@info", "Steam shortcut already present: %1", profileName))
+        }
+        function onErrorOccurred(message) {
+            if (!addToSteamDialog.visible) {
+                applicationWindow().showPassiveNotification(message, "long")
+            }
         }
     }
 
@@ -122,6 +151,12 @@ Kirigami.ScrollablePage {
                             deleteDialog.open()
                         }
                     }
+                    onAddToSteam: {
+                        if (modelData && steamShortcutManager) {
+                            root.profileToAdd = modelData.name
+                            steamShortcutManager.prepare(modelData.name)
+                        }
+                    }
                 }
             }
         }
@@ -151,6 +186,7 @@ Kirigami.ScrollablePage {
 
     component ProfileCard: Kirigami.AbstractCard {
         id: profileCard
+        objectName: "profileCard_" + (profile?.name ?? "")
 
         required property var profile
         property bool isCurrentProfile: false
@@ -159,6 +195,7 @@ Kirigami.ScrollablePage {
         signal duplicateProfile()
         signal launchProfile()
         signal deleteProfile()
+        signal addToSteam()
 
         background: Rectangle {
             color: profileCard.isCurrentProfile 
@@ -264,6 +301,17 @@ Kirigami.ScrollablePage {
                     icon.name: "media-playback-start"
                     highlighted: true
                     onClicked: profileCard.launchProfile()
+                }
+
+                Controls.Button {
+                    objectName: "btnAddProfileToSteam"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Add to Steam")
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Add to Steam")
+                    icon.name: "application-x-executable"
+                    flat: true
+                    onClicked: profileCard.addToSteam()
                 }
 
 

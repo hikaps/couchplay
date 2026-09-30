@@ -39,10 +39,14 @@ set(TEST_MANAGER_SOURCES
     ../src/core/WindowManager.h
     ../src/core/PresetManager.cpp
     ../src/core/PresetManager.h
-     ../src/core/HeroicConfigManager.cpp
-     ../src/core/HeroicConfigManager.h
-     ../src/core/SteamConfigManager.cpp
-     ../src/core/SteamConfigManager.h
+    ../src/core/HeroicConfigManager.cpp
+    ../src/core/HeroicConfigManager.h
+    ../src/core/SteamConfigManager.cpp
+    ../src/core/SteamConfigManager.h
+    ../src/core/SteamShortcutManager.cpp
+    ../src/core/SteamShortcutManager.h
+    ../src/core/SteamShortcutsVdf.cpp
+    ../src/core/SteamShortcutsVdf.h
     ../src/core/SettingsManager.cpp
     ../src/core/SettingsManager.h
     ../src/core/Logging.cpp
@@ -155,6 +159,8 @@ set_target_properties(sunshine_config_generator PROPERTIES AUTOMOC ON)
 
 add_couchplay_test(test_commandlineoptions)
 # Add test executables
+add_couchplay_test(test_steamshortcutmanager)
+add_couchplay_test(test_steamregistration)
 add_couchplay_test(test_steamconfigmanager)
 add_couchplay_test(test_audiomanager)
 add_couchplay_test(test_commandverifier)

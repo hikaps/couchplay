@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -34,10 +35,26 @@ SCREENSHOT_DIR = os.path.join(
     os.environ.get("APPIUM_ARTIFACT_OUTPUT_PATH") or os.path.dirname(__file__), "screenshots"
 )
 DEFAULT_TIMEOUT = int(os.environ.get("COUCHPLAY_E2E_TIMEOUT") or "10")
+STEAM_TEST_ACCOUNT_ID = "123456789"
 
 
 @pytest.fixture(scope="session")
-def driver(mock_helper):
+def steam_test_home(tmp_path_factory):
+    # Keep Steam discovery and all app data in an isolated home so these tests
+    # never inspect or modify a developer's real Steam installation.
+    home = tmp_path_factory.mktemp("couchplay-app-home")
+    account = home / ".steam" / "steam" / "userdata" / STEAM_TEST_ACCOUNT_ID
+    account.mkdir(parents=True)
+    yield {
+        "home": str(home),
+        "xdg_data_home": str(home / ".local" / "share"),
+        "xdg_config_home": str(home / ".config"),
+        "account_id": STEAM_TEST_ACCOUNT_ID,
+    }
+    shutil.rmtree(home)
+
+@pytest.fixture(scope="session")
+def driver(mock_helper, steam_test_home):
     app_id = os.environ.get("COUCHPLAY_APP_ID", "io.github.hikaps.couchplay")
 
     options = AppiumOptions()
@@ -46,6 +63,9 @@ def driver(mock_helper):
             "app": app_id,
             "environ": {
                 "QT_LINUX_ACCESSIBILITY_ALWAYS_ON": "1",
+                "HOME": steam_test_home["home"],
+                "XDG_DATA_HOME": steam_test_home["xdg_data_home"],
+                "XDG_CONFIG_HOME": steam_test_home["xdg_config_home"],
             },
             "timeout": 30000,
         }

@@ -40,3 +40,59 @@ class TestProfiles(BaseTest):
         self.wait_for_element(driver, AppiumBy.NAME, profile_name)
         self.click_by_object_name(driver, "btnDuplicateProfile")
         self.wait_for_element(driver, AppiumBy.NAME, profile_name + " Copy")
+
+    def test_add_to_steam_dialog_shows_warning_and_selects_account(
+        self, driver, steam_test_home
+    ):
+        profile_name = "Steam Test Profile " + uuid.uuid4().hex[:8]
+        self.navigate_to_session_setup(driver)
+        self.click_by_name(driver, "Save Profile")
+        field = self.wait_for_element(driver, AppiumBy.ACCESSIBILITY_ID, "fieldProfileName")
+        field.send_keys(profile_name)
+        self.click_by_name(driver, "Save")
+
+        try:
+            self.navigate_to_profiles(driver)
+            profile_card = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, f"profileCard_{profile_name}"
+            )
+            profile_card.find_element(
+                AppiumBy.ACCESSIBILITY_ID, "btnAddProfileToSteam"
+            ).click()
+            dialog = self.wait_for_element(
+                driver, AppiumBy.NAME, "Add Profile to Steam"
+            )
+            assert dialog.is_displayed()
+            warning = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "messageCloseSteam"
+            )
+            assert warning.is_displayed()
+            account_selector = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "comboSteamAccount"
+            )
+            assert account_selector.is_displayed()
+            account_label = f"Native Steam · {steam_test_home['account_id']}"
+            self.select_combo_option(driver, "comboSteamAccount", account_label)
+            selected_account = self.wait_for_element(
+                driver, AppiumBy.ACCESSIBILITY_ID, "comboSteamAccount"
+            ).get_attribute("value")
+            assert selected_account and steam_test_home["account_id"] in selected_account
+        finally:
+            dialogs = [
+                dialog
+                for dialog in driver.find_elements(
+                    AppiumBy.NAME, "Add Profile to Steam"
+                )
+                if dialog.is_displayed()
+            ]
+            if dialogs:
+                self.click_by_name(driver, "Cancel")
+            self.navigate_to_profiles(driver)
+            cards = driver.find_elements(
+                AppiumBy.ACCESSIBILITY_ID, f"profileCard_{profile_name}"
+            )
+            if cards:
+                cards[0].find_element(
+                    AppiumBy.ACCESSIBILITY_ID, "btnDeleteProfile"
+                ).click()
+                self.click_by_name(driver, "Yes")
