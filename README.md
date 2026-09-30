@@ -72,6 +72,7 @@ Save a session configuration as a profile to reload it later without reconfiguri
 Save the session profile, then open **Profiles** in Desktop Mode and choose **Add to Steam** on its card. Select a Steam account and close Steam manually before adding the shortcut. Reopen Steam manually afterward to refresh its shortcut list; reopening it does not switch accounts.
 
 Account discovery supports native Steam and Flatpak Steam, including its `~/.var/app/com.valvesoftware.Steam/data/Steam` directory. Shortcut files that exceed the supported byte or record limits are left unchanged.
+Symlinked shortcut and backup files, including dangling links, are rejected without writing to their targets.
 
 The shortcut launches the installed `couchplay-gamemode` command with `--profile NAME --start --exit-after-session`, starting the saved profile and its configured games. If CouchPlay is already open, close it first: the current singleton does not forward shortcut arguments to an existing instance.
 

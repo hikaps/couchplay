@@ -66,7 +66,7 @@ bool hasSymlinkComponent(const QString &path)
             current += QLatin1Char('/') + component;
         }
         const QFileInfo info(current);
-        if (info.exists() && info.isSymLink()) {
+        if (info.isSymLink()) {
             return true;
         }
     }
@@ -151,7 +151,7 @@ bool SteamShortcutManager::discoverAccounts()
             continue;
         }
 
-        const bool flatpak = isSteamFlatpakRoot(candidate);
+        const bool flatpak = isSteamFlatpakRoot(root) || isSteamFlatpakRoot(candidate);
         const QDir userdata(userdataPath);
         const QFileInfoList entries = userdata.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const QFileInfo &entry : entries) {
@@ -222,7 +222,7 @@ bool SteamShortcutManager::prepare(const QString &profileName)
 bool SteamShortcutManager::validateWritePath(const QString &path, bool allowMissingFile, QString *error) const
 {
     const QFileInfo fileInfo(path);
-    if (hasSymlinkComponent(path)) {
+    if (fileInfo.isSymLink() || hasSymlinkComponent(path)) {
         if (error) {
             *error = QStringLiteral("Steam shortcut path contains a symlink");
         }
@@ -266,7 +266,7 @@ bool SteamShortcutManager::readShortcuts(const QString &path, QByteArray *bytes,
     }
 
     const QFileInfo fileInfo(path);
-    if (!fileInfo.exists()) {
+    if (!fileInfo.exists() && !hasSymlinkComponent(path)) {
         *exists = false;
         *bytes = SteamShortcutsVdf::emptyDocument();
         return true;

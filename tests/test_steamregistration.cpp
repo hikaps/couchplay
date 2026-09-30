@@ -126,6 +126,78 @@ private Q_SLOTS:
         QStandardPaths::setTestModeEnabled(false);
     }
 
+    void rejectsDanglingShortcutSymlinks_data()
+    {
+        QTest::addColumn<bool>("shortcutsFileIsDangling");
+        QTest::newRow("shortcuts.vdf") << true;
+        QTest::newRow("shortcuts.vdf.backup") << false;
+    }
+
+    void rejectsDanglingShortcutSymlinks()
+    {
+        QFETCH(bool, shortcutsFileIsDangling);
+
+        QTemporaryDir home;
+        QTemporaryDir external;
+        QVERIFY(home.isValid());
+        QVERIFY(external.isValid());
+
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard dataHomeGuard("XDG_DATA_HOME");
+        EnvironmentGuard flatpakGuard("FLATPAK_ID");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_DATA_HOME", (home.path() + QStringLiteral("/data")).toLocal8Bit());
+        qputenv("FLATPAK_ID", QByteArrayLiteral("io.github.hikaps.couchplay"));
+        QStandardPaths::setTestModeEnabled(true);
+
+        const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
+        const QString accountConfig = steamRoot + QStringLiteral("/userdata/123/config");
+        QVERIFY(QDir().mkpath(accountConfig));
+
+        const QString shortcutsPath = accountConfig + QStringLiteral("/shortcuts.vdf");
+        const QByteArray originalShortcuts = SteamShortcutsVdf::emptyDocument();
+        QString danglingLinkPath = shortcutsPath;
+        if (shortcutsFileIsDangling) {
+            QVERIFY(QFile::link(external.path() + QStringLiteral("/target.vdf"), shortcutsPath));
+        } else {
+            QFile shortcuts(shortcutsPath);
+            QVERIFY(shortcuts.open(QIODevice::WriteOnly));
+            QCOMPARE(shortcuts.write(originalShortcuts), qint64(originalShortcuts.size()));
+            shortcuts.close();
+
+            danglingLinkPath += QStringLiteral(".backup");
+            QVERIFY(QFile::link(external.path() + QStringLiteral("/target.vdf"), danglingLinkPath));
+        }
+
+        const QString targetPath = external.path() + QStringLiteral("/target.vdf");
+        QVERIFY(!QFileInfo::exists(targetPath));
+
+        SessionManager sessionManager;
+        const QString profileName = QStringLiteral("Dangling shortcut");
+        QVERIFY(sessionManager.saveProfile(profileName));
+
+        SteamShortcutManager manager;
+        manager.setSessionManager(&sessionManager);
+        QSignalSpy finished(&manager, &SteamShortcutManager::registrationFinished);
+        QSignalSpy errors(&manager, &SteamShortcutManager::errorOccurred);
+        QVERIFY(manager.prepare(profileName));
+        QCOMPARE(manager.accounts().size(), 1);
+
+        manager.addToSteam(0);
+
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(finished.count(), 0);
+        QVERIFY(!QFileInfo::exists(targetPath));
+        QVERIFY(QFileInfo(danglingLinkPath).isSymLink());
+        if (!shortcutsFileIsDangling) {
+            QFile shortcuts(shortcutsPath);
+            QVERIFY(shortcuts.open(QIODevice::ReadOnly));
+            QCOMPARE(shortcuts.readAll(), originalShortcuts);
+        }
+
+        QStandardPaths::setTestModeEnabled(false);
+    }
+
     void discoversCanonicalSteamFlatpakDataRootAndDeduplicatesAlias()
     {
         QTemporaryDir home;
@@ -146,6 +218,14 @@ private Q_SLOTS:
             + QStringLiteral("/config");
         QVERIFY(QDir().mkpath(accountConfig));
 
+        const QString steamConfig = steamRoot + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(steamConfig));
+        QFile libraryFolders(steamConfig + QStringLiteral("/libraryfolders.vdf"));
+        QVERIFY(libraryFolders.open(QIODevice::WriteOnly));
+        const QByteArray libraryFoldersData = QByteArrayLiteral("\"libraryfolders\"\n{\n}\n");
+        QCOMPARE(libraryFolders.write(libraryFoldersData), qint64(libraryFoldersData.size()));
+        libraryFolders.close();
+
         SessionManager sessionManager;
         const QString profileName = QStringLiteral("Canonical Flatpak");
         QVERIFY(sessionManager.saveProfile(profileName));
@@ -158,6 +238,19 @@ private Q_SLOTS:
         QCOMPARE(accounts.size(), 1);
         QVariantMap account = accounts.constFirst().toMap();
         const QString canonicalRoot = QFileInfo(steamRoot).canonicalFilePath();
+        QCOMPARE(account.value(QStringLiteral("root")).toString(), canonicalRoot);
+        QCOMPARE(account.value(QStringLiteral("kind")).toString(), QStringLiteral("flatpak"));
+        QCOMPARE(account.value(QStringLiteral("accountId")).toString(), accountId);
+
+        const QString nativeAlias = home.path() + QStringLiteral("/.steam/steam");
+        QVERIFY(QDir().mkpath(QFileInfo(nativeAlias).absolutePath()));
+        QVERIFY(QFile::link(steamRoot, nativeAlias));
+        QVERIFY(QFileInfo(nativeAlias).isSymLink());
+
+        QVERIFY(manager.prepare(profileName));
+        accounts = manager.accounts();
+        QCOMPARE(accounts.size(), 1);
+        account = accounts.constFirst().toMap();
         QCOMPARE(account.value(QStringLiteral("root")).toString(), canonicalRoot);
         QCOMPARE(account.value(QStringLiteral("kind")).toString(), QStringLiteral("flatpak"));
         QCOMPARE(account.value(QStringLiteral("accountId")).toString(), accountId);
@@ -175,6 +268,24 @@ private Q_SLOTS:
         QCOMPARE(account.value(QStringLiteral("root")).toString(), canonicalRoot);
         QCOMPARE(account.value(QStringLiteral("kind")).toString(), QStringLiteral("flatpak"));
         QCOMPARE(account.value(QStringLiteral("accountId")).toString(), accountId);
+
+        QSignalSpy finished(&manager, &SteamShortcutManager::registrationFinished);
+        QSignalSpy errors(&manager, &SteamShortcutManager::errorOccurred);
+        manager.addToSteam(0);
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(errors.count(), 0);
+        QVERIFY(finished.at(0).at(1).toBool());
+
+        SteamConfigManager configManager;
+        configManager.loadShortcuts();
+        const QVariantList registered = configManager.shortcutsAsVariant();
+        QCOMPARE(registered.size(), 1);
+        const QVariantMap shortcut = registered.constFirst().toMap();
+        QCOMPARE(shortcut.value(QStringLiteral("exe")).toString(), QStringLiteral("\"/usr/bin/flatpak-spawn\""));
+        QCOMPARE(shortcut.value(QStringLiteral("launchOptions")).toString(),
+                 QStringLiteral("--host \"/usr/bin/flatpak\" run --command=couchplay-gamemode ")
+                     + QStringLiteral("io.github.hikaps.couchplay --profile \"Canonical Flatpak\"")
+                     + QStringLiteral(" --start --exit-after-session"));
 
         QStandardPaths::setTestModeEnabled(false);
     }
