@@ -308,6 +308,47 @@ bool readAppId(const QByteArray &data, const Entry &entry, quint32 *appId)
     return false;
 }
 
+bool ownedShortcutStringFieldsMatch(const QByteArray &data,
+                                   const Entry &entry,
+                                   const SteamShortcut &shortcut,
+                                   const QByteArray &marker)
+{
+    bool appNameFound = false;
+    bool exeFound = false;
+    bool startDirFound = false;
+    bool shortcutPathFound = false;
+    bool launchOptionsFound = false;
+    for (const Record &field : entry.fields) {
+        if (field.key == QByteArrayLiteral("AppName")) {
+            if (!sameString(data, field, shortcut.appName.toUtf8())) {
+                return false;
+            }
+            appNameFound = true;
+        } else if (field.key == QByteArrayLiteral("exe") || field.key == QByteArrayLiteral("Exe")) {
+            if (!sameString(data, field, shortcut.exe.toUtf8())) {
+                return false;
+            }
+            exeFound = true;
+        } else if (field.key == QByteArrayLiteral("StartDir")) {
+            if (!sameString(data, field, shortcut.startDir.toUtf8())) {
+                return false;
+            }
+            startDirFound = true;
+        } else if (field.key == QByteArrayLiteral("ShortcutPath")) {
+            if (!sameString(data, field, marker)) {
+                return false;
+            }
+            shortcutPathFound = true;
+        } else if (field.key == QByteArrayLiteral("LaunchOptions")) {
+            if (!sameString(data, field, shortcut.launchOptions.toUtf8())) {
+                return false;
+            }
+            launchOptionsFound = true;
+        }
+    }
+    return appNameFound && exeFound && startDirFound && shortcutPathFound && launchOptionsFound;
+}
+
 quint32 crc32(const QByteArray &data)
 {
     quint32 crc = 0xffffffffu;
@@ -611,7 +652,8 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &shortcut, QByteArray *
     if (matchingIndex >= 0) {
         const Entry &entry = document.entries.at(matchingIndex);
         quint32 existingAppId = 0;
-        if (readAppId(bytes, entry, &existingAppId)) {
+        const bool hasExistingAppId = readAppId(bytes, entry, &existingAppId);
+        if (hasExistingAppId) {
             appId = existingAppId;
         }
         usedAppIds.remove(existingAppId);
@@ -625,6 +667,11 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &shortcut, QByteArray *
         if (outputRecordCount > MaxParserRecords) {
             setError(errorMessage, QStringLiteral("Too many VDF records"));
             return false;
+        }
+        if (hasExistingAppId && existingAppId == appId
+            && ownedShortcutStringFieldsMatch(bytes, entry, shortcut, marker)) {
+            *result = bytes;
+            return true;
         }
         const QByteArray replacement = replacementEntry(bytes, entry, shortcut, marker, appId);
         const qsizetype oldSize = entry.end - entry.start;
