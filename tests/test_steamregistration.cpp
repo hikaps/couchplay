@@ -125,6 +125,59 @@ private Q_SLOTS:
 
         QStandardPaths::setTestModeEnabled(false);
     }
+
+    void discoversCanonicalSteamFlatpakDataRootAndDeduplicatesAlias()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard dataHomeGuard("XDG_DATA_HOME");
+        EnvironmentGuard flatpakGuard("FLATPAK_ID");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_DATA_HOME", (home.path() + QStringLiteral("/data")).toLocal8Bit());
+        qputenv("FLATPAK_ID", QByteArrayLiteral("io.github.hikaps.couchplay"));
+        QStandardPaths::setTestModeEnabled(true);
+
+        const QString steamRoot = home.path()
+            + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+        const QString accountId = QStringLiteral("76561198000000000");
+        const QString accountConfig = steamRoot + QStringLiteral("/userdata/") + accountId
+            + QStringLiteral("/config");
+        QVERIFY(QDir().mkpath(accountConfig));
+
+        SessionManager sessionManager;
+        const QString profileName = QStringLiteral("Canonical Flatpak");
+        QVERIFY(sessionManager.saveProfile(profileName));
+
+        SteamShortcutManager manager;
+        manager.setSessionManager(&sessionManager);
+        QVERIFY(manager.prepare(profileName));
+
+        QVariantList accounts = manager.accounts();
+        QCOMPARE(accounts.size(), 1);
+        QVariantMap account = accounts.constFirst().toMap();
+        const QString canonicalRoot = QFileInfo(steamRoot).canonicalFilePath();
+        QCOMPARE(account.value(QStringLiteral("root")).toString(), canonicalRoot);
+        QCOMPARE(account.value(QStringLiteral("kind")).toString(), QStringLiteral("flatpak"));
+        QCOMPARE(account.value(QStringLiteral("accountId")).toString(), accountId);
+
+        const QString compatibilityAlias = home.path()
+            + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam");
+        QVERIFY(QDir().mkpath(QFileInfo(compatibilityAlias).absolutePath()));
+        QVERIFY(QFile::link(steamRoot, compatibilityAlias));
+        QVERIFY(QFileInfo(compatibilityAlias).isSymLink());
+
+        QVERIFY(manager.prepare(profileName));
+        accounts = manager.accounts();
+        QCOMPARE(accounts.size(), 1);
+        account = accounts.constFirst().toMap();
+        QCOMPARE(account.value(QStringLiteral("root")).toString(), canonicalRoot);
+        QCOMPARE(account.value(QStringLiteral("kind")).toString(), QStringLiteral("flatpak"));
+        QCOMPARE(account.value(QStringLiteral("accountId")).toString(), accountId);
+
+        QStandardPaths::setTestModeEnabled(false);
+    }
 };
 
 QTEST_MAIN(SteamRegistrationTest)

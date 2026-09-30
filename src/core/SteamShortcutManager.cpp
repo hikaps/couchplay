@@ -83,6 +83,8 @@ QStringList steamRoots()
             + QStringLiteral("/.steam/steam"),
         home + QStringLiteral("/.var/app/") + QString::fromLatin1(SteamFlatpakId)
             + QStringLiteral("/.local/share/Steam"),
+        home + QStringLiteral("/.var/app/") + QString::fromLatin1(SteamFlatpakId)
+            + QStringLiteral("/data/Steam"),
     };
 }
 

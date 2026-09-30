@@ -42,6 +42,7 @@ Kirigami.Dialog {
             objectName: "messageCloseSteam"
             Accessible.name: text
             Layout.fillWidth: true
+            visible: true
             type: Kirigami.MessageType.Warning
             text: i18nc(
                 "@warning",

@@ -36,6 +36,7 @@ struct Record {
     qsizetype start = 0;
     qsizetype end = 0;
     qsizetype valueStart = 0;
+    qsizetype recordCount = 0;
     qsizetype valueEnd = 0;
     quint8 type = 0;
     QByteArray key;
@@ -45,12 +46,14 @@ struct Record {
 struct Entry {
     qsizetype start = 0;
     qsizetype end = 0;
+    qsizetype recordCount = 0;
     QByteArray indexKey;
     QList<Record> fields;
 };
 
 struct Document {
     qsizetype rootEnd = 0;
+    qsizetype recordCount = 0;
     QList<Entry> entries;
 };
 
@@ -96,6 +99,7 @@ bool parseRecord(const QByteArray &data,
                 Record *record,
                 QString *errorMessage)
 {
+    const qsizetype recordsBefore = budget.records;
     if (++budget.records > MaxParserRecords) {
         setError(errorMessage, QStringLiteral("Too many VDF records"));
         return false;
@@ -167,6 +171,7 @@ bool parseRecord(const QByteArray &data,
     }
 
     record->end = position;
+    record->recordCount = budget.records - recordsBefore;
     return true;
 }
 
@@ -224,6 +229,7 @@ bool parseDocument(const QByteArray &data, Document *document, QString *errorMes
 
     QSet<QByteArray> indices;
     document->rootEnd = root.valueEnd;
+    document->recordCount = root.recordCount;
     for (const Record &field : root.children) {
         if (field.type != VdfObject || !isDecimalKey(field.key) || indices.contains(field.key)) {
             setError(errorMessage, QStringLiteral("Invalid or duplicate shortcut index"));
@@ -239,6 +245,7 @@ bool parseDocument(const QByteArray &data, Document *document, QString *errorMes
 
         Entry entry;
         entry.start = field.start;
+        entry.recordCount = field.recordCount;
         entry.end = field.end;
         entry.indexKey = field.key;
         entry.fields = field.children;
@@ -484,11 +491,38 @@ QByteArray canonicalEntry(const SteamShortcut &shortcut,
     return result;
 }
 
+qsizetype canonicalEntryRecordCount(const SteamShortcut &shortcut)
+{
+    // Entry object, 17 fixed scalar fields, and the tags object. Each tag is one more record.
+    return 19 + shortcut.tags.size();
+}
+
 bool isReplacedField(const QByteArray &key)
 {
     return key == QByteArrayLiteral("AppName") || key == QByteArrayLiteral("exe") || key == QByteArrayLiteral("Exe")
         || key == QByteArrayLiteral("StartDir") || key == QByteArrayLiteral("ShortcutPath")
         || key == QByteArrayLiteral("LaunchOptions");
+}
+
+qsizetype replacementEntryRecordCount(const Entry &entry)
+{
+    qsizetype recordCount = 1;
+    bool hasAppId = false;
+    for (const Record &field : entry.fields) {
+        if (isReplacedField(field.key)) {
+            continue;
+        }
+        if (field.key == QByteArrayLiteral("appid") || field.key == QByteArrayLiteral("AppId")) {
+            ++recordCount;
+            hasAppId = true;
+        } else {
+            recordCount += field.recordCount;
+        }
+    }
+    if (!hasAppId) {
+        ++recordCount;
+    }
+    return recordCount + 5;
 }
 
 QByteArray replacementEntry(const QByteArray &data,
@@ -586,6 +620,12 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &shortcut, QByteArray *
             return false;
         }
 
+        const qsizetype outputRecordCount = document.recordCount - entry.recordCount
+            + replacementEntryRecordCount(entry);
+        if (outputRecordCount > MaxParserRecords) {
+            setError(errorMessage, QStringLiteral("Too many VDF records"));
+            return false;
+        }
         const QByteArray replacement = replacementEntry(bytes, entry, shortcut, marker, appId);
         const qsizetype oldSize = entry.end - entry.start;
         if (replacement.size() > MaxDocumentSize - (bytes.size() - oldSize)) {
@@ -619,6 +659,11 @@ bool upsert(const QByteArray &bytes, const SteamShortcut &shortcut, QByteArray *
 
     if (!allocateUniqueAppId(appId, shortcut.appName.toUtf8(), shortcut.exe.toUtf8(), usedAppIds, &appId)) {
         setError(errorMessage, QStringLiteral("No unique shortcut AppId is available"));
+        return false;
+    }
+    const qsizetype newEntryRecordCount = canonicalEntryRecordCount(shortcut);
+    if (newEntryRecordCount > MaxParserRecords - document.recordCount) {
+        setError(errorMessage, QStringLiteral("Too many VDF records"));
         return false;
     }
     const QByteArray newEntry = canonicalEntry(shortcut, indexKey, marker, appId);

@@ -12,6 +12,8 @@
 
 namespace {
 
+constexpr qsizetype MaxVdfRecords = 50'000;
+
 QByteArray stringRecord(const QByteArray &key, const QByteArray &value)
 {
     QByteArray result;
@@ -65,6 +67,18 @@ QByteArray document(const QList<QByteArray> &entries)
 {
     QByteArray result = objectRecord(QByteArrayLiteral("shortcuts"), entries);
     result.append(char(0x08));
+    return result;
+}
+
+QList<QByteArray> paddingStringRecords(qsizetype count)
+{
+    QList<QByteArray> result;
+    result.reserve(count);
+    for (qsizetype index = 0; index < count; ++index) {
+        const QByteArray key = QByteArrayLiteral("padding-")
+            + QByteArray::number(static_cast<qlonglong>(index));
+        result.append(stringRecord(key, QByteArray()));
+    }
     return result;
 }
 
@@ -215,6 +229,46 @@ private Q_SLOTS:
         QVERIFY(!SteamShortcutsVdf::upsert(document({objectRecord(QByteArrayLiteral("0"), {wideString})}),
                                            input, &output, &error));
         QCOMPARE(output, QByteArrayLiteral("unchanged"));
+    }
+
+    void testRejectsInsertionBeyondRecordBudget()
+    {
+        const QByteArray input = document({objectRecord(QByteArrayLiteral("0"),
+                                                        paddingStringRecords(MaxVdfRecords - 2))});
+        QByteArray output = QByteArrayLiteral("sentinel");
+        QString error;
+
+        QVERIFY(!SteamShortcutsVdf::upsert(input, shortcut(marker('a')), &output, &error));
+        QCOMPARE(output, QByteArrayLiteral("sentinel"));
+    }
+
+    void testRejectsOwnedReplacementBeyondRecordBudget()
+    {
+        const QByteArray owned = objectRecord(QByteArrayLiteral("0"),
+                                              {stringRecord(QByteArrayLiteral("ShortcutPath"), marker('b'))});
+        const QByteArray foreign = objectRecord(QByteArrayLiteral("1"),
+                                                paddingStringRecords(MaxVdfRecords - 8));
+        const QByteArray input = document({owned, foreign});
+        QByteArray output = QByteArrayLiteral("sentinel");
+        QString error;
+
+        QVERIFY(!SteamShortcutsVdf::upsert(input, shortcut(marker('b')), &output, &error));
+        QCOMPARE(output, QByteArrayLiteral("sentinel"));
+    }
+
+    void testUpsertAtRecordBudgetBoundaryIsIdempotent()
+    {
+        const QByteArray foreign = objectRecord(QByteArrayLiteral("0"),
+                                                paddingStringRecords(MaxVdfRecords - 22));
+        const QByteArray input = document({foreign});
+        const SteamShortcut profile = shortcut(marker('c'));
+        QByteArray first;
+        QString error;
+
+        QVERIFY2(SteamShortcutsVdf::upsert(input, profile, &first, &error), qPrintable(error));
+        QByteArray second;
+        QVERIFY2(SteamShortcutsVdf::upsert(first, profile, &second, &error), qPrintable(error));
+        QCOMPARE(second, first);
     }
 
     void testUpsertIntoEmptyDocument()
