@@ -33,6 +33,33 @@ jobs:
         run: dbus-run-session -- ctest --test-dir build --output-on-failure
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Application smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root=$(mktemp -d)
+          trap 'rm -rf -- "$smoke_root"' EXIT
+          export HOME="$smoke_root/home"
+          export XDG_CONFIG_HOME="$smoke_root/config"
+          export XDG_DATA_HOME="$smoke_root/data"
+          export XDG_CACHE_HOME="$smoke_root/cache"
+          export XDG_RUNTIME_DIR="$smoke_root/runtime"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          export QT_QPA_PLATFORM=offscreen
+          export QT_QUICK_BACKEND=software
+
+          timeout --kill-after=2s 15s dbus-run-session -- ./build/bin/couchplay --help
+
+          status=0
+          timeout --kill-after=2s 15s dbus-run-session -- ./build/bin/couchplay --start || status=$?
+          printf 'Missing --profile: expected 2, got %s\n' "$status"
+          test "$status" -eq 2
+
+          status=0
+          timeout --kill-after=2s 15s dbus-run-session -- ./build/bin/couchplay --profile __couchplay_missing_smoke_profile__ || status=$?
+          printf 'Absent saved profile: expected 1, got %s\n' "$status"
+          test "$status" -eq 1
 
       - name: Package
         run: |

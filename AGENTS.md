@@ -31,12 +31,11 @@ QML UI (Kirigami)  ←→  Core Managers (C++)  ←→  D-Bus Helper (root)
 | `src/qml/` | Kirigami UI (pages, components, dialogs) — packaged as `io.github.hikaps.couchplay` QML module via `ecm_add_qml_module` |
 | `src/dbus/` | `CouchPlayHelperClient` — D-Bus proxy for the privileged helper |
 | `helper/` | Privileged D-Bus service (`couchplay-helper`, ~2.4K lines) — runs as root; user/device/process management |
-| `tests/` | 17 QtTest unit tests + `sunshine_config_generator` binary; tests `#include` sources directly |
-| `appiumtests/` | E2e tests (selenium-webdriver-at-spi) + rootless container harness (Dockerfile) |
+| `tests/` | 21 QtTest executables registered with CTest; tests `#include` sources directly |
 | `data/` | Polkit policy (11 actions), D-Bus configs/services, systemd unit, desktop/metainfo/icons, PipeWire config |
 | `scripts/` | `install.sh` (one-liner), `install-helper.sh`, `bundle-libs.sh` ($ORIGIN RPATH), `run-debug.sh` |
 
-**Per-directory guides**: deeper detail lives in `src/core/AGENTS.md`, `src/qml/AGENTS.md`, `helper/AGENTS.md`, `tests/AGENTS.md`, and `appiumtests/AGENTS.md`.
+**Per-directory guides**: deeper detail lives in `src/core/AGENTS.md`, `src/qml/AGENTS.md`, `helper/AGENTS.md`, and `tests/AGENTS.md`.
 
 ## Development Commands
 
@@ -48,7 +47,7 @@ cmake --build build -j$(nproc)
 # Run the app (must be on host — gamescope needs the real display)
 ./build/bin/couchplay
 
-# Unit tests (17 QtTest binaries; run under dbus-run-session for D-Bus tests)
+# QtTest suite (21 executables; run under dbus-run-session for D-Bus tests)
 QT_QPA_PLATFORM=offscreen dbus-run-session -- ctest --test-dir build --output-on-failure
 
 # Single test
@@ -62,11 +61,6 @@ make tidy      # clang-tidy (diagnostic/analyzer/performance/bugprone/modernize/
 ./run-debug.sh --all       # all Qt debug logs
 ./run-debug.sh --helper    # D-Bus helper logs only
 
-# E2e tests (rootless container — see appiumtests/Dockerfile)
-podman build -f appiumtests/Dockerfile -t localhost/couchplay-e2e .
-distrobox create --image localhost/couchplay-e2e --name cp-test --yes
-distrobox enter cp-test -- /entrypoint.sh appiumtests/ -v
-distrobox rm cp-test -f
 ```
 
 ## Code Conventions & Common Patterns
@@ -101,7 +95,7 @@ distrobox rm cp-test -f
 ### QML/Kirigami
 - Import with aliases: `import org.kde.kirigami as Kirigami`
 - `i18nc("@context", "string")` for all user-visible text
-- `objectName: "controlName"` for AT-SPI/appium accessibility
+- `objectName: "controlName"` for stable control identification
 - PascalCase filenames (`SessionSetupPage.qml`)
 - Required properties for mandatory injections
 
@@ -116,7 +110,6 @@ distrobox rm cp-test -f
 - `MockSystemOps` (25 virtual overrides) injects into `CouchPlayHelper` for helper tests
 - `MockCouchPlayHelperClient` subclass for SessionRunner tests
 - Tests `#include` source `.cpp` files directly (not a linked library) — deliberate trade-off documented in AGENTS.md
-- Appium tests use **type-ahead** for ComboBox selection (Qt6 popup items lack accessible names)
 
 ### Helper Privileged Patterns
 - `validateUserAndAuth(username, action)` — 3-check gate (username regex, user exists, Polkit auth) before every privileged op
@@ -134,35 +127,28 @@ distrobox rm cp-test -f
 | `src/core/SunshineConfig.cpp` | Generates per-instance `sunshine.conf` / `apps.json` / `credentials.json`; port = `47989 + index×30` |
 | `helper/CouchPlayHelper.cpp` | Root D-Bus service (~2.4K lines); user/device/virtual-display/null-sink/process management |
 | `data/polkit/io.github.hikaps.couchplay.policy` | 11 Polkit actions (gates `CreateUser`, `DeleteUser`, `CreateVirtualOutput`, `CreateNullSink`, etc.) |
-| `appiumtests/Dockerfile` | Fedora 43 image baking KDE/KWin/gamescope/pipewire/Sunshine/selenium-driver/couchplay |
-| `appiumtests/container/entrypoint.sh` | Rootless container entrypoint: user-owned system bus + mock helper + PipeWire + nested kwin |
 
 ## Runtime/Tooling Preferences
 
-- **OS**: Developed on Bazzite (immutable Fedora, Wayland/KDE Plasma). The app **must run on the host** (gamescope requires the host display); don't run inside a container (except e2e tests which use a nested kwin).
+- **OS**: Developed on Bazzite (immutable Fedora, Wayland/KDE Plasma). The app **must run on the host** for real gamescope/display interaction.
 - **Build deps**: CMake ≥ 3.20, C++20, Qt6 ≥ 6.5 (Core/Quick/Qml/Gui/QuickControls2/Widgets/DBus), KF6 ≥ 6.0 (Kirigami/I18n/CoreAddons/Config/IconThemes/QQC2DesktopStyle/GlobalAccel), ECM ≥ 6.0, PolkitQt6-1, PipeWire-devel, dbus-daemon.
-- **E2e container**: Podman (rootless) + distrobox. On the dev box, `distrobox-host-exec` bridges to the host's podman. The container uses software rendering (`LIBGL_ALWAYS_SOFTWARE=1`, `QT_QUICK_BACKEND=software`) — no GPU needed for AT-SPI-driven tests.
-- **Package manager**: system `dnf` (Fedora); no npm/cargo/pip for the app itself (only `appiumtests/requirements.txt` for e2e Python deps).
+- **Package manager**: system `dnf` (Fedora); no npm/cargo/pip for the app itself.
 - **Formatting**: `.clang-format` (WebKit base, 120-char, C++20, Linux braces, right pointers). `.editorconfig` (4-space C++/QML/CMake/sh, 2-space JSON/YAML, tab Makefile).
 - **App ID**: `io.github.hikaps.couchplay` (D-Bus service name, QML module URI, desktop file, Flatpak ID).
 
 ## Testing & QA
 
 ### Unit Tests (CI gate)
-- **Framework**: QtTest (`QTest::qExec`), 17 test binaries.
+- **Framework**: QtTest (`QTest::qExec`), 21 test executables.
 - **Run**: `QT_QPA_PLATFORM=offscreen dbus-run-session -- ctest --test-dir build --output-on-failure`
-- **CI**: `.github/workflows/ci.yml` runs all 17 on push/PR to `develop` (Fedora 41 container, no exclusions).
+- **CI**: `.github/workflows/ci.yml` runs all 21 on push/PR to `develop` (Fedora 41 container, no exclusions).
 - **Coverage**: managers (DeviceManager, SessionManager, SessionRunner, GamescopeInstance, StreamManager, SunshineConfig, WindowManager, AudioManager, UserManager, PresetManager, etc.) + the full helper (test_couchplayhelper, 62 tests via MockSystemOps).
 - **Test source inclusion**: tests `#include` the `.cpp` sources directly (not a linked library). Each test target compiles its own copy of the core sources. This is a deliberate trade-off (documented anti-pattern).
 
-### E2E / Appium Tests
-- **Framework**: `selenium-webdriver-at-spi` (KDE driver, drives the app via AT-SPI accessibility).
-- **Container**: `appiumtests/Dockerfile` bakes Fedora 43 + KDE/KWin/gamescope/pipewire/Sunshine + the app + the selenium driver. Self-contained: the entrypoint brings its own user-owned system bus, mock helper, PipeWire, and nested kwin under an isolated `dbus-run-session`, with software rendering — no host GPU/audio/devices needed.
-- **CI (push-only)**: `.github/workflows/e2e.yml` runs the suite on a self-hosted runner (the dev Bazzite box, labels `self-hosted,linux`) — **only on push to `develop`/`main`** (right before beta/stable cuts) + manual dispatch, **never on PRs**. It `podman build`s the image from the current commit (layer-cached) and `podman run --userns=keep-id`s it. Unit tests (`ci.yml`) are the per-PR gate; e2e is the slower integration/release check. No PR trigger ⇒ no fork-PR vector. `concurrency` cancels superseded runs on the same ref (single runner).
-- **Run locally**: `podman build -f appiumtests/Dockerfile -t localhost/couchplay-e2e .` then `distrobox create --image localhost/couchplay-e2e --name cp-test --yes && distrobox enter cp-test -- /entrypoint.sh appiumtests/ -v && distrobox rm cp-test -f` (CI drops distrobox in favor of `podman run --userns=keep-id`; distrobox remains the local convenience flow).
-- **Mock helper**: `appiumtests/helpers/mock_helper.py` owns `io.github.hikaps.CouchPlayHelper` on the system bus (29 methods matching `helper/CouchPlayHelper.h`), records LaunchInstance calls to a JSONL log.
-- **Selector strategy**: id-first hybrid — `objectName` (ACCESSIBILITY_ID) for QML Items, `Accessible.name` (NAME) for Kirigami Actions/dialogs. ComboBox selection via popup type-ahead (Qt6 popup items have no accessible names).
-- **Sunshine integration**: `test_sunshine_integration.py` feeds real `SunshineConfig` output (via `sunshine_config_generator` binary) to the real Sunshine binary and asserts it accepts every config key + value.
+### Manual release smoke
+- Verify profile save/load/duplication and Steam registration in the real QML application.
+- On the Linux host with the helper, verify physical-session input/audio isolation and cleanup; with Sunshine and Moonlight, verify a real streaming session and teardown.
+- Hosted CI runs the QtTest suite and an offscreen application smoke. It does not exercise the real desktop, helper-backed sessions, or streaming.
 
 ### Branching & Release
 - **`develop`**: integration branch; all PRs merge here.
