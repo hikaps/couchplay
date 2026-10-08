@@ -261,6 +261,7 @@ private Q_SLOTS:
     void testSetupSteamConfigAppliesHeroicAcls();
     void testSetupResourcesSyncsSelectedSteamAccount();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
+    void testSteamNativeSessionRefreshesWithoutShortcutSync();
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
@@ -477,6 +478,57 @@ void TestSessionRunner::testSetupResourcesSyncsSelectedSteamAccount()
     QFile untouchedSource(accountA);
     QVERIFY(untouchedSource.open(QIODevice::ReadOnly));
     QCOMPARE(untouchedSource.readAll(), dataA);
+}
+void TestSessionRunner::testSteamNativeSessionRefreshesWithoutShortcutSync()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    TestEnvironmentGuard configGuard("XDG_CONFIG_HOME");
+    qputenv("HOME", home.path().toLocal8Bit());
+    qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+    const QString root = home.path() + QStringLiteral("/.local/share/Steam");
+    const QString shortcutsPath = root + QStringLiteral("/userdata/123/config/shortcuts.vdf");
+    QVERIFY(QDir().mkpath(QFileInfo(shortcutsPath).absolutePath()));
+    auto writeShortcut = [&](const QString &title) {
+        SteamShortcut shortcut;
+        shortcut.appId = 47;
+        shortcut.appName = title;
+        shortcut.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('c'));
+        QByteArray bytes;
+        QString error;
+        if (!SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), shortcut, &bytes, &error)) {
+            qWarning() << error;
+            return false;
+        }
+        QFile file(shortcutsPath);
+        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) return false;
+        return true;
+    };
+    QVERIFY(writeShortcut(QStringLiteral("Before Refresh")));
+
+    m_presetManager->setSteamConfigManager(nullptr);
+    m_runner->setSteamConfigManager(nullptr);
+    delete m_steamConfigManager;
+    m_steamConfigManager = new SteamConfigManager(this);
+    m_presetManager->setSteamConfigManager(m_steamConfigManager);
+    m_runner->setSteamConfigManager(m_steamConfigManager);
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    m_steamConfigManager->loadGames();
+    QCOMPARE(m_steamConfigManager->gamesAsVariant().constFirst().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("Before Refresh"));
+    QVERIFY(writeShortcut(QStringLiteral("After Refresh")));
+
+    QVERIFY(!m_steamConfigManager->syncShortcutsEnabled());
+    QVERIFY(m_runner->start());
+    QCOMPARE(m_steamConfigManager->gamesAsVariant().constFirst().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("After Refresh"));
+    m_runner->stop();
 }
 
 

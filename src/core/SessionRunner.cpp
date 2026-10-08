@@ -344,6 +344,7 @@ bool SessionRunner::start()
         }
     }
 
+    bool steamRequired = false;
     bool steamShortcutsNeeded = false;
     for (const InstanceConfig &instance : profile.instances) {
         const QString presetId = instance.presetId.isEmpty() ? QStringLiteral("steam") : instance.presetId;
@@ -351,11 +352,12 @@ bool SessionRunner::start()
             && instance.gameSelection.backend == QStringLiteral("shortcut");
         const bool requiresSteam = (m_presetManager
             && m_presetManager->getRequiredIntegrations(presetId).contains(QStringLiteral("steam"))) || selectedShortcut;
+        steamRequired |= requiresSteam;
         steamShortcutsNeeded |= requiresSteam && m_steamConfigManager
             && (m_steamConfigManager->syncShortcutsEnabled() || selectedShortcut);
     }
+    if (steamRequired && m_steamConfigManager) m_steamConfigManager->refreshSourceAccounts();
     if (steamShortcutsNeeded && m_steamConfigManager) {
-        m_steamConfigManager->refreshSourceAccounts();
         if (!m_steamConfigManager->sourceAccountAvailable()) {
             Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
             setStatus(QStringLiteral("Error"));

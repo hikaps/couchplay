@@ -212,6 +212,7 @@ private:
     QList<SteamGame> parseInstalledGames() const;
     QString generateLibraryFoldersVdf(const QList<SteamLibraryFolder> &libraries);
     SteamPaths getTargetSteamPaths(const QString &username) const;
+    void detectSteamPathsInternal(bool allowAutomaticSelection);
 
     CouchPlayHelperClient *m_helperClient = nullptr;
     SteamPaths m_steamPaths;

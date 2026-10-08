@@ -199,6 +199,43 @@ private Q_SLOTS:
         QVERIFY(manager.sourceAccountAvailable());
         QCOMPARE(manager.sourceAccountIndex(), 1);
     }
+    void testSavedSourceDoesNotFollowRetargetedSteamRoot()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString rootA = home.path() + QStringLiteral("/.local/share/Steam");
+        const QString rootB = home.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+        const QString accountA = rootA + QStringLiteral("/userdata/123/config");
+        const QString accountB = rootB + QStringLiteral("/userdata/123/config");
+        QVERIFY(QDir().mkpath(accountA));
+        QVERIFY(QDir().mkpath(accountB));
+        const QString rootAOriginal = rootA + QStringLiteral("-original");
+
+        SteamConfigManager manager;
+        QCOMPARE(manager.sourceAccounts().size(), 2);
+        QVERIFY(manager.selectSourceAccount(QFileInfo(rootA).canonicalFilePath(), QStringLiteral("123")));
+        QCOMPARE(manager.steamPaths().steamRoot, QFileInfo(rootA).canonicalFilePath());
+
+        QVERIFY(QDir().rename(rootA, rootAOriginal));
+        QVERIFY(QFile::link(rootB, rootA));
+        QVERIFY(!manager.selectSourceAccount(rootA, QStringLiteral("123")));
+        QCOMPARE(manager.sourceAccounts().size(), 1);
+        QCOMPARE(manager.sourceAccountIndex(), -1);
+        QVERIFY(!manager.isSteamDetected());
+        QVERIFY(!manager.sourceAccountAvailable());
+        QVERIFY(manager.sourceAccountError().contains(QStringLiteral("Previously selected")));
+
+        QVERIFY(QFile::remove(rootA));
+        QVERIFY(QDir().rename(rootAOriginal, rootA));
+        manager.refreshSourceAccounts();
+        QVERIFY(manager.sourceAccountAvailable());
+        QCOMPARE(manager.steamPaths().steamRoot, QFileInfo(rootA).canonicalFilePath());
+    }
 };
 QTEST_MAIN(TestSteamConfigManager)
 #include "test_steamconfigmanager.moc"

@@ -88,11 +88,16 @@ void SteamConfigManager::setShareLibraryEnabled(bool enabled)
 
 void SteamConfigManager::detectSteamPaths()
 {
+    detectSteamPathsInternal(true);
+}
+
+void SteamConfigManager::detectSteamPathsInternal(bool allowAutomaticSelection)
+{
     const SteamPaths previous = m_steamPaths;
     m_sourceAccounts = discoverSteamAccounts(m_userHome);
     const bool hasSavedSelection = !m_sourceSteamRoot.isEmpty() || !m_sourceSteamAccountId.isEmpty();
     int selectedIndex = sourceAccountIndex();
-    if (!hasSavedSelection && m_sourceAccounts.size() == 1) {
+    if (allowAutomaticSelection && !hasSavedSelection && m_sourceAccounts.size() == 1) {
         m_sourceSteamRoot = m_sourceAccounts.constFirst().root;
         m_sourceSteamAccountId = m_sourceAccounts.constFirst().accountId;
         KConfigGroup group = KSharedConfig::openConfig(QStringLiteral("couchplayrc"))->group(QStringLiteral("Steam"));
@@ -109,7 +114,7 @@ void SteamConfigManager::detectSteamPaths()
         m_steamPaths.shortcutsVdf = m_steamPaths.userDataDir + QStringLiteral("/config/shortcuts.vdf");
     } else if (hasSavedSelection) {
         root = m_sourceSteamRoot;
-        if (!QDir(root).exists()) root.clear();
+        if (!QDir(root).exists() || QFileInfo(root).canonicalFilePath() != m_sourceSteamRoot) root.clear();
     } else {
         for (const QString &candidate : steamRootCandidates(m_userHome)) {
             if (QFile::exists(candidate + QStringLiteral("/config/libraryfolders.vdf"))) {
@@ -155,7 +160,7 @@ QVariantList SteamConfigManager::sourceAccounts() const
 
 int SteamConfigManager::sourceAccountIndex() const
 {
-    const QString savedRoot = QFileInfo(m_sourceSteamRoot).canonicalFilePath();
+    const QString &savedRoot = m_sourceSteamRoot;
     for (int i = 0; i < m_sourceAccounts.size(); ++i) {
         if (m_sourceAccounts.at(i).root == savedRoot && m_sourceAccounts.at(i).accountId == m_sourceSteamAccountId)
             return i;
@@ -180,12 +185,14 @@ QString SteamConfigManager::sourceAccountError() const
 
 bool SteamConfigManager::selectSourceAccount(const QString &root, const QString &accountId)
 {
-    const QString canonicalRoot = QFileInfo(root).canonicalFilePath();
+    detectSteamPathsInternal(false);
+    const QString selectedRoot = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
     const auto found = std::find_if(m_sourceAccounts.cbegin(), m_sourceAccounts.cend(), [&](const SteamAccount &account) {
-        return account.root == canonicalRoot && account.accountId == accountId
+        return account.root == selectedRoot && account.accountId == accountId
             && QFileInfo(account.root + QStringLiteral("/userdata/") + account.accountId).isDir();
     });
     if (found == m_sourceAccounts.cend()) {
+        loadGames();
         Q_EMIT errorOccurred(i18nc("@info", "Selected Steam source account is unavailable"));
         return false;
     }
