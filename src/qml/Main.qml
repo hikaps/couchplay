@@ -188,8 +188,7 @@ Kirigami.ApplicationWindow {
         helperClient: helperClient
         
         Component.onCompleted: {
-            detectSteamPaths()
-            loadGames()
+            refreshSourceAccounts()
         }
     }
 

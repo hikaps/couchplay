@@ -55,13 +55,18 @@ void PresetManager::setHeroicConfigManager(HeroicConfigManager *manager)
 
 void PresetManager::setSteamConfigManager(SteamConfigManager *manager)
 {
-    if (m_steamConfigManager != manager) {
-        m_steamConfigManager = manager;
-        initBuiltinPresets();
-        Q_EMIT presetsChanged();
+    if (m_steamConfigManager == manager) return;
+    if (m_steamConfigManager) disconnect(m_steamConfigManager, &SteamConfigManager::steamPathsChanged, this, nullptr);
+    m_steamConfigManager = manager;
+    if (m_steamConfigManager) {
+        connect(m_steamConfigManager, &SteamConfigManager::steamPathsChanged, this, [this] {
+            initBuiltinPresets();
+            Q_EMIT presetsChanged();
+        });
     }
+    initBuiltinPresets();
+    Q_EMIT presetsChanged();
 }
-
 DataDirectory DataDirectory::fromVariant(const QVariant &var)
 {
     DataDirectory dir;
