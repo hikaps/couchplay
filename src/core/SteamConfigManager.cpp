@@ -171,9 +171,10 @@ int SteamConfigManager::sourceAccountIndex() const
 bool SteamConfigManager::sourceAccountAvailable() const
 {
     const int index = sourceAccountIndex();
-    return index >= 0 && QFileInfo(m_steamPaths.userDataDir).isDir();
+    if (index < 0 || QFileInfo(m_sourceSteamRoot).canonicalFilePath() != m_sourceSteamRoot) return false;
+    const QFileInfo accountInfo(m_steamPaths.userDataDir);
+    return accountInfo.isDir() && accountInfo.canonicalFilePath() == m_steamPaths.userDataDir;
 }
-
 QString SteamConfigManager::sourceAccountError() const
 {
     if (sourceAccountAvailable()) return {};

@@ -223,6 +223,7 @@ private Q_SLOTS:
 
         QVERIFY(QDir().rename(rootA, rootAOriginal));
         QVERIFY(QFile::link(rootB, rootA));
+        QVERIFY(!manager.sourceAccountAvailable());
         QVERIFY(!manager.selectSourceAccount(rootA, QStringLiteral("123")));
         QCOMPARE(manager.sourceAccounts().size(), 1);
         QCOMPARE(manager.sourceAccountIndex(), -1);
