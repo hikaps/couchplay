@@ -4,6 +4,7 @@
 #include "SteamShortcutManager.h"
 
 #include "SessionManager.h"
+#include "SteamAccountDiscovery.h"
 #include "SteamConfigManager.h"
 #include "SteamShortcutsVdf.h"
 
@@ -11,8 +12,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QRegularExpression>
-#include <QSet>
 #include <QSaveFile>
 #include <QVariantMap>
 
@@ -22,7 +21,6 @@
 namespace {
 
 constexpr char CouchPlayFlatpakId[] = "io.github.hikaps.couchplay";
-constexpr char SteamFlatpakId[] = "com.valvesoftware.Steam";
 
 QString markerFor(const QString &profilePath)
 {
@@ -73,26 +71,6 @@ bool hasSymlinkComponent(const QString &path)
     return false;
 }
 
-QStringList steamRoots()
-{
-    const QString home = QDir::homePath();
-    return {
-        home + QStringLiteral("/.steam/steam"),
-        home + QStringLiteral("/.local/share/Steam"),
-        home + QStringLiteral("/.var/app/") + QString::fromLatin1(SteamFlatpakId)
-            + QStringLiteral("/.steam/steam"),
-        home + QStringLiteral("/.var/app/") + QString::fromLatin1(SteamFlatpakId)
-            + QStringLiteral("/.local/share/Steam"),
-        home + QStringLiteral("/.var/app/") + QString::fromLatin1(SteamFlatpakId)
-            + QStringLiteral("/data/Steam"),
-    };
-}
-
-bool isSteamFlatpakRoot(const QString &path)
-{
-    return path.contains(QStringLiteral("/.var/app/") + QString::fromLatin1(SteamFlatpakId) + QLatin1Char('/'));
-}
-
 } // namespace
 
 SteamShortcutManager::SteamShortcutManager(QObject *parent)
@@ -130,59 +108,30 @@ void SteamShortcutManager::fail(const QString &message)
 
 bool SteamShortcutManager::discoverAccounts()
 {
-    QSet<QString> rootsSeen;
-    QRegularExpression accountIdExpression(QStringLiteral("\\A[0-9]+\\z"));
-
-    for (const QString &candidate : steamRoots()) {
-        const QFileInfo rootInfo(candidate);
-        if (!rootInfo.exists() || !rootInfo.isDir()) {
-            continue;
-        }
-        const QString root = rootInfo.canonicalFilePath();
-        if (root.isEmpty() || rootsSeen.contains(root)) {
-            continue;
-        }
-        rootsSeen.insert(root);
-
-        const QString userdataPath = root + QStringLiteral("/userdata");
+    const auto discovered = discoverSteamAccounts(QDir::homePath());
+    for (const auto &entry : discovered) {
+        const QString userdataPath = entry.root + QStringLiteral("/userdata");
         const QFileInfo userdataInfo(userdataPath);
         if (!userdataInfo.exists() || !userdataInfo.isDir() || userdataInfo.isSymLink()
-            || !isOwnedByCurrentUser(userdataInfo) || hasSymlinkComponent(userdataPath)) {
+            || !isOwnedByCurrentUser(userdataInfo) || hasSymlinkComponent(userdataPath))
             continue;
-        }
-
-        const bool flatpak = isSteamFlatpakRoot(root) || isSteamFlatpakRoot(candidate);
-        const QDir userdata(userdataPath);
-        const QFileInfoList entries = userdata.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-        for (const QFileInfo &entry : entries) {
-            if (entry.isSymLink() || !isOwnedByCurrentUser(entry) || !accountIdExpression.match(entry.fileName()).hasMatch()) {
-                continue;
-            }
-            const QString accountRoot = entry.canonicalFilePath();
-            if (accountRoot.isEmpty() || hasSymlinkComponent(accountRoot)) {
-                continue;
-            }
-
-            Account account;
-            account.root = root;
-            account.accountId = entry.fileName();
-            account.kind = flatpak ? QStringLiteral("flatpak") : QStringLiteral("native");
-            account.label = QStringLiteral("%1 Steam · %2")
-                                .arg(flatpak ? QStringLiteral("Flatpak") : QStringLiteral("Native"), account.accountId);
-            account.shortcutsPath = accountRoot + QStringLiteral("/config/shortcuts.vdf");
-
-            const QFileInfo configInfo(QFileInfo(account.shortcutsPath).absolutePath());
-            if (configInfo.exists() && (configInfo.isSymLink() || !configInfo.isDir() || !isOwnedByCurrentUser(configInfo)
-                                        || hasSymlinkComponent(configInfo.filePath()))) {
-                continue;
-            }
-            m_accounts.append(account);
-        }
+        const QString accountRoot = userdataPath + QLatin1Char('/') + entry.accountId;
+        const QFileInfo accountInfo(accountRoot);
+        if (accountInfo.isSymLink() || !isOwnedByCurrentUser(accountInfo) || hasSymlinkComponent(accountRoot))
+            continue;
+        Account account;
+        account.root = entry.root;
+        account.accountId = entry.accountId;
+        account.kind = entry.kind;
+        account.label = QStringLiteral("%1 Steam · %2").arg(account.kind == QStringLiteral("flatpak")
+            ? QStringLiteral("Flatpak") : QStringLiteral("Native"), account.accountId);
+        account.shortcutsPath = accountRoot + QStringLiteral("/config/shortcuts.vdf");
+        const QFileInfo configInfo(QFileInfo(account.shortcutsPath).absolutePath());
+        if (configInfo.exists() && (configInfo.isSymLink() || !configInfo.isDir()
+            || !isOwnedByCurrentUser(configInfo) || hasSymlinkComponent(configInfo.filePath())))
+            continue;
+        m_accounts.append(account);
     }
-
-    std::sort(m_accounts.begin(), m_accounts.end(), [](const Account &left, const Account &right) {
-        return left.root == right.root ? left.accountId < right.accountId : left.root < right.root;
-    });
     return !m_accounts.isEmpty();
 }
 
@@ -191,12 +140,10 @@ bool SteamShortcutManager::prepare(const QString &profileName)
     m_prepared = false;
     m_accounts.clear();
     Q_EMIT accountsChanged();
-
     if (!m_sessionManager || !SessionManager::isValidProfileName(profileName)) {
         fail(QStringLiteral("Invalid saved profile"));
         return false;
     }
-
     const QList<SessionProfile> profiles = m_sessionManager->savedProfiles();
     const auto profile = std::find_if(profiles.cbegin(), profiles.cend(), [&](const SessionProfile &candidate) {
         return candidate.name == profileName;
@@ -205,14 +152,12 @@ bool SteamShortcutManager::prepare(const QString &profileName)
         fail(QStringLiteral("Saved profile not found"));
         return false;
     }
-
     m_profileName = profile->name;
     m_profilePath = profile->filePath;
     if (!discoverAccounts()) {
         fail(QStringLiteral("No Steam accounts were found"));
         return false;
     }
-
     m_prepared = true;
     Q_EMIT accountsChanged();
     Q_EMIT prepared();

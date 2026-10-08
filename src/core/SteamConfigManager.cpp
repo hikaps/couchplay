@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SteamConfigManager.h"
+#include "SteamAccountDiscovery.h"
 #include <algorithm>
 #include "PresetManager.h"
 #include "../dbus/CouchPlayHelperClient.h"
@@ -17,6 +18,7 @@
 #include <utility>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <KLocalizedString>
 
 #include <KConfigGroup>
 #include <KSharedConfig>
@@ -38,14 +40,13 @@ SteamConfigManager::SteamConfigManager(QObject *parent)
         }
     }
 
-    // Auto-detect Steam on construction
-    detectSteamPaths();
-
-    // Load settings from config
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup group = config->group(QStringLiteral("Steam"));
+    m_sourceSteamRoot = group.readEntry(QStringLiteral("SourceSteamRoot"), QString());
+    m_sourceSteamAccountId = group.readEntry(QStringLiteral("SourceSteamAccountId"), QString());
     m_syncShortcutsEnabled = group.readEntry(QStringLiteral("SyncShortcutsEnabled"), false);
     m_shareLibraryEnabled = group.readEntry(QStringLiteral("ShareLibraryEnabled"), false);
+    detectSteamPaths();
 }
 
 void SteamConfigManager::setHelperClient(CouchPlayHelperClient *client)
@@ -87,53 +88,134 @@ void SteamConfigManager::setShareLibraryEnabled(bool enabled)
 
 void SteamConfigManager::detectSteamPaths()
 {
+    const SteamPaths previous = m_steamPaths;
+    m_sourceAccounts = discoverSteamAccounts(m_userHome);
+    const bool hasSavedSelection = !m_sourceSteamRoot.isEmpty() || !m_sourceSteamAccountId.isEmpty();
+    int selectedIndex = sourceAccountIndex();
+    if (!hasSavedSelection && m_sourceAccounts.size() == 1) {
+        m_sourceSteamRoot = m_sourceAccounts.constFirst().root;
+        m_sourceSteamAccountId = m_sourceAccounts.constFirst().accountId;
+        KConfigGroup group = KSharedConfig::openConfig(QStringLiteral("couchplayrc"))->group(QStringLiteral("Steam"));
+        group.writeEntry(QStringLiteral("SourceSteamRoot"), m_sourceSteamRoot);
+        group.writeEntry(QStringLiteral("SourceSteamAccountId"), m_sourceSteamAccountId);
+        group.config()->sync();
+        selectedIndex = 0;
+    }
     m_steamPaths = SteamPaths();
-
-    // Check common Steam locations
-    QStringList possibleRoots = {
-        m_userHome + QStringLiteral("/.steam/steam"),
-        m_userHome + QStringLiteral("/.local/share/Steam"),
-        m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam"), // Flatpak
-        m_userHome + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
-    };
-
-    for (const QString &root : possibleRoots) {
-        QString configDir = root + QStringLiteral("/config");
-        QString libraryVdf = configDir + QStringLiteral("/libraryfolders.vdf");
-
-        if (QFile::exists(libraryVdf)) {
-            m_steamPaths.steamRoot = root;
-            m_steamPaths.configDir = configDir;
-            m_steamPaths.libraryFoldersVdf = libraryVdf;
-
-            // Find userdata directory (contains Steam user ID subdirectories)
-            QString userDataBase = root + QStringLiteral("/userdata");
-            QDir userDataDir(userDataBase);
-            if (userDataDir.exists()) {
-                // Get first numeric subdirectory (Steam user ID)
-                QStringList entries = userDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-                for (const QString &entry : entries) {
-                    bool ok;
-                    entry.toULongLong(&ok);
-                    if (ok) {
-                        m_steamPaths.userDataDir = userDataBase + QStringLiteral("/") + entry;
-                        m_steamPaths.shortcutsVdf = m_steamPaths.userDataDir + QStringLiteral("/config/shortcuts.vdf");
-                        break;
-                    }
-                }
+    QString root;
+    if (selectedIndex >= 0) {
+        root = m_sourceAccounts.at(selectedIndex).root;
+        m_steamPaths.userDataDir = root + QStringLiteral("/userdata/") + m_sourceSteamAccountId;
+        m_steamPaths.shortcutsVdf = m_steamPaths.userDataDir + QStringLiteral("/config/shortcuts.vdf");
+    } else if (hasSavedSelection) {
+        root = m_sourceSteamRoot;
+        if (!QDir(root).exists()) root.clear();
+    } else {
+        for (const QString &candidate : steamRootCandidates(m_userHome)) {
+            if (QFile::exists(candidate + QStringLiteral("/config/libraryfolders.vdf"))) {
+                root = QFileInfo(candidate).canonicalFilePath();
+                break;
             }
-
-            m_steamPaths.valid = true;
-            qDebug() << "SteamConfigManager: Detected Steam at" << root;
-            break;
         }
     }
-
-    if (!m_steamPaths.valid) {
-        qWarning() << "SteamConfigManager: Steam installation not found";
+    if (!root.isEmpty() && QDir(root).exists()) {
+        m_steamPaths.steamRoot = root;
+        m_steamPaths.configDir = root + QStringLiteral("/config");
+        m_steamPaths.libraryFoldersVdf = m_steamPaths.configDir + QStringLiteral("/libraryfolders.vdf");
+        m_steamPaths.valid = true;
+    } else if (selectedIndex >= 0) {
+        m_steamPaths.userDataDir.clear();
+        m_steamPaths.shortcutsVdf.clear();
     }
-
+    if (previous.steamRoot != m_steamPaths.steamRoot || previous.userDataDir != m_steamPaths.userDataDir) {
+        m_shortcuts.clear();
+        m_libraries.clear();
+        m_games.clear();
+        Q_EMIT shortcutsLoaded();
+        Q_EMIT librariesLoaded();
+        Q_EMIT gamesLoaded();
+    }
     Q_EMIT steamPathsChanged();
+    Q_EMIT sourceAccountsChanged();
+}
+
+QVariantList SteamConfigManager::sourceAccounts() const
+{
+    QVariantList result;
+    for (const SteamAccount &account : m_sourceAccounts) {
+        result.append(QVariantMap{{QStringLiteral("root"), account.root},
+                                  {QStringLiteral("accountId"), account.accountId},
+                                  {QStringLiteral("kind"), account.kind},
+                                  {QStringLiteral("label"), QStringLiteral("%1 Steam · %2")
+                                      .arg(account.kind == QStringLiteral("flatpak") ? QStringLiteral("Flatpak")
+                                                                                     : QStringLiteral("Native"), account.accountId)}});
+    }
+    return result;
+}
+
+int SteamConfigManager::sourceAccountIndex() const
+{
+    const QString savedRoot = QFileInfo(m_sourceSteamRoot).canonicalFilePath();
+    for (int i = 0; i < m_sourceAccounts.size(); ++i) {
+        if (m_sourceAccounts.at(i).root == savedRoot && m_sourceAccounts.at(i).accountId == m_sourceSteamAccountId)
+            return i;
+    }
+    return -1;
+}
+
+bool SteamConfigManager::sourceAccountAvailable() const
+{
+    const int index = sourceAccountIndex();
+    return index >= 0 && QFileInfo(m_steamPaths.userDataDir).isDir();
+}
+
+QString SteamConfigManager::sourceAccountError() const
+{
+    if (sourceAccountAvailable()) return {};
+    if (!m_sourceSteamRoot.isEmpty() || !m_sourceSteamAccountId.isEmpty())
+        return i18nc("@info", "Previously selected Steam source account is unavailable. Select an account in Settings.");
+    if (m_sourceAccounts.isEmpty()) return i18nc("@info", "No Steam accounts found. Log into Steam, then reload.");
+    return i18nc("@info", "Select a Steam source account in Settings.");
+}
+
+bool SteamConfigManager::selectSourceAccount(const QString &root, const QString &accountId)
+{
+    const QString canonicalRoot = QFileInfo(root).canonicalFilePath();
+    const auto found = std::find_if(m_sourceAccounts.cbegin(), m_sourceAccounts.cend(), [&](const SteamAccount &account) {
+        return account.root == canonicalRoot && account.accountId == accountId
+            && QFileInfo(account.root + QStringLiteral("/userdata/") + account.accountId).isDir();
+    });
+    if (found == m_sourceAccounts.cend()) {
+        Q_EMIT errorOccurred(i18nc("@info", "Selected Steam source account is unavailable"));
+        return false;
+    }
+    m_sourceSteamRoot = found->root;
+    m_sourceSteamAccountId = found->accountId;
+    KConfigGroup group = KSharedConfig::openConfig(QStringLiteral("couchplayrc"))->group(QStringLiteral("Steam"));
+    group.writeEntry(QStringLiteral("SourceSteamRoot"), m_sourceSteamRoot);
+    group.writeEntry(QStringLiteral("SourceSteamAccountId"), m_sourceSteamAccountId);
+    group.config()->sync();
+    refreshSourceAccounts();
+    return true;
+}
+
+void SteamConfigManager::refreshSourceAccounts()
+{
+    detectSteamPaths();
+    loadGames();
+}
+
+bool SteamConfigManager::isSteamRootPath(const QString &path) const
+{
+    const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    const QString canonical = QFileInfo(path).canonicalFilePath();
+    for (const QString &candidate : steamRootCandidates(m_userHome)) {
+        const QString candidateAbsolute = QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+        const QString candidateCanonical = QFileInfo(candidate).canonicalFilePath();
+        if (absolute == candidateAbsolute || (!canonical.isEmpty() && canonical == candidateCanonical)) return true;
+    }
+    return (!m_sourceSteamRoot.isEmpty() && (absolute == QDir::cleanPath(QFileInfo(m_sourceSteamRoot).absoluteFilePath())
+        || (!canonical.isEmpty() && canonical == QFileInfo(m_sourceSteamRoot).canonicalFilePath())));
 }
 
 QString SteamConfigManager::getSteamUserId() const
@@ -283,10 +365,6 @@ QList<SteamGame> SteamConfigManager::parseInstalledGames() const
 void SteamConfigManager::loadGames()
 {
     m_games.clear();
-    if (!m_steamPaths.valid) {
-        Q_EMIT gamesLoaded();
-        return;
-    }
 
     loadLibraryFolders();
     loadShortcuts();
@@ -406,6 +484,12 @@ bool SteamConfigManager::syncShortcutsToUser(const QString &targetUsername)
         return false;
     }
 
+    if (!sourceAccountAvailable()) {
+        const QString error = sourceAccountError();
+        qCWarning(couchplaySteam) << "syncShortcutsToUser failed -" << error;
+        Q_EMIT syncFailed(targetUsername, error);
+        return false;
+    }
     // Get source shortcuts.vdf path
     if (!m_steamPaths.valid || m_steamPaths.shortcutsVdf.isEmpty()) {
         qCWarning(couchplaySteam) << "syncShortcutsToUser failed - Steam not detected";

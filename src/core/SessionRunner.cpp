@@ -344,6 +344,40 @@ bool SessionRunner::start()
         }
     }
 
+    bool steamShortcutsNeeded = false;
+    for (const InstanceConfig &instance : profile.instances) {
+        const QString presetId = instance.presetId.isEmpty() ? QStringLiteral("steam") : instance.presetId;
+        const bool selectedShortcut = instance.gameSelection.launcherId == QStringLiteral("steam")
+            && instance.gameSelection.backend == QStringLiteral("shortcut");
+        const bool requiresSteam = (m_presetManager
+            && m_presetManager->getRequiredIntegrations(presetId).contains(QStringLiteral("steam"))) || selectedShortcut;
+        steamShortcutsNeeded |= requiresSteam && m_steamConfigManager
+            && (m_steamConfigManager->syncShortcutsEnabled() || selectedShortcut);
+    }
+    if (steamShortcutsNeeded && m_steamConfigManager) {
+        m_steamConfigManager->refreshSourceAccounts();
+        if (!m_steamConfigManager->sourceAccountAvailable()) {
+            Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
+            setStatus(QStringLiteral("Error"));
+            return false;
+        }
+        for (const InstanceConfig &instance : profile.instances) {
+            if (instance.gameSelection.launcherId != QStringLiteral("steam")
+                || instance.gameSelection.backend != QStringLiteral("shortcut")) continue;
+            const auto games = m_steamConfigManager->gamesAsVariant();
+            const bool found = std::any_of(games.cbegin(), games.cend(), [&](const QVariant &entry) {
+                const QVariantMap game = entry.toMap();
+                return game.value(QStringLiteral("gameId")).toString() == instance.gameSelection.gameId
+                    && game.value(QStringLiteral("backend")).toString() == QStringLiteral("shortcut");
+            });
+            if (!found) {
+                Q_EMIT errorOccurred(QStringLiteral("Selected Steam shortcut is unavailable in the source account"));
+                setStatus(QStringLiteral("Error"));
+                return false;
+            }
+        }
+    }
+
     for (int i = 0; i < instanceCount; ++i) {
         const QString presetId = profile.instances[i].presetId.isEmpty()
             ? QStringLiteral("steam")
@@ -909,6 +943,10 @@ bool SessionRunner::setupSessionResources()
         }
         if (requiresSteam && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
             && (m_steamConfigManager->syncShortcutsEnabled() || selectedSteamShortcut)) {
+            if (!m_steamConfigManager->sourceAccountAvailable()) {
+                Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
+                return false;
+            }
             qCDebug(couchplaySteam) << "Syncing Steam shortcuts for user" << username;
             m_steamConfigManager->loadShortcuts();
             const QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
@@ -986,7 +1024,7 @@ bool SessionRunner::setupSessionResources()
             // generic directory. Never let a stale Steam snapshot overlay the
             // full compositor Steam root for a non-Steam launcher.
             if (dir.mode == QStringLiteral("overlay") && m_steamConfigManager
-                && dir.path == m_steamConfigManager->steamPaths().steamRoot) {
+                && m_steamConfigManager->isSteamRootPath(dir.path)) {
                 if (!requiresSteam) {
                     qCWarning(couchplaySteam) << "Ignoring Steam root data marker for non-Steam launcher" << username;
                     continue;
@@ -997,14 +1035,20 @@ bool SessionRunner::setupSessionResources()
                 }
                 // Finalization writes manifests and libraryfolders.vdf
                 // entries for the alias mounts — skip it when preparation
-                // failed, or it would advertise libraries that never mounted.
-                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
+                if (!m_steamConfigManager->isSteamDetected()) {
+                    Q_EMIT errorOccurred(QStringLiteral("Selected Steam installation is unavailable"));
+                    allSucceeded = false;
+                    continue;
+                }
+                DataDirectory steamMarker = dir;
+                steamMarker.path = m_steamConfigManager->steamPaths().steamRoot;
+                if (!m_steamConfigManager->prepareDataDir(steamMarker, username)) {
                     qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
                     allSucceeded = false;
                     continue;
                 }
                 m_steamSharedUsers.insert(username);
-                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
+                if (!m_steamConfigManager->finalizeDataDir(steamMarker, username)) {
                     qCWarning(couchplaySteam) << "Steam library finalize failed for" << dir.path;
                     allSucceeded = false;
                 }

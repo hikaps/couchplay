@@ -99,6 +99,8 @@ target_sources(couchplay PRIVATE
      core/PresetManager.h
      core/HeroicConfigManager.cpp
      core/HeroicConfigManager.h
+    core/SteamAccountDiscovery.cpp
+    core/SteamAccountDiscovery.h
      core/SteamConfigManager.cpp
      core/SteamConfigManager.h
     core/SteamShortcutManager.cpp

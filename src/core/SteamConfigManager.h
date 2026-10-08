@@ -11,6 +11,7 @@
 #include <QVariantMap>
 
 class CouchPlayHelperClient;
+#include "SteamAccountDiscovery.h"
 struct DataDirectory;
 
 /**
@@ -125,6 +126,10 @@ class SteamConfigManager : public QObject
     Q_PROPERTY(bool shareLibraryEnabled READ shareLibraryEnabled WRITE setShareLibraryEnabled NOTIFY shareLibraryEnabledChanged)
     Q_PROPERTY(int libraryCount READ libraryCount NOTIFY librariesLoaded)
     Q_PROPERTY(QVariantList libraries READ librariesAsVariant NOTIFY librariesLoaded)
+    Q_PROPERTY(QVariantList sourceAccounts READ sourceAccounts NOTIFY sourceAccountsChanged)
+    Q_PROPERTY(int sourceAccountIndex READ sourceAccountIndex NOTIFY sourceAccountsChanged)
+    Q_PROPERTY(bool sourceAccountAvailable READ sourceAccountAvailable NOTIFY sourceAccountsChanged)
+    Q_PROPERTY(QString sourceAccountError READ sourceAccountError NOTIFY sourceAccountsChanged)
     Q_PROPERTY(QVariantList games READ gamesAsVariant NOTIFY gamesLoaded)
 
 public:
@@ -163,6 +168,13 @@ public:
 
     int libraryCount() const { return m_libraries.size(); }
     QVariantList librariesAsVariant() const;
+    QVariantList sourceAccounts() const;
+    int sourceAccountIndex() const;
+    bool sourceAccountAvailable() const;
+    QString sourceAccountError() const;
+    Q_INVOKABLE bool selectSourceAccount(const QString &root, const QString &accountId);
+    Q_INVOKABLE void refreshSourceAccounts();
+    bool isSteamRootPath(const QString &path) const;
 
     Q_INVOKABLE void detectSteamPaths();
     Q_INVOKABLE QString getSteamUserId() const;
@@ -191,6 +203,7 @@ Q_SIGNALS:
     void librariesLoaded();
     void syncCompleted(const QString &username);
     void syncFailed(const QString &username, const QString &error);
+    void sourceAccountsChanged();
     void errorOccurred(const QString &message);
 
 private:
@@ -207,5 +220,8 @@ private:
     QList<SteamGame> m_games;
     QString m_userHome;
     bool m_syncShortcutsEnabled = false;
+    QList<SteamAccount> m_sourceAccounts;
+    QString m_sourceSteamRoot;
+    QString m_sourceSteamAccountId;
     bool m_shareLibraryEnabled = false;
 };

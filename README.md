@@ -86,6 +86,7 @@ The **Settings** page offers additional configuration:
 - **Hide KDE panels** — auto-hide Plasma panels during gaming sessions.
 - **Scaling and filter modes** — per-instance rendering options.
 - **Steam and Heroic shortcut sync** — keep launch shortcuts in sync across users.
+- **Steam shortcut source account** — select which native/Flatpak Steam account supplies shortcut counts, game choices, and shortcuts synced to players. CouchPlay auto-selects only when it finds one valid account; choose explicitly when there are multiple. The Add to Steam destination account is selected separately.
 
 ## Installation
 

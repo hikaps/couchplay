@@ -45,6 +45,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SteamConfigManager.h
     ../src/core/SteamShortcutManager.cpp
     ../src/core/SteamShortcutManager.h
+    ../src/core/SteamAccountDiscovery.cpp
+    ../src/core/SteamAccountDiscovery.h
     ../src/core/SteamShortcutsVdf.cpp
     ../src/core/SteamShortcutsVdf.h
     ../src/core/SettingsManager.cpp

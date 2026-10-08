@@ -3,7 +3,6 @@
 
 #include <QDir>
 #include <QFile>
-#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -20,6 +19,41 @@ void appendString(QByteArray &data, const QByteArray &key, const QByteArray &val
 }
 }
 
+QByteArray makeShortcutDocument(const QByteArray &name, quint8 appId)
+{
+    QByteArray data;
+    data.append(char(0x00));
+    data.append("shortcuts");
+    data.append(char(0));
+    data.append(char(0x00));
+    data.append("0");
+    data.append(char(0));
+    appendString(data, "AppName", name);
+    data.append(char(0x02));
+    data.append("appid");
+    data.append(char(0));
+    data.append(static_cast<char>(appId));
+    data.append(char(0));
+    data.append(char(0));
+    data.append(char(0));
+    data.append(char(0x08));
+    data.append(char(0x08));
+    return data;
+}
+
+class EnvironmentGuard {
+public:
+    explicit EnvironmentGuard(const char *name) : m_name(name), m_value(qgetenv(name)), m_wasSet(qEnvironmentVariableIsSet(name)) {}
+    ~EnvironmentGuard() {
+        if (m_wasSet) qputenv(m_name.constData(), m_value);
+        else qunsetenv(m_name.constData());
+    }
+private:
+    QByteArray m_name;
+    QByteArray m_value;
+    bool m_wasSet;
+};
+
 class TestSteamConfigManager : public QObject
 {
     Q_OBJECT
@@ -29,16 +63,17 @@ private Q_SLOTS:
     {
         QTemporaryDir home;
         QVERIFY(home.isValid());
-        const QByteArray oldHome = qgetenv("HOME");
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
         qputenv("HOME", home.path().toLocal8Bit());
-        QStandardPaths::setTestModeEnabled(true);
-
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
         const QString steamRoot = home.path() + QStringLiteral("/.steam/steam");
         const QString libraryRoot = home.path() + QStringLiteral("/library");
         const QString configDir = steamRoot + QStringLiteral("/config");
         const QString userConfigDir = steamRoot + QStringLiteral("/userdata/76561198000000000/config");
         QVERIFY(QDir().mkpath(configDir));
         QVERIFY(QDir().mkpath(userConfigDir));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/userdata/0/config")));
         QVERIFY(QDir().mkpath(libraryRoot + QStringLiteral("/steamapps/common/TestNative")));
 
         QFile libraries(configDir + QStringLiteral("/libraryfolders.vdf"));
@@ -78,7 +113,10 @@ private Q_SLOTS:
 
         SteamConfigManager manager;
         QVERIFY(manager.isSteamDetected());
+        QCOMPARE(manager.getSteamUserId(), QStringLiteral("76561198000000000"));
+        QVERIFY(manager.sourceAccountAvailable());
         manager.loadGames();
+        QCOMPARE(manager.shortcutCount(), 1);
         const QVariantList games = manager.gamesAsVariant();
         QCOMPARE(games.size(), 2);
 
@@ -100,14 +138,67 @@ private Q_SLOTS:
         QVERIFY(foundNative);
         QVERIFY(foundShortcut);
 
-        if (oldHome.isNull()) {
-            qunsetenv("HOME");
-        } else {
-            qputenv("HOME", oldHome);
+    }
+    void testExplicitSourceSelectionPersistsAndDoesNotFallback()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString rootA = home.path() + QStringLiteral("/.local/share/Steam");
+        const QString rootB = home.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+        const QString accountA = rootA + QStringLiteral("/userdata/123/config");
+        const QString accountB = rootB + QStringLiteral("/userdata/123/config");
+        QVERIFY(QDir().mkpath(accountA));
+        QVERIFY(QDir().mkpath(accountB));
+
+        QFile shortcutsA(rootA + QStringLiteral("/userdata/123/config/shortcuts.vdf"));
+        QVERIFY(shortcutsA.open(QIODevice::WriteOnly));
+        const QByteArray dataA = makeShortcutDocument("Account A Game", 31);
+        QCOMPARE(shortcutsA.write(dataA), qint64(dataA.size()));
+        shortcutsA.close();
+        QFile shortcutsB(rootB + QStringLiteral("/userdata/123/config/shortcuts.vdf"));
+        QVERIFY(shortcutsB.open(QIODevice::WriteOnly));
+        const QByteArray dataB = makeShortcutDocument("Account B Game", 47);
+        QCOMPARE(shortcutsB.write(dataB), qint64(dataB.size()));
+        shortcutsB.close();
+
+        SteamConfigManager manager;
+        QCOMPARE(manager.sourceAccounts().size(), 2);
+        QCOMPARE(manager.sourceAccountIndex(), -1);
+        QVERIFY(!manager.sourceAccountAvailable());
+        QVERIFY(manager.sourceAccountError().contains(QStringLiteral("Select a Steam source account")));
+        QVERIFY(manager.selectSourceAccount(QFileInfo(rootB).canonicalFilePath(), QStringLiteral("123")));
+        QVERIFY(manager.sourceAccountAvailable());
+        const QVariantList selectedGames = manager.gamesAsVariant();
+        QCOMPARE(selectedGames.size(), 1);
+        QCOMPARE(selectedGames.constFirst().toMap().value(QStringLiteral("title")).toString(),
+                 QStringLiteral("Account B Game"));
+        QCOMPARE(manager.steamPaths().steamRoot, QFileInfo(rootB).canonicalFilePath());
+
+        {
+            SteamConfigManager reloaded;
+            QCOMPARE(reloaded.sourceAccountIndex(), 1);
+            QVERIFY(reloaded.sourceAccountAvailable());
+            QCOMPARE(reloaded.steamPaths().steamRoot, QFileInfo(rootB).canonicalFilePath());
         }
-        QStandardPaths::setTestModeEnabled(false);
+
+        QVERIFY(QDir(rootB + QStringLiteral("/userdata/123")).removeRecursively());
+        manager.refreshSourceAccounts();
+        QCOMPARE(manager.sourceAccountIndex(), -1);
+        QVERIFY(!manager.sourceAccountAvailable());
+        QCOMPARE(manager.gamesAsVariant().size(), 0);
+        QCOMPARE(manager.steamPaths().steamRoot, QFileInfo(rootB).canonicalFilePath());
+        QVERIFY(manager.sourceAccountError().contains(QStringLiteral("Previously selected")));
+
+        QVERIFY(QDir().mkpath(accountB));
+        manager.refreshSourceAccounts();
+        QVERIFY(manager.sourceAccountAvailable());
+        QCOMPARE(manager.sourceAccountIndex(), 1);
     }
 };
-
 QTEST_MAIN(TestSteamConfigManager)
 #include "test_steamconfigmanager.moc"

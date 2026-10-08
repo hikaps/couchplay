@@ -20,6 +20,7 @@
 #include "HeroicConfigManager.h"
 #include "SessionManager.h"
 #include "SteamConfigManager.h"
+#include "SteamShortcutsVdf.h"
 #define private public
 #include "CouchPlayHelperClient.h"
 
@@ -27,6 +28,22 @@
 #include "GamescopeInstance.h"
 #undef private
 #include "UserLookup.h"
+
+class TestEnvironmentGuard
+{
+public:
+    explicit TestEnvironmentGuard(const char *name)
+        : m_name(name), m_value(qgetenv(name)), m_wasSet(qEnvironmentVariableIsSet(name)) {}
+    ~TestEnvironmentGuard()
+    {
+        if (m_wasSet) qputenv(m_name.constData(), m_value);
+        else qunsetenv(m_name.constData());
+    }
+private:
+    QByteArray m_name;
+    QByteArray m_value;
+    bool m_wasSet;
+};
 
 class MockCouchPlayHelperClient : public CouchPlayHelperClient
 {
@@ -197,6 +214,10 @@ public:
     {
         return username == QStringLiteral("player1") ? QStringLiteral("12345") : QString();
     }
+    bool isSteamBootstrapped(const QString &username) override
+    {
+        return username == QStringLiteral("player1");
+    }
     QString player1SteamRoot;
     QString getUserSteamRoot(const QString &username) override
     {
@@ -238,6 +259,7 @@ private Q_SLOTS:
     void testSetupSteamConfigWithNonSteamLauncher();
     void testSetupSteamConfigSteamIntegrationDisabled();
     void testSetupSteamConfigAppliesHeroicAcls();
+    void testSetupResourcesSyncsSelectedSteamAccount();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
@@ -375,6 +397,88 @@ void TestSessionRunner::testSetupSteamConfigSteamIntegrationDisabled()
 
     QVERIFY(!m_steamConfigManager->syncShortcutsEnabled());
 }
+void TestSessionRunner::testSetupResourcesSyncsSelectedSteamAccount()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    TestEnvironmentGuard configGuard("XDG_CONFIG_HOME");
+    qputenv("HOME", home.path().toLocal8Bit());
+    qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+    const QString rootA = home.path() + QStringLiteral("/.local/share/Steam");
+    const QString rootB = home.path() + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+    const QString accountA = rootA + QStringLiteral("/userdata/111/config/shortcuts.vdf");
+    const QString accountB = rootB + QStringLiteral("/userdata/222/config/shortcuts.vdf");
+    QVERIFY(QDir().mkpath(QFileInfo(accountA).absolutePath()));
+    QVERIFY(QDir().mkpath(QFileInfo(accountB).absolutePath()));
+
+    SteamShortcut shortcutA;
+    shortcutA.appId = 31;
+    shortcutA.appName = QStringLiteral("Wrong Source Game");
+    shortcutA.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('a'));
+    SteamShortcut shortcutB;
+    shortcutB.appId = 47;
+    shortcutB.appName = QStringLiteral("Selected Source Game");
+    shortcutB.shortcutPath = QStringLiteral("couchplay://profile/") + QString(64, QLatin1Char('b'));
+    QByteArray dataA;
+    QByteArray dataB;
+    QString vdfError;
+    QVERIFY(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), shortcutA, &dataA, &vdfError));
+    QVERIFY(SteamShortcutsVdf::upsert(SteamShortcutsVdf::emptyDocument(), shortcutB, &dataB, &vdfError));
+    QFile fileA(accountA);
+    QVERIFY(fileA.open(QIODevice::WriteOnly));
+    QCOMPARE(fileA.write(dataA), qint64(dataA.size()));
+    fileA.close();
+    QFile fileB(accountB);
+    QVERIFY(fileB.open(QIODevice::WriteOnly));
+    QCOMPARE(fileB.write(dataB), qint64(dataB.size()));
+    fileB.close();
+
+    m_presetManager->setSteamConfigManager(nullptr);
+    m_runner->setSteamConfigManager(nullptr);
+    delete m_steamConfigManager;
+    m_steamConfigManager = new SteamConfigManager(this);
+    m_steamConfigManager->setHelperClient(m_helperClient);
+    m_presetManager->setSteamConfigManager(m_steamConfigManager);
+    m_runner->setSteamConfigManager(m_steamConfigManager);
+    m_helperClient->player1SteamRoot = home.path() + QStringLiteral("/players/player1/.local/share/Steam");
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+    const QVariantMap selection{{QStringLiteral("launcherId"), QStringLiteral("steam")},
+                                {QStringLiteral("backend"), QStringLiteral("shortcut")},
+                                {QStringLiteral("gameId"), QString::number((quint64(47) << 32) | 0x02000000ULL)},
+                                {QStringLiteral("title"), QStringLiteral("Selected Source Game")}};
+    m_sessionManager->setInstanceGame(0, selection);
+
+    QVERIFY(!m_runner->start());
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(m_helperClient->aclCalls.isEmpty());
+    QVERIFY(m_helperClient->launchCommands.isEmpty());
+    QVERIFY(m_steamConfigManager->selectSourceAccount(QFileInfo(rootB).canonicalFilePath(), QStringLiteral("222")));
+
+    QVariantMap wrongSourceSelection = selection;
+    wrongSourceSelection[QStringLiteral("gameId")] = QString::number((quint64(31) << 32) | 0x02000000ULL);
+    wrongSourceSelection[QStringLiteral("title")] = QStringLiteral("Wrong Source Game");
+    m_sessionManager->setInstanceGame(0, wrongSourceSelection);
+    QVERIFY(!m_runner->start());
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(m_helperClient->aclCalls.isEmpty());
+    QVERIFY(m_helperClient->launchCommands.isEmpty());
+    m_sessionManager->setInstanceGame(0, selection);
+
+    QVERIFY(m_runner->setupSessionResources());
+    QFile playerShortcuts(m_helperClient->player1SteamRoot
+                          + QStringLiteral("/userdata/12345/config/shortcuts.vdf"));
+    QVERIFY(playerShortcuts.open(QIODevice::ReadOnly));
+    QCOMPARE(playerShortcuts.readAll(), dataB);
+    QFile untouchedSource(accountA);
+    QVERIFY(untouchedSource.open(QIODevice::ReadOnly));
+    QCOMPARE(untouchedSource.readAll(), dataA);
+}
+
 
 void TestSessionRunner::testSetupSteamConfigAppliesHeroicAcls()
 {
@@ -614,10 +718,16 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
 {
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    TestEnvironmentGuard configGuard("XDG_CONFIG_HOME");
     qputenv("HOME", homeDir.path().toLocal8Bit());
+    qputenv("XDG_CONFIG_HOME", (homeDir.path() + QStringLiteral("/config")).toLocal8Bit());
 
     // Mock a detected Steam installation
     QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    const QString selectedSteamRoot = homeDir.path()
+        + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam");
+    QVERIFY(QDir().mkpath(selectedSteamRoot + QStringLiteral("/userdata/222/config")));
     QDir().mkpath(steamRoot + QStringLiteral("/config"));
     QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
     QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
@@ -627,7 +737,8 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
     auto *steamManager = new SteamConfigManager(this);
     m_runner->setSteamConfigManager(steamManager);
     QVERIFY(steamManager->isSteamDetected());
-    QCOMPARE(steamManager->steamPaths().steamRoot, steamRoot);
+    QVERIFY(steamManager->selectSourceAccount(QFileInfo(selectedSteamRoot).canonicalFilePath(), QStringLiteral("222")));
+    QCOMPARE(steamManager->steamPaths().steamRoot, QFileInfo(selectedSteamRoot).canonicalFilePath());
     QVERIFY(!steamManager->shareLibraryEnabled()); // default off
 
     m_sessionManager->setInstanceCount(1);

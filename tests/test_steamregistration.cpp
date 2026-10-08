@@ -66,7 +66,10 @@ private Q_SLOTS:
 
         const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
         const QString accountConfig = steamRoot + QStringLiteral("/userdata/123/config");
+        const QString accountBConfig = steamRoot + QStringLiteral("/userdata/456/config");
+        QVERIFY(QDir().mkpath(accountBConfig));
         QVERIFY(QDir().mkpath(accountConfig));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/userdata/0/config")));
         QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
         QFile libraryFolders(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
         QVERIFY(libraryFolders.open(QIODevice::WriteOnly));
@@ -80,6 +83,15 @@ private Q_SLOTS:
         const QByteArray initial = SteamShortcutsVdf::emptyDocument();
         QCOMPARE(shortcuts.write(initial), qint64(initial.size()));
         shortcuts.close();
+        QFile shortcutsB(accountBConfig + QStringLiteral("/shortcuts.vdf"));
+        QVERIFY(shortcutsB.open(QIODevice::WriteOnly));
+        const QByteArray initialB = SteamShortcutsVdf::emptyDocument();
+        QCOMPARE(shortcutsB.write(initialB), qint64(initialB.size()));
+        shortcutsB.close();
+
+        SteamConfigManager sourceManager;
+        QCOMPARE(sourceManager.sourceAccounts().size(), 2);
+        QVERIFY(sourceManager.selectSourceAccount(QFileInfo(steamRoot).canonicalFilePath(), QStringLiteral("456")));
 
         SessionManager sessionManager;
         const QString profileName = QStringLiteral(R"(Party "Profile")");
@@ -94,11 +106,12 @@ private Q_SLOTS:
         QVERIFY(manager.prepare(profileName));
         QCOMPARE(prepared.count(), 1);
         QCOMPARE(errors.count(), 0);
-        QCOMPARE(manager.accounts().size(), 1);
+        QCOMPARE(manager.accounts().size(), 2);
 
         manager.addToSteam(0);
         QCOMPARE(finished.count(), 1);
         QCOMPARE(errors.count(), 0);
+        QCOMPARE(manager.accounts().size(), 2);
         QCOMPARE(finished.at(0).at(0).toString(), profileName);
         QVERIFY(finished.at(0).at(1).toBool());
 
@@ -106,9 +119,13 @@ private Q_SLOTS:
         QVERIFY(resultFile.open(QIODevice::ReadOnly));
         const QByteArray result = resultFile.readAll();
         QVERIFY(result != initial);
+        QFile unchangedB(accountBConfig + QStringLiteral("/shortcuts.vdf"));
+        QVERIFY(unchangedB.open(QIODevice::ReadOnly));
+        QCOMPARE(unchangedB.readAll(), initialB);
 
         QVERIFY(result.contains(QByteArrayLiteral("couchplay://profile/")));
         SteamConfigManager configManager;
+        QVERIFY(configManager.selectSourceAccount(QFileInfo(steamRoot).canonicalFilePath(), QStringLiteral("123")));
         QCOMPARE(configManager.steamPaths().shortcutsVdf, shortcutsPath);
         configManager.loadShortcuts();
         const QVariantList registered = configManager.shortcutsAsVariant();

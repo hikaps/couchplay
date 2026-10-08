@@ -339,7 +339,9 @@ Kirigami.ScrollablePage {
 
                 Controls.Label {
                     text: root.steamConfigManager && root.steamConfigManager.steamDetected
-                          ? i18nc("@info", "Yes (%1 non-Steam shortcuts)", root.steamConfigManager.shortcutCount)
+                          ? (root.steamConfigManager.sourceAccountAvailable
+                             ? i18nc("@info", "Yes (%1 non-Steam shortcuts)", root.steamConfigManager.shortcutCount)
+                             : i18nc("@info", "Yes"))
                           : i18nc("@info", "Not found")
                     color: root.steamConfigManager && root.steamConfigManager.steamDetected
                            ? Kirigami.Theme.positiveTextColor
@@ -351,15 +353,51 @@ Kirigami.ScrollablePage {
                     Accessible.role: Accessible.Button
                     Accessible.name: i18nc("@action:button", "Reload")
                     Accessible.onPressAction: clicked()
-                    visible: root.steamConfigManager && root.steamConfigManager.steamDetected
+                    enabled: root.steamConfigManager && !root.sessionRunner?.active
+                    visible: root.steamConfigManager !== null
                     text: i18nc("@action:button", "Reload")
                     icon.name: "view-refresh"
                     onClicked: {
-                        root.steamConfigManager.loadShortcuts()
-                        applicationWindow().showPassiveNotification(
-                            i18nc("@info", "Loaded %1 shortcuts", root.steamConfigManager.shortcutCount))
+                        root.steamConfigManager.refreshSourceAccounts()
+                        if (root.steamConfigManager.sourceAccountAvailable)
+                            applicationWindow().showPassiveNotification(
+                                i18nc("@info", "Loaded %1 shortcuts", root.steamConfigManager.shortcutCount))
                     }
                 }
+            }
+
+            Controls.ComboBox {
+                id: steamSourceAccountCombo
+                objectName: "comboSteamSourceAccount"
+                Kirigami.FormData.label: i18nc("@label", "Steam source account")
+                Accessible.name: Kirigami.FormData.label
+                Layout.fillWidth: true
+                model: root.steamConfigManager ? root.steamConfigManager.sourceAccounts : []
+                textRole: "label"
+                currentIndex: root.steamConfigManager ? root.steamConfigManager.sourceAccountIndex : -1
+                enabled: root.steamConfigManager && !root.sessionRunner?.active
+                displayText: currentIndex >= 0 ? currentText : i18nc("@item", "Select an account")
+                onActivated: index => {
+                    const account = model[index]
+                    if (!root.steamConfigManager.selectSourceAccount(account.root, account.accountId))
+                        applicationWindow().showPassiveNotification(
+                            i18nc("@info", "Selected Steam source account is unavailable"), "long")
+                }
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: root.steamConfigManager?.sourceAccountAvailable ?? false
+                text: root.steamConfigManager?.steamPaths?.steamRoot ?? ""
+                elide: Text.ElideMiddle
+            }
+
+            Kirigami.InlineMessage {
+                objectName: "messageSteamSourceAccount"
+                Layout.fillWidth: true
+                visible: root.steamConfigManager && !root.steamConfigManager.sourceAccountAvailable
+                type: Kirigami.MessageType.Warning
+                text: root.steamConfigManager ? root.steamConfigManager.sourceAccountError : ""
             }
 
             Controls.CheckBox {
@@ -369,15 +407,18 @@ Kirigami.ScrollablePage {
                 Accessible.role: Accessible.CheckBox
                 Accessible.name: Kirigami.FormData.label
                 checked: root.steamConfigManager ? root.steamConfigManager.syncShortcutsEnabled : false
+                enabled: (root.steamConfigManager?.sourceAccountAvailable ?? false) || checked
                 onToggled: {
                     if (root.steamConfigManager) {
                         root.steamConfigManager.syncShortcutsEnabled = checked
                     }
                 }
 
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Copy your non-Steam game shortcuts (Heroic, Lutris, etc. added to Steam) to gaming users at session start.")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
+                Controls.ToolTip.text: (root.steamConfigManager?.sourceAccountAvailable ?? false)
+                    ? i18nc("@info:tooltip", "Copy non-Steam shortcuts to players at session start.")
+                    : i18nc("@info:tooltip", "Select a Steam source account before enabling shortcut sync.")
             }
 
             Controls.CheckBox {
