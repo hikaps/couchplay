@@ -421,7 +421,7 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
 
         QVERIFY(manager.updateCustomPreset(id,
                                            QStringLiteral("OnlineFix updated"),
-                                           updatedExecutable,
+                                           QStringLiteral("\"%1\"").arg(updatedExecutable),
                                            updatedApplicationDir,
                                            QStringLiteral("updated-icon")));
         QVERIFY(QDir(applicationDir).removeRecursively());
