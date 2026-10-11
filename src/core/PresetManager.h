@@ -56,6 +56,13 @@ QString dataDirectoryStagingSlug(const QString &dirPath, const QString &composit
 QString encodeDataDirectories(const QList<DataDirectory> &directories);
 QList<DataDirectory> decodeDataDirectories(const QString &payload);
 
+/**
+ * Return existing, deduplicated native application-install/cwd directories
+ * inferred only from the structured program and working directory. Flatpak,
+ * system, broad, and sensitive paths are omitted; expose results read-only.
+ */
+QStringList applicationAccessDirectories(const LaunchCommand &command, const QString &compositorHome);
+
 struct LauncherInfo {
     Q_GADGET
     Q_PROPERTY(QString configPath MEMBER configPath)

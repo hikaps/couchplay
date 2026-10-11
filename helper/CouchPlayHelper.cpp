@@ -172,6 +172,7 @@ static const QString ACTION_LAUNCH_INSTANCE = QStringLiteral("io.github.hikaps.c
 static const QString ACTION_MANAGE_MOUNTS = QStringLiteral("io.github.hikaps.couchplay.manage-mounts");
 static const QString ACTION_MANAGE_VIRTUAL_DISPLAY = QStringLiteral("io.github.hikaps.couchplay.manage-virtual-display");
 static const QString ACTION_MANAGE_AUDIO_SINK = QStringLiteral("io.github.hikaps.couchplay.manage-audio-sink");
+static const QString ACTION_MANAGE_SESSION = QStringLiteral("io.github.hikaps.couchplay.manage-session");
 
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
 static constexpr uint INVALID_CALLER_UID = std::numeric_limits<uint>::max();
@@ -1273,7 +1274,10 @@ uint CouchPlayHelper::callerUid() const
 }
 bool CouchPlayHelper::checkAuthorization(const QString &action)
 {
-    return m_ops->checkAuthorization(action, message().service());
+    const bool sessionOperation = action == ACTION_DEVICE_OWNER || action == ACTION_WAYLAND_ACCESS
+        || action == ACTION_LAUNCH_INSTANCE || action == ACTION_MANAGE_MOUNTS || action == ACTION_MANAGE_VIRTUAL_DISPLAY
+        || action == ACTION_MANAGE_AUDIO_SINK;
+    return m_ops->checkAuthorization(sessionOperation ? ACTION_MANAGE_SESSION : action, message().service());
 }
 bool CouchPlayHelper::validateUserAndAuth(const QString &username, const QString &action)
 {
@@ -1352,7 +1356,7 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username,
                                        const QString &workingDirectory,
                                        const QStringList &sharedRoots,
                                        const QStringList &environment,
-                                       const QStringList &bindPaths)
+                                       bool privateTemporaryDirectories)
 {
     if (!validateUserAndAuth(username, ACTION_LAUNCH_INSTANCE)) {
         return 0;
@@ -1408,7 +1412,7 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username,
                                           workingDirectory,
                                           sharedRoots,
                                           environment,
-                                          bindPaths);
+                                          privateTemporaryDirectories);
     if (pid <= 0) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to launch instance for user '%1'").arg(username));
         return 0;
@@ -1517,7 +1521,7 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username,
                                            const QString &workingDirectory,
                                            const QStringList &sharedRoots,
                                            const QStringList &environment,
-                                           const QStringList &bindPaths)
+                                           bool privateTemporaryDirectories)
 
 {
     Q_UNUSED(sharedRoots);
@@ -1576,6 +1580,8 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username,
     systemdRunArgs << QStringLiteral("--property=KillMode=control-group");
     systemdRunArgs << QStringLiteral("--property=TimeoutStopSec=10s");
     systemdRunArgs << QStringLiteral("--property=SendSIGKILL=yes");
+    systemdRunArgs << (privateTemporaryDirectories ? QStringLiteral("--property=PrivateTmp=yes")
+                                                   : QStringLiteral("--property=PrivateTmp=no"));
     systemdRunArgs << QStringLiteral("--property=Delegate=yes");
     systemdRunArgs << QStringLiteral("--property=MemoryDenyWriteExecute=false");
     const QString effectiveWorkingDirectory =
@@ -1638,45 +1644,6 @@ qint64 CouchPlayHelper::startTransientUnit(const QString &username,
     if (runtimeUid != pwd->pw_uid) {
         systemdRunArgs << QStringLiteral("--property=BindReadOnlyPaths=%1").arg(compositorRuntimeDir);
     }
-    const QString targetHome = getUserHome(username);
-
-    QStringList validatedBindPaths;
-    for (const QString &bp : bindPaths) {
-        const int separator = bp.indexOf(QLatin1Char(':'));
-        if (separator <= 0 || separator == bp.size() - 1) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Malformed launch bind path"));
-            return 0;
-        }
-        const QString source = bp.left(separator);
-        const QString target = bp.mid(separator + 1);
-        bool targetAllowed = !targetHome.isEmpty()
-            && (target == targetHome || target.startsWith(targetHome + QLatin1Char('/')));
-        for (const QString &root : sharedRoots) {
-            if (target == root || target.startsWith(root + QLatin1Char('/'))) {
-                targetAllowed = true;
-                break;
-            }
-        }
-        if (!targetAllowed) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Launch bind target is not a declared shared root"));
-            return 0;
-        }
-        if (!QDir::isAbsolutePath(source) || !QDir::isAbsolutePath(target)
-            || !isPathWithinAllowedPrefix(source) || !isPathWithinAllowedPrefix(target)) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Launch bind path is outside allowed prefixes"));
-            return 0;
-        }
-        const QString canonicalSource = m_ops->canonicalFilePath(source);
-        if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Launch bind source resolves outside allowed prefixes"));
-            return 0;
-        }
-        validatedBindPaths.append(bp);
-    }
-    for (const QString &bp : validatedBindPaths) {
-        systemdRunArgs << QStringLiteral("--property=BindReadOnlyPaths=%1").arg(bp);
-    }
-
     // On immutable distros, gamescope may not be at /usr/bin/gamescope
     QString gamescopePath = QStringLiteral("/usr/bin/gamescope");
     if (!m_ops->fileExists(gamescopePath)) {
@@ -1857,6 +1824,13 @@ bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
 {
     if (pathHasDotDotComponent(path)) {
         return false;
+    }
+
+    static const QString canonicalMntPrefix = QStringLiteral("/var/mnt/");
+    if (path.startsWith(canonicalMntPrefix) && path.length() > canonicalMntPrefix.length()
+        && path.at(canonicalMntPrefix.length()) != QLatin1Char('/')
+        && m_ops->canonicalFilePath(QStringLiteral("/mnt")) == QStringLiteral("/var/mnt")) {
+        return true;
     }
 
     static const QStringList allowedPrefixes = {
@@ -2426,7 +2400,7 @@ bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &t
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create directory: %1").arg(targetDir));
         return false;
     }
-    if (!m_ops->copyFileSecure(sourcePath, targetPath, sourceOwnerUid, userUid, pw->pw_gid)) {
+    if (!m_ops->copyFileSecure(canonicalSource, targetPath, sourceOwnerUid, userUid, pw->pw_gid)) {
         qWarning() << "CopyFileToUser: Failed to copy" << sourcePath << "to" << targetPath;
         sendErrorReply(QDBusError::Failed,
                        QStringLiteral("Failed to copy file from %1 to %2").arg(sourcePath, targetPath));
@@ -3067,6 +3041,7 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
         QStringLiteral("/run/media"),
         QStringLiteral("/media"),
         QStringLiteral("/mnt"),
+        QStringLiteral("/var/mnt"), // canonical target of the trusted Bazzite /mnt alias
         QStringLiteral("/home"),
         QStringLiteral("/var/home"), // Bazzite/Fedora Silverblue
         QStringLiteral("/"),

@@ -12,7 +12,29 @@
 
 #include <pwd.h>
 #include <unistd.h>
+static bool runCommand(const QString &program, const QStringList &arguments, QByteArray *standardOutput = nullptr)
+{
+    QProcess process;
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        QStringList hostArguments{QStringLiteral("--host"), program};
+        hostArguments.append(arguments);
+        process.setProgram(QStringLiteral("flatpak-spawn"));
+        process.setArguments(hostArguments);
+    } else {
+        process.setProgram(program);
+        process.setArguments(arguments);
+    }
+    process.start();
 
+    if (!process.waitForFinished(2000) || process.exitCode() != 0) {
+        return false;
+    }
+
+    if (standardOutput) {
+        *standardOutput = process.readAllStandardOutput();
+    }
+    return true;
+}
 CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
 {
     CommandVerificationResult result;
@@ -145,18 +167,8 @@ bool CommandVerifier::isAbsolutePath(const QString &command)
 
 bool CommandVerifier::commandExistsInPath(const QString &commandName)
 {
-    QProcess process;
-    process.setProgram(QStringLiteral("which"));
-    process.setArguments({commandName});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        return process.exitCode() == 0;
-    }
-
-    return false;
+    return runCommand(QStringLiteral("which"), {commandName});
 }
-
 bool CommandVerifier::isCommandExecutable(const QString &path)
 {
     QFileInfo fileInfo(path);
@@ -190,16 +202,7 @@ bool CommandVerifier::isUserLocalCommand(const QString &command)
 
 bool CommandVerifier::isFlatpakAvailable()
 {
-    QProcess process;
-    process.setProgram(QStringLiteral("flatpak"));
-    process.setArguments({QStringLiteral("--version")});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        return process.exitCode() == 0;
-    }
-
-    return false;
+    return runCommand(QStringLiteral("flatpak"), {QStringLiteral("--version")});
 }
 
 bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
@@ -208,17 +211,12 @@ bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
         return false;
     }
 
-    QProcess process;
-    process.setProgram(QStringLiteral("flatpak"));
-    process.setArguments({QStringLiteral("list"), QStringLiteral("--app"), QStringLiteral("--columns=application")});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        if (process.exitCode() == 0) {
-            QByteArray output = process.readAllStandardOutput();
-            QStringList installedApps = QString::fromUtf8(output).split(QStringLiteral("\n"));
-            return installedApps.contains(appID);
-        }
+    QByteArray output;
+    if (runCommand(QStringLiteral("flatpak"),
+                   {QStringLiteral("list"), QStringLiteral("--app"), QStringLiteral("--columns=application")},
+                   &output)) {
+        QStringList installedApps = QString::fromUtf8(output).split(QStringLiteral("\n"));
+        return installedApps.contains(appID);
     }
 
     return false;
@@ -226,20 +224,16 @@ bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
 
 QString CommandVerifier::resolveCommandPath(const QString &commandName)
 {
-    QProcess process;
-    process.setProgram(QStringLiteral("which"));
-    process.setArguments({commandName});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        if (process.exitCode() == 0) {
-            QByteArray output = process.readAllStandardOutput();
-            QString path = QString::fromUtf8(output).trimmed();
-            if (!path.isEmpty()) {
-                QFileInfo fileInfo(path);
-                if (fileInfo.exists() && fileInfo.isExecutable()) {
-                    return path;
-                }
+    QByteArray output;
+    if (runCommand(QStringLiteral("which"), {commandName}, &output)) {
+        QString path = QString::fromUtf8(output).trimmed();
+        if (!path.isEmpty()) {
+            if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+                return path;
+            }
+            QFileInfo fileInfo(path);
+            if (fileInfo.exists() && fileInfo.isExecutable()) {
+                return path;
             }
         }
     }

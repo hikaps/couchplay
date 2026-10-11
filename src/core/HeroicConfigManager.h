@@ -60,7 +60,7 @@ public:
     QString appName; // Internal ID (e.g., "Egret")
     QString title; // Display name
     QString installPath; // Full path to game installation
-    QString executable; // Relative path to executable
+    QString executable; // Relative to installPath, or absolute for sideloads
     QString runner; // "legendary", "gog", "nile"
     qint64 installSize = 0;
 };
@@ -201,7 +201,7 @@ public:
 
     /**
      * @brief Sync Heroic config to a target user
-     * Copies game configs, library files to target user's Heroic config directory
+     * Copies installed-library catalogs only; per-user settings, game configs, and authentication remain private.
      *
      * @param targetUsername Username to sync to
      * @return true if successful

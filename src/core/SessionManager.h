@@ -40,9 +40,7 @@ struct InstanceConfig {
     Q_PROPERTY(QVariantMap gameSelection READ gameSelectionAsVariant WRITE setGameSelectionFromVariant)
     Q_PROPERTY(QString presetId MEMBER presetId)
     Q_PROPERTY(QVariantList dataDirectories READ dataDirectoriesAsVariant WRITE setDataDirectoriesFromVariant)
-    Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
-    Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
-    Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
+    Q_PROPERTY(bool privateTemporaryDirectories MEMBER privateTemporaryDirectories)
     Q_PROPERTY(QString outputMode MEMBER outputMode)
     Q_PROPERTY(QString streamResolution MEMBER streamResolution)
     Q_PROPERTY(int streamFps MEMBER streamFps)
@@ -67,13 +65,11 @@ public:
     QString presetId = QStringLiteral("steam"); // ID of the launch preset to use
     QList<DataDirectory> dataDirectories; // Per-instance data directories (from preset)
     bool dataDirectoriesSnapshotted = false; // True once a snapshot was taken (even an empty one)
+    bool privateTemporaryDirectories = false;
     QVariantList dataDirectoriesAsVariant() const;
     void setDataDirectoriesFromVariant(const QVariantList &dirs);
     QVariantMap gameSelectionAsVariant() const { return gameSelection.toVariant(); }
     void setGameSelectionFromVariant(const QVariantMap &selection) { gameSelection = GameSelection::fromVariant(selection); }
-    QString overrideGamePath;
-    QStringList overrideFiles;
-    QStringList overridePatterns; // Glob patterns for per-user overrides
     QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
     QString streamResolution = QStringLiteral("1920x1080");
     int streamFps = 60;
@@ -192,10 +188,17 @@ public:
     Q_INVOKABLE QString playerDataFolderPath(int index);
 
     /**
+     * @brief Whether this player has a private shared directory for staged data
+     *
+     * Checks the instance snapshot or current preset defaults without creating
+     * the staging folder.
+     */
+    Q_INVOKABLE bool hasPlayerDataStagingDirectories(int index) const;
+
+    /**
      * @brief Open the per-player staging folder in the file manager
      *
-     * No-op under Flatpak (no host filesystem access) — use
-     * playerDataFolderPath() to show a copyable path instead.
+     * Uses the desktop URL opener (including the desktop portal under Flatpak).
      *
      * @return true if an opener was launched
      */

@@ -4,6 +4,7 @@
 #include <pwd.h>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QList>
@@ -111,7 +112,7 @@ public:
                           const QString &workingDirectory,
                           const QStringList &sharedRoots,
                           const QStringList &environment,
-                          const QStringList &bindPaths) override
+                          bool privateTemporaryDirectories) override
     {
         Q_UNUSED(username)
         Q_UNUSED(displayContext)
@@ -119,7 +120,7 @@ public:
         Q_UNUSED(workingDirectory)
         Q_UNUSED(sharedRoots)
         Q_UNUSED(environment)
-        Q_UNUSED(bindPaths)
+        Q_UNUSED(privateTemporaryDirectories)
         launchCommands.append(gameCommand);
         return nextPid++;
     }
@@ -265,6 +266,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
+    void testNativeApplicationAccessDoesNotPopulateEmptySnapshot();
     void testSetupDataDirectoriesBindModeMounts();
     void testSetupDataDirectoriesBindModeEscapesPipePath();
     void testSetupDataDirectoriesMirrorsStagedData();
@@ -370,6 +372,13 @@ void TestSessionRunner::createMockLegendaryConfig(const QString &basePath)
         legendaryFile.close();
     }
     QDir().mkpath(basePath + QStringLiteral("/Games/Heroic/EpicGame"));
+    const QString executableDir = basePath + QStringLiteral("/Games/Heroic/EpicGame/Binaries/Win64");
+    QDir().mkpath(executableDir);
+    QFile executable(executableDir + QStringLiteral("/Game.exe"));
+    if (executable.open(QIODevice::WriteOnly)) {
+        executable.write("windows-game");
+        executable.close();
+    }
 }
 
 void TestSessionRunner::testSetupSteamConfigWithSteamLauncher()
@@ -651,6 +660,7 @@ void TestSessionRunner::testSetupDataDirectoriesEmptySnapshotStaysEmpty()
     m_sessionManager->setInstancePreset(0, presetId);
     // Explicitly empty snapshot (preset selected while it had no dirs)
     m_sessionManager->setInstanceDataDirectories(0, QVariantList());
+    m_runner->m_launchCommands = {m_presetManager->buildLaunchCommand(presetId, {})};
 
     QVERIFY(m_runner->setupSessionResources());
 
@@ -659,6 +669,47 @@ void TestSessionRunner::testSetupDataDirectoriesEmptySnapshotStaysEmpty()
     QCOMPARE(m_helperClient->overlayCalls.size(), 0);
     QCOMPARE(m_helperClient->copyDirCalls.size(), 0);
     QCOMPARE(m_helperClient->mountCalls.size(), 0);
+}
+
+void TestSessionRunner::testNativeApplicationAccessDoesNotPopulateEmptySnapshot()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    m_helperClient->uidHomeOverride = homeDir.path();
+
+    const QString appDir = homeDir.path() + QStringLiteral("/.local/share/OnlineFix Linux Launcher");
+    QVERIFY(QDir().mkpath(appDir));
+    const QString executablePath = appDir + QStringLiteral("/onlinefix-linux-launcher");
+    QFile executable(executablePath);
+    QVERIFY(executable.open(QIODevice::WriteOnly));
+    executable.write("#!/bin/sh\n");
+    executable.close();
+    QVERIFY(executable.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    const QString presetId = m_presetManager->addCustomPreset(
+        QStringLiteral("OnlineFix"), QStringLiteral("\"%1\"").arg(executablePath), appDir);
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceDataDirectories(0, QVariantList());
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    m_sessionManager->setInstanceDataDirectories(1, QVariantList());
+
+    const LaunchCommand command = m_presetManager->buildLaunchCommand(presetId, {});
+    QVERIFY(command.isValid());
+    QCOMPARE(command.program, executablePath);
+    QCOMPARE(command.workingDirectory, appDir);
+    m_runner->m_launchCommands = {command, command};
+
+    QVERIFY(m_runner->setupSessionResources());
+
+    QVERIFY(m_runner->m_instanceSharedRoots.value(0).isEmpty());
+    QVERIFY(m_runner->m_instanceSharedRoots.value(1).isEmpty());
+    QVERIFY(m_sessionManager->currentProfile().instances[0].dataDirectories.isEmpty());
+    QVERIFY(m_sessionManager->currentProfile().instances[0].dataDirectoriesSnapshotted);
+    QVERIFY(m_sessionManager->currentProfile().instances[1].dataDirectories.isEmpty());
+    QVERIFY(m_sessionManager->currentProfile().instances[1].dataDirectoriesSnapshotted);
 }
 
 void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()
@@ -915,8 +966,17 @@ void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
     QCOMPARE(m_helperClient->overlayCalls.size(), 1);
     QCOMPARE(m_helperClient->overlayCalls[0].sourceDir, heroicManager.defaultInstallPath());
     QCOMPARE(m_helperClient->overlayCalls[0].username, QStringLiteral("ghostuser"));
-    QCOMPARE(m_helperClient->aclCalls.size(), 1);
-    QCOMPARE(m_helperClient->aclCalls[0].path, homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame"));
+    bool foundGameDirAcl = false;
+    bool foundExecutableParentAcl = false;
+    for (const auto &call : m_helperClient->aclCalls) {
+        QCOMPARE(call.username, QStringLiteral("ghostuser"));
+        foundGameDirAcl |= call.path == homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
+        foundExecutableParentAcl |=
+            call.path == homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame/Binaries/Win64");
+    }
+    QVERIFY(foundGameDirAcl);
+    QVERIFY(foundExecutableParentAcl);
+    QCOMPARE(m_helperClient->directoryAclCalls.size(), 0);
 }
 
 void TestSessionRunner::testResolveUserIdentityViaHelper()

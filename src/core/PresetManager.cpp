@@ -33,7 +33,187 @@
 #include <KConfigGroup>
 
 static constexpr int CACHE_TTL_HOURS = 24;
-static constexpr int FLATPAK_CACHE_VERSION = 2;  // bump when builtin preset commands change
+static constexpr int FLATPAK_CACHE_VERSION = 3; // bump when builtin preset commands change
+
+namespace {
+
+bool pathIsWithin(const QString &path, const QString &parent)
+{
+    return path == parent || (parent == QStringLiteral("/")
+                              ? path.startsWith(QLatin1Char('/'))
+                              : path.startsWith(parent + QLatin1Char('/')));
+}
+
+QString canonicalPath(const QString &path, bool directory)
+{
+    if (!QDir::isAbsolutePath(path)) {
+        return {};
+    }
+    if (!qEnvironmentVariableIsEmpty("FLATPAK_ID")) {
+        // Resolve against the host without granting the GUI access to private application files.
+        QProcess process;
+        process.start(QStringLiteral("flatpak-spawn"),
+                      {QStringLiteral("--host"), QStringLiteral("/usr/bin/readlink"), QStringLiteral("-e"),
+                       QStringLiteral("--"), directory ? path + QLatin1Char('/') : path});
+        if (!process.waitForFinished(2000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+            return {};
+        }
+        QByteArray output = process.readAllStandardOutput();
+        if (output.endsWith('\n')) {
+            output.chop(1);
+        }
+        const QString resolved = QString::fromUtf8(output);
+        return QDir::isAbsolutePath(resolved) ? resolved : QString();
+    }
+    const QFileInfo info(QDir::cleanPath(path));
+    return (directory ? info.isDir() : info.isFile()) ? info.canonicalFilePath() : QString();
+}
+
+QString canonicalDirectory(const QString &path)
+{
+    return canonicalPath(path, true);
+}
+
+bool isFlatpakPath(const QString &path, const QString &home)
+{
+    static const QStringList flatpakRoots = {
+        QStringLiteral("/app"),
+        QStringLiteral("/var/lib/flatpak"),
+        QStringLiteral("/usr/lib/flatpak"),
+        QStringLiteral("/run/flatpak")
+    };
+    for (const QString &root : flatpakRoots) {
+        if (pathIsWithin(path, root)) {
+            return true;
+        }
+    }
+    return !home.isEmpty() && pathIsWithin(path, home + QStringLiteral("/.local/share/flatpak"));
+}
+
+QString safeApplicationDirectory(const QString &path, const QString &home)
+{
+    const QString candidate = canonicalDirectory(path);
+    if (candidate.isEmpty() || isFlatpakPath(candidate, home)) {
+        return QString();
+    }
+
+    static const QStringList commonBases = {
+        QStringLiteral(".local"), QStringLiteral(".local/share"), QStringLiteral(".local/bin"),
+        QStringLiteral(".local/lib"), QStringLiteral(".local/share/applications"),
+        QStringLiteral(".local/share/icons"), QStringLiteral("downloads"),
+        QStringLiteral("documents"), QStringLiteral("desktop"), QStringLiteral("games"),
+        QStringLiteral("public"), QStringLiteral("videos"), QStringLiteral("music"),
+        QStringLiteral("pictures"), QStringLiteral("templates"), QStringLiteral("applications")
+    };
+    static const QStringList sensitiveTrees = {
+        QStringLiteral(".config"), QStringLiteral(".ssh"), QStringLiteral(".gnupg"),
+        QStringLiteral(".pki"), QStringLiteral(".aws"), QStringLiteral(".azure"),
+        QStringLiteral(".kube"), QStringLiteral(".docker"), QStringLiteral(".password-store"),
+        QStringLiteral(".mozilla"), QStringLiteral(".thunderbird"), QStringLiteral(".cache"),
+        QStringLiteral(".steam"), QStringLiteral(".local/share/flatpak"),
+        QStringLiteral(".local/share/keyrings"), QStringLiteral(".local/share/steam"),
+        QStringLiteral(".var")
+    };
+
+    if (!home.isEmpty() && pathIsWithin(candidate, home)) {
+        if (candidate == home) {
+            return QString();
+        }
+        const QString relative = QDir(home).relativeFilePath(candidate).toCaseFolded();
+        for (const QString &base : commonBases) {
+            if (relative == base) {
+                return QString();
+            }
+        }
+        for (const QString &tree : sensitiveTrees) {
+            if (relative == tree || relative.startsWith(tree + QLatin1Char('/'))) {
+                return QString();
+            }
+        }
+        return candidate;
+    }
+
+    struct ExternalRoot {
+        const char *path;
+        int minimumComponents;
+    };
+    static const ExternalRoot externalRoots[] = {
+        {"/opt", 1}, {"/mnt", 2}, {"/media", 2}, {"/run/media", 3}, {"/srv", 2}
+    };
+    for (const ExternalRoot &root : externalRoots) {
+        const QString rootPath = QString::fromLatin1(root.path);
+        if (!pathIsWithin(candidate, rootPath)) {
+            continue;
+        }
+        const QString relative = candidate.mid(rootPath.size() + 1);
+        const QStringList components = relative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        if (components.size() < root.minimumComponents || commonBases.contains(components.constLast().toCaseFolded())) {
+            return QString();
+        }
+        return candidate;
+    }
+
+    // System install trees have their own readable permissions and are never shared.
+    static const QStringList systemRoots = {
+        QStringLiteral("/usr"), QStringLiteral("/bin"), QStringLiteral("/sbin"),
+        QStringLiteral("/lib"), QStringLiteral("/lib64"), QStringLiteral("/etc"),
+        QStringLiteral("/var"), QStringLiteral("/snap"), QStringLiteral("/nix")
+    };
+    for (const QString &root : systemRoots) {
+        if (pathIsWithin(candidate, root)) {
+            return QString();
+        }
+    }
+    return QString();
+}
+
+} // namespace
+
+QStringList applicationAccessDirectories(const LaunchCommand &command, const QString &compositorHome)
+{
+    const QString home = canonicalDirectory(compositorHome);
+    if (home == QStringLiteral("/")) {
+        return {};
+    }
+    const QString programName = QFileInfo(command.program).fileName();
+    if (programName == QStringLiteral("flatpak") || programName == QStringLiteral("flatpak-spawn")) {
+        return {};
+    }
+
+    if (QDir::isAbsolutePath(command.program) && isFlatpakPath(QDir::cleanPath(command.program), home)) {
+        return {};
+    }
+    QString programPath;
+    if (QDir::isAbsolutePath(command.program)) {
+        programPath = canonicalPath(command.program, false);
+    }
+    if (!programPath.isEmpty() && isFlatpakPath(programPath, home)) {
+        return {};
+    }
+
+    QStringList directories;
+    const auto addDirectory = [&directories, &home](const QString &path) {
+        const QString safePath = safeApplicationDirectory(path, home);
+        if (safePath.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < directories.size(); ++i) {
+            if (pathIsWithin(safePath, directories.at(i))) {
+                return;
+            }
+            if (pathIsWithin(directories.at(i), safePath)) {
+                directories.removeAt(i--);
+            }
+        }
+        directories.append(safePath);
+    };
+
+    if (!programPath.isEmpty()) {
+        addDirectory(QFileInfo(programPath).absolutePath());
+    }
+    addDirectory(command.workingDirectory);
+    return directories;
+}
 
 PresetManager::PresetManager(QObject *parent)
     : QObject(parent)
@@ -813,6 +993,17 @@ QString PresetManager::addPresetFromDesktopFile(const QString &desktopFilePath)
         }
     }
 
+    const QStringList commandParts = QProcess::splitCommand(preset.command);
+    if (!commandParts.isEmpty()) {
+        LaunchCommand launchCommand;
+        launchCommand.program = commandParts.constFirst();
+        launchCommand.arguments = commandParts.mid(1);
+        launchCommand.workingDirectory = preset.workingDirectory;
+        for (const QString &directory : applicationAccessDirectories(launchCommand, QDir::homePath())) {
+            preset.dataDirectories.append({directory, QStringLiteral("acl")});
+        }
+    }
+
     preset.id = generateCustomId();
     preset.isBuiltin = false;
 
@@ -935,7 +1126,7 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
     QSettings desktop(filePath, QSettings::IniFormat);
     desktop.beginGroup(QStringLiteral("Desktop Entry"));
 
-    QString type = desktop.value(QStringLiteral("Type")).toString();
+    const QString type = desktop.value(QStringLiteral("Type")).toString();
     if (type != QStringLiteral("Application")) {
         return preset;
     }
@@ -945,17 +1136,42 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
         return preset;
     }
 
+    QString rawExec;
+    QFile rawDesktopFile(filePath);
+    if (rawDesktopFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        bool inDesktopEntry = false;
+        while (!rawDesktopFile.atEnd()) {
+            QByteArray bytes = rawDesktopFile.readLine();
+            if (bytes.endsWith('\n')) {
+                bytes.chop(1);
+            }
+            if (bytes.endsWith('\r')) {
+                bytes.chop(1);
+            }
+            QString line = QString::fromUtf8(bytes);
+            if (line.startsWith(QChar(0xFEFF))) {
+                line.remove(0, 1);
+            }
+            if (line.startsWith(QLatin1Char('['))) {
+                inDesktopEntry = line == QStringLiteral("[Desktop Entry]");
+            } else if (inDesktopEntry && line.startsWith(QStringLiteral("Exec="))) {
+                rawExec = line.mid(5);
+                break;
+            }
+        }
+    }
+
     preset.name = desktop.value(QStringLiteral("Name")).toString();
-    preset.command = cleanExecCommand(desktop.value(QStringLiteral("Exec")).toString());
+    preset.command = cleanExecCommand(rawExec);
     preset.workingDirectory = desktop.value(QStringLiteral("Path")).toString();
     preset.iconName = desktop.value(QStringLiteral("Icon")).toString();
     preset.desktopFilePath = filePath;
+
+
     preset.launcherId = detectLauncherId(preset.command);
     if (preset.launcherId == QStringLiteral("steam") || preset.launcherId == QStringLiteral("heroic")) {
         preset.requiredIntegrations = {preset.launcherId};
     }
-
-    // QString categories = desktop.value(QStringLiteral("Categories")).toString();
 
     return preset;
 }
@@ -966,12 +1182,12 @@ QString PresetManager::detectLauncherId(const QString &command) const
         return QString();
     }
 
-    const QStringList tokens = command.split(QStringLiteral(" "), Qt::SkipEmptyParts);
+    const QStringList tokens = QProcess::splitCommand(command);
     if (tokens.isEmpty()) {
         return QString();
     }
 
-    const QString &firstToken = tokens.first();
+    const QString &firstToken = tokens.constFirst();
 
     if (firstToken.contains(QStringLiteral("://"))) {
         return QString();
@@ -1031,9 +1247,27 @@ QString PresetManager::cleanExecCommand(const QString &exec)
         cleaned.remove(code);
     }
 
-    cleaned = cleaned.simplified();
+    QString normalized;
+    bool inQuotes = false;
+    bool escaped = false;
+    bool pendingSpace = false;
+    for (const QChar character : cleaned) {
+        if (character == QLatin1Char('"') && !escaped) {
+            inQuotes = !inQuotes;
+        }
+        if (!inQuotes && character.isSpace()) {
+            pendingSpace = !normalized.isEmpty();
+        } else {
+            if (pendingSpace) {
+                normalized.append(QLatin1Char(' '));
+                pendingSpace = false;
+            }
+            normalized.append(character);
+        }
+        escaped = character == QLatin1Char('\\') && !escaped;
+    }
 
-    return cleaned;
+    return normalized;
 }
 
 QString PresetManager::generateCustomId()

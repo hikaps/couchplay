@@ -244,22 +244,18 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              const QString &workingDirectory,
                                              const QStringList &sharedRoots,
                                              const QStringList &environment,
-                                             const QStringList &bindPaths)
+                                             bool privateTemporaryDirectories)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
         return 0;
     }
 
-    QDBusReply<qint64> reply = m_interface->call(QStringLiteral("LaunchInstance"),
-                                                 username,
-                                                 displayContext,
-                                                 gamescopeArgs,
-                                                 gameCommand,
-                                                 workingDirectory,
-                                                 sharedRoots,
-                                                 environment,
-                                                 bindPaths);
+    QDBusReply<qint64> reply = m_interface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchInstance"),
+        QVariantList{username, displayContext, gamescopeArgs, gameCommand,
+                     workingDirectory, sharedRoots, environment,
+                     privateTemporaryDirectories});
 
     if (!reply.isValid()) {
         const QString errorText = reply.error().message();

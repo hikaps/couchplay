@@ -5,6 +5,10 @@
 #include "dbus/CouchPlayHelperClient.h"
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -43,7 +47,11 @@ public:
     QVariantMap getUserInfo(const QString &username) override
     {
         QVariantMap info;
-        if (const struct passwd *pw = getpwnam(username.toLocal8Bit().constData())) {
+        if (!targetHome.isEmpty()) {
+            info.insert(QStringLiteral("uid"), 1234u);
+            info.insert(QStringLiteral("gid"), 1234u);
+            info.insert(QStringLiteral("home"), targetHome);
+        } else if (const struct passwd *pw = getpwnam(username.toLocal8Bit().constData())) {
             info.insert(QStringLiteral("uid"), static_cast<uint>(pw->pw_uid));
             info.insert(QStringLiteral("gid"), static_cast<uint>(pw->pw_gid));
             info.insert(QStringLiteral("home"), QString::fromLocal8Bit(pw->pw_dir));
@@ -51,6 +59,7 @@ public:
         return info;
     }
 
+    QString targetHome;
     QList<QPair<QString, QString>> createdDirs;
     QList<QPair<QString, QString>> copiedFiles;
 };
@@ -69,6 +78,7 @@ private Q_SLOTS:
     void testParseNile();
     // void testParseSideload();  // Disabled: methods not implemented in HeroicConfigManager
     void testExtractGameDirectories();
+    void testSyncConfigCopiesCatalogsWithoutPrivateHeroicSettings();
     // void testExtractSideloadDirectories();  // Disabled: methods not implemented in HeroicConfigManager
     // void testSyncSideloadToUser();  // Disabled: methods not implemented in HeroicConfigManager
     void testSyncShortcutsToUser();
@@ -377,6 +387,46 @@ void TestHeroicConfigManager::testExtractGameDirectories()
     createMockHeroicConfig(homeDir.path(), false);
     createMockGameConfigs(homeDir.path());
 
+    const QString externalGameDir = homeDir.path() + QStringLiteral("/external/InstalledGame");
+    QVERIFY(QDir().mkpath(externalGameDir));
+    QFile externalExe(externalGameDir + QStringLiteral("/Game.exe"));
+    QVERIFY(externalExe.open(QIODevice::WriteOnly));
+    externalExe.write("windows-game");
+    externalExe.close();
+    QVERIFY(externalExe.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ReadGroup | QFile::ReadOther));
+
+    QJsonObject installedSideload;
+    installedSideload[QStringLiteral("app_name")] = QStringLiteral("ExternalGame");
+    installedSideload[QStringLiteral("title")] = QStringLiteral("External Game");
+    installedSideload[QStringLiteral("folder_name")] = externalGameDir;
+    installedSideload[QStringLiteral("is_installed")] = true;
+    QJsonObject installedConfig;
+    installedConfig[QStringLiteral("platform")] = QStringLiteral("Windows");
+    installedConfig[QStringLiteral("executable")] = QString(externalGameDir + QStringLiteral("/Game.exe"));
+    installedSideload[QStringLiteral("install")] = installedConfig;
+
+    QJsonObject cachedSideload;
+    cachedSideload[QStringLiteral("app_name")] = QStringLiteral("CachedGame");
+    cachedSideload[QStringLiteral("title")] = QStringLiteral("Cached Game");
+    cachedSideload[QStringLiteral("folder_name")] = externalGameDir;
+    cachedSideload[QStringLiteral("is_installed")] = false;
+    QJsonObject cachedConfig;
+    cachedConfig[QStringLiteral("platform")] = QStringLiteral("Windows");
+    cachedConfig[QStringLiteral("executable")] = QString(externalGameDir + QStringLiteral("/Missing.exe"));
+    cachedSideload[QStringLiteral("install")] = cachedConfig;
+
+    QJsonArray sideloadGames;
+    sideloadGames.append(installedSideload);
+    sideloadGames.append(cachedSideload);
+    QJsonObject sideloadRoot;
+    sideloadRoot[QStringLiteral("games")] = sideloadGames;
+    const QString sideloadDir = homeDir.path() + QStringLiteral("/.config/heroic/sideload_apps");
+    QVERIFY(QDir().mkpath(sideloadDir));
+    QFile sideloadFile(sideloadDir + QStringLiteral("/library.json"));
+    QVERIFY(sideloadFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    sideloadFile.write(QJsonDocument(sideloadRoot).toJson());
+    sideloadFile.close();
+
     HeroicConfigManager manager;
     manager.loadGames();
 
@@ -384,6 +434,51 @@ void TestHeroicConfigManager::testExtractGameDirectories()
     QVERIFY(gameDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame")));
     QVERIFY(gameDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/GogGame")));
     QVERIFY(gameDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/AmazonGame")));
+    QVERIFY(gameDirs.contains(externalGameDir));
+    bool foundExternalGame = false;
+    bool foundUninstalledGame = false;
+    for (const HeroicGame &game : manager.installedGames()) {
+        foundExternalGame |= game.appName == QStringLiteral("ExternalGame");
+        foundUninstalledGame |= game.appName == QStringLiteral("CachedGame");
+    }
+    QVERIFY(foundExternalGame);
+    QVERIFY(!foundUninstalledGame);
+}
+
+void TestHeroicConfigManager::testSyncConfigCopiesCatalogsWithoutPrivateHeroicSettings()
+{
+    QTemporaryDir sourceHome;
+    QTemporaryDir targetHome;
+    QVERIFY(sourceHome.isValid());
+    QVERIFY(targetHome.isValid());
+    qputenv("HOME", sourceHome.path().toLocal8Bit());
+
+    createMockHeroicConfig(sourceHome.path(), false);
+    createMockGameConfigs(sourceHome.path());
+    const QString sourceRoot = sourceHome.path() + QStringLiteral("/.config/heroic");
+    QFile privateGameSettings(sourceRoot + QStringLiteral("/GamesConfig/EpicGameApp.json"));
+    QVERIFY(privateGameSettings.open(QIODevice::WriteOnly));
+    privateGameSettings.write(
+        R"({"EpicGameApp":{"enviromentOptions":[{"name":"TOKEN","value":"private-test-token"}],"savesPath":"/private/saves"},"version":"v0","explicit":true})");
+    privateGameSettings.close();
+    QFile authFile(sourceRoot + QStringLiteral("/auth.json"));
+    QVERIFY(authFile.open(QIODevice::WriteOnly));
+    authFile.write("private-auth-test-data");
+    authFile.close();
+
+    HeroicConfigManager manager;
+    auto *helper = new MockHelperClient(&manager);
+    helper->targetHome = targetHome.path();
+    manager.setHelperClient(helper);
+    QVERIFY(manager.syncConfigToUser(QStringLiteral("sync-target")));
+
+    const QString targetRoot = targetHome.path() + QStringLiteral("/.config/heroic");
+    QVERIFY(QFile::exists(targetRoot + QStringLiteral("/sideload_apps/library.json")));
+    QVERIFY(QFile::exists(targetRoot + QStringLiteral("/legendaryConfig/legendary/installed.json")));
+    QVERIFY(QFile::exists(targetRoot + QStringLiteral("/gog_store/installed.json")));
+    QVERIFY(QFile::exists(targetRoot + QStringLiteral("/nile_config/installed.json")));
+    QVERIFY(!QFile::exists(targetRoot + QStringLiteral("/GamesConfig/EpicGameApp.json")));
+    QVERIFY(!QFile::exists(targetRoot + QStringLiteral("/auth.json")));
 }
 
 void TestHeroicConfigManager::testSyncShortcutsToUser()
