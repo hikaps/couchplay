@@ -158,10 +158,19 @@ QString safeApplicationDirectory(const QString &path, const QString &home, const
         int minimumComponents;
     };
     static const ExternalRoot externalRoots[] = {
-        {"/tmp", 1}, {"/opt", 1}, {"/mnt", 2}, {"/var/mnt", 2}, {"/media", 2}, {"/run/media", 3}, {"/srv", 2}
+        {"/tmp", 1}, {"/opt", 1}, {"/var/opt", 1}, {"/mnt", 2}, {"/var/mnt", 2},
+        {"/media", 2}, {"/run/media", 3}, {"/srv", 2}, {"/var/srv", 2}
     };
     const QString canonicalMntRoot = QStringLiteral("/var/mnt");
     if (pathIsWithin(candidate, canonicalMntRoot) && canonicalDirectory(QStringLiteral("/mnt")) != canonicalMntRoot) {
+        return QString();
+    }
+    const QString canonicalOptRoot = QStringLiteral("/var/opt");
+    if (pathIsWithin(candidate, canonicalOptRoot) && canonicalDirectory(QStringLiteral("/opt")) != canonicalOptRoot) {
+        return QString();
+    }
+    const QString canonicalSrvRoot = QStringLiteral("/var/srv");
+    if (pathIsWithin(candidate, canonicalSrvRoot) && canonicalDirectory(QStringLiteral("/srv")) != canonicalSrvRoot) {
         return QString();
     }
     for (const ExternalRoot &root : externalRoots) {
@@ -580,6 +589,7 @@ void PresetManager::initBuiltinPresets()
     }
 
     heroic.dataDirectories = getDefaultDataDirectories(QStringLiteral("heroic"));
+    heroic.dataDirectoriesAreAutomatic = true;
     m_builtinPresets.append(heroic);
 
     LaunchPreset lutris;
@@ -961,6 +971,7 @@ bool PresetManager::setDataDirectories(const QString &id, const QVariantList &di
     for (int i = 0; i < m_builtinPresets.size(); ++i) {
         if (m_builtinPresets[i].id == id) {
             m_builtinPresets[i].dataDirectories = dataDirs;
+            m_builtinPresets[i].dataDirectoriesAreAutomatic = false;
             saveBuiltinDataDirectoryOverride(id);
             Q_EMIT presetsChanged();
             return true;
@@ -970,6 +981,7 @@ bool PresetManager::setDataDirectories(const QString &id, const QVariantList &di
     for (int i = 0; i < m_customPresets.size(); ++i) {
         if (m_customPresets[i].id == id) {
             m_customPresets[i].dataDirectories = dataDirs;
+            m_customPresets[i].dataDirectoriesAreAutomatic = false;
             saveCustomPresets();
             Q_EMIT presetsChanged();
             return true;
@@ -1344,6 +1356,7 @@ void PresetManager::applyBuiltinDataDirectoryOverrides()
             continue;
         }
         m_builtinPresets[i].dataDirectories = decodeDataDirectories(group.readEntry(id, QString()));
+        m_builtinPresets[i].dataDirectoriesAreAutomatic = false;
     }
 }
 

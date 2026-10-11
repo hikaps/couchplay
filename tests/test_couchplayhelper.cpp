@@ -479,8 +479,8 @@ private Q_SLOTS:
     void testMirrorDirectoryContentsTargetNotExists();
     void testMirrorDirectoryContentsTraversalTarget();
     void testIsPathWithinAllowedPrefixMountRoots();
-    void testIsPathWithinAllowedPrefixCanonicalMntAlias();
-    void testIsPathWithinAllowedPrefixCanonicalMntAliasAbsent();
+    void testIsPathWithinAllowedPrefixCanonicalAtomicAliases();
+    void testIsPathWithinAllowedPrefixCanonicalAtomicAliasesAbsent();
     void testComputeMountTargetDotDotNames();
     void testUnmountRetainsFailedMounts();
     void testMountSpecCodec();
@@ -1582,13 +1582,20 @@ void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/tmp/a/../../etc")));
 }
 
-void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalMntAlias()
+void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalAtomicAliases()
 {
     m_ops->clear();
     m_ops->setCanonicalMapping(QStringLiteral("/mnt"), QStringLiteral("/var/mnt"));
+    m_ops->setCanonicalMapping(QStringLiteral("/opt"), QStringLiteral("/var/opt"));
+    m_ops->setCanonicalMapping(QStringLiteral("/srv"), QStringLiteral("/var/srv"));
 
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/steamlibrary")));
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/library..2/saves")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt/MyApp")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/srv/games/MyApp")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/srv")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt/../etc")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/../etc")));
@@ -1596,10 +1603,12 @@ void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalMntAlias()
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/other/steamlibrary")));
 }
 
-void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalMntAliasAbsent()
+void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalAtomicAliasesAbsent()
 {
     m_ops->clear();
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/steamlibrary")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt/Applications")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/srv/games/MyGame")));
 }
 
 void TestCouchPlayHelper::testComputeMountTargetDotDotNames()

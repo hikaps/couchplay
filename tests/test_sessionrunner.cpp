@@ -276,6 +276,7 @@ private Q_SLOTS:
     void testSteamNativeSessionRefreshesWithoutShortcutSync();
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
+    void testHeroicPresetAclDirectoriesRemainRecursiveWithoutInstanceSnapshot();
     void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
     void testNativeApplicationAccessDoesNotPopulateEmptySnapshot();
     void testSetupDataDirectoriesBindModeMounts();
@@ -654,6 +655,45 @@ void TestSessionRunner::testSetupDataDirectoriesFallsBackToPresetDirs()
     QCOMPARE(m_helperClient->aclCalls[0].username, QStringLiteral("player1"));
 }
 
+void TestSessionRunner::testHeroicPresetAclDirectoriesRemainRecursiveWithoutInstanceSnapshot()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+    createMockHeroicConfig(homeDir.path());
+    createMockLegendaryConfig(homeDir.path());
+
+    HeroicConfigManager heroicManager;
+    QVERIFY(heroicManager.isHeroicDetected());
+    heroicManager.setHelperClient(m_helperClient);
+    m_presetManager->setHeroicConfigManager(&heroicManager);
+    m_runner->setHeroicConfigManager(&heroicManager);
+
+    const QString gamePath = homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
+    QVERIFY(QDir(gamePath).exists());
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Heroic custom preset"),
+                                                               QStringLiteral("/usr/bin/true"));
+    QVERIFY(!presetId.isEmpty());
+    QVERIFY(m_presetManager->setRequiredIntegrations(presetId, {QStringLiteral("heroic")}));
+    QVariantMap presetAcl;
+    presetAcl.insert(QStringLiteral("path"), gamePath);
+    presetAcl.insert(QStringLiteral("mode"), QStringLiteral("acl"));
+    QVERIFY(m_presetManager->setDataDirectories(presetId, {presetAcl}));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    // No instance-level directory snapshot: setup falls back to this explicit preset list.
+    QVERIFY(m_runner->setupSessionResources());
+
+    bool recursivePresetAclApplied = false;
+    for (const auto &call : m_helperClient->directoryAclCalls) {
+        recursivePresetAclApplied |= call.path == gamePath && call.username == QStringLiteral("player1")
+            && call.recursive;
+    }
+    QVERIFY(recursivePresetAclApplied);
+}
 void TestSessionRunner::testSetupDataDirectoriesEmptySnapshotStaysEmpty()
 {
     QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Empty Snapshot Game"),

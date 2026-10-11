@@ -37,6 +37,7 @@ private Q_SLOTS:
     void testRequiredIntegrations();
     void testSandboxedPresetMetadata();
     void testApplicationAccessDirectoriesSafety();
+    void testApplicationAccessDirectoriesCanonicalAtomicAliases();
     void testDesktopImportPreservesQuotedExecAndSharesApplicationDirectory();
 
     void testAddCustomPreset();
@@ -325,6 +326,54 @@ void TestPresetManager::testApplicationAccessDirectoriesSafety()
     command.program = QStringLiteral("/bin/sh");
     command.workingDirectory.clear();
     QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+}
+
+void TestPresetManager::testApplicationAccessDirectoriesCanonicalAtomicAliases()
+{
+    static const QStringList commonBases = {
+        QStringLiteral(".local"), QStringLiteral(".local/share"), QStringLiteral(".local/bin"),
+        QStringLiteral(".local/lib"), QStringLiteral(".local/share/applications"),
+        QStringLiteral(".local/share/icons"), QStringLiteral("downloads"), QStringLiteral("documents"),
+        QStringLiteral("desktop"), QStringLiteral("games"), QStringLiteral("public"), QStringLiteral("videos"),
+        QStringLiteral("music"), QStringLiteral("pictures"), QStringLiteral("templates"), QStringLiteral("applications")
+    };
+    bool testedAlias = false;
+    for (const QString &alias : {QStringLiteral("/opt"), QStringLiteral("/srv")}) {
+        const QString expectedRoot = alias == QStringLiteral("/opt") ? QStringLiteral("/var/opt")
+                                                                      : QStringLiteral("/var/srv");
+        if (QDir(alias).canonicalPath() != expectedRoot) {
+            continue;
+        }
+
+        QStringList candidates;
+        for (const QString &first : QDir(alias).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+            const QString firstPath = QDir(alias).filePath(first);
+            if (alias == QStringLiteral("/opt")) {
+                candidates.append(firstPath);
+            }
+            for (const QString &second : QDir(firstPath).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                candidates.append(QDir(firstPath).filePath(second));
+            }
+        }
+
+        for (const QString &candidate : candidates) {
+            if (commonBases.contains(QDir(candidate).dirName().toCaseFolded())) {
+                continue;
+            }
+            LaunchCommand command;
+            command.program = QStringLiteral("/bin/sh");
+            command.workingDirectory = candidate;
+            const QString canonicalCandidate = QDir(candidate).canonicalPath();
+            QVERIFY2(applicationAccessDirectories(command, QDir::homePath()).contains(canonicalCandidate),
+                     qPrintable(alias + QStringLiteral(" canonical alias was rejected")));
+            testedAlias = true;
+            break;
+        }
+    }
+
+    if (!testedAlias) {
+        QSKIP("Requires an Atomic /opt or /srv alias with an accessible non-root child directory");
+    }
 }
 
 void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplicationDirectory()

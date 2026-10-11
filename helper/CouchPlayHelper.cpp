@@ -1833,6 +1833,21 @@ bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
         return true;
     }
 
+    static const QString canonicalOptPrefix = QStringLiteral("/var/opt/");
+    if (path.startsWith(canonicalOptPrefix) && path.length() > canonicalOptPrefix.length()
+        && path.at(canonicalOptPrefix.length()) != QLatin1Char('/')
+        && m_ops->canonicalFilePath(QStringLiteral("/opt")) == QStringLiteral("/var/opt")) {
+        return true;
+    }
+
+    static const QString canonicalSrvPrefix = QStringLiteral("/var/srv/");
+    if (path.startsWith(canonicalSrvPrefix) && path.length() > canonicalSrvPrefix.length()
+        && path.at(canonicalSrvPrefix.length()) != QLatin1Char('/')
+        && m_ops->canonicalFilePath(QStringLiteral("/srv")) == QStringLiteral("/var/srv")) {
+        return true;
+    }
+
+
     static const QStringList allowedPrefixes = {
         QStringLiteral("/home/"),
         QStringLiteral("/var/home/"), // Bazzite/Fedora Silverblue
@@ -3044,6 +3059,8 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
         QStringLiteral("/media"),
         QStringLiteral("/mnt"),
         QStringLiteral("/var/mnt"), // canonical target of the trusted Bazzite /mnt alias
+        QStringLiteral("/var/opt"), // canonical target of the trusted Fedora Atomic /opt alias
+        QStringLiteral("/var/srv"), // canonical target of the trusted Fedora Atomic /srv alias
         QStringLiteral("/opt"),
         QStringLiteral("/srv"),
         QStringLiteral("/home"),

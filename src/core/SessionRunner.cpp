@@ -953,9 +953,12 @@ bool SessionRunner::setupSessionResources()
         // empty snapshot must stay empty — it must not inherit later preset
         // edits.
         QList<DataDirectory> dataDirs = profile.instances[i].dataDirectories;
-        if (dataDirs.isEmpty() && !profile.instances[i].dataDirectoriesSnapshotted) {
+        const bool usingPresetDataDirectories =
+            dataDirs.isEmpty() && !profile.instances[i].dataDirectoriesSnapshotted;
+        if (usingPresetDataDirectories) {
             dataDirs = preset.dataDirectories;
         }
+        const bool automaticHeroicDataDirectories = usingPresetDataDirectories && preset.dataDirectoriesAreAutomatic;
         if (i < m_launchCommands.size()) {
             const QStringList applicationDirectories =
                 applicationAccessDirectories(m_launchCommands.at(i), compositorHome);
@@ -1177,10 +1180,9 @@ bool SessionRunner::setupSessionResources()
                 }
             } else if (dir.mode == QStringLiteral("acl")) {
                 const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
-                // Automatically resolved Heroic roots need traversal only; explicit ACL directories retain
-                // the recursive grant their saved configuration requests.
+                // Resolver-generated Heroic defaults need traversal only; configured directories keep recursion.
                 const bool automaticHeroicPath = requiresHeroic
-                    && !profile.instances[i].dataDirectoriesSnapshotted
+                    && automaticHeroicDataDirectories
                     && gameAccessDirectories.contains(QDir::cleanPath(dir.path));
                 const bool contentsOk =
                     automaticHeroicPath || m_helperClient->setDirectoryAcl(dir.path, username, true);
