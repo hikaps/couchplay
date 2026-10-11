@@ -1035,17 +1035,6 @@ QString PresetManager::addPresetFromDesktopFile(const QString &desktopFilePath)
         }
     }
 
-    const QStringList commandParts = QProcess::splitCommand(preset.command);
-    if (!commandParts.isEmpty()) {
-        LaunchCommand launchCommand;
-        launchCommand.program = commandParts.constFirst();
-        launchCommand.arguments = commandParts.mid(1);
-        launchCommand.workingDirectory = preset.workingDirectory;
-        for (const QString &directory : applicationAccessDirectories(launchCommand, QDir::homePath())) {
-            preset.dataDirectories.append({directory, QStringLiteral("acl")});
-        }
-    }
-
     preset.id = generateCustomId();
     preset.isBuiltin = false;
 

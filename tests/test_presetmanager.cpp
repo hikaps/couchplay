@@ -388,6 +388,13 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
     QVERIFY(executableFile.open(QIODevice::WriteOnly));
     executableFile.close();
 
+    const QString updatedApplicationDir = applicationHome.path() + QStringLiteral("/Updated Launcher");
+    QVERIFY(QDir().mkpath(updatedApplicationDir));
+    const QString updatedExecutable = updatedApplicationDir + QStringLiteral("/updated-launcher");
+    QFile updatedExecutableFile(updatedExecutable);
+    QVERIFY(updatedExecutableFile.open(QIODevice::WriteOnly));
+    updatedExecutableFile.close();
+
     const QString desktopFilePath = m_tempDir->filePath(QStringLiteral("OnlineFix.desktop"));
     QFile desktopFile(desktopFilePath);
     QVERIFY(desktopFile.open(QIODevice::WriteOnly | QIODevice::Text));
@@ -409,34 +416,27 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
         QCOMPARE(launch.program, executable);
         QCOMPARE(launch.arguments, (QStringList{QStringLiteral("--profile"), QStringLiteral("two  words")}));
         QCOMPARE(launch.workingDirectory, applicationDir);
+        QVERIFY(manager.getDataDirectories(id).isEmpty());
 
-        const QVariantList directories = manager.getDataDirectories(id);
-        QCOMPARE(directories.size(), 1);
-        const DataDirectory sharedDirectory = directories.constFirst().value<DataDirectory>();
-        QCOMPARE(sharedDirectory.path, applicationDir);
-        QCOMPARE(sharedDirectory.mode, QStringLiteral("acl"));
+        QVERIFY(manager.updateCustomPreset(id,
+                                           QStringLiteral("OnlineFix updated"),
+                                           updatedExecutable,
+                                           updatedApplicationDir,
+                                           QStringLiteral("updated-icon")));
+        QVERIFY(QDir(applicationDir).removeRecursively());
 
+        const LaunchCommand updatedLaunch = manager.buildLaunchCommand(id, {});
+        QCOMPARE(updatedLaunch.program, updatedExecutable);
+        QCOMPARE(updatedLaunch.workingDirectory, updatedApplicationDir);
+        QCOMPARE(applicationAccessDirectories(updatedLaunch, QDir::homePath()), QStringList{updatedApplicationDir});
     }
 
-    {
-        PresetManager restoredManager;
-        const LaunchPreset restored = restoredManager.getPreset(id);
-        QCOMPARE(restored.dataDirectories.size(), 1);
-        QCOMPARE(restored.dataDirectories.constFirst().path, applicationDir);
-        QCOMPARE(restored.dataDirectories.constFirst().mode, QStringLiteral("acl"));
+    PresetManager restoredManager;
+    const LaunchPreset restored = restoredManager.getPreset(id);
+    QVERIFY(restored.dataDirectories.isEmpty());
+    const LaunchCommand restoredLaunch = restoredManager.buildLaunchCommand(id, {});
+    QCOMPARE(applicationAccessDirectories(restoredLaunch, QDir::homePath()), QStringList{updatedApplicationDir});
 
-        QVariantList userEditedDirectories;
-        userEditedDirectories.append(QVariant::fromValue(DataDirectory{
-            applicationHome.path() + QStringLiteral("/user-selected"), QStringLiteral("acl")}));
-        QVERIFY(restoredManager.setDataDirectories(id, userEditedDirectories));
-    }
-
-    PresetManager userEditedManager;
-    const LaunchPreset userEdited = userEditedManager.getPreset(id);
-    QCOMPARE(userEdited.dataDirectories.size(), 1);
-    QCOMPARE(userEdited.dataDirectories.constFirst().path,
-             applicationHome.path() + QStringLiteral("/user-selected"));
-    QCOMPARE(userEdited.dataDirectories.constFirst().mode, QStringLiteral("acl"));
     const QString flatpakDesktopPath = m_tempDir->filePath(QStringLiteral("Flatpak.desktop"));
     QFile flatpakDesktop(flatpakDesktopPath);
     QVERIFY(flatpakDesktop.open(QIODevice::WriteOnly | QIODevice::Text));
