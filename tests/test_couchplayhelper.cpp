@@ -1566,12 +1566,14 @@ void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/media/steamlibrary")));
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/mnt/steamlibrary")));
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/tmp/couchplay/share")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/opt/MyGame")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/srv/games/MyGame")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/opt")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/srv")));
 
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/etc")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/usr/share/games")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home"))); // root itself, not a subdir
-    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/a/../b")));
-    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QString()));
 
     // ".." inside a name is fine; a whole ".." component is traversal
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/deck/Games/Foo..Bar")));

@@ -990,7 +990,7 @@ bool SessionRunner::setupSessionResources()
         QSet<QString> gameAccessDirectories;
         if (requiresHeroic && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
             auto addGameAccessDirectory = [&gameAccessDirectories](const QString &path) {
-                if (path.isEmpty() || !QDir::isAbsolutePath(path)) {
+                if (path.isEmpty() || !QDir::isAbsolutePath(path) || !QDir(path).exists()) {
                     return;
                 }
                 gameAccessDirectories.insert(QDir::cleanPath(path));

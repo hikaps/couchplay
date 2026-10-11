@@ -106,10 +106,13 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
             result.isValid = false;
             result.errorMessage = QString(QStringLiteral("Command not found in PATH: %1")).arg(command);
         } else {
-            QFileInfo fileInfo(resolvedPath);
             result.resolvedPath = resolvedPath;
             result.isAccessibleToOtherUsers = isAccessibleToOtherUsersPath(resolvedPath);
-            result.isValid = fileInfo.exists() && fileInfo.isExecutable();
+            // Flatpak PATH discovery runs on the host, so the resolved path may
+            // not be visible to QFileInfo inside the sandbox. A successful host
+            // `which` has already verified the executable.
+            result.isValid = qEnvironmentVariableIsSet("FLATPAK_ID")
+                || QFileInfo(resolvedPath).isExecutable();
             if (!result.isValid) {
                 result.errorMessage = QString(QStringLiteral("Command is not executable: %1")).arg(command);
             }

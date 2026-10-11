@@ -1836,6 +1836,8 @@ bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
     static const QStringList allowedPrefixes = {
         QStringLiteral("/home/"),
         QStringLiteral("/var/home/"), // Bazzite/Fedora Silverblue
+        QStringLiteral("/opt/"),
+        QStringLiteral("/srv/"),
         QStringLiteral("/run/media/"),
         QStringLiteral("/media/"), // keep in sync with SetPathAclWithParents stop boundaries
         QStringLiteral("/mnt/"),
@@ -3042,6 +3044,8 @@ bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &
         QStringLiteral("/media"),
         QStringLiteral("/mnt"),
         QStringLiteral("/var/mnt"), // canonical target of the trusted Bazzite /mnt alias
+        QStringLiteral("/opt"),
+        QStringLiteral("/srv"),
         QStringLiteral("/home"),
         QStringLiteral("/var/home"), // Bazzite/Fedora Silverblue
         QStringLiteral("/"),

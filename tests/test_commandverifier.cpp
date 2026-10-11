@@ -203,7 +203,9 @@ void TestCommandVerifier::testHostLauncherDiscoveryInFlatpak()
     QVERIFY(qputenv("PATH", tempDir.path().toLocal8Bit()));
     QVERIFY(qputenv("FLATPAK_ID", QByteArrayLiteral("org.example.CouchPlay")));
 
-    QVERIFY(CommandVerifier::commandExistsInPath(QStringLiteral("heroic")));
+    const CommandVerificationResult result = CommandVerifier::verifyCommand(QStringLiteral("heroic"));
+    QVERIFY(result.isValid);
+    QCOMPARE(result.resolvedPath, QStringLiteral("/host-only/bin/heroic"));
     QCOMPARE(CommandVerifier::resolveCommandPath(QStringLiteral("heroic")), QStringLiteral("/host-only/bin/heroic"));
     QVERIFY(CommandVerifier::isFlatpakAvailable());
     QVERIFY(CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com.example.Game")));
@@ -226,6 +228,7 @@ void TestCommandVerifier::testHostLauncherUnavailableInFlatpak()
     QVERIFY(CommandVerifier::resolveCommandPath(QStringLiteral("heroic")).isEmpty());
     QVERIFY(!CommandVerifier::isFlatpakAvailable());
     QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com.example.Game")));
+    QVERIFY(!CommandVerifier::verifyCommand(QStringLiteral("heroic")).isValid);
 }
 
 void TestCommandVerifier::testFlatpakAppDetection()

@@ -140,7 +140,7 @@ public:
     bool setPathAclWithParents(const QString &path, const QString &username) override
     {
         aclCalls.append({path, username});
-        return true;
+        return !rejectMissingAclPaths || QDir(path).exists();
     }
     bool setDirectoryAcl(const QString &path, const QString &username, bool recursive) override
     {
@@ -178,6 +178,8 @@ public:
         unmountAllCalls++;
         return 0;
     }
+    bool rejectMissingAclPaths = false;
+
 
     bool setDeviceOwner(const QString &devicePath, int uid) override
     {
@@ -239,6 +241,11 @@ public:
         return true;
     }
 
+    bool copyFileToUser(const QString &, const QString &, const QString &) override
+    {
+        return true;
+    }
+
     bool isInCouchPlayGroup(const QString &username) override
     {
         return username == QStringLiteral("player1");
@@ -259,6 +266,7 @@ private Q_SLOTS:
     void testSetupSteamConfigWithSteamLauncher();
     void testSetupSteamConfigWithNonSteamLauncher();
     void testSetupSteamConfigSteamIntegrationDisabled();
+    void testHeroicMissingCatalogDirectoriesDoNotAbortSetup();
     void testSetupSteamConfigAppliesHeroicAcls();
     void testSetupResourcesSyncsSelectedSteamAccount();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
@@ -979,6 +987,53 @@ void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
     QCOMPARE(m_helperClient->directoryAclCalls.size(), 0);
 }
 
+void TestSessionRunner::testHeroicMissingCatalogDirectoriesDoNotAbortSetup()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    createMockHeroicConfig(homeDir.path());
+    createMockLegendaryConfig(homeDir.path());
+
+    const QString staleGamePath = homeDir.path() + QStringLiteral("/Games/Heroic/DisconnectedGame");
+    const QString staleExecutableDirectory = staleGamePath + QStringLiteral("/bin");
+    const QString installedPath = homeDir.path() + QStringLiteral("/.config/legendary/installed.json");
+    QFile installedFile(installedPath);
+    QVERIFY(installedFile.open(QIODevice::ReadOnly));
+    QJsonObject installed = QJsonDocument::fromJson(installedFile.readAll()).object();
+    installedFile.close();
+    QJsonObject staleGame;
+    staleGame[QStringLiteral("title")] = QStringLiteral("Disconnected Game");
+    staleGame[QStringLiteral("install_path")] = staleGamePath;
+    staleGame[QStringLiteral("executable")] = QStringLiteral("bin/Game.exe");
+    installed[QStringLiteral("DisconnectedGameApp")] = staleGame;
+    QVERIFY(installedFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(installedFile.write(QJsonDocument(installed).toJson()), qint64(QJsonDocument(installed).toJson().size()));
+    installedFile.close();
+
+    HeroicConfigManager heroicManager;
+    QVERIFY(heroicManager.isHeroicDetected());
+    m_presetManager->setHeroicConfigManager(&heroicManager);
+    heroicManager.setHelperClient(m_helperClient);
+    m_runner->setHeroicConfigManager(&heroicManager);
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("heroic"));
+    m_sessionManager->setInstanceDataDirectories(0, {});
+    m_helperClient->rejectMissingAclPaths = true;
+
+    QVERIFY(m_runner->setupSessionResources());
+    bool existingGameAclApplied = false;
+    for (const auto &call : m_helperClient->aclCalls) {
+        QVERIFY(call.path != staleGamePath);
+        QVERIFY(call.path != staleExecutableDirectory);
+        existingGameAclApplied |= call.path == homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
+    }
+    QVERIFY(existingGameAclApplied);
+}
 void TestSessionRunner::testResolveUserIdentityViaHelper()
 {
     const UserIdentity id = resolveUserIdentity(QStringLiteral("player1"), m_helperClient);
