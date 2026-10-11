@@ -140,7 +140,10 @@ public:
     bool setPathAclWithParents(const QString &path, const QString &username) override
     {
         aclCalls.append({path, username});
-        return !rejectMissingAclPaths || QDir(path).exists();
+        const bool pathExists = !rejectMissingAclPaths || QDir(path).exists();
+        const bool rootAllowed = !rejectUnsupportedAclPaths || (path != QStringLiteral("/usr")
+                                                                  && !path.startsWith(QStringLiteral("/usr/")));
+        return pathExists && rootAllowed;
     }
     bool setDirectoryAcl(const QString &path, const QString &username, bool recursive) override
     {
@@ -179,7 +182,7 @@ public:
         return 0;
     }
     bool rejectMissingAclPaths = false;
-
+    bool rejectUnsupportedAclPaths = false;
 
     bool setDeviceOwner(const QString &devicePath, int uid) override
     {
@@ -266,7 +269,7 @@ private Q_SLOTS:
     void testSetupSteamConfigWithSteamLauncher();
     void testSetupSteamConfigWithNonSteamLauncher();
     void testSetupSteamConfigSteamIntegrationDisabled();
-    void testHeroicMissingCatalogDirectoriesDoNotAbortSetup();
+    void testHeroicStaleAndUnsupportedPathsDoNotAbortSetup();
     void testSetupSteamConfigAppliesHeroicAcls();
     void testSetupResourcesSyncsSelectedSteamAccount();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
@@ -987,7 +990,7 @@ void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
     QCOMPARE(m_helperClient->directoryAclCalls.size(), 0);
 }
 
-void TestSessionRunner::testHeroicMissingCatalogDirectoriesDoNotAbortSetup()
+void TestSessionRunner::testHeroicStaleAndUnsupportedPathsDoNotAbortSetup()
 {
     QTemporaryDir homeDir;
     QVERIFY(homeDir.isValid());
@@ -1015,6 +1018,31 @@ void TestSessionRunner::testHeroicMissingCatalogDirectoriesDoNotAbortSetup()
 
     HeroicConfigManager heroicManager;
     QVERIFY(heroicManager.isHeroicDetected());
+    const QString sideloadDirectory = heroicManager.heroicPaths().heroicRoot + QStringLiteral("/sideload_apps");
+    QVERIFY(QDir().mkpath(sideloadDirectory));
+    const QString sideloadLibrary = sideloadDirectory + QStringLiteral("/library.json");
+    QJsonObject systemSideload;
+    systemSideload.insert(QStringLiteral("app_name"), QStringLiteral("SystemSideload"));
+    systemSideload.insert(QStringLiteral("title"), QStringLiteral("System Sideload"));
+    systemSideload.insert(QStringLiteral("folder_name"), QString());
+    systemSideload.insert(QStringLiteral("is_installed"), true);
+    QJsonObject systemSideloadInstall;
+    systemSideloadInstall.insert(QStringLiteral("executable"), QStringLiteral("/usr/bin/true"));
+    systemSideload.insert(QStringLiteral("install"), systemSideloadInstall);
+    QJsonObject sideloadLibraryData;
+    sideloadLibraryData.insert(QStringLiteral("games"), QJsonArray{systemSideload});
+    QFile sideloadFile(sideloadLibrary);
+    QVERIFY(sideloadFile.open(QIODevice::WriteOnly));
+    QCOMPARE(sideloadFile.write(QJsonDocument(sideloadLibraryData).toJson()),
+             qint64(QJsonDocument(sideloadLibraryData).toJson().size()));
+    sideloadFile.close();
+    heroicManager.loadGames();
+    bool foundSystemSideload = false;
+    for (const HeroicGame &game : heroicManager.installedGames()) {
+        foundSystemSideload |= game.appName == QStringLiteral("SystemSideload") && game.installPath.isEmpty()
+            && game.executable == QStringLiteral("/usr/bin/true");
+    }
+    QVERIFY(foundSystemSideload);
     m_presetManager->setHeroicConfigManager(&heroicManager);
     heroicManager.setHelperClient(m_helperClient);
     m_runner->setHeroicConfigManager(&heroicManager);
@@ -1028,10 +1056,12 @@ void TestSessionRunner::testHeroicMissingCatalogDirectoriesDoNotAbortSetup()
     configuredAcl.insert(QStringLiteral("mode"), QStringLiteral("acl"));
     m_sessionManager->setInstanceDataDirectories(0, {configuredAcl});
     m_helperClient->rejectMissingAclPaths = true;
+    m_helperClient->rejectUnsupportedAclPaths = true;
 
     QVERIFY(m_runner->setupSessionResources());
     bool existingGameAclApplied = false;
     for (const auto &call : m_helperClient->aclCalls) {
+        QVERIFY(!call.path.startsWith(QStringLiteral("/usr/")));
         QVERIFY(call.path != staleGamePath);
         QVERIFY(call.path != staleExecutableDirectory);
         existingGameAclApplied |= call.path == homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");

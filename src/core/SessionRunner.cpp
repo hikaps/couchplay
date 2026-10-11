@@ -989,11 +989,16 @@ bool SessionRunner::setupSessionResources()
 
         QSet<QString> gameAccessDirectories;
         if (requiresHeroic && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            auto addGameAccessDirectory = [&gameAccessDirectories](const QString &path) {
+            auto addGameAccessDirectory = [&gameAccessDirectories, &compositorHome](const QString &path) {
                 if (path.isEmpty() || !QDir::isAbsolutePath(path) || !QDir(path).exists()) {
                     return;
                 }
-                gameAccessDirectories.insert(QDir::cleanPath(path));
+                LaunchCommand accessCheck;
+                accessCheck.workingDirectory = path;
+                const QStringList safeDirectories = applicationAccessDirectories(accessCheck, compositorHome);
+                if (!safeDirectories.isEmpty()) {
+                    gameAccessDirectories.insert(safeDirectories.constFirst());
+                }
             };
 
             for (const HeroicGame &game : m_heroicConfigManager->installedGames()) {

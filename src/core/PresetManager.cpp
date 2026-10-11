@@ -89,9 +89,43 @@ bool isFlatpakPath(const QString &path, const QString &home)
     }
     return !home.isEmpty() && pathIsWithin(path, home + QStringLiteral("/.local/share/flatpak"));
 }
-
-QString safeApplicationDirectory(const QString &path, const QString &home)
+const QStringList &sensitiveHomeTrees()
 {
+    static const QStringList trees = {
+        QStringLiteral(".config"), QStringLiteral(".ssh"), QStringLiteral(".gnupg"),
+        QStringLiteral(".pki"), QStringLiteral(".aws"), QStringLiteral(".azure"),
+        QStringLiteral(".kube"), QStringLiteral(".docker"), QStringLiteral(".password-store"),
+        QStringLiteral(".mozilla"), QStringLiteral(".thunderbird"), QStringLiteral(".cache"),
+        QStringLiteral(".steam"), QStringLiteral(".local/share/flatpak"),
+        QStringLiteral(".local/share/keyrings"), QStringLiteral(".local/share/steam"),
+        QStringLiteral(".var")
+    };
+    return trees;
+}
+
+bool isSensitiveHomePath(const QString &path, const QString &home)
+{
+    if (home.isEmpty() || !QDir::isAbsolutePath(path)) {
+        return false;
+    }
+    const QString cleanPath = QDir::cleanPath(path);
+    if (cleanPath == home || !pathIsWithin(cleanPath, home)) {
+        return false;
+    }
+    const QString relative = QDir(home).relativeFilePath(cleanPath).toCaseFolded();
+    for (const QString &tree : sensitiveHomeTrees()) {
+        if (relative == tree || relative.startsWith(tree + QLatin1Char('/'))) {
+            return true;
+        }
+    }
+    return false;
+}
+QString safeApplicationDirectory(const QString &path, const QString &home, const QString &homeAlias)
+{
+    if (isSensitiveHomePath(path, home) || isSensitiveHomePath(path, homeAlias)
+        || isSensitiveHomePath(path, QDir::homePath())) {
+        return QString();
+    }
     const QString candidate = canonicalDirectory(path);
     if (candidate.isEmpty() || isFlatpakPath(candidate, home)) {
         return QString();
@@ -105,28 +139,14 @@ QString safeApplicationDirectory(const QString &path, const QString &home)
         QStringLiteral("public"), QStringLiteral("videos"), QStringLiteral("music"),
         QStringLiteral("pictures"), QStringLiteral("templates"), QStringLiteral("applications")
     };
-    static const QStringList sensitiveTrees = {
-        QStringLiteral(".config"), QStringLiteral(".ssh"), QStringLiteral(".gnupg"),
-        QStringLiteral(".pki"), QStringLiteral(".aws"), QStringLiteral(".azure"),
-        QStringLiteral(".kube"), QStringLiteral(".docker"), QStringLiteral(".password-store"),
-        QStringLiteral(".mozilla"), QStringLiteral(".thunderbird"), QStringLiteral(".cache"),
-        QStringLiteral(".steam"), QStringLiteral(".local/share/flatpak"),
-        QStringLiteral(".local/share/keyrings"), QStringLiteral(".local/share/steam"),
-        QStringLiteral(".var")
-    };
 
     if (!home.isEmpty() && pathIsWithin(candidate, home)) {
-        if (candidate == home) {
+        if (candidate == home || isSensitiveHomePath(candidate, home)) {
             return QString();
         }
         const QString relative = QDir(home).relativeFilePath(candidate).toCaseFolded();
         for (const QString &base : commonBases) {
             if (relative == base) {
-                return QString();
-            }
-        }
-        for (const QString &tree : sensitiveTrees) {
-            if (relative == tree || relative.startsWith(tree + QLatin1Char('/'))) {
                 return QString();
             }
         }
@@ -138,8 +158,12 @@ QString safeApplicationDirectory(const QString &path, const QString &home)
         int minimumComponents;
     };
     static const ExternalRoot externalRoots[] = {
-        {"/opt", 1}, {"/mnt", 2}, {"/media", 2}, {"/run/media", 3}, {"/srv", 2}
+        {"/tmp", 1}, {"/opt", 1}, {"/mnt", 2}, {"/var/mnt", 2}, {"/media", 2}, {"/run/media", 3}, {"/srv", 2}
     };
+    const QString canonicalMntRoot = QStringLiteral("/var/mnt");
+    if (pathIsWithin(candidate, canonicalMntRoot) && canonicalDirectory(QStringLiteral("/mnt")) != canonicalMntRoot) {
+        return QString();
+    }
     for (const ExternalRoot &root : externalRoots) {
         const QString rootPath = QString::fromLatin1(root.path);
         if (!pathIsWithin(candidate, rootPath)) {
@@ -185,15 +209,21 @@ QStringList applicationAccessDirectories(const LaunchCommand &command, const QSt
     }
     QString programPath;
     if (QDir::isAbsolutePath(command.program)) {
-        programPath = canonicalPath(command.program, false);
+        const QString originalProgramDirectory = QFileInfo(QDir::cleanPath(command.program)).absolutePath();
+        const bool sensitiveProgramDirectory = isSensitiveHomePath(originalProgramDirectory, home)
+            || isSensitiveHomePath(originalProgramDirectory, compositorHome)
+            || isSensitiveHomePath(originalProgramDirectory, QDir::homePath());
+        if (!sensitiveProgramDirectory) {
+            programPath = canonicalPath(command.program, false);
+        }
     }
     if (!programPath.isEmpty() && isFlatpakPath(programPath, home)) {
         return {};
     }
 
     QStringList directories;
-    const auto addDirectory = [&directories, &home](const QString &path) {
-        const QString safePath = safeApplicationDirectory(path, home);
+    const auto addDirectory = [&directories, &home, &compositorHome](const QString &path) {
+        const QString safePath = safeApplicationDirectory(path, home, compositorHome);
         if (safePath.isEmpty()) {
             return;
         }
