@@ -338,7 +338,7 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=OnlineFix\n"
-        "Exec=\"%1\" --profile \"two  words\" %f\n"
+        "Exec = \"%1\" --profile \"two  words\" %f\n"
         "Path=%2\n").arg(executable, applicationDir).toUtf8());
     desktopFile.close();
 

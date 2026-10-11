@@ -1152,11 +1152,16 @@ LaunchPreset PresetManager::parseDesktopFile(const QString &filePath) const
             if (line.startsWith(QChar(0xFEFF))) {
                 line.remove(0, 1);
             }
-            if (line.startsWith(QLatin1Char('['))) {
-                inDesktopEntry = line == QStringLiteral("[Desktop Entry]");
-            } else if (inDesktopEntry && line.startsWith(QStringLiteral("Exec="))) {
-                rawExec = line.mid(5);
-                break;
+            const QString trimmedLine = line.trimmed();
+            if (trimmedLine.startsWith(QLatin1Char('[')) && trimmedLine.endsWith(QLatin1Char(']'))) {
+                inDesktopEntry = trimmedLine.mid(1, trimmedLine.size() - 2).trimmed()
+                    == QStringLiteral("Desktop Entry");
+            } else if (inDesktopEntry) {
+                const qsizetype equals = line.indexOf(QLatin1Char('='));
+                if (equals >= 0 && line.left(equals).trimmed() == QStringLiteral("Exec")) {
+                    rawExec = line.mid(equals + 1).trimmed();
+                    break;
+                }
             }
         }
     }
