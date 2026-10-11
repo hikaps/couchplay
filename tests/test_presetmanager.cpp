@@ -406,6 +406,7 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
         "Path=%2\n").arg(executable, applicationDir).toUtf8());
     desktopFile.close();
 
+    const QString userSelectedDirectory = applicationHome.path() + QStringLiteral("/user-selected");
     QString id;
     {
         PresetManager manager;
@@ -429,11 +430,16 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
         QCOMPARE(updatedLaunch.program, updatedExecutable);
         QCOMPARE(updatedLaunch.workingDirectory, updatedApplicationDir);
         QCOMPARE(applicationAccessDirectories(updatedLaunch, QDir::homePath()), QStringList{updatedApplicationDir});
+        QVariantList userEditedDirectories;
+        userEditedDirectories.append(QVariant::fromValue(DataDirectory{userSelectedDirectory, QStringLiteral("acl")}));
+        QVERIFY(manager.setDataDirectories(id, userEditedDirectories));
     }
 
     PresetManager restoredManager;
     const LaunchPreset restored = restoredManager.getPreset(id);
-    QVERIFY(restored.dataDirectories.isEmpty());
+    QCOMPARE(restored.dataDirectories.size(), 1);
+    QCOMPARE(restored.dataDirectories.constFirst().path, userSelectedDirectory);
+    QCOMPARE(restored.dataDirectories.constFirst().mode, QStringLiteral("acl"));
     const LaunchCommand restoredLaunch = restoredManager.buildLaunchCommand(id, {});
     QCOMPARE(applicationAccessDirectories(restoredLaunch, QDir::homePath()), QStringList{updatedApplicationDir});
 
