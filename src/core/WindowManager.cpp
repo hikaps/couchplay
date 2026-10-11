@@ -214,6 +214,14 @@ bool WindowManager::positionWindow(const QString &windowId, const QRect &geometr
     }
 
     PendingPosition pending;
+    // A newer direct placement supersedes any unconfirmed direct request for this window.
+    for (int i = m_pendingPositions.size() - 1; i >= 0; --i) {
+        const PendingPosition &existing = m_pendingPositions.at(i);
+        if (!existing.queued && existing.windowId == windowId) {
+            m_pendingPositions.removeAt(i);
+        }
+    }
+
     pending.requestId = 0;
     pending.windowId = windowId;
     pending.geometry = geometry;

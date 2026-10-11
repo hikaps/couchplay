@@ -1172,10 +1172,13 @@ bool SessionRunner::setupSessionResources()
                 }
             } else if (dir.mode == QStringLiteral("acl")) {
                 const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
-                const bool registeredHeroicPath =
-                    requiresHeroic && gameAccessDirectories.contains(QDir::cleanPath(dir.path));
+                // Automatically resolved Heroic roots need traversal only; explicit ACL directories retain
+                // the recursive grant their saved configuration requests.
+                const bool automaticHeroicPath = requiresHeroic
+                    && !profile.instances[i].dataDirectoriesSnapshotted
+                    && gameAccessDirectories.contains(QDir::cleanPath(dir.path));
                 const bool contentsOk =
-                    registeredHeroicPath || m_helperClient->setDirectoryAcl(dir.path, username, true);
+                    automaticHeroicPath || m_helperClient->setDirectoryAcl(dir.path, username, true);
                 if (!parentsOk || !contentsOk) {
                     qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
                     allSucceeded = false;

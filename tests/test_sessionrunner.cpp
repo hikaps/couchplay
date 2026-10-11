@@ -1022,7 +1022,11 @@ void TestSessionRunner::testHeroicMissingCatalogDirectoriesDoNotAbortSetup()
     m_sessionManager->setInstanceCount(1);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     m_sessionManager->setInstancePreset(0, QStringLiteral("heroic"));
-    m_sessionManager->setInstanceDataDirectories(0, {});
+    const QString existingGamePath = homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
+    QVariantMap configuredAcl;
+    configuredAcl.insert(QStringLiteral("path"), existingGamePath);
+    configuredAcl.insert(QStringLiteral("mode"), QStringLiteral("acl"));
+    m_sessionManager->setInstanceDataDirectories(0, {configuredAcl});
     m_helperClient->rejectMissingAclPaths = true;
 
     QVERIFY(m_runner->setupSessionResources());
@@ -1033,6 +1037,12 @@ void TestSessionRunner::testHeroicMissingCatalogDirectoriesDoNotAbortSetup()
         existingGameAclApplied |= call.path == homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
     }
     QVERIFY(existingGameAclApplied);
+    bool recursiveGameContentsAclApplied = false;
+    for (const auto &call : m_helperClient->directoryAclCalls) {
+        recursiveGameContentsAclApplied |= call.path == existingGamePath && call.username == QStringLiteral("player1")
+            && call.recursive;
+    }
+    QVERIFY(recursiveGameContentsAclApplied);
 }
 void TestSessionRunner::testResolveUserIdentityViaHelper()
 {
