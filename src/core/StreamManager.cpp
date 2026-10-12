@@ -155,7 +155,6 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     const QString displayContext = entry.displayContext;
     const QStringList gamescopeArgs;
     const QStringList envVars;
-    const QStringList bindPaths;
 
     const qint64 pid = m_helperClient->launchInstance(username,
                                                        displayContext,
@@ -164,7 +163,7 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
                                                        QString(),
                                                        QStringList(),
                                                        envVars,
-                                                       bindPaths);
+                                                       false);
     if (pid <= 0) {
         qWarning() << "StreamManager: LaunchInstance failed";
         setStreamState(instanceIndex, Error);
@@ -418,7 +417,6 @@ void StreamManager::attemptRestart(int instanceIndex)
     const QString displayContext = entry.displayContext;
     const QStringList gamescopeArgs;
     const QStringList envVars;
-    const QStringList bindPaths;
 
     const qint64 pid = m_helperClient->launchInstance(entry.username,
                                                        displayContext,
@@ -427,7 +425,7 @@ void StreamManager::attemptRestart(int instanceIndex)
                                                        QString(),
                                                        QStringList(),
                                                        envVars,
-                                                       bindPaths);
+                                                       false);
     if (pid <= 0) {
         const QString detail = QStringLiteral("helper launch failed");
         qWarning() << "StreamManager: restart LaunchInstance failed for instance" << instanceIndex << ":" << detail;

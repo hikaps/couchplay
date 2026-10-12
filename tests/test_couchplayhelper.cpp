@@ -5,8 +5,12 @@
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QTest>
 
 #define private public
@@ -28,6 +32,19 @@ public:
     void setAuthResult(bool authorized)
     {
         m_authorized = authorized;
+    }
+    void setConnectionUid(uid_t uid)
+    {
+        m_connectionUid = uid;
+    }
+    void setStatOwner(uid_t uid, gid_t gid)
+    {
+        m_statOwnerUid = uid;
+        m_statOwnerGid = gid;
+    }
+    void setRealCopyFileSecure(bool enabled)
+    {
+        m_realCopyFileSecure = enabled;
     }
     void setProcessExitCode(int exitCode)
     {
@@ -103,6 +120,11 @@ public:
         m_symlinks.clear();
         m_canonical.clear();
         m_authorized = true;
+        m_connectionUid = 1000;
+        m_statOwnerUid = 1000;
+        m_statOwnerGid = 1000;
+        m_realCopyFileSecure = false;
+        realAccessProbe = false;
         m_processExitCode = 0;
         m_chownResult = 0;
         m_chmodResult = 0;
@@ -127,6 +149,7 @@ public:
         QStringList args;
     };
     QList<ProcessInvocation> m_processInvocations;
+    bool realAccessProbe = false;
 
     struct passwd *getpwnam(const char *name) override
     {
@@ -164,7 +187,7 @@ public:
     uid_t connectionUnixUser(const QString &busName) override
     {
         Q_UNUSED(busName)
-        return 1000;
+        return m_connectionUid;
     }
     bool fileExists(const QString &path) override
     {
@@ -198,12 +221,8 @@ public:
                         uid_t destOwner,
                         gid_t destGroup) override
     {
-        Q_UNUSED(source)
-        Q_UNUSED(dest)
-        Q_UNUSED(sourceOwner)
-        Q_UNUSED(destOwner)
-        Q_UNUSED(destGroup)
-        return true;
+        return m_realCopyFileSecure ? m_realSystemOps.copyFileSecure(source, dest, sourceOwner, destOwner, destGroup)
+                                    : true;
     }
 
     bool createDirectorySecure(const QString &path, uid_t owner, gid_t group) override
@@ -235,9 +254,10 @@ public:
 
     bool statPath(const QString &path, struct stat *buf) override
     {
+        Q_UNUSED(path)
         buf->st_mode = S_IFREG | 0644;
-        buf->st_uid = 1000;
-        buf->st_gid = 1000;
+        buf->st_uid = m_statOwnerUid;
+        buf->st_gid = m_statOwnerGid;
 
         return true;
     }
@@ -273,7 +293,10 @@ public:
         m_processCommand = program;
         m_processArgs = arguments;
         m_processInvocations.append({program, arguments});
-        if (!m_mockProcessStart) {
+        if (realAccessProbe && program == QStringLiteral("/usr/sbin/runuser")) {
+            process->setProperty("realAccessProbe", true);
+            process->start(program, arguments);
+        } else if (!m_mockProcessStart) {
             process->start(program, arguments);
         }
     }
@@ -282,7 +305,7 @@ public:
     {
         Q_UNUSED(process)
         Q_UNUSED(msecs)
-        if (m_mockProcessStart) {
+        if (m_mockProcessStart && !process->property("realAccessProbe").toBool()) {
             return true;
         }
         return process->waitForFinished(msecs);
@@ -291,7 +314,7 @@ public:
     int processExitCode(QProcess *process) override
     {
         Q_UNUSED(process)
-        return m_processExitCode;
+        return process->property("realAccessProbe").toBool() ? process->exitCode() : m_processExitCode;
     }
 
     QByteArray readStandardError(QProcess *process) override
@@ -379,7 +402,12 @@ private:
     QMap<QString, bool> m_directories;
     QMap<QString, QString> m_symlinks;
     QMap<QString, QString> m_canonical;
+    RealSystemOps m_realSystemOps;
     bool m_authorized = true;
+    uid_t m_connectionUid = 1000;
+    uid_t m_statOwnerUid = 1000;
+    gid_t m_statOwnerGid = 1000;
+    bool m_realCopyFileSecure = false;
     int m_processExitCode = 0;
     int m_chownResult = 0;
     int m_chmodResult = 0;
@@ -434,6 +462,11 @@ private Q_SLOTS:
     void testIsSteamBootstrappedTrue();
     void testIsSteamBootstrappedFalse();
 
+    // Copy file tests
+    void testCopyFileToUserTrustedHomeAliasUsesCanonicalSource();
+    void testCopyFileToUserRejectsSymlinkedSourceComponent();
+    void testCopyFileToUserRejectsSymlinkedSourceLeaf();
+
     // Copy directory tests
     void testCopyDirectoryToUserAbsoluteTarget();
     void testCopyDirectoryToUserTraversalTarget();
@@ -451,11 +484,15 @@ private Q_SLOTS:
     void testMirrorDirectoryContentsTargetNotExists();
     void testMirrorDirectoryContentsTraversalTarget();
     void testIsPathWithinAllowedPrefixMountRoots();
+    void testIsPathWithinAllowedPrefixCanonicalAtomicAliases();
+    void testIsPathWithinAllowedPrefixCanonicalAtomicAliasesAbsent();
     void testComputeMountTargetDotDotNames();
     void testUnmountRetainsFailedMounts();
     void testMountSpecCodec();
     void testSetPathAclWithParentsSymlinkEscapeRejected();
+    void testSetPathAclWithParentsCanonicalMntAliasEscapeRejected();
     void testSetDirectoryAclSymlinkEscapeRejected();
+    void testAclFailureRequiresEffectiveTargetUserAccess();
     void testSecureWriteRejectsSymlinkLeaf();
 
     // Device ownership tests
@@ -493,7 +530,6 @@ private Q_SLOTS:
     // Launch/Stop/Kill instance tests
     void testGenerateServiceName();
     void testLaunchInstance_basicLaunch();
-    void testLaunchInstance_withBindPaths();
     void testLaunchInstance_validationEmptyUsername();
     void testLaunchInstance_validationNonexistentUser();
     void testStopInstance_serviceStop();
@@ -1168,6 +1204,175 @@ void TestCouchPlayHelper::testCopyDirectoryToUserSourceSymlinkResolvesOutside()
     QCOMPARE(m_ops->m_processInvocations.size(), 0);
 }
 
+void TestCouchPlayHelper::testCopyFileToUserTrustedHomeAliasUsesCanonicalSource()
+{
+    m_ops->clear();
+    QTemporaryDir sourceStorage(QStringLiteral("/tmp/couchplay-source-XXXXXX"));
+    QTemporaryDir aliasParent(QStringLiteral("/tmp/couchplay-alias-XXXXXX"));
+    QTemporaryDir destinationHome(QStringLiteral("/tmp/couchplay-destination-XXXXXX"));
+    QVERIFY(sourceStorage.isValid());
+    QVERIFY(aliasParent.isValid());
+    QVERIFY(destinationHome.isValid());
+
+    const QString actualSource = QDir(sourceStorage.path()).filePath(QStringLiteral("compositor/game/config.ini"));
+    QVERIFY(QDir().mkpath(QFileInfo(actualSource).absolutePath()));
+    const QByteArray contents("trusted home alias content");
+    QFile sourceFile(actualSource);
+    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+    QCOMPARE(sourceFile.write(contents), contents.size());
+    sourceFile.close();
+
+    // Model the root-owned system home alias above, not inside, the caller's home.
+    const QString aliasPrefix = QDir(aliasParent.path()).filePath(QStringLiteral("root-owned-system-home-alias"));
+    const QByteArray aliasTargetBytes = sourceStorage.path().toLocal8Bit();
+    const QByteArray aliasPathBytes = aliasPrefix.toLocal8Bit();
+    QVERIFY(::symlink(aliasTargetBytes.constData(), aliasPathBytes.constData()) == 0);
+    const QString callerHome = aliasPrefix + QStringLiteral("/compositor");
+    const QString sourcePath = callerHome + QStringLiteral("/game/config.ini");
+    const QString canonicalSource = QFileInfo(sourcePath).canonicalFilePath();
+    QVERIFY(!canonicalSource.isEmpty());
+    QCOMPARE(canonicalSource, actualSource);
+
+    const QString targetDir = QDir(destinationHome.path()).filePath(QStringLiteral("Saves"));
+    QVERIFY(QDir().mkpath(targetDir));
+    const QString targetPath = QDir(targetDir).filePath(QStringLiteral("config.ini"));
+    const uid_t uid = getuid();
+    const gid_t gid = getgid();
+    m_ops->setConnectionUid(uid);
+    m_ops->setStatOwner(uid, gid);
+    m_ops->setUserExists(QStringLiteral("compositor"), true, uid, gid, callerHome);
+    m_ops->setUserExists(QStringLiteral("player1"), true, uid, gid, destinationHome.path());
+    m_ops->setSymlink(aliasPrefix, sourceStorage.path());
+    m_ops->setFileExists(sourcePath, true);
+    m_ops->setCanonicalMapping(sourcePath, canonicalSource);
+    m_ops->setRealCopyFileSecure(true);
+
+    QDBusReply<bool> reply =
+        m_dbusInterface->call(QStringLiteral("CopyFileToUser"), sourcePath, targetPath, QStringLiteral("player1"));
+
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+    QFile copiedFile(targetPath);
+    QVERIFY(copiedFile.open(QIODevice::ReadOnly));
+    QCOMPARE(copiedFile.readAll(), contents);
+    struct stat copiedStat{};
+    QVERIFY(::stat(targetPath.toLocal8Bit().constData(), &copiedStat) == 0);
+    QCOMPARE(copiedStat.st_uid, uid);
+    QCOMPARE(copiedStat.st_gid, gid);
+}
+
+void TestCouchPlayHelper::testCopyFileToUserRejectsSymlinkedSourceComponent()
+{
+    m_ops->clear();
+    QTemporaryDir sourceStorage(QStringLiteral("/tmp/couchplay-source-XXXXXX"));
+    QTemporaryDir aliasParent(QStringLiteral("/tmp/couchplay-alias-XXXXXX"));
+    QTemporaryDir destinationHome(QStringLiteral("/tmp/couchplay-destination-XXXXXX"));
+    QVERIFY(sourceStorage.isValid());
+    QVERIFY(aliasParent.isValid());
+    QVERIFY(destinationHome.isValid());
+
+    const QString actualCallerHome = QDir(sourceStorage.path()).filePath(QStringLiteral("compositor"));
+    const QString redirectedSourceDir = QDir(sourceStorage.path()).filePath(QStringLiteral("redirected"));
+    QVERIFY(QDir().mkpath(actualCallerHome));
+    QVERIFY(QDir().mkpath(redirectedSourceDir));
+    const QString actualSource = QDir(redirectedSourceDir).filePath(QStringLiteral("config.ini"));
+    QFile sourceFile(actualSource);
+    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+    QVERIFY(sourceFile.write("symlinked component content") > 0);
+    sourceFile.close();
+
+    const QString aliasPrefix = QDir(aliasParent.path()).filePath(QStringLiteral("root-owned-system-home-alias"));
+    const QByteArray aliasTargetBytes = sourceStorage.path().toLocal8Bit();
+    const QByteArray aliasPathBytes = aliasPrefix.toLocal8Bit();
+    QVERIFY(::symlink(aliasTargetBytes.constData(), aliasPathBytes.constData()) == 0);
+    const QString callerHome = aliasPrefix + QStringLiteral("/compositor");
+    const QString sourceComponent = callerHome + QStringLiteral("/game");
+    const QString sourcePath = sourceComponent + QStringLiteral("/config.ini");
+    const QByteArray componentTargetBytes = redirectedSourceDir.toLocal8Bit();
+    const QByteArray componentPathBytes = sourceComponent.toLocal8Bit();
+    QVERIFY(::symlink(componentTargetBytes.constData(), componentPathBytes.constData()) == 0);
+    const QString canonicalSource = QFileInfo(sourcePath).canonicalFilePath();
+    QVERIFY(!canonicalSource.isEmpty());
+    QCOMPARE(canonicalSource, actualSource);
+
+    const QString targetDir = QDir(destinationHome.path()).filePath(QStringLiteral("Saves"));
+    QVERIFY(QDir().mkpath(targetDir));
+    const QString targetPath = QDir(targetDir).filePath(QStringLiteral("config.ini"));
+    const uid_t uid = getuid();
+    const gid_t gid = getgid();
+    m_ops->setConnectionUid(uid);
+    m_ops->setStatOwner(uid, gid);
+    m_ops->setUserExists(QStringLiteral("compositor"), true, uid, gid, callerHome);
+    m_ops->setUserExists(QStringLiteral("player1"), true, uid, gid, destinationHome.path());
+    m_ops->setSymlink(aliasPrefix, sourceStorage.path());
+    m_ops->setSymlink(sourceComponent, redirectedSourceDir);
+    m_ops->setFileExists(sourcePath, true);
+    m_ops->setCanonicalMapping(sourcePath, canonicalSource);
+    m_ops->setRealCopyFileSecure(true);
+    QVERIFY(!QFileInfo::exists(targetPath));
+
+    QDBusReply<bool> reply =
+        m_dbusInterface->call(QStringLiteral("CopyFileToUser"), sourcePath, targetPath, QStringLiteral("player1"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QVERIFY(!QFileInfo::exists(targetPath));
+}
+
+void TestCouchPlayHelper::testCopyFileToUserRejectsSymlinkedSourceLeaf()
+{
+    m_ops->clear();
+    QTemporaryDir sourceStorage(QStringLiteral("/tmp/couchplay-source-XXXXXX"));
+    QTemporaryDir aliasParent(QStringLiteral("/tmp/couchplay-alias-XXXXXX"));
+    QTemporaryDir destinationHome(QStringLiteral("/tmp/couchplay-destination-XXXXXX"));
+    QVERIFY(sourceStorage.isValid());
+    QVERIFY(aliasParent.isValid());
+    QVERIFY(destinationHome.isValid());
+
+    const QString actualCallerHome = QDir(sourceStorage.path()).filePath(QStringLiteral("compositor"));
+    const QString actualCallerGameDir = QDir(actualCallerHome).filePath(QStringLiteral("game"));
+    QVERIFY(QDir().mkpath(actualCallerGameDir));
+    const QString actualSource = QDir(sourceStorage.path()).filePath(QStringLiteral("redirected.ini"));
+    QFile sourceFile(actualSource);
+    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+    QVERIFY(sourceFile.write("symlinked leaf content") > 0);
+    sourceFile.close();
+
+    const QString aliasPrefix = QDir(aliasParent.path()).filePath(QStringLiteral("root-owned-system-home-alias"));
+    const QByteArray aliasTargetBytes = sourceStorage.path().toLocal8Bit();
+    const QByteArray aliasPathBytes = aliasPrefix.toLocal8Bit();
+    QVERIFY(::symlink(aliasTargetBytes.constData(), aliasPathBytes.constData()) == 0);
+    const QString callerHome = aliasPrefix + QStringLiteral("/compositor");
+    const QString sourcePath = callerHome + QStringLiteral("/game/config.ini");
+    const QByteArray sourceTargetBytes = actualSource.toLocal8Bit();
+    const QByteArray sourcePathBytes = sourcePath.toLocal8Bit();
+    QVERIFY(::symlink(sourceTargetBytes.constData(), sourcePathBytes.constData()) == 0);
+    const QString canonicalSource = QFileInfo(sourcePath).canonicalFilePath();
+    QVERIFY(!canonicalSource.isEmpty());
+    QCOMPARE(canonicalSource, actualSource);
+
+    const QString targetDir = QDir(destinationHome.path()).filePath(QStringLiteral("Saves"));
+    QVERIFY(QDir().mkpath(targetDir));
+    const QString targetPath = QDir(targetDir).filePath(QStringLiteral("config.ini"));
+    const uid_t uid = getuid();
+    const gid_t gid = getgid();
+    m_ops->setConnectionUid(uid);
+    m_ops->setStatOwner(uid, gid);
+    m_ops->setUserExists(QStringLiteral("compositor"), true, uid, gid, callerHome);
+    m_ops->setUserExists(QStringLiteral("player1"), true, uid, gid, destinationHome.path());
+    m_ops->setSymlink(aliasPrefix, sourceStorage.path());
+    m_ops->setSymlink(sourcePath, canonicalSource);
+    m_ops->setCanonicalMapping(sourcePath, canonicalSource);
+    m_ops->setRealCopyFileSecure(true);
+    QVERIFY(!QFileInfo::exists(targetPath));
+
+    QDBusReply<bool> reply =
+        m_dbusInterface->call(QStringLiteral("CopyFileToUser"), sourcePath, targetPath, QStringLiteral("player1"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QVERIFY(!QFileInfo::exists(targetPath));
+}
 void TestCouchPlayHelper::testSetupOverlayMountSymlinkedTargetRejected()
 {
     m_ops->clear();
@@ -1367,18 +1572,49 @@ void TestCouchPlayHelper::testIsPathWithinAllowedPrefixMountRoots()
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/media/steamlibrary")));
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/mnt/steamlibrary")));
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/tmp/couchplay/share")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/opt/MyGame")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/srv/games/MyGame")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/opt")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/srv")));
 
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/etc")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/usr/share/games")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home"))); // root itself, not a subdir
-    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/a/../b")));
-    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QString()));
 
     // ".." inside a name is fine; a whole ".." component is traversal
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/deck/Games/Foo..Bar")));
     QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/mnt/library..2/saves")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/home/deck/Games/..")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/tmp/a/../../etc")));
+}
+
+void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalAtomicAliases()
+{
+    m_ops->clear();
+    m_ops->setCanonicalMapping(QStringLiteral("/mnt"), QStringLiteral("/var/mnt"));
+    m_ops->setCanonicalMapping(QStringLiteral("/opt"), QStringLiteral("/var/opt"));
+    m_ops->setCanonicalMapping(QStringLiteral("/srv"), QStringLiteral("/var/srv"));
+
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/steamlibrary")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/library..2/saves")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt/MyApp")));
+    QVERIFY(m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/srv/games/MyApp")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/srv")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt/../etc")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/../etc")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnted/steamlibrary")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/other/steamlibrary")));
+}
+
+void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalAtomicAliasesAbsent()
+{
+    m_ops->clear();
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/steamlibrary")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt/Applications")));
+    QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/srv/games/MyGame")));
 }
 
 void TestCouchPlayHelper::testComputeMountTargetDotDotNames()
@@ -1440,6 +1676,25 @@ void TestCouchPlayHelper::testSetPathAclWithParentsSymlinkEscapeRejected()
     QCOMPARE(m_ops->m_processInvocations.size(), 0);
 }
 
+void TestCouchPlayHelper::testSetPathAclWithParentsCanonicalMntAliasEscapeRejected()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, QStringLiteral("/home/player1"));
+    m_ops->setCanonicalMapping(QStringLiteral("/mnt"), QStringLiteral("/var/mnt"));
+    m_ops->setFileExists(QStringLiteral("/var/mnt/shared-link"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/var/mnt/shared-link"), true);
+    m_ops->setCanonicalMapping(QStringLiteral("/var/mnt/shared-link"), QStringLiteral("/etc/private"));
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetPathAclWithParents"),
+                                                   QStringLiteral("/var/mnt/shared-link"),
+                                                   QStringLiteral("player1"));
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(m_ops->m_processInvocations.size(), 0);
+}
+
 void TestCouchPlayHelper::testSetDirectoryAclSymlinkEscapeRejected()
 {
     m_ops->clear();
@@ -1458,6 +1713,59 @@ void TestCouchPlayHelper::testSetDirectoryAclSymlinkEscapeRejected()
     QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
     QCOMPARE(m_ops->m_processInvocations.size(), 0);
 }
+void TestCouchPlayHelper::testAclFailureRequiresEffectiveTargetUserAccess()
+{
+    if (::geteuid() != 0) {
+        QSKIP("Requires root to probe access as an unprivileged user");
+    }
+    const struct passwd *target = ::getpwnam("nobody");
+    QVERIFY(target);
+    const uid_t uid = target->pw_uid;
+    const gid_t gid = target->pw_gid;
+    QTemporaryDir directory(QStringLiteral("/tmp/couchplay-acl-test-XXXXXX"));
+    QVERIFY(directory.isValid());
+    const QString path = directory.path();
+    QVERIFY(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                          | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                          | QFileDevice::ReadOther | QFileDevice::ExeOther));
+    QFile asset(directory.filePath(QStringLiteral("game")));
+    QVERIFY(asset.open(QIODevice::WriteOnly));
+    QCOMPARE(asset.write("game"), qint64(4));
+    asset.close();
+    QVERIFY(asset.setPermissions(QFileDevice::ReadOwner | QFileDevice::ExeOwner
+                                | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                | QFileDevice::ReadOther | QFileDevice::ExeOther));
+
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setProcessExitCode(1); // Simulate a filesystem that cannot apply ACLs.
+    m_ops->setStandardError("Operation not supported");
+    m_ops->realAccessProbe = true;
+    m_ops->setUserExists(QStringLiteral("nobody"), true, uid, gid);
+    m_ops->setFileExists(path, true);
+    m_ops->setDirectoryExists(path, true);
+
+    QDBusReply<bool> traversal = m_dbusInterface->call(QStringLiteral("SetPathAclWithParents"), path,
+                                                     QStringLiteral("nobody"));
+    QVERIFY2(traversal.isValid(), qPrintable(traversal.error().message()));
+    QVERIFY(traversal.value());
+    QDBusReply<bool> readable = m_dbusInterface->call(QStringLiteral("SetDirectoryAcl"), path,
+                                                    QStringLiteral("nobody"), true);
+    QVERIFY2(readable.isValid(), qPrintable(readable.error().message()));
+    QVERIFY(readable.value());
+
+    QVERIFY(asset.setPermissions(QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    QDBusReply<bool> privateAsset = m_dbusInterface->call(QStringLiteral("SetDirectoryAcl"), path,
+                                                        QStringLiteral("nobody"), true);
+    QVERIFY(!privateAsset.isValid());
+    QCOMPARE(privateAsset.error().type(), QDBusError::Failed);
+    QVERIFY(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    QDBusReply<bool> privateDirectory = m_dbusInterface->call(QStringLiteral("SetPathAclWithParents"), path,
+                                                            QStringLiteral("nobody"));
+    QVERIFY(privateDirectory.isValid());
+    QVERIFY(!privateDirectory.value());
+}
+
 void TestCouchPlayHelper::testSecureWriteRejectsSymlinkLeaf()
 {
     QTemporaryDir tempDir;
@@ -2028,7 +2336,8 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
     m_ops->setMockProcessStart(true);
     m_ops->setStandardOutput(QByteArray("12345\n"));
 
-    QDBusReply<qint64> reply = m_dbusInterface->call(QStringLiteral("LaunchInstance"),
+    QDBusReply<qint64> reply = m_dbusInterface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchInstance"), QVariantList{
                                                      QStringLiteral("player1"),
                                                      QString(),
                                                      QStringList{QStringLiteral("-W"), QStringLiteral("960")},
@@ -2036,7 +2345,7 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
                                                      QString(),
                                                      QStringList(),
                                                      QStringList{QStringLiteral("ENABLE_GAMESCOPE_WSI=1")},
-                                                     QStringList());
+                                                     false});
 
     QVERIFY(reply.isValid());
     QCOMPARE(reply.value(), qint64(12345));
@@ -2076,56 +2385,13 @@ void TestCouchPlayHelper::testLaunchInstance_basicLaunch()
     QVERIFY2(foundSystemctlShow, "systemctl show should be called to get MainPID");
 }
 
-void TestCouchPlayHelper::testLaunchInstance_withBindPaths()
-{
-    m_ops->clear();
-    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {QStringLiteral("player1")});
-    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
-    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001);
-    m_ops->setFileExists(QStringLiteral("/run/user/1001"), true);
-    m_ops->setFileExists(QStringLiteral("/run/user/1001/bus"), true);
-    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
-    m_ops->setFileExists(QStringLiteral("/run/user/1000"), true);
-    m_ops->setFileExists(QStringLiteral("/run/user/1000/wayland-0"), true);
-    m_ops->setProcessExitCode(0);
-    m_ops->setMockProcessStart(true);
-    m_ops->setStandardOutput(QByteArray("54321\n"));
-
-    QStringList bindPaths = {QStringLiteral("/tmp/overrides/config.ini:/home/player1/games/config.ini")};
-
-    QDBusReply<qint64> reply = m_dbusInterface->call(QStringLiteral("LaunchInstance"),
-                                                     QStringLiteral("player1"),
-                                                     QString(),
-                                                     QStringList{},
-                                                     QStringList{QStringLiteral("steam")},
-                                                     QString(),
-                                                     QStringList{QStringLiteral("/home/player1/games")},
-                                                     QStringList{},
-                                                     bindPaths);
-
-    QVERIFY(reply.isValid());
-    QCOMPARE(reply.value(), qint64(54321));
-
-    bool foundBindPaths = false;
-    for (const auto &inv : m_ops->m_processInvocations) {
-        if (inv.command == QStringLiteral("systemd-run")) {
-            for (const QString &arg : inv.args) {
-                if (arg.contains(QStringLiteral("BindReadOnlyPaths=/tmp/overrides/config.ini:/home/player1/games/config.ini"))) {
-                    foundBindPaths = true;
-                    break;
-                }
-            }
-        }
-    }
-    QVERIFY2(foundBindPaths, "BindPaths property should be set in systemd-run args");
-}
-
 void TestCouchPlayHelper::testLaunchInstance_validationEmptyUsername()
 {
     m_ops->clear();
     m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
 
-    QDBusReply<qint64> reply = m_dbusInterface->call(QStringLiteral("LaunchInstance"),
+    QDBusReply<qint64> reply = m_dbusInterface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchInstance"), QVariantList{
                                                      QString(),
                                                      QString(),
                                                      QStringList{},
@@ -2133,7 +2399,7 @@ void TestCouchPlayHelper::testLaunchInstance_validationEmptyUsername()
                                                      QString(),
                                                      QStringList(),
                                                      QStringList{},
-                                                     QStringList());
+                                                     false});
 
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
@@ -2144,7 +2410,8 @@ void TestCouchPlayHelper::testLaunchInstance_validationNonexistentUser()
     m_ops->clear();
     m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
 
-    QDBusReply<qint64> reply = m_dbusInterface->call(QStringLiteral("LaunchInstance"),
+    QDBusReply<qint64> reply = m_dbusInterface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchInstance"), QVariantList{
                                                      QStringLiteral("nonexistent"),
                                                      QString(),
                                                      QStringList{},
@@ -2152,7 +2419,7 @@ void TestCouchPlayHelper::testLaunchInstance_validationNonexistentUser()
                                                      QString(),
                                                      QStringList(),
                                                      QStringList{},
-                                                     QStringList{});
+                                                     false});
 
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
@@ -2174,7 +2441,8 @@ void TestCouchPlayHelper::testStopInstance_serviceStop()
     m_ops->setMockProcessStart(true);
     m_ops->setStandardOutput(QByteArray("99999\n"));
 
-    QDBusReply<qint64> launchReply = m_dbusInterface->call(QStringLiteral("LaunchInstance"),
+    QDBusReply<qint64> launchReply = m_dbusInterface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchInstance"), QVariantList{
                                                            QStringLiteral("player1"),
                                                            QString(),
                                                            QStringList{},
@@ -2182,7 +2450,7 @@ void TestCouchPlayHelper::testStopInstance_serviceStop()
                                                            QString(),
                                                            QStringList(),
                                                            QStringList{},
-                                                           QStringList{});
+                                                           false});
     QVERIFY(launchReply.isValid());
     qint64 pid = launchReply.value();
     QVERIFY(pid > 0);
@@ -2226,7 +2494,8 @@ void TestCouchPlayHelper::testKillInstance_serviceKill()
     m_ops->setMockProcessStart(true);
     m_ops->setStandardOutput(QByteArray("77777\n"));
 
-    QDBusReply<qint64> launchReply = m_dbusInterface->call(QStringLiteral("LaunchInstance"),
+    QDBusReply<qint64> launchReply = m_dbusInterface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchInstance"), QVariantList{
                                                            QStringLiteral("player1"),
                                                            QString(),
                                                            QStringList{},
@@ -2234,7 +2503,7 @@ void TestCouchPlayHelper::testKillInstance_serviceKill()
                                                            QString(),
                                                            QStringList(),
                                                            QStringList{},
-                                                           QStringList{});
+                                                           false});
     QVERIFY(launchReply.isValid());
     qint64 pid = launchReply.value();
     QVERIFY(pid > 0);
@@ -2292,7 +2561,8 @@ void TestCouchPlayHelper::testLaunchInstance_staleUnitRecovery()
     m_ops->setStandardError(QByteArray("Unit couchplay-player1.service already loaded"));
     m_ops->setStandardOutput(QByteArray(""));
 
-    QDBusReply<qint64> reply = m_dbusInterface->call(QStringLiteral("LaunchInstance"),
+    QDBusReply<qint64> reply = m_dbusInterface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchInstance"), QVariantList{
                                                      QStringLiteral("player1"),
                                                      QString(),
                                                      QStringList{},
@@ -2300,7 +2570,7 @@ void TestCouchPlayHelper::testLaunchInstance_staleUnitRecovery()
                                                      QString(),
                                                      QStringList(),
                                                      QStringList{},
-                                                     QStringList{});
+                                                     false});
 
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::Failed);

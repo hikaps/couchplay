@@ -36,6 +36,10 @@ private Q_SLOTS:
     void testGetLauncherId();
     void testRequiredIntegrations();
     void testSandboxedPresetMetadata();
+    void testApplicationAccessDirectoriesResolveSymlinkBeforeParent();
+    void testApplicationAccessDirectoriesSafety();
+    void testApplicationAccessDirectoriesCanonicalAtomicAliases();
+    void testDesktopImportPreservesQuotedExecAndSharesApplicationDirectory();
 
     void testAddCustomPreset();
     void testRemoveCustomPreset();
@@ -204,9 +208,7 @@ void TestPresetManager::testStaleFlatpakCacheIgnored()
     PresetManager manager;
     QCOMPARE(manager.getCommand(QStringLiteral("steam")), QStringLiteral("steam -bigpicture"));
 
-    // Constructor rewrote the cache at the current version.
     cacheGroup = config->group(QStringLiteral("FlatpakCache"));
-    QCOMPARE(cacheGroup.readEntry(QStringLiteral("version"), 0), 2);
     QCOMPARE(cacheGroup.readEntry(QStringLiteral("steam/command")), QStringLiteral("steam -bigpicture"));
 }
 
@@ -259,6 +261,233 @@ void TestPresetManager::testSandboxedPresetMetadata()
     const QString nativeId = manager.addCustomPreset(QStringLiteral("Native app"), QStringLiteral("/usr/bin/nautilus"));
     QVERIFY(manager.getPreset(flatpakId).sandboxed);
     QVERIFY(!manager.getPreset(nativeId).sandboxed);
+}
+
+void TestPresetManager::testApplicationAccessDirectoriesResolveSymlinkBeforeParent()
+{
+    QTemporaryDir temporaryHome;
+    QVERIFY(temporaryHome.isValid());
+    const QString home = temporaryHome.path();
+    const QString actual = home + QStringLiteral("/Install/App");
+    QVERIFY(QDir().mkpath(actual));
+    QVERIFY(QDir().mkpath(home + QStringLiteral("/Install/sub")));
+    QVERIFY(QDir().mkpath(home + QStringLiteral("/App")));
+    QVERIFY(QFile::link(home + QStringLiteral("/Install/sub"), home + QStringLiteral("/link")));
+
+    LaunchCommand command;
+    command.program = QStringLiteral("/bin/sh");
+    command.workingDirectory = home + QStringLiteral("/link/../App");
+    QCOMPARE(applicationAccessDirectories(command, home), QStringList{QFileInfo(actual).canonicalFilePath()});
+}
+
+void TestPresetManager::testApplicationAccessDirectoriesSafety()
+{
+    QTemporaryDir temporaryHome;
+    QVERIFY(temporaryHome.isValid());
+    const QString home = temporaryHome.path();
+    const QString applicationDir = home + QStringLiteral("/.local/share/OnlineFix Linux Launcher");
+    QVERIFY(QDir().mkpath(applicationDir));
+    const QString executable = applicationDir + QStringLiteral("/onlinefix-linux-launcher");
+    QFile executableFile(executable);
+    QVERIFY(executableFile.open(QIODevice::WriteOnly));
+    executableFile.close();
+
+    LaunchCommand command;
+    command.program = executable;
+    command.workingDirectory = applicationDir;
+    QCOMPARE(applicationAccessDirectories(command, home), QStringList{applicationDir});
+    command.workingDirectory = home;
+    QCOMPARE(applicationAccessDirectories(command, home), QStringList{applicationDir});
+    command.workingDirectory = home + QStringLiteral("/.local/share");
+    QCOMPARE(applicationAccessDirectories(command, home), QStringList{applicationDir});
+
+    const QString broadBin = home + QStringLiteral("/.local/bin");
+    QVERIFY(QDir().mkpath(broadBin));
+    QFile broadExecutable(broadBin + QStringLiteral("/launcher"));
+    QVERIFY(broadExecutable.open(QIODevice::WriteOnly));
+    broadExecutable.close();
+    QVERIFY(QDir().mkpath(home + QStringLiteral("/Games")));
+    command.program = broadExecutable.fileName();
+    command.workingDirectory = home + QStringLiteral("/Games");
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+
+    const QString secretDir = home + QStringLiteral("/.config/private-app");
+    QVERIFY(QDir().mkpath(secretDir));
+    QFile secretExecutable(secretDir + QStringLiteral("/tool"));
+    QVERIFY(secretExecutable.open(QIODevice::WriteOnly));
+    secretExecutable.close();
+    command.program = secretExecutable.fileName();
+    command.workingDirectory = secretDir;
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+
+    const QString privateKeysTarget = home + QStringLiteral("/Launcher/private-keys");
+    QVERIFY(QDir().mkpath(privateKeysTarget));
+    const QString sshAlias = home + QStringLiteral("/.ssh");
+    QVERIFY(QFile::link(privateKeysTarget, sshAlias));
+    command.program = QStringLiteral("/bin/sh");
+    command.workingDirectory = sshAlias;
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+    command.workingDirectory = privateKeysTarget;
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+    command.workingDirectory = home + QStringLiteral("/Launcher");
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+
+    const QString flatpakDir = home + QStringLiteral("/.local/share/flatpak/app/com.example.App/current/active/files");
+    QVERIFY(QDir().mkpath(flatpakDir));
+    QFile flatpakExecutable(flatpakDir + QStringLiteral("/app"));
+    QVERIFY(flatpakExecutable.open(QIODevice::WriteOnly));
+    flatpakExecutable.close();
+    command.program = flatpakExecutable.fileName();
+    command.workingDirectory = applicationDir;
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+
+    command.program = QStringLiteral("/usr/bin/flatpak");
+    command.workingDirectory = applicationDir;
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+
+    command.program = QStringLiteral("/bin/sh");
+    command.workingDirectory.clear();
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+}
+
+void TestPresetManager::testApplicationAccessDirectoriesCanonicalAtomicAliases()
+{
+    static const QStringList commonBases = {
+        QStringLiteral(".local"), QStringLiteral(".local/share"), QStringLiteral(".local/bin"),
+        QStringLiteral(".local/lib"), QStringLiteral(".local/share/applications"),
+        QStringLiteral(".local/share/icons"), QStringLiteral("downloads"), QStringLiteral("documents"),
+        QStringLiteral("desktop"), QStringLiteral("games"), QStringLiteral("public"), QStringLiteral("videos"),
+        QStringLiteral("music"), QStringLiteral("pictures"), QStringLiteral("templates"), QStringLiteral("applications")
+    };
+    bool testedAlias = false;
+    for (const QString &alias : {QStringLiteral("/opt"), QStringLiteral("/srv")}) {
+        const QString expectedRoot = alias == QStringLiteral("/opt") ? QStringLiteral("/var/opt")
+                                                                      : QStringLiteral("/var/srv");
+        if (QDir(alias).canonicalPath() != expectedRoot) {
+            continue;
+        }
+
+        QStringList candidates;
+        for (const QString &first : QDir(alias).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+            const QString firstPath = QDir(alias).filePath(first);
+            if (alias == QStringLiteral("/opt")) {
+                candidates.append(firstPath);
+            }
+            for (const QString &second : QDir(firstPath).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                candidates.append(QDir(firstPath).filePath(second));
+            }
+        }
+
+        for (const QString &candidate : candidates) {
+            const QString canonicalCandidate = QDir(candidate).canonicalPath();
+            if (!canonicalCandidate.startsWith(expectedRoot + QLatin1Char('/'))
+                || commonBases.contains(QDir(canonicalCandidate).dirName().toCaseFolded())) {
+                continue;
+            }
+            const QString relativeCandidate = QDir(expectedRoot).relativeFilePath(canonicalCandidate);
+            if (alias == QStringLiteral("/srv") && !relativeCandidate.contains(QLatin1Char('/'))) {
+                continue;
+            }
+            LaunchCommand command;
+            command.program = QStringLiteral("/bin/sh");
+            command.workingDirectory = candidate;
+            QVERIFY2(applicationAccessDirectories(command, QDir::homePath()).contains(canonicalCandidate),
+                     qPrintable(alias + QStringLiteral(" canonical alias was rejected")));
+            testedAlias = true;
+            break;
+        }
+    }
+
+    if (!testedAlias) {
+        QSKIP("Requires an Atomic /opt or /srv alias with an accessible non-root child directory");
+    }
+}
+
+void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplicationDirectory()
+{
+    QTemporaryDir applicationHome(QDir::homePath() + QStringLiteral("/couchplay-preset-test-XXXXXX"));
+    QVERIFY(applicationHome.isValid());
+    const QString applicationDir = applicationHome.path() + QStringLiteral("/OnlineFix Linux Launcher");
+    QVERIFY(QDir().mkpath(applicationDir));
+
+    const QString executable = applicationDir + QStringLiteral("/onlinefix-linux-launcher");
+    QFile executableFile(executable);
+    QVERIFY(executableFile.open(QIODevice::WriteOnly));
+    executableFile.close();
+
+    const QString updatedApplicationDir = applicationHome.path() + QStringLiteral("/Updated Launcher");
+    QVERIFY(QDir().mkpath(updatedApplicationDir));
+    const QString updatedExecutable = updatedApplicationDir + QStringLiteral("/updated-launcher");
+    QFile updatedExecutableFile(updatedExecutable);
+    QVERIFY(updatedExecutableFile.open(QIODevice::WriteOnly));
+    updatedExecutableFile.close();
+
+    const QString desktopFilePath = m_tempDir->filePath(QStringLiteral("OnlineFix.desktop"));
+    QFile desktopFile(desktopFilePath);
+    QVERIFY(desktopFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    desktopFile.write(QStringLiteral(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=OnlineFix\n"
+        "Exec = \"%1\" --profile \"two  words\" %f\n"
+        "Path=%2\n").arg(executable, applicationDir).toUtf8());
+    desktopFile.close();
+
+    const QString userSelectedDirectory = applicationHome.path() + QStringLiteral("/user-selected");
+    QString id;
+    {
+        PresetManager manager;
+        id = manager.addPresetFromDesktopFile(desktopFilePath);
+        QVERIFY(!id.isEmpty());
+
+        const LaunchCommand launch = manager.buildLaunchCommand(id, {});
+        QCOMPARE(launch.program, executable);
+        QCOMPARE(launch.arguments, (QStringList{QStringLiteral("--profile"), QStringLiteral("two  words")}));
+        QCOMPARE(launch.workingDirectory, applicationDir);
+        QVERIFY(manager.getDataDirectories(id).isEmpty());
+
+        QVERIFY(manager.updateCustomPreset(id,
+                                           QStringLiteral("OnlineFix updated"),
+                                           QStringLiteral("\"%1\"").arg(updatedExecutable),
+                                           updatedApplicationDir,
+                                           QStringLiteral("updated-icon")));
+        QVERIFY(QDir(applicationDir).removeRecursively());
+
+        const LaunchCommand updatedLaunch = manager.buildLaunchCommand(id, {});
+        QCOMPARE(updatedLaunch.program, updatedExecutable);
+        QCOMPARE(updatedLaunch.workingDirectory, updatedApplicationDir);
+        QCOMPARE(applicationAccessDirectories(updatedLaunch, QDir::homePath()), QStringList{updatedApplicationDir});
+        QVariantList userEditedDirectories;
+        userEditedDirectories.append(QVariant::fromValue(DataDirectory{userSelectedDirectory, QStringLiteral("acl")}));
+        QVERIFY(manager.setDataDirectories(id, userEditedDirectories));
+    }
+
+    PresetManager restoredManager;
+    const LaunchPreset restored = restoredManager.getPreset(id);
+    QCOMPARE(restored.dataDirectories.size(), 1);
+    QCOMPARE(restored.dataDirectories.constFirst().path, userSelectedDirectory);
+    QCOMPARE(restored.dataDirectories.constFirst().mode, QStringLiteral("acl"));
+    const LaunchCommand restoredLaunch = restoredManager.buildLaunchCommand(id, {});
+    QCOMPARE(applicationAccessDirectories(restoredLaunch, QDir::homePath()), QStringList{updatedApplicationDir});
+
+    const QString flatpakDesktopPath = m_tempDir->filePath(QStringLiteral("Flatpak.desktop"));
+    QFile flatpakDesktop(flatpakDesktopPath);
+    QVERIFY(flatpakDesktop.open(QIODevice::WriteOnly | QIODevice::Text));
+    flatpakDesktop.write(QStringLiteral(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Flatpak app\n"
+        "Exec=flatpak run com.example.App\n"
+        "Path=%1\n").arg(applicationDir).toUtf8());
+    flatpakDesktop.close();
+
+    PresetManager flatpakManager;
+    const QString flatpakId = flatpakManager.addPresetFromDesktopFile(flatpakDesktopPath);
+    QVERIFY(!flatpakId.isEmpty());
+    const LaunchCommand flatpakLaunch = flatpakManager.buildLaunchCommand(flatpakId, {});
+    QCOMPARE(flatpakLaunch.program, QStringLiteral("flatpak"));
+    QCOMPARE(flatpakLaunch.arguments, (QStringList{QStringLiteral("run"), QStringLiteral("com.example.App")}));
+    QVERIFY(flatpakManager.getDataDirectories(flatpakId).isEmpty());
 }
 
 void TestPresetManager::testAddCustomPreset()

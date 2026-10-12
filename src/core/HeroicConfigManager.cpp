@@ -604,6 +604,9 @@ QList<HeroicGame> HeroicConfigManager::parseSideloadGames()
 
     for (const QJsonValue &value : gamesArray) {
         QJsonObject gameObj = value.toObject();
+        if (gameObj[QStringLiteral("is_installed")] == QJsonValue(false)) {
+            continue;
+        }
 
         HeroicGame game;
         game.appName = gameObj[QStringLiteral("app_name")].toString();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
+#include <QByteArray>
 #include <QDebug>
 #include <QObject>
 #include <QTest>
@@ -13,6 +14,40 @@
 
 #include "../src/core/CommandVerifier.h"
 #include "../src/core/Logging.h"
+class ScopedEnvironmentVariable
+{
+public:
+    explicit ScopedEnvironmentVariable(const char *name)
+        : m_name(name)
+        , m_value(qgetenv(name))
+        , m_wasSet(qEnvironmentVariableIsSet(name))
+    {
+    }
+
+    ~ScopedEnvironmentVariable()
+    {
+        if (m_wasSet) {
+            qputenv(m_name.constData(), m_value);
+        } else {
+            qunsetenv(m_name.constData());
+        }
+    }
+
+private:
+    QByteArray m_name;
+    QByteArray m_value;
+    bool m_wasSet;
+};
+
+static bool writeExecutable(const QString &path, const QByteArray &contents)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(contents) != contents.size()) {
+        return false;
+    }
+    file.close();
+    return QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+}
 
 class TestCommandVerifier : public QObject
 {
@@ -25,6 +60,8 @@ private Q_SLOTS:
     void testPathResolution();
     void testAbsoluteValidation();
     void testNonExistentCommand();
+    void testHostLauncherDiscoveryInFlatpak();
+    void testHostLauncherUnavailableInFlatpak();
     void testFlatpakAppDetection();
     void testExtractFlatpakAppId();
 };
@@ -129,6 +166,69 @@ void TestCommandVerifier::testNonExistentCommand()
     // Test non-existent command detection using the correct method name
     QVERIFY(!CommandVerifier::isCommandExecutable(QStringLiteral("/non/existent/path")));
     QVERIFY(!CommandVerifier::commandExistsInPath(QStringLiteral("nonexistentcommand12345")));
+}
+void TestCommandVerifier::testHostLauncherDiscoveryInFlatpak()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QByteArray flatpakSpawn = QByteArrayLiteral(
+        "#!/bin/sh\n"
+        "[ \"$1\" = \"--host\" ] || exit 90\n"
+        "shift\n"
+        "case \"$1\" in\n"
+        "  which)\n"
+        "    case \"$2\" in\n"
+        "      heroic) printf '%s\\n' '/host-only/bin/heroic'; exit 0 ;;\n"
+        "      *) exit 1 ;;\n"
+        "    esac ;;\n"
+        "  flatpak)\n"
+        "    shift\n"
+        "    case \"$1\" in\n"
+        "      --version) printf '%s\\n' 'Flatpak 1.16.0'; exit 0 ;;\n"
+        "      list)\n"
+        "        if [ \"$2\" = \"--app\" ] && [ \"$3\" = \"--columns=application\" ]; then\n"
+        "          printf '%s\\n' 'com.example.Game'\n"
+        "          exit 0\n"
+        "        fi\n"
+        "        exit 2 ;;\n"
+        "      *) exit 2 ;;\n"
+        "    esac ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n");
+    QVERIFY(writeExecutable(tempDir.filePath(QStringLiteral("flatpak-spawn")), flatpakSpawn));
+
+    ScopedEnvironmentVariable pathGuard("PATH");
+    ScopedEnvironmentVariable flatpakIdGuard("FLATPAK_ID");
+    QVERIFY(qputenv("PATH", tempDir.path().toLocal8Bit()));
+    QVERIFY(qputenv("FLATPAK_ID", QByteArrayLiteral("org.example.CouchPlay")));
+
+    const CommandVerificationResult result = CommandVerifier::verifyCommand(QStringLiteral("heroic"));
+    QVERIFY(result.isValid);
+    QCOMPARE(result.resolvedPath, QStringLiteral("/host-only/bin/heroic"));
+    QCOMPARE(CommandVerifier::resolveCommandPath(QStringLiteral("heroic")), QStringLiteral("/host-only/bin/heroic"));
+    QVERIFY(CommandVerifier::isFlatpakAvailable());
+    QVERIFY(CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com.example.Game")));
+    QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com.example.Gam")));
+    QVERIFY(!CommandVerifier::commandExistsInPath(QStringLiteral("missing-launcher")));
+    QVERIFY(CommandVerifier::resolveCommandPath(QStringLiteral("missing-launcher")).isEmpty());
+}
+
+void TestCommandVerifier::testHostLauncherUnavailableInFlatpak()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    ScopedEnvironmentVariable pathGuard("PATH");
+    ScopedEnvironmentVariable flatpakIdGuard("FLATPAK_ID");
+    QVERIFY(qputenv("PATH", tempDir.path().toLocal8Bit()));
+    QVERIFY(qputenv("FLATPAK_ID", QByteArrayLiteral("org.example.CouchPlay")));
+
+    QVERIFY(!CommandVerifier::commandExistsInPath(QStringLiteral("heroic")));
+    QVERIFY(CommandVerifier::resolveCommandPath(QStringLiteral("heroic")).isEmpty());
+    QVERIFY(!CommandVerifier::isFlatpakAvailable());
+    QVERIFY(!CommandVerifier::isFlatpakAppInstalled(QStringLiteral("com.example.Game")));
+    QVERIFY(!CommandVerifier::verifyCommand(QStringLiteral("heroic")).isValid);
 }
 
 void TestCommandVerifier::testFlatpakAppDetection()

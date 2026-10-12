@@ -18,6 +18,7 @@
         "--talk-name=com.github.CouchPlay",
         "--system-talk-name=org.freedesktop.login1",
         "--system-talk-name=io.github.hikaps.CouchPlayHelper",
+        "--filesystem=~/.local/share/applications:rw",
         "--filesystem=~/.local/share/Steam:ro",
         "--filesystem=~/.local/share/Steam/userdata:rw",
         "--filesystem=~/.steam:ro",

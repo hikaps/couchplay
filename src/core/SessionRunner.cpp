@@ -16,19 +16,15 @@
 #include "WindowManager.h"
 
 #include <QAction>
-#include <QCryptographicHash>
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
 #include <QDebug>
 #include <QDir>
-#include <QDirIterator>
-#include <QFile>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QSet>
 #include <QFileInfo>
-#include <QStandardPaths>
 
 #include <KGlobalAccel>
 #include <KLocalizedString>
@@ -473,17 +469,13 @@ void SessionRunner::continueStart()
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
         return;
     }
-    if (!buildOverrideBinds()) {
-        beginFinalization(true, QStringLiteral("Failed to prepare override binds"));
-        return;
-    }
-
     m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
         const InstanceConfig &instConfig = profile.instances[i];
         const bool isStreaming = streamingIndices.contains(i);
         QVariantMap config;
         config[QStringLiteral("username")] = instConfig.username;
+        config[QStringLiteral("privateTemporaryDirectories")] = instConfig.privateTemporaryDirectories;
         config[QStringLiteral("monitor")] = instConfig.monitor;
         if (isStreaming) {
             const QStringList resolution = instConfig.streamResolution.split(QLatin1Char('x'));
@@ -535,9 +527,6 @@ void SessionRunner::continueStart()
                 pathList.append(path);
             }
             config[QStringLiteral("devicePaths")] = pathList;
-        }
-        if (m_instanceBindPaths.contains(i)) {
-            config[QStringLiteral("overrideBinds")] = m_instanceBindPaths.value(i);
         }
         QStringList sharedRoots = m_instanceSharedRoots.value(i);
         if (!command.workingDirectory.isEmpty() && !sharedRoots.contains(command.workingDirectory)) {
@@ -594,25 +583,6 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
         m_streamManager->stopAll();
     }
 
-    QStringList overridePaths;
-    if (m_sessionManager) {
-        const auto &profile = activeProfile();
-        for (const auto &instConfig : profile.instances) {
-            if (instConfig.overridePatterns.isEmpty() || instConfig.overrideGamePath.isEmpty()) {
-                continue;
-            }
-            QString gameId = instConfig.gameSelection.gameId;
-            if (gameId.isEmpty()) {
-                gameId = QString::fromLatin1(
-                    QCryptographicHash::hash(instConfig.overrideGamePath.toUtf8(), QCryptographicHash::Md5)
-                        .toHex()
-                        .left(16));
-            }
-            const QString presetId = instConfig.presetId.isEmpty() ? QStringLiteral("steam") : instConfig.presetId;
-            overridePaths.append(getOverridesRootPath(presetId, gameId));
-        }
-    }
-
     for (auto *instance : m_instances) {
         if (instance->isRunning()) {
             instance->stop();
@@ -622,7 +592,6 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
     teardownSharingState();
     teardownStreamingInstances();
     cleanupInstances();
-    cleanupOverrideDirs(overridePaths);
 
     const QString postHook = m_sessionManager ? activeProfile().postSessionExecutable : QString();
     if (m_postHookArmed && m_preHookCompleted && !postHook.isEmpty()) {
@@ -785,19 +754,6 @@ void SessionRunner::cleanupInstances()
     m_nextInstanceToStart = 0;
 }
 
-void SessionRunner::cleanupOverrideDirs(const QStringList &overridePaths)
-{
-    for (const QString &path : overridePaths) {
-        QDir dir(path);
-        if (dir.exists()) {
-            if (dir.removeRecursively()) {
-                qCDebug(couchplayCore) << "Cleaned up override staging directory:" << path;
-            } else {
-                qCWarning(couchplayCore) << "Failed to clean up override staging directory:" << path;
-            }
-        }
-    }
-}
 
 bool SessionRunner::setupDeviceOwnership()
 {
@@ -918,6 +874,7 @@ bool SessionRunner::setupSessionResources()
 
     const auto &profile = activeProfile();
     bool allSucceeded = true;
+    bool heroicCatalogLoaded = false;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
@@ -971,6 +928,11 @@ bool SessionRunner::setupSessionResources()
             allSucceeded = false;
         }
         if (requiresHeroic && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            if (!heroicCatalogLoaded) {
+                // Refresh once per session; snapshots may predate installed games.
+                m_heroicConfigManager->loadGames();
+                heroicCatalogLoaded = true;
+            }
             qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
             if (!m_heroicConfigManager->syncConfigToUser(username)) {
                 qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
@@ -991,8 +953,97 @@ bool SessionRunner::setupSessionResources()
         // empty snapshot must stay empty — it must not inherit later preset
         // edits.
         QList<DataDirectory> dataDirs = profile.instances[i].dataDirectories;
-        if (dataDirs.isEmpty() && !profile.instances[i].dataDirectoriesSnapshotted) {
+        const bool usingPresetDataDirectories =
+            dataDirs.isEmpty() && !profile.instances[i].dataDirectoriesSnapshotted;
+        if (usingPresetDataDirectories) {
             dataDirs = preset.dataDirectories;
+        }
+        if (i < m_launchCommands.size()) {
+            const QStringList applicationDirectories =
+                applicationAccessDirectories(m_launchCommands.at(i), compositorHome);
+            for (const QString &directory : applicationDirectories) {
+                const QString applicationDirectory = QDir::cleanPath(directory);
+                bool coveredByAclDataDirectory = false;
+                for (const DataDirectory &dir : dataDirs) {
+                    if (dir.mode != QStringLiteral("acl") || !QDir::isAbsolutePath(dir.path)) {
+                        continue;
+                    }
+                    const QString aclPath = QDir::cleanPath(dir.path);
+                    if (applicationDirectory == aclPath || aclPath == QStringLiteral("/")
+                        || applicationDirectory.startsWith(aclPath + QLatin1Char('/'))) {
+                        coveredByAclDataDirectory = true;
+                        break;
+                    }
+                }
+                if (coveredByAclDataDirectory) {
+                    continue;
+                }
+
+                const bool parentsOk = m_helperClient->setPathAclWithParents(applicationDirectory, username);
+                const bool contentsOk = m_helperClient->setDirectoryAcl(applicationDirectory, username, true);
+                if (!parentsOk || !contentsOk) {
+                    qCWarning(couchplaySteam) << "Failed to set ACL for selected application directory"
+                                              << applicationDirectory << "user" << username;
+                    allSucceeded = false;
+                }
+            }
+        }
+
+        QSet<QString> gameAccessDirectories;
+        if (requiresHeroic && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
+            auto addGameAccessDirectory = [&gameAccessDirectories, &compositorHome](const QString &path) {
+                if (path.isEmpty() || !QDir::isAbsolutePath(path) || !QDir(path).exists()) {
+                    return;
+                }
+                LaunchCommand accessCheck;
+                accessCheck.workingDirectory = path;
+                const QStringList safeDirectories = applicationAccessDirectories(accessCheck, compositorHome);
+                if (!safeDirectories.isEmpty()) {
+                    gameAccessDirectories.insert(safeDirectories.constFirst());
+                }
+            };
+
+            for (const HeroicGame &game : m_heroicConfigManager->installedGames()) {
+                addGameAccessDirectory(game.installPath);
+
+                QString executablePath = game.executable;
+                if (executablePath.isEmpty()) {
+                    continue;
+                }
+                if (!QDir::isAbsolutePath(executablePath)) {
+                    if (!QDir::isAbsolutePath(game.installPath)) {
+                        continue;
+                    }
+                    executablePath = QDir(game.installPath).filePath(executablePath);
+                }
+                addGameAccessDirectory(QFileInfo(executablePath).absolutePath());
+            }
+
+            for (const QString &path : gameAccessDirectories) {
+                bool coveredByAclDataDirectory = false;
+                for (const DataDirectory &dir : dataDirs) {
+                    if (dir.mode != QStringLiteral("acl")) {
+                        continue;
+                    }
+                    const QString aclPath = QDir::cleanPath(dir.path);
+                    const bool coveredByAcl = path == aclPath
+                        || (path.startsWith(aclPath + QLatin1Char('/')) && !gameAccessDirectories.contains(aclPath));
+                    if (coveredByAcl) {
+                        coveredByAclDataDirectory = true;
+                        break;
+                    }
+                }
+                if (coveredByAclDataDirectory) {
+                    continue;
+                }
+
+                // Grant traversal to registered game paths; selected data roots are ACLed below.
+                if (!m_helperClient->setPathAclWithParents(path, username)) {
+                    qCWarning(couchplaySteam)
+                        << "Failed to set traversal ACL for Heroic game path" << path << "user" << username;
+                    allSucceeded = false;
+                }
+            }
         }
         if (dataDirs.isEmpty()) {
 
@@ -1129,7 +1180,7 @@ bool SessionRunner::setupSessionResources()
                 const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
                 const bool contentsOk = m_helperClient->setDirectoryAcl(dir.path, username, true);
                 if (!parentsOk || !contentsOk) {
-                    qWarning() << "SessionRunner: Failed to set recursive ACL for" << dir.path << "user" << username;
+                    qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
                     allSucceeded = false;
                 }
             }
@@ -1205,81 +1256,6 @@ void SessionRunner::teardownSharingState()
     }
 }
 
-bool SessionRunner::buildOverrideBinds()
-{
-    m_instanceBindPaths.clear();
-
-    if (!m_sessionManager) {
-        return true;
-    }
-
-    const auto &profile = activeProfile();
-
-    for (int i = 0; i < profile.instances.size(); ++i) {
-        const auto &instConfig = profile.instances[i];
-
-        if (instConfig.overridePatterns.isEmpty()) {
-            qCDebug(couchplaySharing) << "No override patterns for instance" << i << "- skipping bind paths";
-            continue;
-        }
-        qCDebug(couchplaySharing) << "Building bind paths for instance" << i << "with"
-                                  << instConfig.overridePatterns.size() << "patterns";
-
-        const QString &username = instConfig.username;
-        if (username.isEmpty()) {
-            qCDebug(couchplaySharing) << "Instance" << i << "has no username, skipping bind paths";
-            continue;
-        }
-
-        QString gamePath = instConfig.overrideGamePath;
-        if (gamePath.isEmpty()) {
-            qCWarning(couchplaySharing) << "Instance" << i << "has patterns but no game path, skipping";
-            continue;
-        }
-
-        QString gameId = instConfig.gameSelection.gameId;
-        if (gameId.isEmpty()) {
-            gameId = QString::fromLatin1(
-                QCryptographicHash::hash(gamePath.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
-        }
-
-        QStringList matchedFiles = expandPatternsToFiles(gamePath, instConfig.overridePatterns);
-        qCDebug(couchplaySharing) << "Instance" << i << "matched" << matchedFiles.size() << "files from"
-                                  << instConfig.overridePatterns.size() << "patterns";
-
-        QString presetId = instConfig.presetId;
-        if (presetId.isEmpty()) {
-            presetId = QStringLiteral("steam"); // Default preset
-        }
-        QString overridesRoot = getOverridesRootPath(presetId, gameId);
-
-        // Bind format: "<stagingDir>/<relativeFile>:<gamePath>/<relativeFile>"
-        QStringList bindPaths;
-        QStringList sharedRoots = m_instanceSharedRoots.value(i);
-        if (!sharedRoots.contains(gamePath)) {
-            sharedRoots.append(gamePath);
-        }
-        if (!sharedRoots.contains(overridesRoot)) {
-            sharedRoots.append(overridesRoot);
-        }
-        m_instanceSharedRoots[i] = sharedRoots;
-        for (const QString &relativePath : matchedFiles) {
-            QString bindEntry =
-                overridesRoot + relativePath + QLatin1Char(':') + gamePath + QLatin1Char('/') + relativePath;
-            bindPaths.append(bindEntry);
-        }
-
-        if (!bindPaths.isEmpty()) {
-            m_instanceBindPaths[i] = bindPaths;
-            qCDebug(couchplaySharing) << "Instance" << i << "has" << bindPaths.size() << "bind paths";
-        }
-
-        loadOverrideFiles(overridesRoot, matchedFiles, username, gameId);
-    }
-
-    return true;
-}
-
 QRect SessionRunner::getScreenGeometry() const
 {
     QScreen *screen = QGuiApplication::primaryScreen();
@@ -1288,86 +1264,6 @@ QRect SessionRunner::getScreenGeometry() const
     }
 
     return QRect(0, 0, 1920, 1080);
-}
-
-QString SessionRunner::getOverridesRootPath(const QString &presetId, const QString &gameKeyHash)
-{
-    QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QString path =
-        basePath + QStringLiteral("/overrides/") + presetId + QStringLiteral("/") + gameKeyHash + QStringLiteral("/");
-    return path;
-}
-
-QString SessionRunner::getAndEnsureOverridesPath(const QString &presetId)
-{
-    QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QString overridesPath = basePath + QStringLiteral("/overrides/") + presetId + QStringLiteral("/");
-
-    QDir dir;
-    if (!dir.exists(overridesPath)) {
-        dir.mkpath(overridesPath);
-    }
-
-    return overridesPath;
-}
-
-QStringList SessionRunner::expandPatternsToFiles(const QString &gamePath, const QStringList &patterns)
-{
-    QStringList matchedFiles;
-
-    if (gamePath.isEmpty() || patterns.isEmpty()) {
-        return matchedFiles;
-    }
-
-    QDir baseDir(gamePath);
-    if (!baseDir.exists()) {
-        qCWarning(couchplaySharing) << "expandPatternsToFiles: gamePath does not exist:" << gamePath;
-        return matchedFiles;
-    }
-
-    QDirIterator it(gamePath, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-
-    while (it.hasNext()) {
-        QString filePath = it.next();
-        QString relativePath = baseDir.relativeFilePath(filePath);
-
-        for (const QString &pattern : patterns) {
-            if (QDir::match(pattern, relativePath)) {
-                matchedFiles.append(relativePath);
-                qCDebug(couchplaySharing) << "Pattern" << pattern << "matched file:" << relativePath;
-                break;
-            }
-        }
-    }
-
-    qCDebug(couchplaySharing) << "expandPatternsToFiles:" << matchedFiles.size() << "files matched from"
-                              << patterns.size() << "patterns in" << gamePath;
-
-    return matchedFiles;
-}
-
-void SessionRunner::loadOverrideFiles(const QString &overridesRoot,
-                                      const QStringList &matchedFiles,
-                                      const QString &username,
-                                      const QString &gameId)
-{
-    Q_UNUSED(username)
-    Q_UNUSED(gameId)
-
-    if (overridesRoot.isEmpty() || matchedFiles.isEmpty()) {
-        return;
-    }
-
-    QDir dir(overridesRoot);
-    if (!dir.exists()) {
-        if (!dir.mkpath(QStringLiteral("."))) {
-            qCWarning(couchplaySharing) << "Failed to create overrides directory:" << overridesRoot;
-            return;
-        }
-    }
-
-    qCDebug(couchplaySharing) << "Override staging ready:" << overridesRoot << "with" << matchedFiles.size()
-                              << "files for bind paths";
 }
 
 QList<QRect> SessionRunner::calculateLayout(const QString &layout,

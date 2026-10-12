@@ -83,7 +83,6 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
 
     const QString displayContext = config.value(QStringLiteral("displayContext")).toString();
     const QString workingDirectory = config.value(QStringLiteral("workingDirectory")).toString();
-    const QStringList bindPaths = config.value(QStringLiteral("overrideBinds")).toStringList();
     const QStringList sharedRoots = config.value(QStringLiteral("sharedRoots")).toStringList();
     QString helperError;
     const QMetaObject::Connection helperErrorConnection = connect(
@@ -97,7 +96,7 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
                                                        workingDirectory,
                                                        sharedRoots,
                                                        envVars,
-                                                       bindPaths);
+                                                       config.value(QStringLiteral("privateTemporaryDirectories")).toBool());
     disconnect(helperErrorConnection);
     if (pid <= 0) {
         qWarning() << "Instance" << m_index << "helper LaunchInstance failed";

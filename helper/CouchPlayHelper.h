@@ -208,7 +208,7 @@ public Q_SLOTS:
      * @param workingDirectory Optional absolute working directory
      * @param sharedRoots Explicit source roots available to the target user
      * @param environment Additional environment variables (VAR=value format)
-     * @param bindPaths Paths to bind-mount into the unit via --property=BindPaths=
+     * @param privateTemporaryDirectories Whether to isolate the instance's /tmp and /var/tmp
      * @return MainPID of launched process, or 0 on failure
      */
     qint64 LaunchInstance(const QString &username,
@@ -218,7 +218,7 @@ public Q_SLOTS:
                           const QString &workingDirectory,
                           const QStringList &sharedRoots,
                           const QStringList &environment,
-                          const QStringList &bindPaths);
+                          bool privateTemporaryDirectories);
 
     /**
      * Stop a launched instance
@@ -502,7 +502,7 @@ private:
                               const QString &workingDirectory,
                               const QStringList &sharedRoots,
                               const QStringList &environment,
-                              const QStringList &bindPaths);
+                              bool privateTemporaryDirectories);
     bool stopServiceInstance(const QString &serviceName);
     void monitorUnitState(const QString &serviceName, const QString &username, qint64 mainPid);
     QString computeMountTarget(const QString &source,

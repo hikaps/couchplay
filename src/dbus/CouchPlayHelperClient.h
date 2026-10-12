@@ -89,7 +89,7 @@ public:
      * @param workingDirectory Optional absolute working directory
      * @param environment Additional environment variables (VAR=value format)
      * @param sharedRoots Explicit source roots available to the target user
-     * @param bindPaths Bind mount entries for per-instance config overrides (source:target format)
+     * @param privateTemporaryDirectories Whether to isolate the instance's /tmp and /var/tmp
      * @return PID of launched process, or 0 on failure
      */
     Q_INVOKABLE virtual qint64 launchInstance(const QString &username,
@@ -99,7 +99,7 @@ public:
                                                const QString &workingDirectory,
                                                const QStringList &sharedRoots,
                                                const QStringList &environment,
-                                               const QStringList &bindPaths);
+                                               bool privateTemporaryDirectories);
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)

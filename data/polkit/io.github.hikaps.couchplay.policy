@@ -19,7 +19,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
   </action>
 
   <action id="io.github.hikaps.couchplay.create-user">
@@ -42,7 +41,7 @@
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>yes</allow_active>
+      <allow_active>auth_admin_keep</allow_active>
     </defaults>
   </action>
 
@@ -70,7 +69,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.create-user</annotate>
   </action>
 
   <action id="io.github.hikaps.couchplay.setup-wayland-access">
@@ -83,7 +81,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
   </action>
 
   <action id="io.github.hikaps.couchplay.launch-instance">
@@ -96,7 +93,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.setup-wayland-access</annotate>
   </action>
 
   <action id="io.github.hikaps.couchplay.manage-mounts">
@@ -109,7 +105,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.manage-session</annotate>
   </action>
 
   <action id="io.github.hikaps.couchplay.manage-virtual-display">
@@ -122,7 +117,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.launch-instance</annotate>
   </action>
 
   <action id="io.github.hikaps.couchplay.manage-audio-sink">
@@ -135,7 +129,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.imply">io.github.hikaps.couchplay.launch-instance</annotate>
   </action>
 
   <action id="io.github.hikaps.couchplay.delete-user">

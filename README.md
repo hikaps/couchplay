@@ -30,7 +30,6 @@
 - 🕹️ **Input isolation** — assign gamepads, keyboards, and mice to specific player instances. Steam Input virtual gamepads are detected and isolated automatically.
 - 👤 **User isolation** — each player gets a temporary Linux account with their own save data, settings, and Steam library.
 - 🔊 **Audio routing** — cross-user audio via PipeWire PulseAudio TCP listener.
-- 🛡️ **Overlay configs** — per-user config file overrides via glob patterns.
 - ⚡ **Sequential launching** — instances start one at a time to avoid GPU contention.
 - 🖼️ **Borderless windows** — optional borderless mode for cleaner multi-window setups.
 - 🐧 **Atomic-ready** — designed for immutable distributions like Bazzite and Fedora Silverblue. Available as a Flatpak.
@@ -65,7 +64,7 @@ Alternatively, use the **Stop Session** button in the CouchPlay UI.
 
 ### Profiles
 
-Save a session configuration as a profile to reload it later without reconfiguring everything. Profiles are stored as JSON files in `~/.local/share/couchplay/profiles/` and can be loaded from the **Profiles** page.
+Save a session configuration as a profile to reload it later without reconfiguring everything. On the **Profiles** page, card actions wrap on narrow windows so **Delete** remains accessible; deleting a profile requires confirmation.
 
 ### Adding a Profile to Steam
 
@@ -79,6 +78,21 @@ The shortcut launches the installed `couchplay-gamemode` command with `--profile
 ### Managing Users
 
 CouchPlay creates temporary Linux user accounts so each player gets isolated save data and settings. Open the **Users** page to view and manage these accounts. The helper service handles the privileged operations behind the scenes.
+Managed users reload automatically when the helper is attached or becomes available; opening CouchPlay does not require a manual user refresh.
+
+Normal session operations use the shared Polkit `manage-session` action (`auth_admin_keep`). Polkit may cache approval for a bounded period, but it is not permanent or guaranteed to last through the CouchPlay session. Account creation, deletion, and explicit linger changes keep their separate Polkit actions.
+
+On immutable hosts such as Bazzite, Heroic configuration and shortcut copies resolve the system `/home` alias before secure copying. Symlinked source files and directories inside the caller's home remain rejected.
+The Flatpak shares `~/.local/share/applications` read/write so newly generated Heroic desktop shortcuts are visible to the host helper; it does not require access to the entire home directory.
+Launcher availability is checked on the host, not against executable names inside the GUI sandbox.
+Heroic sessions resolve current registered game roots and executable-parent directories independently of older profile snapshots, granting bounded directory traversal without copying account credentials or per-player game settings. On atomic hosts, the helper admits the canonical `/var/mnt` storage alias only when the system `/mnt` path proves equivalent.
+Selecting a native application from the application list adds its bounded executable/working directories as read-only ACL shares. Session startup also grants required launcher access to every selected player without changing saved shared-data snapshots. Discovery runs against the host for Flatpak installations; whole home folders, common collection roots, credentials/configuration trees, and Flatpak runtime files are not automatically shared. Sensitive home trees, their canonical symlink targets, and directories containing those targets are excluded from automatic recursive sharing. Application directories under `/opt` and `/srv` are supported without granting access to either root itself. Missing Heroic catalog paths (for example, games on a disconnected drive) are skipped. Configured ACL shares and automatic Heroic data-directory defaults recursively grant read/execute access to game contents; additional catalog paths receive traversal access, and system-root paths such as `/usr` are left to normal host permissions. Desktop executable paths retain their quoting, including paths with spaces. On filesystems without ACL support, the helper accepts a failed grant only after verifying the required read/execute access as the target account on the pinned inode; inaccessible paths still fail. Native symlink paths are resolved before parent components are collapsed.
+Player settings are shown directly in **New Session**, without a separate Advanced section. **Private temporary directories** gives that player's Gamescope/launcher/game processes separate `/tmp` and `/var/tmp` storage. The option defaults off, is saved per player in the profile, and removes temporary files when the instance stops. It does not change shared-data snapshots or auxiliary Sunshine configuration. Install the matching GUI and host helper together; the launch D-Bus contract includes this option.
+
+**Player data** is shown only when the selected player has a configured Copy/Overlay directory that can receive staged files. ACL/bind shares and the special Steam library-sharing overlay do not qualify. The button opens a staging folder for the selected launcher and player, including under Flatpak. Each eligible directory has a generated subfolder: place files there with their relative paths preserved. Session startup prepares the player's private copy/overlay, then merges those staged files into it. Loose files at the staging root are ignored. This folder is not the player's Linux home or live `/tmp`. Automation hooks run once before/after the whole session, not before each instance.
+
+The former Config Overrides/file-pattern feature has been removed. Its old profile settings are ignored and discarded when profiles are saved; existing override files on disk are left untouched. Use configured Copy/Overlay directories and Player data for per-player configurations.
+Gamescope positioning uses host-visible scripts and waits for KWin to confirm the requested frame geometry before reporting success.
 
 ### Settings
 

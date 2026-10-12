@@ -91,11 +91,14 @@ Kirigami.ScrollablePage {
     }
 
     ColumnLayout {
+        Layout.minimumWidth: 0
         spacing: Kirigami.Units.largeSpacing
         visible: (sessionManager?.savedProfiles?.length ?? 0) > 0
 
         GridLayout {
+            id: profileGrid
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             columns: Math.max(1, Math.floor(root.width / (Kirigami.Units.gridUnit * 20)))
             rowSpacing: Kirigami.Units.largeSpacing
             columnSpacing: Kirigami.Units.largeSpacing
@@ -106,6 +109,9 @@ Kirigami.ScrollablePage {
                 delegate: ProfileCard {
                     id: profileDelegate
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.preferredWidth: 1
+                    Layout.alignment: Qt.AlignTop
 
                     required property var modelData
                     required property int index
@@ -288,8 +294,9 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            RowLayout {
+            Flow {
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 spacing: Kirigami.Units.smallSpacing
 
                 Controls.Button {
@@ -336,7 +343,6 @@ Kirigami.ScrollablePage {
                     onClicked: profileCard.loadProfile()
                 }
 
-                Item { Layout.fillWidth: true }
 
                 Controls.Button {
                     objectName: "btnDeleteProfile"

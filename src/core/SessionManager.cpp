@@ -33,6 +33,37 @@ GameSelection gameSelectionFromJson(const QString &value)
     }
     return GameSelection::fromVariant(document.object().toVariantMap());
 }
+
+const QList<DataDirectory> &effectiveDataDirectories(const InstanceConfig &instance,
+                                                     const QString &presetId,
+                                                     const PresetManager *presetManager,
+                                                     LaunchPreset &presetStorage)
+{
+    if (instance.dataDirectories.isEmpty() && !instance.dataDirectoriesSnapshotted && presetManager) {
+        presetStorage = presetManager->getPreset(presetId);
+        return presetStorage.dataDirectories;
+    }
+    return instance.dataDirectories;
+}
+
+QString steamRootOverlayMarkerPath(const PresetManager *presetManager, const QString &presetId)
+{
+    if (!presetManager
+        || !presetManager->getPreset(presetId).requiredIntegrations.contains(QStringLiteral("steam"))) {
+        return QString();
+    }
+    return presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
+}
+
+bool isPlayerDataStagingDirectory(const DataDirectory &directory, const QString &steamMarkerPath)
+{
+    if (directory.mode != QStringLiteral("copy") && directory.mode != QStringLiteral("overlay")) {
+        return false;
+    }
+    return steamMarkerPath.isEmpty() || directory.mode != QStringLiteral("overlay")
+        || directory.path != steamMarkerPath;
+}
+
 }
 
 SessionManager::SessionManager(QObject *parent)
@@ -200,6 +231,7 @@ bool SessionManager::saveProfile(const QString &name)
             instGroup.writeEntry("gameSelection", gameSelectionToJson(inst.gameSelection));
         }
         instGroup.writeEntry("presetId", inst.presetId);
+        instGroup.writeEntry("privateTemporaryDirectories", inst.privateTemporaryDirectories);
         if (inst.dataDirectoriesSnapshotted) {
             instGroup.writeEntry("dataDirectories", encodeDataDirectories(inst.dataDirectories));
         } else {
@@ -208,9 +240,11 @@ bool SessionManager::saveProfile(const QString &name)
         }
         instGroup.deleteEntry("gameCommand");
         instGroup.deleteEntry("steamAppId");
-        instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
-        instGroup.writeEntry("overrideFiles", inst.overrideFiles);
-        instGroup.writeEntry("overridePatterns", inst.overridePatterns);
+        instGroup.deleteEntry("overrideGamePath");
+        instGroup.deleteEntry("overrideFiles");
+        instGroup.deleteEntry("overridePatterns");
+        instGroup.deleteEntry("overlayGamePath");
+        instGroup.deleteEntry("overlayPatterns");
         instGroup.writeEntry("outputMode", inst.outputMode);
         instGroup.writeEntry("streamResolution", inst.streamResolution);
         instGroup.writeEntry("streamFps", inst.streamFps);
@@ -277,6 +311,7 @@ bool SessionManager::loadProfile(const QString &name)
         inst.scalingMode = instGroup.readEntry("scalingMode", QStringLiteral("fit"));
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
+        inst.privateTemporaryDirectories = instGroup.readEntry("privateTemporaryDirectories", false);
         if (instGroup.hasKey("gameSelection")) {
             inst.gameSelection = gameSelectionFromJson(instGroup.readEntry("gameSelection", QString()));
         } else {
@@ -310,18 +345,6 @@ bool SessionManager::loadProfile(const QString &name)
                 dir.mode = QStringLiteral("bind");
                 inst.dataDirectories.append(dir);
             }
-        }
-        inst.overrideGamePath =
-            instGroup.readEntry("overrideGamePath", instGroup.readEntry("overlayGamePath", QString()));
-        inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
-
-        inst.overridePatterns =
-            instGroup.readEntry("overridePatterns", instGroup.readEntry("overlayPatterns", QStringList()));
-
-        // Migration: copy legacy overrideFiles to overridePatterns if overridePatterns is empty
-        if (inst.overridePatterns.isEmpty() && !inst.overrideFiles.isEmpty()) {
-            inst.overridePatterns = inst.overrideFiles;
-            qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
         }
 
         inst.outputMode = instGroup.readEntry("outputMode", QStringLiteral("physical"));
@@ -547,7 +570,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("filterMode")] = inst.filterMode;
     map[QStringLiteral("gameSelection")] = inst.gameSelectionAsVariant();
     map[QStringLiteral("presetId")] = inst.presetId;
-    map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
+    map[QStringLiteral("privateTemporaryDirectories")] = inst.privateTemporaryDirectories;
     QVariantList dataDirsVariant;
     for (const DataDirectory &dir : inst.dataDirectories) {
         QVariantMap dirMap;
@@ -616,10 +639,8 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
     }
     if (config.contains(QStringLiteral("presetId")))
         inst.presetId = config[QStringLiteral("presetId")].toString();
-    if (config.contains(QStringLiteral("overridePatterns")))
-        inst.overridePatterns = config[QStringLiteral("overridePatterns")].toStringList();
-    if (config.contains(QStringLiteral("overrideGamePath")))
-        inst.overrideGamePath = config[QStringLiteral("overrideGamePath")].toString();
+    if (config.contains(QStringLiteral("privateTemporaryDirectories")))
+        inst.privateTemporaryDirectories = config[QStringLiteral("privateTemporaryDirectories")].toBool();
     if (config.contains(QStringLiteral("outputMode")))
         inst.outputMode = config[QStringLiteral("outputMode")].toString();
     if (config.contains(QStringLiteral("streamResolution")))
@@ -774,6 +795,29 @@ QString playerDataStagingRoot(const QString &presetId, const QString &username)
     return dataRoot + QStringLiteral("/player-data/") + presetId + QLatin1Char('/') + username;
 }
 
+bool SessionManager::hasPlayerDataStagingDirectories(int index) const
+{
+    if (index < 0 || index >= m_currentProfile.instances.size()) {
+        return false;
+    }
+
+    const InstanceConfig &inst = m_currentProfile.instances[index];
+    if (inst.username.isEmpty()) {
+        return false;
+    }
+    const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
+    LaunchPreset presetStorage;
+    const QList<DataDirectory> &effectiveDirs =
+        effectiveDataDirectories(inst, presetId, m_presetManager, presetStorage);
+    const QString steamMarkerPath = steamRootOverlayMarkerPath(m_presetManager, presetId);
+    for (const DataDirectory &dir : effectiveDirs) {
+        if (isPlayerDataStagingDirectory(dir, steamMarkerPath)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString SessionManager::playerDataFolderPath(int index)
 {
     if (index < 0 || index >= m_currentProfile.instances.size()) {
@@ -793,42 +837,19 @@ QString SessionManager::playerDataFolderPath(int index)
         return QString();
     }
 
-    // One subfolder per private (copy/overlay) shared directory so users see
-    // where files go; bind mounts are shared with everyone, so seeding them
-    // per-player is impossible (writes would mutate the shared source).
-    // Resolve the same effective list as SessionRunner's fallback: unsnapshotted
-    // instances use the preset's current defaults.
-    QList<DataDirectory> effectiveDirs = inst.dataDirectories;
-    if (effectiveDirs.isEmpty() && !inst.dataDirectoriesSnapshotted && m_presetManager) {
-        effectiveDirs = m_presetManager->getPreset(presetId).dataDirectories;
-    }
-
-    // The Steam-root overlay entry is a library-sharing marker handled
-    // entirely by session setup (libraries are alias-mounted) — it never
-    // receives staged data, so don't create a misleading folder for it.
-    // Match the runtime predicate exactly (SessionRunner::setupSessionResources):
-    // the instance explicitly requires Steam, the entry is overlay-mode, and the
-    // path is the detected Steam root. Copy-mode entries and other paths remain
-    // ordinary private directories that session setup stages for the player.
-
-
-
-
-    QString steamMarkerPath;
-    if (m_presetManager
-        && m_presetManager->getPreset(presetId).requiredIntegrations.contains(QStringLiteral("steam"))) {
-        steamMarkerPath = m_presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
-    }
+    // One subfolder per private (copy/overlay) shared directory. Bind mounts
+    // are shared with everyone, so seeding them per-player would mutate the
+    // shared source.
+    LaunchPreset presetStorage;
+    const QList<DataDirectory> &effectiveDirs =
+        effectiveDataDirectories(inst, presetId, m_presetManager, presetStorage);
+    const QString steamMarkerPath = steamRootOverlayMarkerPath(m_presetManager, presetId);
 
     // Helper-first so the slug matches SessionRunner's target mapping under
     // Flatpak, where the sandbox resolves the compositor's home differently
     const QString compositorHome = resolveCompositorHome(m_helperClient);
     for (const DataDirectory &dir : effectiveDirs) {
-        if (dir.mode != QStringLiteral("copy") && dir.mode != QStringLiteral("overlay")) {
-            continue;
-        }
-        if (!steamMarkerPath.isEmpty() && dir.path == steamMarkerPath
-            && dir.mode == QStringLiteral("overlay")) {
+        if (!isPlayerDataStagingDirectory(dir, steamMarkerPath)) {
             continue;
         }
         QDir().mkpath(root + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome));
@@ -839,12 +860,6 @@ QString SessionManager::playerDataFolderPath(int index)
 
 bool SessionManager::openPlayerDataFolder(int index)
 {
-    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
-        // No host filesystem access from the sandbox; the caller should show
-        // the path from playerDataFolderPath() instead
-        return false;
-    }
-
     const QString path = playerDataFolderPath(index);
     if (path.isEmpty()) {
         return false;

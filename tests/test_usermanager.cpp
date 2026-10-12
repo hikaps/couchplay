@@ -13,12 +13,39 @@ class MockCouchPlayHelperClient : public CouchPlayHelperClient
     Q_OBJECT
 public:
     using CouchPlayHelperClient::CouchPlayHelperClient;
-    bool isAvailable() const override { return true; }
+    bool isAvailable() const override
+    {
+        return m_available;
+    }
     QStringList listCouchPlayUsers() override
     {
-        return {QStringLiteral("player1\t1001\t1001\t/home/player1\t/bin/bash")};
+        return m_users;
     }
+
+    void setAvailable(bool available)
+    {
+        m_available = available;
+        Q_EMIT availabilityChanged();
+    }
+
+    void setUsers(const QStringList &users)
+    {
+        m_users = users;
+    }
+
+private:
+    bool m_available = true;
+    QStringList m_users{QStringLiteral("player1\t1001\t1001\t/home/player1\t/bin/bash")};
 };
+
+static QStringList userNames(const UserManager *manager)
+{
+    QStringList names;
+    for (const QVariant &user : manager->usersAsVariant()) {
+        names.append(user.toMap().value(QStringLiteral("username")).toString());
+    }
+    return names;
+}
 
 class TestUserManager : public QObject
 {
@@ -74,6 +101,9 @@ private Q_SLOTS:
     // Refresh tests
     void testRefreshEmitsSignal();
     void testParseUsersViaHelper();
+    void testHelperAvailabilityRefreshesUsers();
+    void testReplacingHelperIgnoresOldSignals();
+    void testDestroyedHelperIsCleared();
 
 private:
     UserManager *m_manager = nullptr;
@@ -382,25 +412,73 @@ void TestUserManager::testRefreshEmitsSignal()
 
 void TestUserManager::testParseUsersViaHelper()
 {
-    MockCouchPlayHelperClient *mock = new MockCouchPlayHelperClient();
+    MockCouchPlayHelperClient mock;
+    const QString currentUser = m_manager->currentUser();
+    const QString player =
+        currentUser == QStringLiteral("player1") ? QStringLiteral("player2") : QStringLiteral("player1");
+    mock.setUsers({QStringLiteral("%1\t1001\t1001\t/home/%1\t/bin/bash").arg(player),
+                   QStringLiteral("%1\t1002\t1002\t/home/%1\t/bin/bash").arg(currentUser),
+                   QStringLiteral("malformed")});
+
+    m_manager->setHelperClient(&mock);
+
+    QCOMPARE(userNames(m_manager), QStringList{player});
+}
+
+void TestUserManager::testHelperAvailabilityRefreshesUsers()
+{
+    MockCouchPlayHelperClient mock;
+    const QString lateUser = QStringLiteral("late_fixture_%1").arg(getpid());
+    mock.setUsers({QStringLiteral("%1\t1001\t1001\t/home/%1\t/bin/bash").arg(lateUser)});
+    mock.setAvailable(false);
+
+    m_manager->setHelperClient(&mock);
+    QVERIFY(!userNames(m_manager).contains(lateUser));
+
+    mock.setAvailable(true);
+
+    QCOMPARE(userNames(m_manager), QStringList{lateUser});
+}
+
+void TestUserManager::testReplacingHelperIgnoresOldSignals()
+{
+    MockCouchPlayHelperClient first;
+    const QString firstUser = QStringLiteral("first_fixture_%1").arg(getpid());
+    first.setUsers({QStringLiteral("%1\t1001\t1001\t/home/%1\t/bin/bash").arg(firstUser)});
+    m_manager->setHelperClient(&first);
+    QCOMPARE(userNames(m_manager), QStringList{firstUser});
+
+    MockCouchPlayHelperClient replacement;
+    const QString replacementUser = QStringLiteral("replacement_fixture_%1").arg(getpid());
+    replacement.setUsers({QStringLiteral("%1\t1002\t1002\t/home/%1\t/bin/bash").arg(replacementUser)});
+    m_manager->setHelperClient(&replacement);
+    QCOMPARE(userNames(m_manager), QStringList{replacementUser});
+
+    const QString sameHelperUser = QStringLiteral("same_helper_fixture_%1").arg(getpid());
+    replacement.setUsers({QStringLiteral("%1\t1003\t1003\t/home/%1\t/bin/bash").arg(sameHelperUser)});
+    m_manager->setHelperClient(&replacement);
+    QCOMPARE(userNames(m_manager), QStringList{replacementUser});
+
+    const QString staleUser = QStringLiteral("stale_fixture_%1").arg(getpid());
+    first.setUsers({QStringLiteral("%1\t1004\t1004\t/home/%1\t/bin/bash").arg(staleUser)});
+    first.setAvailable(false);
+    first.setAvailable(true);
+
+    QCOMPARE(userNames(m_manager), QStringList{replacementUser});
+}
+
+void TestUserManager::testDestroyedHelperIsCleared()
+{
+    const QString staleUser = QStringLiteral("destroyed_fixture_%1").arg(getpid());
+    auto *mock = new MockCouchPlayHelperClient();
+    mock->setUsers({QStringLiteral("%1\t1001\t1001\t/home/%1\t/bin/bash").arg(staleUser)});
     m_manager->setHelperClient(mock);
+    QCOMPARE(userNames(m_manager), QStringList{staleUser});
 
-    QSignalSpy spy(m_manager, &UserManager::usersChanged);
-    m_manager->refresh();
-    QCOMPARE(spy.count(), 1);
-
-    const QVariantList users = m_manager->usersAsVariant();
-    bool found = false;
-    for (const QVariant &v : users) {
-        if (v.toMap().value(QStringLiteral("username")).toString() == QStringLiteral("player1")) {
-            found = true;
-            break;
-        }
-    }
-    QVERIFY2(found, "player1 should appear when the helper provides it");
-
-    m_manager->setHelperClient(nullptr);
     delete mock;
+
+    QCOMPARE(m_manager->helperClient(), nullptr);
+    QVERIFY(!userNames(m_manager).contains(staleUser));
 }
 
 QTEST_MAIN(TestUserManager)

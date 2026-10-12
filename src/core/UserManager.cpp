@@ -35,7 +35,45 @@ UserManager::~UserManager() = default;
 
 void UserManager::setHelperClient(CouchPlayHelperClient *client)
 {
+    if (m_helperClient == client) {
+        return;
+    }
+
+    if (auto *oldHelper = m_helperClient.data()) {
+        disconnect(oldHelper,
+                   &CouchPlayHelperClient::availabilityChanged,
+                   this,
+                   &UserManager::onHelperAvailabilityChanged);
+        disconnect(oldHelper, &QObject::destroyed, this, &UserManager::onHelperDestroyed);
+    }
+
     m_helperClient = client;
+    if (client) {
+        connect(client, &CouchPlayHelperClient::availabilityChanged, this, &UserManager::onHelperAvailabilityChanged);
+        connect(client, &QObject::destroyed, this, &UserManager::onHelperDestroyed);
+    }
+
+    refresh();
+}
+
+CouchPlayHelperClient *UserManager::helperClient() const
+{
+    return m_helperClient.data();
+}
+
+void UserManager::onHelperAvailabilityChanged()
+{
+    auto *helper = qobject_cast<CouchPlayHelperClient *>(sender());
+    if (helper == m_helperClient.data() && helper && helper->isAvailable()) {
+        refresh();
+    }
+}
+
+void UserManager::onHelperDestroyed(QObject *helper)
+{
+    if (sender() == helper && m_helperClient.isNull()) {
+        refresh();
+    }
 }
 
 void UserManager::setHelper(QObject *helper)

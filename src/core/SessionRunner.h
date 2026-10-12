@@ -164,18 +164,6 @@ public:
                                         const QRect &screenGeometry,
                                         const QString &gridSubLayout = QString());
 
-    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash);
-
-    static QStringList expandPatternsToFiles(const QString &gamePath, const QStringList &patterns);
-
-    // Returns override path for a preset (~/.local/share/hikaps/CouchPlay/overrides/<presetId>/), creating it if needed
-    Q_INVOKABLE static QString getAndEnsureOverridesPath(const QString &presetId);
-
-    void loadOverrideFiles(const QString &overridesRoot,
-                           const QStringList &matchedFiles,
-                           const QString &username,
-                           const QString &gameId);
-
 Q_SIGNALS:
     void runningChanged();
     void runningInstanceCountChanged();
@@ -222,11 +210,9 @@ private:
     bool setupSessionResources();
     void teardownSharedDirectories();
     void teardownSharingState();
-    bool buildOverrideBinds();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
-    void cleanupOverrideDirs(const QStringList &overridePaths);
     void inhibitScreenSaver();
     void uninhibitScreenSaver();
     bool setupStreamingInstance(int instanceIndex, const QVariantMap &config);
@@ -241,7 +227,6 @@ private:
         bool nullSinkCreated = false;
     };
 
-    QMap<int, QStringList> m_instanceBindPaths;
     QMap<int, QStringList> m_instanceSharedRoots;
     uint m_screenSaverCookie = 0;
 
