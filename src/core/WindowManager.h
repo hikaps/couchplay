@@ -58,6 +58,7 @@ public:
     /**
      * @brief Queue a positioning request that will be fulfilled when a gamescope window appears
      * @param requestId Unique identifier for this request (e.g., instance index)
+     * @param gamescopePid Host PID returned by the helper, used to identify the instance window
      * @param geometry The target geometry for the window
      * @param excludeWindowIds Window IDs to exclude (already positioned windows)
      * @param timeoutMs Maximum time to find and confirm the window (default 60 seconds)
@@ -67,6 +68,7 @@ public:
      * If the timeout expires, positioningTimedOut is emitted.
      */
     Q_INVOKABLE void queuePositionRequest(int requestId,
+                                          qint64 gamescopePid,
                                           const QRect &geometry,
                                           const QStringList &excludeWindowIds,
                                           bool borderless,
@@ -84,10 +86,11 @@ public:
     Q_INVOKABLE void cancelAllRequests();
 
     /**
-     * @brief Get all gamescope windows currently open
+     * @brief Get gamescope windows by host PID, or by application identity when no PID is supplied
+     * @param gamescopePid Host Gamescope PID (0 uses the gamescope application identity)
      * @return List of window UUIDs
      */
-    Q_INVOKABLE QStringList findAllGamescopeWindows();
+    Q_INVOKABLE QStringList findAllGamescopeWindows(qint64 gamescopePid = 0);
 
     /**
      * @brief Check if KWin is available
@@ -137,6 +140,7 @@ private:
         QStringList excludeWindowIds;
         bool borderless;
         qint64 expiresAt;
+        qint64 gamescopePid;
     };
 
     struct PendingPosition {

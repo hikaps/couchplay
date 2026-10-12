@@ -1413,7 +1413,8 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 
     const bool borderless = m_settingsManager && m_settingsManager->borderlessWindows();
 
-    m_windowManager->queuePositionRequest(instanceIndex, targetGeometry, m_positionedWindowIds, borderless, 60000);
+    m_windowManager->queuePositionRequest(instanceIndex, instance->gamescopePid(), targetGeometry,
+                                         m_positionedWindowIds, borderless, 60000);
 }
 
 void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
