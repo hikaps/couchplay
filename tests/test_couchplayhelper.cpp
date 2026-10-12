@@ -124,6 +124,7 @@ public:
         m_statOwnerUid = 1000;
         m_statOwnerGid = 1000;
         m_realCopyFileSecure = false;
+        realAccessProbe = false;
         m_processExitCode = 0;
         m_chownResult = 0;
         m_chmodResult = 0;
@@ -148,6 +149,7 @@ public:
         QStringList args;
     };
     QList<ProcessInvocation> m_processInvocations;
+    bool realAccessProbe = false;
 
     struct passwd *getpwnam(const char *name) override
     {
@@ -291,7 +293,10 @@ public:
         m_processCommand = program;
         m_processArgs = arguments;
         m_processInvocations.append({program, arguments});
-        if (!m_mockProcessStart) {
+        if (realAccessProbe && program == QStringLiteral("/usr/sbin/runuser")) {
+            process->setProperty("realAccessProbe", true);
+            process->start(program, arguments);
+        } else if (!m_mockProcessStart) {
             process->start(program, arguments);
         }
     }
@@ -300,7 +305,7 @@ public:
     {
         Q_UNUSED(process)
         Q_UNUSED(msecs)
-        if (m_mockProcessStart) {
+        if (m_mockProcessStart && !process->property("realAccessProbe").toBool()) {
             return true;
         }
         return process->waitForFinished(msecs);
@@ -309,7 +314,7 @@ public:
     int processExitCode(QProcess *process) override
     {
         Q_UNUSED(process)
-        return m_processExitCode;
+        return process->property("realAccessProbe").toBool() ? process->exitCode() : m_processExitCode;
     }
 
     QByteArray readStandardError(QProcess *process) override
@@ -487,6 +492,7 @@ private Q_SLOTS:
     void testSetPathAclWithParentsSymlinkEscapeRejected();
     void testSetPathAclWithParentsCanonicalMntAliasEscapeRejected();
     void testSetDirectoryAclSymlinkEscapeRejected();
+    void testAclFailureRequiresEffectiveTargetUserAccess();
     void testSecureWriteRejectsSymlinkLeaf();
 
     // Device ownership tests
@@ -1707,6 +1713,59 @@ void TestCouchPlayHelper::testSetDirectoryAclSymlinkEscapeRejected()
     QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
     QCOMPARE(m_ops->m_processInvocations.size(), 0);
 }
+void TestCouchPlayHelper::testAclFailureRequiresEffectiveTargetUserAccess()
+{
+    if (::geteuid() != 0) {
+        QSKIP("Requires root to probe access as an unprivileged user");
+    }
+    const struct passwd *target = ::getpwnam("nobody");
+    QVERIFY(target);
+    const uid_t uid = target->pw_uid;
+    const gid_t gid = target->pw_gid;
+    QTemporaryDir directory(QStringLiteral("/tmp/couchplay-acl-test-XXXXXX"));
+    QVERIFY(directory.isValid());
+    const QString path = directory.path();
+    QVERIFY(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                          | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                          | QFileDevice::ReadOther | QFileDevice::ExeOther));
+    QFile asset(directory.filePath(QStringLiteral("game")));
+    QVERIFY(asset.open(QIODevice::WriteOnly));
+    QCOMPARE(asset.write("game"), qint64(4));
+    asset.close();
+    QVERIFY(asset.setPermissions(QFileDevice::ReadOwner | QFileDevice::ExeOwner
+                                | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+                                | QFileDevice::ReadOther | QFileDevice::ExeOther));
+
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setProcessExitCode(1); // Simulate a filesystem that cannot apply ACLs.
+    m_ops->setStandardError("Operation not supported");
+    m_ops->realAccessProbe = true;
+    m_ops->setUserExists(QStringLiteral("nobody"), true, uid, gid);
+    m_ops->setFileExists(path, true);
+    m_ops->setDirectoryExists(path, true);
+
+    QDBusReply<bool> traversal = m_dbusInterface->call(QStringLiteral("SetPathAclWithParents"), path,
+                                                     QStringLiteral("nobody"));
+    QVERIFY2(traversal.isValid(), qPrintable(traversal.error().message()));
+    QVERIFY(traversal.value());
+    QDBusReply<bool> readable = m_dbusInterface->call(QStringLiteral("SetDirectoryAcl"), path,
+                                                    QStringLiteral("nobody"), true);
+    QVERIFY2(readable.isValid(), qPrintable(readable.error().message()));
+    QVERIFY(readable.value());
+
+    QVERIFY(asset.setPermissions(QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    QDBusReply<bool> privateAsset = m_dbusInterface->call(QStringLiteral("SetDirectoryAcl"), path,
+                                                        QStringLiteral("nobody"), true);
+    QVERIFY(!privateAsset.isValid());
+    QCOMPARE(privateAsset.error().type(), QDBusError::Failed);
+    QVERIFY(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    QDBusReply<bool> privateDirectory = m_dbusInterface->call(QStringLiteral("SetPathAclWithParents"), path,
+                                                            QStringLiteral("nobody"));
+    QVERIFY(privateDirectory.isValid());
+    QVERIFY(!privateDirectory.value());
+}
+
 void TestCouchPlayHelper::testSecureWriteRejectsSymlinkLeaf()
 {
     QTemporaryDir tempDir;

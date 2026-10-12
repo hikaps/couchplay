@@ -36,6 +36,7 @@ private Q_SLOTS:
     void testGetLauncherId();
     void testRequiredIntegrations();
     void testSandboxedPresetMetadata();
+    void testApplicationAccessDirectoriesResolveSymlinkBeforeParent();
     void testApplicationAccessDirectoriesSafety();
     void testApplicationAccessDirectoriesCanonicalAtomicAliases();
     void testDesktopImportPreservesQuotedExecAndSharesApplicationDirectory();
@@ -260,6 +261,23 @@ void TestPresetManager::testSandboxedPresetMetadata()
     const QString nativeId = manager.addCustomPreset(QStringLiteral("Native app"), QStringLiteral("/usr/bin/nautilus"));
     QVERIFY(manager.getPreset(flatpakId).sandboxed);
     QVERIFY(!manager.getPreset(nativeId).sandboxed);
+}
+
+void TestPresetManager::testApplicationAccessDirectoriesResolveSymlinkBeforeParent()
+{
+    QTemporaryDir temporaryHome;
+    QVERIFY(temporaryHome.isValid());
+    const QString home = temporaryHome.path();
+    const QString actual = home + QStringLiteral("/Install/App");
+    QVERIFY(QDir().mkpath(actual));
+    QVERIFY(QDir().mkpath(home + QStringLiteral("/Install/sub")));
+    QVERIFY(QDir().mkpath(home + QStringLiteral("/App")));
+    QVERIFY(QFile::link(home + QStringLiteral("/Install/sub"), home + QStringLiteral("/link")));
+
+    LaunchCommand command;
+    command.program = QStringLiteral("/bin/sh");
+    command.workingDirectory = home + QStringLiteral("/link/../App");
+    QCOMPARE(applicationAccessDirectories(command, home), QStringList{QFileInfo(actual).canonicalFilePath()});
 }
 
 void TestPresetManager::testApplicationAccessDirectoriesSafety()

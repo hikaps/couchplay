@@ -2874,6 +2874,24 @@ bool runSetfaclOnFd(SystemOps *ops, int objectFd, const QStringList &options, in
         qWarning() << "ACL:" << context << "setfacl failed:"
                    << QString::fromUtf8(ops->readStandardError(process));
     }
+    if (!success && finished && options.size() == 2 && options.constFirst() == QStringLiteral("-m")
+        && options.at(1).startsWith(QStringLiteral("u:")) && options.at(1).endsWith(QStringLiteral(":rx"))) {
+        // ACL-less filesystems may already provide access. Check the pinned inode
+        // with the target account's effective credentials, never the root helper's.
+        const QString username = options.at(1).mid(2, options.at(1).size() - 5);
+        QProcess *probe = ops->createProcess();
+        probe->setChildProcessModifier([childFd]() {
+            if (::dup2(childFd, 3) < 0) {
+                ::_exit(127);
+            }
+        });
+        ops->startProcess(probe, QStringLiteral("/usr/sbin/runuser"),
+                          {QStringLiteral("-u"), username, QStringLiteral("--"), QStringLiteral("/bin/sh"),
+                           QStringLiteral("-c"),
+                           QStringLiteral("test -r /proc/self/fd/3 && test -x /proc/self/fd/3")});
+        success = ops->waitForFinished(probe, 5000) && ops->processExitCode(probe) == 0;
+        delete probe;
+    }
 
     ::close(childFd);
     delete process;

@@ -65,7 +65,7 @@ QString canonicalPath(const QString &path, bool directory)
         const QString resolved = QString::fromUtf8(output);
         return QDir::isAbsolutePath(resolved) ? resolved : QString();
     }
-    const QFileInfo info(QDir::cleanPath(path));
+    const QFileInfo info(path);
     return (directory ? info.isDir() : info.isFile()) ? info.canonicalFilePath() : QString();
 }
 
