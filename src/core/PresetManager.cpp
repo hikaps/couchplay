@@ -198,7 +198,7 @@ QString safeApplicationDirectory(const QString &path,
         return QString();
     }
     for (const QString &sensitiveTarget : sensitiveTargets) {
-        if (pathIsWithin(candidate, sensitiveTarget)) {
+        if (pathIsWithin(candidate, sensitiveTarget) || pathIsWithin(sensitiveTarget, candidate)) {
             return QString();
         }
     }

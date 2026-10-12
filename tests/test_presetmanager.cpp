@@ -302,7 +302,7 @@ void TestPresetManager::testApplicationAccessDirectoriesSafety()
     command.workingDirectory = secretDir;
     QVERIFY(applicationAccessDirectories(command, home).isEmpty());
 
-    const QString privateKeysTarget = home + QStringLiteral("/private-keys");
+    const QString privateKeysTarget = home + QStringLiteral("/Launcher/private-keys");
     QVERIFY(QDir().mkpath(privateKeysTarget));
     const QString sshAlias = home + QStringLiteral("/.ssh");
     QVERIFY(QFile::link(privateKeysTarget, sshAlias));
@@ -311,6 +311,9 @@ void TestPresetManager::testApplicationAccessDirectoriesSafety()
     QVERIFY(applicationAccessDirectories(command, home).isEmpty());
     command.workingDirectory = privateKeysTarget;
     QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+    command.workingDirectory = home + QStringLiteral("/Launcher");
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
+
     const QString flatpakDir = home + QStringLiteral("/.local/share/flatpak/app/com.example.App/current/active/files");
     QVERIFY(QDir().mkpath(flatpakDir));
     QFile flatpakExecutable(flatpakDir + QStringLiteral("/app"));
@@ -358,13 +361,18 @@ void TestPresetManager::testApplicationAccessDirectoriesCanonicalAtomicAliases()
         }
 
         for (const QString &candidate : candidates) {
-            if (commonBases.contains(QDir(candidate).dirName().toCaseFolded())) {
+            const QString canonicalCandidate = QDir(candidate).canonicalPath();
+            if (!canonicalCandidate.startsWith(expectedRoot + QLatin1Char('/'))
+                || commonBases.contains(QDir(canonicalCandidate).dirName().toCaseFolded())) {
+                continue;
+            }
+            const QString relativeCandidate = QDir(expectedRoot).relativeFilePath(canonicalCandidate);
+            if (alias == QStringLiteral("/srv") && !relativeCandidate.contains(QLatin1Char('/'))) {
                 continue;
             }
             LaunchCommand command;
             command.program = QStringLiteral("/bin/sh");
             command.workingDirectory = candidate;
-            const QString canonicalCandidate = QDir(candidate).canonicalPath();
             QVERIFY2(applicationAccessDirectories(command, QDir::homePath()).contains(canonicalCandidate),
                      qPrintable(alias + QStringLiteral(" canonical alias was rejected")));
             testedAlias = true;

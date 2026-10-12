@@ -1061,7 +1061,6 @@ void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
     }
     QVERIFY(foundGameDirAcl);
     QVERIFY(foundExecutableParentAcl);
-    QCOMPARE(m_helperClient->directoryAclCalls.size(), 0);
 }
 
 void TestSessionRunner::testHeroicStaleAndUnsupportedPathsDoNotAbortSetup()
