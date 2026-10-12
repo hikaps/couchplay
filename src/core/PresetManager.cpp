@@ -120,7 +120,74 @@ bool isSensitiveHomePath(const QString &path, const QString &home)
     }
     return false;
 }
-QString safeApplicationDirectory(const QString &path, const QString &home, const QString &homeAlias)
+QStringList canonicalSensitiveHomeTargets(const QStringList &homeRoots, bool *success)
+{
+    *success = true;
+    QStringList sensitivePaths;
+    for (const QString &home : homeRoots) {
+        if (!QDir::isAbsolutePath(home)) {
+            continue;
+        }
+        for (const QString &tree : sensitiveHomeTrees()) {
+            const QString path = QDir(QDir::cleanPath(home)).filePath(tree);
+            if (!sensitivePaths.contains(path)) {
+                sensitivePaths.append(path);
+            }
+        }
+    }
+
+    QStringList targets;
+    if (qEnvironmentVariableIsEmpty("FLATPAK_ID")) {
+        for (const QString &path : sensitivePaths) {
+            const QFileInfo info(path);
+            if (!info.isDir()) {
+                continue;
+            }
+            const QString target = info.canonicalFilePath();
+            if (!target.isEmpty() && !targets.contains(target)) {
+                targets.append(target);
+            }
+        }
+        return targets;
+    }
+
+    // Resolve all sensitive root aliases in one host query inside Flatpak.
+    QStringList arguments = {QStringLiteral("--host"), QStringLiteral("/usr/bin/readlink"), QStringLiteral("-m"),
+                             QStringLiteral("--")};
+    arguments.append(sensitivePaths);
+    QProcess process;
+    process.start(QStringLiteral("flatpak-spawn"), arguments);
+    if (!process.waitForFinished(2000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        *success = false;
+        return {};
+    }
+
+    QByteArray output = process.readAllStandardOutput();
+    if (output.endsWith('\n')) {
+        output.chop(1);
+    }
+    const QList<QByteArray> lines = output.split('\n');
+    if (lines.size() != sensitivePaths.size()) {
+        *success = false;
+        return {};
+    }
+    for (const QByteArray &line : lines) {
+        const QString target = QString::fromUtf8(line);
+        if (!QDir::isAbsolutePath(target)) {
+            *success = false;
+            return {};
+        }
+        if (!targets.contains(target)) {
+            targets.append(target);
+        }
+    }
+    return targets;
+}
+
+QString safeApplicationDirectory(const QString &path,
+                                 const QString &home,
+                                 const QString &homeAlias,
+                                 const QStringList &sensitiveTargets)
 {
     if (isSensitiveHomePath(path, home) || isSensitiveHomePath(path, homeAlias)
         || isSensitiveHomePath(path, QDir::homePath())) {
@@ -129,6 +196,11 @@ QString safeApplicationDirectory(const QString &path, const QString &home, const
     const QString candidate = canonicalDirectory(path);
     if (candidate.isEmpty() || isFlatpakPath(candidate, home)) {
         return QString();
+    }
+    for (const QString &sensitiveTarget : sensitiveTargets) {
+        if (pathIsWithin(candidate, sensitiveTarget)) {
+            return QString();
+        }
     }
 
     static const QStringList commonBases = {
@@ -229,10 +301,18 @@ QStringList applicationAccessDirectories(const LaunchCommand &command, const QSt
     if (!programPath.isEmpty() && isFlatpakPath(programPath, home)) {
         return {};
     }
-
+    if (programPath.isEmpty() && command.workingDirectory.isEmpty()) {
+        return {};
+    }
+    bool sensitiveTargetsResolved = false;
+    const QStringList sensitiveTargets = canonicalSensitiveHomeTargets(
+        QStringList{home, compositorHome, QDir::homePath()}, &sensitiveTargetsResolved);
+    if (!sensitiveTargetsResolved) {
+        return {};
+    }
     QStringList directories;
-    const auto addDirectory = [&directories, &home, &compositorHome](const QString &path) {
-        const QString safePath = safeApplicationDirectory(path, home, compositorHome);
+    const auto addDirectory = [&directories, &home, &compositorHome, &sensitiveTargets](const QString &path) {
+        const QString safePath = safeApplicationDirectory(path, home, compositorHome, sensitiveTargets);
         if (safePath.isEmpty()) {
             return;
         }
@@ -589,7 +669,6 @@ void PresetManager::initBuiltinPresets()
     }
 
     heroic.dataDirectories = getDefaultDataDirectories(QStringLiteral("heroic"));
-    heroic.dataDirectoriesAreAutomatic = true;
     m_builtinPresets.append(heroic);
 
     LaunchPreset lutris;
@@ -971,7 +1050,6 @@ bool PresetManager::setDataDirectories(const QString &id, const QVariantList &di
     for (int i = 0; i < m_builtinPresets.size(); ++i) {
         if (m_builtinPresets[i].id == id) {
             m_builtinPresets[i].dataDirectories = dataDirs;
-            m_builtinPresets[i].dataDirectoriesAreAutomatic = false;
             saveBuiltinDataDirectoryOverride(id);
             Q_EMIT presetsChanged();
             return true;
@@ -981,7 +1059,6 @@ bool PresetManager::setDataDirectories(const QString &id, const QVariantList &di
     for (int i = 0; i < m_customPresets.size(); ++i) {
         if (m_customPresets[i].id == id) {
             m_customPresets[i].dataDirectories = dataDirs;
-            m_customPresets[i].dataDirectoriesAreAutomatic = false;
             saveCustomPresets();
             Q_EMIT presetsChanged();
             return true;
@@ -1345,7 +1422,6 @@ void PresetManager::applyBuiltinDataDirectoryOverrides()
             continue;
         }
         m_builtinPresets[i].dataDirectories = decodeDataDirectories(group.readEntry(id, QString()));
-        m_builtinPresets[i].dataDirectoriesAreAutomatic = false;
     }
 }
 

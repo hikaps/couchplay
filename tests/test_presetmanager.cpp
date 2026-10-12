@@ -309,7 +309,8 @@ void TestPresetManager::testApplicationAccessDirectoriesSafety()
     command.program = QStringLiteral("/bin/sh");
     command.workingDirectory = sshAlias;
     QVERIFY(applicationAccessDirectories(command, home).isEmpty());
-
+    command.workingDirectory = privateKeysTarget;
+    QVERIFY(applicationAccessDirectories(command, home).isEmpty());
     const QString flatpakDir = home + QStringLiteral("/.local/share/flatpak/app/com.example.App/current/active/files");
     QVERIFY(QDir().mkpath(flatpakDir));
     QFile flatpakExecutable(flatpakDir + QStringLiteral("/app"));

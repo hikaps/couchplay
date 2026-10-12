@@ -277,6 +277,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesUsesInstanceDirs();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testHeroicPresetAclDirectoriesRemainRecursiveWithoutInstanceSnapshot();
+    void testAutomaticHeroicGameRootsRetainRecursiveAcl();
     void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
     void testNativeApplicationAccessDoesNotPopulateEmptySnapshot();
     void testSetupDataDirectoriesBindModeMounts();
@@ -694,6 +695,39 @@ void TestSessionRunner::testHeroicPresetAclDirectoriesRemainRecursiveWithoutInst
     }
     QVERIFY(recursivePresetAclApplied);
 }
+void TestSessionRunner::testAutomaticHeroicGameRootsRetainRecursiveAcl()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+    createMockHeroicConfig(homeDir.path());
+    createMockLegendaryConfig(homeDir.path());
+
+    HeroicConfigManager heroicManager;
+    QVERIFY(heroicManager.isHeroicDetected());
+    heroicManager.setHelperClient(m_helperClient);
+    m_presetManager->setHeroicConfigManager(&heroicManager);
+    m_runner->setHeroicConfigManager(&heroicManager);
+
+    const QString gamePath = homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame");
+    QFile privateExecutable(gamePath + QStringLiteral("/Binaries/Win64/Game.exe"));
+    QVERIFY(privateExecutable.exists());
+    QVERIFY(privateExecutable.setPermissions(QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("heroic"));
+    QVERIFY(m_runner->setupSessionResources());
+
+    bool recursiveGameAclApplied = false;
+    for (const auto &call : m_helperClient->directoryAclCalls) {
+        recursiveGameAclApplied |= call.path == gamePath && call.username == QStringLiteral("player1")
+            && call.recursive;
+    }
+    QVERIFY2(recursiveGameAclApplied, "Automatic Heroic roots must grant access to owner-private game files");
+}
+
 void TestSessionRunner::testSetupDataDirectoriesEmptySnapshotStaysEmpty()
 {
     QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Empty Snapshot Game"),

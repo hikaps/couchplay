@@ -112,7 +112,6 @@ public:
     bool sandboxed = false;            // True when the top-level command is a Flatpak launcher
     LauncherInfo launcherInfo;      // Populated by detection for launcher presets
     QList<DataDirectory> dataDirectories; // Per-preset data directories with mode (copy/overlay/acl)
-    bool dataDirectoriesAreAutomatic = false; // True only for dynamically resolved Heroic defaults
     QString flatpakAppId;           // e.g., "com.valvesoftware.Steam" (empty = no Flatpak alternative)
     QString flatpakArgs;            // Extra args for Flatpak launch (e.g., "-bigpicture")
 

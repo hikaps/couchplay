@@ -958,7 +958,6 @@ bool SessionRunner::setupSessionResources()
         if (usingPresetDataDirectories) {
             dataDirs = preset.dataDirectories;
         }
-        const bool automaticHeroicDataDirectories = usingPresetDataDirectories && preset.dataDirectoriesAreAutomatic;
         if (i < m_launchCommands.size()) {
             const QStringList applicationDirectories =
                 applicationAccessDirectories(m_launchCommands.at(i), compositorHome);
@@ -1038,8 +1037,7 @@ bool SessionRunner::setupSessionResources()
                     continue;
                 }
 
-                // Registered game roots and executable parents need traversal,
-                // not recursive permission changes to every asset.
+                // Grant traversal to registered game paths; selected data roots are ACLed below.
                 if (!m_helperClient->setPathAclWithParents(path, username)) {
                     qCWarning(couchplaySteam)
                         << "Failed to set traversal ACL for Heroic game path" << path << "user" << username;
@@ -1180,12 +1178,7 @@ bool SessionRunner::setupSessionResources()
                 }
             } else if (dir.mode == QStringLiteral("acl")) {
                 const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
-                // Resolver-generated Heroic defaults need traversal only; configured directories keep recursion.
-                const bool automaticHeroicPath = requiresHeroic
-                    && automaticHeroicDataDirectories
-                    && gameAccessDirectories.contains(QDir::cleanPath(dir.path));
-                const bool contentsOk =
-                    automaticHeroicPath || m_helperClient->setDirectoryAcl(dir.path, username, true);
+                const bool contentsOk = m_helperClient->setDirectoryAcl(dir.path, username, true);
                 if (!parentsOk || !contentsOk) {
                     qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
                     allSucceeded = false;
