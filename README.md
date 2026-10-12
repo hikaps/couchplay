@@ -212,6 +212,9 @@ player and save to refresh it from application settings.
 cmake -B build
 cmake --build build
 ```
+Standalone diagnostic builds must retain `KDECompilerSettings`, including
+`QT_USE_QSTRINGBUILDER`, so string-expression compilation matches production.
+
 Run the app you just built (only on a distro with matching Qt6, e.g. Fedora — otherwise use the Flatpak):
 ```bash
 ./build/bin/couchplay

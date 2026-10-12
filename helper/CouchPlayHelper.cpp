@@ -1936,9 +1936,11 @@ QString CouchPlayHelper::computeMountTarget(const QString &source,
             qWarning() << "computeMountTarget: invalid shared-directory source:" << source;
             return {};
         }
-        target = mapping.kind == HomePathKind::Relative
-            ? userHome + QLatin1Char('/') + mapping.relativePath
-            : userHome + QStringLiteral("/.couchplay/mounts") + source;
+        if (mapping.kind == HomePathKind::Relative) {
+            target = userHome + QLatin1Char('/') + mapping.relativePath;
+        } else {
+            target = userHome + QStringLiteral("/.couchplay/mounts") + source;
+        }
     }
     // Normalize, then require a strict descendant of the home: an alias or
     // source that cleans to the home itself (".", "./", "/home/deck/.")
