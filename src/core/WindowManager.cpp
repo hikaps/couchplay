@@ -80,7 +80,7 @@ QString WindowManager::findGamescopeWindow(const QStringList &excludeWindowIds)
     return QString();
 }
 
-QStringList WindowManager::findAllGamescopeWindows()
+QStringList WindowManager::findAllGamescopeWindows(qint64 gamescopePid)
 {
     QStringList results;
 
@@ -144,7 +144,10 @@ QStringList WindowManager::findAllGamescopeWindows()
             QString desktopFile = info.value(QStringLiteral("desktopFile")).toString();
             QString resourceClass = info.value(QStringLiteral("resourceClass")).toString();
 
-            if (desktopFile == QStringLiteral("gamescope") || resourceClass == QStringLiteral("gamescope")) {
+            const bool matches = gamescopePid > 0
+                ? info.value(QStringLiteral("pid")).toLongLong() == gamescopePid
+                : desktopFile == QStringLiteral("gamescope") || resourceClass == QStringLiteral("gamescope");
+            if (matches) {
                 results << uuid;
                 qDebug() << "WindowManager: Found gamescope window" << uuid << "caption:" << caption;
             }
@@ -236,6 +239,7 @@ bool WindowManager::positionWindow(const QString &windowId, const QRect &geometr
 }
 
 void WindowManager::queuePositionRequest(int requestId,
+                                         qint64 gamescopePid,
                                          const QRect &geometry,
                                          const QStringList &excludeWindowIds,
                                          bool borderless,
@@ -251,6 +255,7 @@ void WindowManager::queuePositionRequest(int requestId,
 
     PositionRequest request;
     request.requestId = requestId;
+    request.gamescopePid = gamescopePid;
     request.geometry = geometry;
     request.excludeWindowIds = excludeWindowIds;
     request.borderless = borderless;
@@ -337,11 +342,11 @@ void WindowManager::checkForNewWindows()
         return;
     }
 
-    const QStringList currentWindows = findAllGamescopeWindows();
     QStringList attemptedWindowIds;
     int i = 0;
-    while (i < m_pendingRequests.size() && !currentWindows.isEmpty()) {
+    while (i < m_pendingRequests.size()) {
         const PositionRequest request = m_pendingRequests[i];
+        const QStringList currentWindows = findAllGamescopeWindows(request.gamescopePid);
         QString matchedWindowId;
         for (const QString &windowId : currentWindows) {
             if (!request.excludeWindowIds.contains(windowId) && !m_knownWindowIds.contains(windowId)

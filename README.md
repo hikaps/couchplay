@@ -179,6 +179,12 @@ sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh unin
 sudo ./install-helper.sh uninstall
 ```
 
+## Troubleshooting
+
+If only the first instance starts and CouchPlay reports a window-positioning timeout,
+check KWin window discovery rather than launcher PID locks. Session startup matches each
+window to the host Gamescope PID; Wayland Gamescope windows can have an empty application ID.
+
 ## Development
 
 ### Prerequisites
