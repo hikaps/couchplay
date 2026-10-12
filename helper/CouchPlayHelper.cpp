@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "CouchPlayHelper.h"
+#include "HomePathMapping.h"
 #include "MountSpec.h"
 #include "PolkitActions.h"
 #include "SecureFs.h"
@@ -822,16 +823,16 @@ QVariantMap CouchPlayHelper::GetUserInfo(const QString &username)
     return info;
 }
 
-QString CouchPlayHelper::GetUserHomeByUid(uint uid)
+QVariantMap CouchPlayHelper::GetUserHomeInfoByUid(uint uid)
 {
-    // Informational, like GetUserInfo: lets the (possibly sandboxed) GUI
-    // resolve the compositor's host-side home for home-relative target mapping
     struct passwd *pw = m_ops->getpwuid(uid);
     if (!pw) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("No user with uid %1").arg(uid));
-        return QString();
+        return {};
     }
-    return QString::fromLocal8Bit(pw->pw_dir);
+    const QString home = QString::fromLocal8Bit(pw->pw_dir);
+    return {{QStringLiteral("home"), home},
+            {QStringLiteral("canonicalHome"), m_ops->canonicalFilePath(home)}};
 }
 
 QString CouchPlayHelper::GetUserSteamRoot(const QString &username)
@@ -1812,14 +1813,6 @@ void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString
     m_monitors.insert(serviceName, monitor);
 }
 
-// Only a complete ".." component climbs the tree; names like "Foo..Bar" are
-// ordinary and folder pickers produce them happily. openDirBelow additionally
-// rejects ".." parts during its walk as defense in depth.
-static bool pathHasDotDotComponent(const QString &path)
-{
-    return path.split(QLatin1Char('/'), Qt::SkipEmptyParts).contains(QStringLiteral(".."));
-}
-
 bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
 {
     if (pathHasDotDotComponent(path)) {
@@ -1931,26 +1924,22 @@ QString CouchPlayHelper::computeMountTarget(const QString &source,
     }
 
     QString target;
-    // Require the '/' boundary: /home/deck2/game must not be treated as
-    // home-relative to /home/deck (that produced /home/<player>2/game)
-    if (source.startsWith(compositorHome + QLatin1Char('/')) && alias.isEmpty()) {
-        // Prevent traversal via source containing ../ after compositorHome prefix
-        QString relativePath = source.mid(compositorHome.length());
-        if (pathHasDotDotComponent(relativePath)) {
-            qWarning() << "computeMountTarget: source relative path contains a '..' component:" << source;
+    if (!alias.isEmpty()) {
+        if (!QDir::isAbsolutePath(source) || pathHasDotDotComponent(source)) {
             return {};
         }
-        target = userHome + relativePath;
-    } else if (!alias.isEmpty()) {
-        if (alias.startsWith(QLatin1Char('/'))) {
-            target = userHome + alias;
-        } else {
-            target = userHome + QStringLiteral("/") + alias;
-        }
+        target = userHome + (alias.startsWith(QLatin1Char('/')) ? alias : QLatin1Char('/') + alias);
     } else {
-        target = userHome + QStringLiteral("/.couchplay/mounts") + source;
+        const HomePathMapping mapping = mapHomeRelativePath(source, compositorHome,
+                                                            m_ops->canonicalFilePath(compositorHome));
+        if (mapping.kind == HomePathKind::Invalid) {
+            qWarning() << "computeMountTarget: invalid shared-directory source:" << source;
+            return {};
+        }
+        target = mapping.kind == HomePathKind::Relative
+            ? userHome + QLatin1Char('/') + mapping.relativePath
+            : userHome + QStringLiteral("/.couchplay/mounts") + source;
     }
-
     // Normalize, then require a strict descendant of the home: an alias or
     // source that cleans to the home itself (".", "./", "/home/deck/.")
     // would attach the shared source over the player's entire home

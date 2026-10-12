@@ -19,6 +19,7 @@
 #include "../helper/SecureFs.h"
 #include "../helper/SystemOps.h"
 #include "../helper/MountSpec.h"
+#include "../helper/HomePathMapping.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -487,6 +488,8 @@ private Q_SLOTS:
     void testIsPathWithinAllowedPrefixCanonicalAtomicAliases();
     void testIsPathWithinAllowedPrefixCanonicalAtomicAliasesAbsent();
     void testComputeMountTargetDotDotNames();
+    void testComputeMountTargetHomeMappings_data();
+    void testComputeMountTargetHomeMappings();
     void testUnmountRetainsFailedMounts();
     void testMountSpecCodec();
     void testSetPathAclWithParentsSymlinkEscapeRejected();
@@ -1615,6 +1618,59 @@ void TestCouchPlayHelper::testIsPathWithinAllowedPrefixCanonicalAtomicAliasesAbs
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/mnt/steamlibrary")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/opt/Applications")));
     QVERIFY(!m_helper->isPathWithinAllowedPrefix(QStringLiteral("/var/srv/games/MyGame")));
+}
+
+void TestCouchPlayHelper::testComputeMountTargetHomeMappings_data()
+{
+    QTest::addColumn<QString>("declaredHome");
+    QTest::addColumn<QString>("canonicalHome");
+    QTest::addColumn<QString>("source");
+    QTest::addColumn<QString>("target");
+    const QString playerHome = QStringLiteral("/players/alex");
+    auto row = [&](const char *name, const QString &home, const QString &canonical,
+                   const QString &source, const QString &relative) {
+        QTest::newRow(name) << home << canonical << source
+                           << (relative.isEmpty() ? QString() : playerHome + QLatin1Char('/') + relative);
+    };
+    const QString ordinary = QStringLiteral("/home/account");
+    const QString atomic = QStringLiteral("/var/home/account");
+    const QString custom = QStringLiteral("/srv/accounts/account");
+    const QString customCanonical = QStringLiteral("/storage/users/account");
+    const QString config = QStringLiteral(".config/launcher");
+    row("ordinary", ordinary, {}, ordinary + QLatin1Char('/') + config, config);
+    row("declared-alias", ordinary, atomic, ordinary + QLatin1Char('/') + config, config);
+    row("canonical-alias", ordinary, atomic, atomic + QLatin1Char('/') + config, config);
+    row("custom-declared", custom, customCanonical, custom + QStringLiteral("/Game Saves"),
+        QStringLiteral("Game Saves"));
+    row("custom-canonical", custom, customCanonical, customCanonical + QStringLiteral("/Game Saves"),
+        QStringLiteral("Game Saves"));
+    row("declared-lookalike", ordinary, atomic, ordinary + QStringLiteral("2/config"),
+        QStringLiteral(".couchplay/mounts/home/account2/config"));
+    row("canonical-lookalike", ordinary, atomic, atomic + QStringLiteral("2/config"),
+        QStringLiteral(".couchplay/mounts/var/home/account2/config"));
+    row("external", ordinary, atomic, QStringLiteral("/mnt/library/config"),
+        QStringLiteral(".couchplay/mounts/mnt/library/config"));
+    row("trailing-home-slash", ordinary + QLatin1Char('/'), atomic + QLatin1Char('/'),
+        atomic + QStringLiteral("/config/./"), QStringLiteral("config"));
+    row("dotdot-name", ordinary, atomic, atomic + QStringLiteral("/Game..Saves"), QStringLiteral("Game..Saves"));
+    row("declared-root", ordinary, atomic, ordinary, {});
+    row("canonical-root", ordinary, atomic, atomic + QStringLiteral("/."), {});
+    row("home-traversal", ordinary, atomic, atomic + QStringLiteral("/../other/config"), {});
+    row("external-traversal", ordinary, atomic, QStringLiteral("/mnt/library/../config"), {});
+    row("relative-source", ordinary, atomic, QStringLiteral("config/launcher"), {});
+}
+
+void TestCouchPlayHelper::testComputeMountTargetHomeMappings()
+{
+    QFETCH(QString, declaredHome);
+    QFETCH(QString, canonicalHome);
+    QFETCH(QString, source);
+    QFETCH(QString, target);
+    m_ops->clear();
+    if (!canonicalHome.isEmpty()) {
+        m_ops->setCanonicalMapping(declaredHome, canonicalHome);
+    }
+    QCOMPARE(m_helper->computeMountTarget(source, {}, QStringLiteral("/players/alex"), declaredHome), target);
 }
 
 void TestCouchPlayHelper::testComputeMountTargetDotDotNames()

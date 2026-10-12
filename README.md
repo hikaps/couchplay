@@ -185,6 +185,18 @@ If only the first instance starts and CouchPlay reports a window-positioning tim
 check KWin window discovery rather than launcher PID locks. Session startup matches each
 window to the host Gamescope PID; Wayland Gamescope windows can have an empty application ID.
 
+Flatpak directory selections are resolved from document-portal exports to host paths
+before being saved as shared directories. The GUI and helper share one mapping
+rule: strict descendants of either the account's declared home or its canonical
+path are home-relative. External paths remain external; traversal and whole-home
+sharing without an explicit target alias are rejected. This applies to any
+symlinked home, including `/home` → `/var/home` on Atomic desktops. Both home
+paths are resolved by the host helper, not inside the Flatpak sandbox. Update
+the GUI and helper together when installing this fix.
+
+Saved profiles retain their directory snapshot; reselect the application for each
+player and save to refresh it from application settings.
+
 ## Development
 
 ### Prerequisites
@@ -207,7 +219,7 @@ Run the app you just built (only on a distro with matching Qt6, e.g. Fedora — 
 
 ### Running Tests
 ```bash
-ctest --test-dir build --output-on-failure
+dbus-run-session -- ctest --test-dir build --output-on-failure
 ```
 
 ## AI Disclosure

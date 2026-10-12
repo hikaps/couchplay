@@ -65,12 +65,12 @@ public:
     Q_INVOKABLE virtual QVariantMap getUserInfo(const QString &username);
 
     /**
-     * @brief Resolve a uid to its host-side home directory via the helper
+     * @brief Resolve declared and canonical host home paths for a uid
+     * @return map with keys "home", "canonicalHome", or empty if unavailable
      *
-     * Needed by the sandboxed (Flatpak) GUI, whose process-local getpwuid
-     * cannot see host user accounts.
+     * Resolve both on the host: the sandbox may not expose its home symlink.
      */
-    Q_INVOKABLE virtual QString getUserHomeByUid(uint uid);
+    Q_INVOKABLE virtual QVariantMap getUserHomeInfoByUid(uint uid);
 
     /**
      * @brief Resolve a target user's existing Steam root on the host
