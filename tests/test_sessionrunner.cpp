@@ -207,13 +207,21 @@ public:
     // expectations stay identical; tests can override to simulate the
     // helper-resolved host home
     QString uidHomeOverride;
-    QString getUserHomeByUid(uint uid) override
+    QString canonicalHomeOverride;
+    QVariantMap getUserHomeInfoByUid(uint uid) override
     {
-        if (!uidHomeOverride.isEmpty()) {
-            return uidHomeOverride;
-        }
         struct passwd *pw = getpwuid(uid);
-        return pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+        const QString home = !uidHomeOverride.isEmpty() ? uidHomeOverride
+            : pw ? QString::fromLocal8Bit(pw->pw_dir) : QString();
+        if (home.isEmpty()) {
+            return {};
+        }
+        QString canonical = canonicalHomeOverride.isEmpty()
+            ? QFileInfo(home).canonicalFilePath() : canonicalHomeOverride;
+        if (canonical.isEmpty()) {
+            canonical = home;
+        }
+        return {{QStringLiteral("home"), home}, {QStringLiteral("canonicalHome"), canonical}};
     }
 
     QString getUserSteamId(const QString &username) override
@@ -281,6 +289,8 @@ private Q_SLOTS:
     void testSetupDataDirectoriesEmptySnapshotStaysEmpty();
     void testNativeApplicationAccessDoesNotPopulateEmptySnapshot();
     void testSetupDataDirectoriesBindModeMounts();
+    void testCopyDataDirectoryUsesCanonicalHome();
+    void testDataDirectorySetupRejectsMissingHostHome();
     void testSetupDataDirectoriesBindModeEscapesPipePath();
     void testSetupDataDirectoriesMirrorsStagedData();
     void testSetupDataDirectoriesLibrarySharingGate();
@@ -795,6 +805,67 @@ void TestSessionRunner::testNativeApplicationAccessDoesNotPopulateEmptySnapshot(
     QVERIFY(m_sessionManager->currentProfile().instances[0].dataDirectoriesSnapshotted);
     QVERIFY(m_sessionManager->currentProfile().instances[1].dataDirectories.isEmpty());
     QVERIFY(m_sessionManager->currentProfile().instances[1].dataDirectoriesSnapshotted);
+}
+
+void TestSessionRunner::testCopyDataDirectoryUsesCanonicalHome()
+{
+    class FileCopyHelper : public MockCouchPlayHelperClient
+    {
+    public:
+        using MockCouchPlayHelperClient::MockCouchPlayHelperClient;
+        bool copyDirectoryToUser(const QString &, const QString &source, const QString &relative) override
+        {
+            const QString destination = QDir(player1Home).filePath(relative);
+            return QDir().mkpath(destination)
+                && QFile::copy(QDir(source).filePath(QStringLiteral("settings.ini")),
+                               QDir(destination).filePath(QStringLiteral("settings.ini")));
+        }
+    };
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString canonicalHome = QFileInfo(root.path()).canonicalFilePath() + QStringLiteral("/accounts/account");
+    const QString declaredHome = root.path() + QStringLiteral("/declared-home");
+    const QString source = canonicalHome + QStringLiteral("/.config/launcher");
+    QVERIFY(QDir().mkpath(source));
+    // The host alias need not exist inside the GUI sandbox.
+    QFile config(source + QStringLiteral("/settings.ini"));
+    QVERIFY(config.open(QIODevice::WriteOnly));
+    QCOMPARE(config.write("account=shared\n"), qint64(15));
+    config.close();
+    auto *helper = new FileCopyHelper(m_runner);
+    helper->uidHomeOverride = declaredHome;
+    helper->canonicalHomeOverride = canonicalHome;
+    helper->player1Home = root.path() + QStringLiteral("/players/player1");
+    m_runner->setHelperClient(helper);
+    const QString preset = m_presetManager->addCustomPreset(QStringLiteral("Home Mapping"), QStringLiteral("/usr/bin/game"));
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, preset);
+    m_sessionManager->setInstanceDataDirectories(0, {
+        QVariantMap{{QStringLiteral("path"), source}, {QStringLiteral("mode"), QStringLiteral("copy")}}
+    });
+    QVERIFY(m_runner->setupSessionResources());
+    QFile copied(helper->player1Home + QStringLiteral("/.config/launcher/settings.ini"));
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    QCOMPARE(copied.readAll(), QByteArray("account=shared\n"));
+}
+
+void TestSessionRunner::testDataDirectorySetupRejectsMissingHostHome()
+{
+    class MissingHomeHelper : public MockCouchPlayHelperClient
+    {
+    public:
+        using MockCouchPlayHelperClient::MockCouchPlayHelperClient;
+        QVariantMap getUserHomeInfoByUid(uint) override
+        {
+            return {{QStringLiteral("home"), QStringLiteral("/home/account")}};
+        }
+    };
+    auto *helper = new MissingHomeHelper(m_runner);
+    m_runner->setHelperClient(helper);
+    QSignalSpy errors(m_runner, &SessionRunner::errorOccurred);
+    QVERIFY(!m_runner->setupSessionResources());
+    QCOMPARE(errors.count(), 1);
 }
 
 void TestSessionRunner::testSetupDataDirectoriesBindModeMounts()

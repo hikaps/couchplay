@@ -207,17 +207,17 @@ QVariantMap CouchPlayHelperClient::getUserInfo(const QString &username)
     return reply.value();
 }
 
-QString CouchPlayHelperClient::getUserHomeByUid(uint uid)
+QVariantMap CouchPlayHelperClient::getUserHomeInfoByUid(uint uid)
 {
     if (!m_available) {
-        return QString();
+        return {};
     }
 
-    QDBusReply<QString> reply = m_interface->call(QStringLiteral("GetUserHomeByUid"), uid);
+    QDBusReply<QVariantMap> reply = m_interface->call(QStringLiteral("GetUserHomeInfoByUid"), uid);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
-        return QString();
+        return {};
     }
 
     return reply.value();

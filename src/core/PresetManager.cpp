@@ -385,6 +385,8 @@ DataDirectory DataDirectory::fromVariant(const QVariant &var)
 
 QString dataDirectoryStagingSlug(const QString &dirPath, const QString &compositorHome)
 {
+    // Persisted staging identity, not destination routing. Preserve its encoding
+    // so existing hand-seeded player files remain discoverable.
     QString relative;
     if (!compositorHome.isEmpty() && dirPath.startsWith(compositorHome + QLatin1Char('/'))) {
         relative = dirPath.mid(compositorHome.length() + 1);
@@ -1012,9 +1014,8 @@ QString PresetManager::resolveHostPath(const QString &path) const
         return {};
     }
 
-    const QDBusArgument paths = reply.arguments().constFirst().value<QDBusArgument>();
+    const QDBusArgument map = reply.arguments().constFirst().value<QDBusArgument>();
     QString hostPath;
-    QDBusArgument map = paths;
     map.beginMap();
     while (!map.atEnd()) {
         QString id;
@@ -1023,7 +1024,7 @@ QString PresetManager::resolveHostPath(const QString &path) const
         map >> id >> pathBytes;
         map.endMapEntry();
         if (id == documentId) {
-            hostPath = QString::fromUtf8(pathBytes);
+            hostPath = QString::fromUtf8(pathBytes.constData());
             break;
         }
     }

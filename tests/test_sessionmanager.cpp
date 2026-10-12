@@ -34,10 +34,10 @@ public:
     }
 
     QString uidHome;
-    QString getUserHomeByUid(uint uid) override
+    QVariantMap getUserHomeInfoByUid(uint uid) override
     {
         Q_UNUSED(uid)
-        return uidHome;
+        return {{QStringLiteral("home"), uidHome}, {QStringLiteral("canonicalHome"), uidHome}};
     }
 };
 

@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
+#include <QByteArray>
 #include <QDateTime>
+#include <QDBusConnection>
+#include <QDBusMetaType>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -17,6 +21,26 @@
 
 #include "PresetManager.h"
 #include "SteamConfigManager.h"
+
+using DocumentPaths = QMap<QString, QByteArray>;
+Q_DECLARE_METATYPE(DocumentPaths)
+
+class MockDocumentsPortal : public QObject
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.portal.Documents")
+public Q_SLOTS:
+    DocumentPaths GetHostPaths(const QStringList &ids) const
+    {
+        DocumentPaths paths;
+        for (const QString &id : ids) {
+            QByteArray path("/srv/OFME-Linux");
+            path.append('\0');
+            paths.insert(id, path);
+        }
+        return paths;
+    }
+};
 
 class TestPresetManager : public QObject
 {
@@ -45,6 +69,7 @@ private Q_SLOTS:
     void testRemoveCustomPreset();
 
     void testGetSetSharedDirectories();
+    void testResolvePortalHostPath();
     void testSetDataDirectoriesQmlShape();
     void testSetDataDirectoriesBuiltinPersisted();
     void testDataDirectoriesEncodingRoundTrip();
@@ -78,10 +103,35 @@ private:
 
 void TestPresetManager::initTestCase()
 {
+    qDBusRegisterMetaType<DocumentPaths>();
 }
 
 void TestPresetManager::cleanupTestCase()
 {
+}
+
+void TestPresetManager::testResolvePortalHostPath()
+{
+    MockDocumentsPortal portal;
+    auto bus = QDBusConnection::sessionBus();
+    QVERIFY(bus.registerService(QStringLiteral("org.freedesktop.portal.Documents")));
+    QVERIFY(bus.registerObject(QStringLiteral("/org/freedesktop/portal/documents"), &portal,
+                               QDBusConnection::ExportAllSlots));
+    const bool hadFlatpakId = qEnvironmentVariableIsSet("FLATPAK_ID");
+    const QByteArray oldFlatpakId = qgetenv("FLATPAK_ID");
+    qputenv("FLATPAK_ID", "io.github.hikaps.couchplay");
+    PresetManager manager;
+    const QString root = manager.resolveHostPath(QStringLiteral("/run/flatpak/doc/test-id/OFME-Linux"));
+    const QString child = manager.resolveHostPath(QStringLiteral("/run/user/1000/doc/test-id/OFME-Linux/icons"));
+    if (hadFlatpakId) {
+        qputenv("FLATPAK_ID", oldFlatpakId);
+    } else {
+        qunsetenv("FLATPAK_ID");
+    }
+    bus.unregisterObject(QStringLiteral("/org/freedesktop/portal/documents"));
+    bus.unregisterService(QStringLiteral("org.freedesktop.portal.Documents"));
+    QCOMPARE(root, QStringLiteral("/srv/OFME-Linux"));
+    QCOMPARE(child, QStringLiteral("/srv/OFME-Linux/icons"));
 }
 
 void TestPresetManager::init()

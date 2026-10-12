@@ -88,7 +88,8 @@ public Q_SLOTS:
      */
     QVariantMap GetUserInfo(const QString &username);
 
-    QString GetUserHomeByUid(uint uid);
+    // Read-only host home paths; no Polkit authorization.
+    QVariantMap GetUserHomeInfoByUid(uint uid);
 
     /**
      * Resolve a target user's existing Steam root on the host.

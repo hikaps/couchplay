@@ -3,6 +3,7 @@
 
 #include "SessionRunner.h"
 #include "../../helper/MountSpec.h"
+#include "../../helper/HomePathMapping.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "DeviceManager.h"
 #include "GamescopeInstance.h"
@@ -868,9 +869,15 @@ bool SessionRunner::setupSessionResources()
     m_steamSharedUsers.clear();
     m_instanceSharedRoots.clear();
 
-    // Helper-first resolution: the Flatpak sandbox's getpwuid(getuid()) cannot
-    // see host accounts, which would misroute home-relative copy/mount targets
-    QString compositorHome = resolveCompositorHome(m_helperClient);
+    // Both paths must come from the host; Flatpak may hide its home symlink.
+    const QVariantMap homeInfo = m_helperClient->getUserHomeInfoByUid(static_cast<uint>(::getuid()));
+    const QString compositorHome = homeInfo.value(QStringLiteral("home")).toString();
+    const QString canonicalCompositorHome = homeInfo.value(QStringLiteral("canonicalHome")).toString();
+    if (compositorHome.isEmpty() || canonicalCompositorHome.isEmpty()) {
+        Q_EMIT errorOccurred(
+            QStringLiteral("Could not determine host home paths; check the CouchPlay helper installation"));
+        return false;
+    }
 
     const auto &profile = activeProfile();
     bool allSucceeded = true;
@@ -1123,11 +1130,17 @@ bool SessionRunner::setupSessionResources()
                 }
             }
 
+            const HomePathMapping mapping = mapHomeRelativePath(dir.path, compositorHome, canonicalCompositorHome);
+            if (mapping.kind == HomePathKind::Invalid) {
+                Q_EMIT errorOccurred(QStringLiteral("Invalid shared directory: %1").arg(dir.path));
+                allSucceeded = false;
+                continue;
+            }
             QString playerViewRelative; // where the player sees this directory
             if (dir.mode == QStringLiteral("copy")) {
                 QString relativePath;
-                if (dir.path.startsWith(compositorHome + QLatin1Char('/'))) {
-                    relativePath = dir.path.mid(compositorHome.length() + 1);
+                if (mapping.kind == HomePathKind::Relative) {
+                    relativePath = mapping.relativePath;
                 } else {
                     // External sources have no home-relative location; map the
                     // full normalized path under .couchplay/copies — a basename
@@ -1150,8 +1163,8 @@ bool SessionRunner::setupSessionResources()
                 // failed mount's plain target directory would put files where
                 // a later successful mount would hide them.
                 QString relativePath;
-                if (dir.path.startsWith(compositorHome + QLatin1Char('/'))) {
-                    relativePath = dir.path.mid(compositorHome.length() + 1);
+                if (mapping.kind == HomePathKind::Relative) {
+                    relativePath = mapping.relativePath;
                 } else {
                     relativePath = QStringLiteral(".couchplay/mounts") + dir.path;
                 }

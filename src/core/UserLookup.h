@@ -50,7 +50,8 @@ inline UserIdentity resolveUserIdentity(const QString &username, CouchPlayHelper
 inline QString resolveCompositorHome(CouchPlayHelperClient *helper)
 {
     if (helper && helper->isAvailable()) {
-        const QString home = helper->getUserHomeByUid(static_cast<uint>(::getuid()));
+        const QVariantMap info = helper->getUserHomeInfoByUid(static_cast<uint>(::getuid()));
+        const QString home = info.value(QStringLiteral("home")).toString();
         if (!home.isEmpty()) {
             return home;
         }
