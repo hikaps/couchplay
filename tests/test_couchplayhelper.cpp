@@ -3200,6 +3200,7 @@ void TestCouchPlayHelper::testLegacyMountCleanupRecognizesBindMountByDirectoryId
         m_ops->clear();
         m_ops->setMockProcessStart(true);
         m_ops->setStandardOutput(QByteArray("33 1 8:1 /shared ") + target.toUtf8() + " rw - ext4 /dev/sda1 rw\n");
+        m_ops->setCanonicalMapping(QDir(home).filePath(QStringLiteral("linked-source")), target);
         m_ops->setProcessExitCode(unmountSucceeds ? 0 : 1);
         m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
         m_helper->m_usernameToUnitName.clear();
@@ -3221,6 +3222,10 @@ void TestCouchPlayHelper::testLegacyMountCleanupRecognizesBindMountByDirectoryId
     };
 
     QCOMPARE(reconcile(target, true), std::make_tuple(true, 1, true));
+    // The legacy helper persisted a symlinked source path but mounted its canonical directory.
+    const QString linkedSource = QDir(home).filePath(QStringLiteral("linked-source"));
+    QVERIFY(QFile::link(target, linkedSource));
+    QCOMPARE(reconcile(linkedSource, true), std::make_tuple(true, 1, true));
     QCOMPARE(reconcile(otherSource, true), std::make_tuple(false, 0, false));
     m_helper->m_legacyActiveMounts = {};
 }

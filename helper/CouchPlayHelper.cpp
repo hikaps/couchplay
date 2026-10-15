@@ -5153,8 +5153,10 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
     };
     // A bind mount's mountinfo source is the backing device, not the bound directory, so the
     // string comparison cannot authenticate it. The mounted target is the same inode as its source.
-    const auto sameDirectoryIdentity = [](const QString &source, const QString &target) {
-        const int sourceFd = SecureFs::openExistingDirNoFollow(source);
+    // The legacy helper recorded the requested source but mounted its canonical path, so resolve it first.
+    const auto sameDirectoryIdentity = [this](const QString &source, const QString &target) {
+        const QString canonicalSource = m_ops->canonicalFilePath(source);
+        const int sourceFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? source : canonicalSource);
         if (sourceFd < 0) {
             return false;
         }
