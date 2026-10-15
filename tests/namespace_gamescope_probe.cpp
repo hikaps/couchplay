@@ -90,6 +90,8 @@ QJsonObject credentialSnapshot()
     result.insert(QStringLiteral("gid"), static_cast<qint64>(::getgid()));
     result.insert(QStringLiteral("egid"), static_cast<qint64>(::getegid()));
     result.insert(QStringLiteral("home"), QString::fromLocal8Bit(qgetenv("HOME")));
+    result.insert(QStringLiteral("lang"), QString::fromLocal8Bit(qgetenv("LANG")));
+    result.insert(QStringLiteral("lcTime"), QString::fromLocal8Bit(qgetenv("LC_TIME")));
     char cwd[PATH_MAX] = {};
     if (::getcwd(cwd, sizeof(cwd))) {
         result.insert(QStringLiteral("cwd"), QString::fromLocal8Bit(cwd));

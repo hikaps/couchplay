@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
+#include <tuple>
 #include <functional>
 #include <cerrno>
 #include <utility>
@@ -937,6 +938,7 @@ private Q_SLOTS:
     void testLaunchInstance_subscribesSystemdManagerBeforeSignals();
     void testLegacyMountCleanupUnmountsValidatedTarget();
     void testLegacyMountCleanupPreservesFailedUnmount();
+    void testLegacyMountCleanupRecognizesBindMountByDirectoryIdentity();
     void testLegacyMountCleanupRejectsUntrustedTarget();
     void testLaunchInstance_validationEmptyUsername();
     void testLaunchInstance_validationNonexistentUser();
@@ -3153,6 +3155,47 @@ void TestCouchPlayHelper::testLegacyMountCleanupPreservesFailedUnmount()
     const QJsonDocument state = QJsonDocument::fromJson(stateFile.readAll(), &parseError);
     QCOMPARE(parseError.error, QJsonParseError::NoError);
     QCOMPARE(state.object().value(QStringLiteral("activeMounts")).toObject(), stored);
+    m_helper->m_legacyActiveMounts = {};
+}
+
+void TestCouchPlayHelper::testLegacyMountCleanupRecognizesBindMountByDirectoryIdentity()
+{
+    QTemporaryDir homeDirectory;
+    QVERIFY(homeDirectory.isValid());
+    const QString home = QFileInfo(homeDirectory.path()).canonicalFilePath();
+    const QString target = QDir(home).filePath(QStringLiteral(".couchplay/mounts/shared"));
+    const QString otherSource = QDir(home).filePath(QStringLiteral("unrelated"));
+    QVERIFY(QDir().mkpath(target));
+    QVERIFY(QDir().mkpath(otherSource));
+
+    // A bind mount of ext4 reports the backing device, not the bound directory, as its mount source.
+    // The mounted target and its source are one inode; this stands in for that identity.
+    const auto reconcile = [&](const QString &source, bool unmountSucceeds) {
+        m_ops->clear();
+        m_ops->setMockProcessStart(true);
+        m_ops->setStandardOutput(QByteArray("33 1 8:1 /shared ") + target.toUtf8() + " rw - ext4 /dev/sda1 rw\n");
+        m_ops->setProcessExitCode(unmountSucceeds ? 0 : 1);
+        m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
+        m_helper->m_usernameToUnitName.clear();
+        m_helper->m_auxiliaryUnitNameForUsername.clear();
+        m_helper->m_unitUsernameByName.clear();
+        QJsonObject mount;
+        mount.insert(QStringLiteral("source"), source);
+        mount.insert(QStringLiteral("target"), target);
+        QJsonObject stored;
+        stored.insert(QStringLiteral("player1"), QJsonArray{mount});
+        m_helper->m_legacyActiveMounts = stored;
+        const QSet<QString> noUnits;
+        const bool changed = m_helper->reconcileLegacyMounts(noUnits, noUnits, true);
+        int unmounts = 0;
+        for (const MockSystemOps::ProcessInvocation &invocation : m_ops->m_processInvocations) {
+            unmounts += invocation.command == QStringLiteral("umount");
+        }
+        return std::make_tuple(changed, unmounts, m_helper->m_legacyActiveMounts.isEmpty());
+    };
+
+    QCOMPARE(reconcile(target, true), std::make_tuple(true, 1, true));
+    QCOMPARE(reconcile(otherSource, true), std::make_tuple(false, 0, false));
     m_helper->m_legacyActiveMounts = {};
 }
 

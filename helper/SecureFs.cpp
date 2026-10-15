@@ -108,7 +108,8 @@ static int negativeErrno()
 
 static bool unsupportedAclError(int error)
 {
-    return error == ENOTSUP || error == ENOSYS;
+    // EROFS: the ACL cannot be changed, but ordinary permissions may already grant access.
+    return error == ENOTSUP || error == ENOSYS || error == EROFS;
 }
 
 struct TargetPrincipal {

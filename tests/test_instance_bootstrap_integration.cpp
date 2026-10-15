@@ -3,6 +3,7 @@
 
 #include "DirectoryPlan.h"
 #include "InstanceBootstrap.h"
+#include "SecureFs.h"
 
 #include <QCryptographicHash>
 
@@ -315,6 +316,7 @@ private Q_SLOTS:
     void testLaunchManifestCollectionLimits();
     void testEarlyGuardPreservesPrivateTmpMarker();
     void testCopyIntoSgidParent();
+    void testAclPreparationAcceptsAlreadyAccessibleReadOnlyTree();
     void testInterruptedSgidCopyScratchRecovery();
     void testAliasedSourceProjection_data();
     void testAliasedSourceProjection();
@@ -369,6 +371,7 @@ private:
     QSet<QString> m_createdUsers;
     QSet<QString> m_createdGroups;
     bool m_probeInstalled = false;
+    bool m_managerLocaleSet = false;
     QString m_externalRoot;
     QString m_overlayStorage = QStringLiteral("/var/lib/couchplay/overlays");
     QString m_probeBuildExecutable;
@@ -702,6 +705,12 @@ void InstanceBootstrapIntegrationTest::initTestCase()
     QVERIFY2(createFixtureUsers(&error), qPrintable(error));
     QVERIFY2(createFixtureFiles(&error), qPrintable(error));
     QVERIFY2(installProbeAndRule(&error), qPrintable(error));
+    // Bootstrap units inherit the systemd manager's locale; the game must keep it.
+    QVERIFY2(runCommand(QStringLiteral("systemctl"), {QStringLiteral("set-environment"),
+                                                       QStringLiteral("LANG=en_US.UTF-8"),
+                                                       QStringLiteral("LC_TIME=C.UTF-8")}, &error),
+             qPrintable(error));
+    m_managerLocaleSet = true;
 
     const QString previousHelperPid = helperPid();
     QVERIFY2(runCommand(QStringLiteral("systemctl"), {QStringLiteral("restart"), helperUnit}, &error), qPrintable(error));
@@ -729,6 +738,11 @@ void InstanceBootstrapIntegrationTest::cleanup()
 void InstanceBootstrapIntegrationTest::cleanupTestCase()
 {
     releaseOwnedUnits();
+    if (m_managerLocaleSet) {
+        QProcess::execute(QStringLiteral("systemctl"), {QStringLiteral("unset-environment"),
+                                                         QStringLiteral("LANG"), QStringLiteral("LC_TIME")});
+        m_managerLocaleSet = false;
+    }
     if (m_bus.isConnected()) {
         m_bus.disconnect(serviceName, objectPath, interfaceName, QStringLiteral("instanceReady"),
                          this, SLOT(onInstanceReady(QString,qlonglong)));
@@ -1037,6 +1051,8 @@ bool InstanceBootstrapIntegrationTest::assertDroppedCredentials(
         || report.value(QStringLiteral("gid")).toVariant().toLongLong() != target.gid
         || report.value(QStringLiteral("egid")).toVariant().toLongLong() != target.gid
         || report.value(QStringLiteral("home")).toString() != target.declaredHome
+        || report.value(QStringLiteral("lang")).toString() != QStringLiteral("en_US.UTF-8")
+        || report.value(QStringLiteral("lcTime")).toString() != QStringLiteral("C.UTF-8")
         || report.value(QStringLiteral("cwd")).toString()
                != (expectedWorkingDirectory.isEmpty() ? target.canonicalHome : expectedWorkingDirectory)
         || report.value(QStringLiteral("mountNamespace")).toString().isEmpty()
@@ -1307,6 +1323,45 @@ void InstanceBootstrapIntegrationTest::testLaunchManifestCollectionLimits()
     QVERIFY2(cleanupFailures.isEmpty(), qPrintable(cleanupFailures.join(QLatin1Char(','))));
     QVERIFY2(unreadableCollections.isEmpty(), qPrintable(unreadableCollections.join(QLatin1Char(','))));
     QVERIFY2(persistedCollections.isEmpty(), qPrintable(persistedCollections.join(QLatin1Char(','))));
+}
+
+void InstanceBootstrapIntegrationTest::testAclPreparationAcceptsAlreadyAccessibleReadOnlyTree()
+{
+    const Account &target = m_players[0];
+    const QString mountPoint = fixtureRoot + QStringLiteral("/readonly-acl");
+    bool mounted = false;
+    QString error;
+    QVERIFY2(mountTmpfs(mountPoint, 0, 0, 0755, &mounted, &error), qPrintable(error));
+    auto unmount = qScopeGuard([&]() {
+        if (mounted) ::umount2(QFile::encodeName(mountPoint).constData(), MNT_DETACH);
+    });
+    const QString library = mountPoint + QStringLiteral("/library");
+    const QString restrictedFile = library + QStringLiteral("/private");
+    QVERIFY(createOwnedDirectory(library, 0, 0, 0755));
+    QVERIFY(writeOwnedFile(library + QStringLiteral("/game"), QByteArrayLiteral("game"), 0, 0, 0755));
+    QVERIFY(writeOwnedFile(restrictedFile, QByteArrayLiteral("private"), 0, 0, 0700));
+    const QByteArray encodedMount = QFile::encodeName(mountPoint);
+    const QByteArray encodedLibrary = QFile::encodeName(library);
+    const auto setReadOnly = [&](bool readOnly) {
+        return ::mount(nullptr, encodedMount.constData(), nullptr,
+                       MS_REMOUNT | MS_BIND | (readOnly ? MS_RDONLY : 0), nullptr) == 0;
+    };
+    const auto applyAcl = [&]() {
+        const int fd = ::open(encodedLibrary.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (fd < 0) return -errno;
+        const int result = SecureFs::applyReadExecuteAclTree(fd, target.uid);
+        ::close(fd);
+        return result;
+    };
+
+    // The ACL cannot be written (EROFS). The player has no access to the 0700 file, so refuse the tree.
+    QVERIFY(setReadOnly(true));
+    QVERIFY(applyAcl() != 0);
+    // Once ordinary permissions already grant r-x everywhere, the read-only tree is acceptable.
+    QVERIFY(setReadOnly(false));
+    QVERIFY(::unlink(QFile::encodeName(restrictedFile).constData()) == 0);
+    QVERIFY(setReadOnly(true));
+    QCOMPARE(applyAcl(), 0);
 }
 
 void InstanceBootstrapIntegrationTest::testCopyIntoSgidParent()

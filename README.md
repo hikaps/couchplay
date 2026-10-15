@@ -236,6 +236,8 @@ Helper recovery restores the complete device/runtime snapshot before persisting 
 Main services use `couchplay-<player>.service`; stream services use
 `couchplay-stream@<player>.service`, so player names cannot collide across roles.
 Owned stream units using the old naming scheme are stopped during upgrade recovery.
+ACL shares on read-only filesystems are accepted only when the player already has read/execute access to every
+object; otherwise preparation fails. The game inherits the host locale (`LANG`, `LANGUAGE`, `LC_*`).
 
 Profiles store the application selection, not a copied directory list. Legacy directory
 snapshots are removed after preserving the original profile in a sibling

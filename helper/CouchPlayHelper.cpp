@@ -5135,6 +5135,25 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
         }
         return true;
     };
+    // A bind mount's mountinfo source is the backing device, not the bound directory, so the
+    // string comparison cannot authenticate it. The mounted target is the same inode as its source.
+    const auto sameDirectoryIdentity = [](const QString &source, const QString &target) {
+        const int sourceFd = SecureFs::openExistingDirNoFollow(source);
+        if (sourceFd < 0) {
+            return false;
+        }
+        const int targetFd = SecureFs::openExistingDirNoFollow(target);
+        struct stat sourceStat {};
+        struct stat targetStat {};
+        const bool same = targetFd >= 0 && ::fstat(sourceFd, &sourceStat) == 0
+            && ::fstat(targetFd, &targetStat) == 0 && S_ISDIR(sourceStat.st_mode)
+            && sourceStat.st_dev == targetStat.st_dev && sourceStat.st_ino == targetStat.st_ino;
+        ::close(sourceFd);
+        if (targetFd >= 0) {
+            ::close(targetFd);
+        }
+        return same;
+    };
 
     QJsonObject remainingMounts;
     bool changed = false;
@@ -5192,7 +5211,14 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
 
             bool mounted = false;
             bool sourceMatches = false;
-            if (!findMount(target.toUtf8(), source.toUtf8(), &mounted, &sourceMatches) || (mounted && !sourceMatches)) {
+            if (!findMount(target.toUtf8(), source.toUtf8(), &mounted, &sourceMatches)) {
+                retained.append(value);
+                continue;
+            }
+            if (mounted && !sourceMatches) {
+                sourceMatches = sameDirectoryIdentity(source, target);
+            }
+            if (mounted && !sourceMatches) {
                 retained.append(value);
                 continue;
             }

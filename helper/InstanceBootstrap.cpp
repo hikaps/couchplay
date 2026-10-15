@@ -10,6 +10,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QMap>
+#include <QProcessEnvironment>
 #include <QSet>
 
 #include <dirent.h>
@@ -1403,11 +1404,19 @@ int failBootstrap(const QString &message, int errorNumber)
 QMap<QString, QString> environmentForExec(const LaunchManifest &manifest,
                                           const QString &workingDirectory)
 {
-    // The manifest is the complete, root-protected game environment. Do not
-    // leak the bootstrap/systemd environment into the unprivileged process.
+    // The manifest is the root-protected game environment. Do not leak the
+    // rest of the bootstrap/systemd environment into the unprivileged process.
     QMap<QString, QString> environment;
     for (auto it = manifest.environment.cbegin(); it != manifest.environment.cend(); ++it) {
         environment.insert(it.key(), it.value());
+    }
+    // The manifest carries no locale defaults; keep the ones systemd gave this root-owned unit.
+    const QProcessEnvironment inherited = QProcessEnvironment::systemEnvironment();
+    for (const QString &name : inherited.keys()) {
+        if ((name == QStringLiteral("LANG") || name == QStringLiteral("LANGUAGE") || name.startsWith(QStringLiteral("LC_")))
+            && !environment.contains(name)) {
+            environment.insert(name, inherited.value(name));
+        }
     }
     environment.insert(QStringLiteral("HOME"), manifest.targetDeclaredHome);
     environment.insert(QStringLiteral("USER"), manifest.targetUsername);
