@@ -262,6 +262,7 @@ private:
     bool m_finalizing = false;
     bool m_startupFailure = false;
     bool m_finalizationCleanupStarted = false;
+    bool m_stoppingInstances = false;
     bool m_launchErrorReported = false;
     bool m_streamStartupErrorReported = false;
     bool m_preHookCompleted = false;

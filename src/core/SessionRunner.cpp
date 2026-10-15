@@ -25,6 +25,7 @@
 #include <QGuiApplication>
 #include <QMetaObject>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QSet>
 #include <QFileInfo>
 
@@ -578,6 +579,9 @@ void SessionRunner::continueStart()
 
 void SessionRunner::beginFinalization(bool startupFailure, const QString &message)
 {
+    if (m_stoppingInstances) {
+        return;
+    }
     if (m_finalizing) {
         if (m_hookProcess) {
             m_hookProcess->kill();
@@ -586,12 +590,15 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
             finishFinalization();
             return;
         }
-        if (m_streamManager) {
-            m_streamManager->stopAll();
-        }
-        for (auto *instance : m_instances) {
-            if (instance->pid() > 0) {
-                instance->stop();
+        {
+            QScopedValueRollback<bool> stopping(m_stoppingInstances, true);
+            if (m_streamManager) {
+                m_streamManager->stopAll();
+            }
+            for (auto *instance : m_instances) {
+                if (instance->pid() > 0) {
+                    instance->stop();
+                }
             }
         }
         continueFinalizationAfterStopping();
@@ -619,13 +626,17 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
 
     setStatus(QStringLiteral("Stopping session..."));
     uninhibitScreenSaver();
-    if (m_streamManager) {
-        m_streamManager->stopAll();
-    }
+    {
+        // stopped() can be synchronous; retain resources until every stop returns.
+        QScopedValueRollback<bool> stopping(m_stoppingInstances, true);
+        if (m_streamManager) {
+            m_streamManager->stopAll();
+        }
 
-    for (auto *instance : m_instances) {
-        if (instance->pid() > 0) {
-            instance->stop();
+        for (auto *instance : m_instances) {
+            if (instance->pid() > 0) {
+                instance->stop();
+            }
         }
     }
     continueFinalizationAfterStopping();
@@ -643,7 +654,7 @@ bool SessionRunner::hasOwnedPids() const
 
 void SessionRunner::continueFinalizationAfterStopping()
 {
-    if (!m_finalizing || m_finalizationCleanupStarted || hasOwnedPids()) {
+    if (!m_finalizing || m_stoppingInstances || m_finalizationCleanupStarted || hasOwnedPids()) {
         return;
     }
 

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include <fcntl.h>
+#include <functional>
 #include <pwd.h>
 #include <QDir>
 #include <QFile>
@@ -103,6 +104,7 @@ public:
     bool auxiliaryLaunchFails = false;
     bool stopSucceeds = true;
     bool killSucceeds = true;
+    std::function<void(qint64)> onStopInstance;
     qint64 nextPid = 1000;
     qint64 launchInstance(const QString &username,
                           const QString &displayContext,
@@ -162,6 +164,7 @@ public:
     bool stopInstance(qint64 pid) override
     {
         stopPids.append(pid);
+        if (onStopInstance) onStopInstance(pid);
         return stopSucceeds;
     }
 
@@ -348,6 +351,8 @@ private Q_SLOTS:
     void testPreparationFailureAbortsStartup();
     void testCancelWhilePreparing();
     void testStopFailureRetainsPreparingInstanceForRetry();
+    void testStopDefersCleanupUntilStopReturns_data();
+    void testStopDefersCleanupUntilStopReturns();
     void testSynchronousLaunchFailureRunsPostHookOnce();
     void testStreamingStartupWaitsForAuxiliaryReadiness();
     void testStreamingLaunchFailureAbortsStartup();
@@ -1685,6 +1690,75 @@ void TestSessionRunner::testStopFailureRetainsPreparingInstanceForRetry()
     QCOMPARE(stoppedSpy.count(), 1);
     QVERIFY(!m_runner->isActive());
     QVERIFY(!m_runner->m_sharedStateActive);
+}
+
+void TestSessionRunner::testStopDefersCleanupUntilStopReturns_data()
+{
+    QTest::addColumn<bool>("retry");
+    QTest::newRow("initial-stop") << false;
+    QTest::newRow("retry-stop") << true;
+}
+
+void TestSessionRunner::testStopDefersCleanupUntilStopReturns()
+{
+    QFETCH(bool, retry);
+    const QString presetId = m_presetManager->addCustomPreset(
+        QStringLiteral("Synchronous stop"), QStringLiteral("/usr/bin/true"));
+    QVERIFY(m_presetManager->setDataDirectories(presetId, {
+        QVariantMap{{QStringLiteral("path"), QStringLiteral("/tmp/couchplay-stop-stack")},
+                    {QStringLiteral("mode"), QStringLiteral("overlay")}}
+    }));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 2000);
+
+    const auto instances = m_runner->m_instances;
+    const qint64 livePid = instances.at(0)->pid();
+    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player2"), instances.at(1)->pid(),
+                                         QStringLiteral("exited"));
+    QVERIFY(m_runner->isActive());
+    if (retry) {
+        m_helperClient->stopSucceeds = false;
+        m_helperClient->killSucceeds = false;
+        m_runner->stop();
+        QVERIFY(m_runner->isActive());
+        QVERIFY(m_runner->m_sharedStateActive);
+        QCOMPARE(instances.at(0)->pid(), livePid);
+        QCOMPARE(stoppedSpy.count(), 0);
+        m_helperClient->stopSucceeds = true;
+    }
+
+    bool callbackRan = false;
+    bool retainedDuringStop = false;
+    QList<GamescopeInstance *> stoppingInstances;
+    m_helperClient->onStopInstance = [&](qint64 pid) {
+        callbackRan = true;
+        // Retain the active loop's storage even if cleanup clears m_instances;
+        // baseline failure must observe early release, not invalid iterators.
+        stoppingInstances = m_runner->m_instances;
+        Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player1"), pid,
+                                             QStringLiteral("stopped"));
+        retainedDuringStop = m_runner->isActive() && m_runner->m_sharedStateActive
+            && m_runner->m_instances.size() == 2
+            && !m_runner->m_instanceDirectoryPreparations.isEmpty()
+            && stoppedSpy.count() == 0;
+    };
+    m_runner->stop();
+    m_helperClient->onStopInstance = {};
+
+    QVERIFY(callbackRan);
+    QVERIFY(retainedDuringStop);
+    QCOMPARE(stoppedSpy.count(), 1);
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(!m_runner->m_sharedStateActive);
+    QVERIFY(m_runner->m_instances.isEmpty());
+    QVERIFY(m_runner->m_instanceDirectoryPreparations.isEmpty());
 }
 
 void TestSessionRunner::testSynchronousLaunchFailureRunsPostHookOnce()

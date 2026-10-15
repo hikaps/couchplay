@@ -2083,13 +2083,23 @@ bool CouchPlayHelper::acquireOverlayLeases(const QString &username,
             return false;
         }
         struct stat st {};
-        if (::fstat(fd, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        if (::fstat(fd, &st) != 0 || !S_ISDIR(st.st_mode)
+            || (!created && (st.st_dev != before.st_dev || st.st_ino != before.st_ino))) {
             *failure = QStringLiteral("Overlay %1 path changed or is not a directory").arg(QString::fromLatin1(name));
             ::close(fd);
             return false;
         }
         if (created && (::fchown(fd, target->pw_uid, target->pw_gid) != 0 || ::fchmod(fd, 0700) != 0)) {
             *failure = QStringLiteral("Could not protect new overlay %1 directory: %2")
+                           .arg(QString::fromLatin1(name), QString::fromLocal8Bit(strerror(errno)));
+            ::close(fd);
+            return false;
+        }
+        // Older helpers created target-owned upper/work directories as 0755.
+        // Normalize only the pinned directory after authenticating both owners.
+        if (!created && st.st_uid == target->pw_uid && st.st_gid == target->pw_gid
+            && ::fchmod(fd, 0700) != 0) {
+            *failure = QStringLiteral("Could not protect existing overlay %1 directory: %2")
                            .arg(QString::fromLatin1(name), QString::fromLocal8Bit(strerror(errno)));
             ::close(fd);
             return false;
@@ -2502,6 +2512,7 @@ void CouchPlayHelper::failPendingLaunch(const QString &serviceName, const QStrin
     if (!pending) {
         return;
     }
+    const quint64 generation = m_unitGenerationByName.value(serviceName, 0);
     const bool pidAcknowledged = m_pidToUnitName.key(serviceName, 0) > 0;
     pending->pollTimer->stop();
     pending->deadlineTimer->stop();
@@ -2518,8 +2529,9 @@ void CouchPlayHelper::failPendingLaunch(const QString &serviceName, const QStrin
     } else {
         qWarning() << "Could not stop failed launch unit" << serviceName << ":" << reason;
         saveState();
-        QTimer::singleShot(1000, this, [this, serviceName, pidAcknowledged, reason]() {
-            if (!m_pendingLaunches.contains(serviceName)) {
+        QTimer::singleShot(1000, this, [this, serviceName, generation, pidAcknowledged, reason]() {
+            if (m_unitGenerationByName.value(serviceName, 0) != generation
+                || !m_pendingLaunches.contains(serviceName)) {
                 return;
             }
             if (stopServiceInstance(serviceName)) {
@@ -2530,8 +2542,9 @@ void CouchPlayHelper::failPendingLaunch(const QString &serviceName, const QStrin
                 }
                 return;
             }
-            QTimer::singleShot(1000, this, [this, serviceName]() {
-                if (m_pendingLaunches.contains(serviceName)) {
+            QTimer::singleShot(1000, this, [this, serviceName, generation]() {
+                if (m_unitGenerationByName.value(serviceName, 0) == generation
+                    && m_pendingLaunches.contains(serviceName)) {
                     failPendingLaunch(serviceName, QStringLiteral("Retrying cleanup of failed instance unit"));
                 }
             });
@@ -2574,30 +2587,6 @@ void CouchPlayHelper::publishUnitReady(const QString &serviceName)
         return;
     }
     m_announcedReadyUnitNames.insert(serviceName);
-    const QString token = m_launchTokenByUnitName.value(serviceName);
-    if (!token.isEmpty()) {
-        LaunchManifest manifest;
-        QString error;
-        if (!readLaunchManifestForUnit(serviceName, token, &manifest, &error)) {
-            qWarning() << "Could not validate READY launch manifest for" << serviceName << ":" << error;
-        } else {
-            bool hasCopyDirectories = false;
-            for (const DirectoryRecord &directory : manifest.directories) {
-                if (directory.mode == QStringLiteral("copy")) {
-                    hasCopyDirectories = true;
-                    break;
-                }
-            }
-            if (!hasCopyDirectories) {
-                if (!m_ops->unlinkLaunchManifest(token, &error)) {
-                    qWarning() << "Could not unlink consumed launch manifest for" << serviceName << ":" << error;
-                } else {
-                    m_launchTokenByUnitName.remove(serviceName);
-                    m_cleanedLaunchManifestTokens.insert(token);
-                }
-            }
-        }
-    }
     saveState();
     Q_EMIT instanceReady(username, pid);
 }
@@ -2904,17 +2893,10 @@ void CouchPlayHelper::releaseOwnedUnit(const QString &serviceName, bool unlinkMa
         delete pending;
     }
     const QString token = m_launchTokenByUnitName.value(serviceName);
-    if (unlinkManifest && !token.isEmpty()) {
-        QString error;
-        if (cleanupCopyScratchForUnit(serviceName, token)) {
-            if (m_ops->unlinkLaunchManifest(token, &error)) {
-                m_launchTokenByUnitName.remove(serviceName);
-                m_cleanedLaunchManifestTokens.insert(token);
-            } else {
-                qWarning() << "Could not unlink inactive launch manifest for" << serviceName << ":" << error;
-            }
-        }
-    }
+    // Keep the manifest as cleanup authority until the unit is terminal and
+    // scratch cleanup succeeds. Never unlink ahead of durable token removal.
+    const bool manifestCleaned = unlinkManifest && !token.isEmpty()
+        && cleanupCopyScratchForUnit(serviceName, token);
     if (UnitMonitor *monitor = m_monitors.take(serviceName)) {
         monitor->deleteLater();
     }
@@ -2954,7 +2936,22 @@ void CouchPlayHelper::releaseOwnedUnit(const QString &serviceName, bool unlinkMa
         }
     }
     cleanupTcpListenerIfLast(username);
-    saveState();
+    if (manifestCleaned) {
+        m_launchTokenByUnitName.remove(serviceName);
+    }
+    if (!saveState()) {
+        if (manifestCleaned) {
+            m_launchTokenByUnitName.insert(serviceName, token);
+        }
+        return;
+    }
+    if (manifestCleaned) {
+        m_cleanedLaunchManifestTokens.insert(token);
+        QString error;
+        if (!m_ops->unlinkLaunchManifest(token, &error)) {
+            qWarning() << "Could not unlink inactive launch manifest for" << serviceName << ":" << error;
+        }
+    }
 }
 
 void CouchPlayHelper::cleanupTcpListenerIfLast(const QString &username)
@@ -4600,6 +4597,7 @@ void CouchPlayHelper::loadAndReconcileState()
         unitsObject.insert(QStringLiteral("stream:") + it.key(), it.value());
     }
     const QJsonObject launchTokensObject = root.value(QStringLiteral("launchTokens")).toObject();
+    QMap<QString, QString> manifestsToUnlink;
     const QJsonObject unitOwnerObject = root.value(QStringLiteral("unitOwnerUid")).toObject();
     const QJsonObject targetIdentityObject = root.value(QStringLiteral("targetIdentityByUnit")).toObject();
     const QJsonObject storedLeasePathsObject = root.value(QStringLiteral("overlayLeasePaths")).toObject();
@@ -4827,33 +4825,8 @@ void CouchPlayHelper::loadAndReconcileState()
         if (ready) {
             m_readyUnitNames.insert(unitName);
         }
-        if (!ready) {
+        if (DirectoryPlan::isLaunchToken(token)) {
             m_launchTokenByUnitName.insert(unitName, token);
-        } else if (DirectoryPlan::isLaunchToken(token)) {
-            LaunchManifest readyManifest;
-            QString manifestError;
-            if (!readLaunchManifestForUnit(unitName, token, &readyManifest, &manifestError)) {
-                qWarning() << "Could not validate READY launch manifest for" << unitName << ":" << manifestError;
-                m_launchTokenByUnitName.insert(unitName, token);
-            } else {
-                bool hasCopyDirectories = false;
-                for (const DirectoryRecord &directory : readyManifest.directories) {
-                    if (directory.mode == QStringLiteral("copy")) {
-                        hasCopyDirectories = true;
-                        break;
-                    }
-                }
-                if (hasCopyDirectories) {
-                    m_launchTokenByUnitName.insert(unitName, token);
-                } else {
-                    QString ignored;
-                    if (!m_ops->unlinkLaunchManifest(token, &ignored)) {
-                        m_launchTokenByUnitName.insert(unitName, token);
-                    } else {
-                        m_cleanedLaunchManifestTokens.insert(token);
-                    }
-                }
-            }
         }
     }
     m_usernameToUnitName = recoveredUnits;
@@ -4940,13 +4913,9 @@ void CouchPlayHelper::loadAndReconcileState()
         if (!cleanupCopyScratchForUnit(unitName, token)) {
             continue;
         }
-        QString unlinkError;
-        if (!m_ops->unlinkLaunchManifest(token, &unlinkError)) {
-            qWarning() << "Could not unlink reconciled launch manifest for" << unitName << ":" << unlinkError;
-            continue;
-        }
         m_launchTokenByUnitName.remove(unitName);
         m_cleanedLaunchManifestTokens.insert(token);
+        manifestsToUnlink.insert(unitName, token);
         changed = true;
     }
     QJsonArray devicesArray = root.value(QStringLiteral("modifiedDevices")).toArray();
@@ -5022,8 +4991,20 @@ void CouchPlayHelper::loadAndReconcileState()
     }
 
     changed = reconcileLegacyMounts(activeSystemdUnits, stoppedUnitNames, activeSystemdUnitsKnown) || changed;
-    if (changed) {
-        saveState();
+    if (changed && saveState()) {
+        // Only unreferenced manifests may be deleted. A crash before unlink
+        // leaves a harmless protected file, not a token with missing authority.
+        for (auto it = manifestsToUnlink.constBegin(); it != manifestsToUnlink.constEnd(); ++it) {
+            QString error;
+            if (!m_ops->unlinkLaunchManifest(it.value(), &error)) {
+                qWarning() << "Could not unlink reconciled launch manifest for" << it.key() << ":" << error;
+            }
+        }
+    } else if (changed) {
+        for (auto it = manifestsToUnlink.constBegin(); it != manifestsToUnlink.constEnd(); ++it) {
+            m_launchTokenByUnitName.insert(it.key(), it.value());
+            m_cleanedLaunchManifestTokens.remove(it.value());
+        }
     }
 
     qDebug() << "loadAndReconcileState: Restored" << (m_usernameToUnitName.size() + m_auxiliaryUnitNameForUsername.size())

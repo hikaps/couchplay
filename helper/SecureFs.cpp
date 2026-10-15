@@ -793,15 +793,21 @@ int removeCopyScratchAt(int parentFd, const QString &scratchName)
     struct stat parentStat{};
     if (::fstat(parentFd, &parentStat) != 0) return -errno;
     if (!S_ISDIR(parentStat.st_mode)) return -ENOTDIR;
+    const auto isPrivateWrapper = [&](const struct stat &st) {
+        if (!S_ISDIR(st.st_mode) || st.st_uid != 0 || st.st_dev != parentStat.st_dev) return false;
+        const mode_t mode = st.st_mode & 07777;
+        if (st.st_gid == 0 && mode == 0700) return true;
+        // mkdir(0700) inherits SGID and the parent's group before fchown/fchmod.
+        // A crash after fchown may already have reset the group to root.
+        return (parentStat.st_mode & S_ISGID) && mode == 02700
+            && (st.st_gid == parentStat.st_gid || st.st_gid == 0);
+    };
 
     struct stat observed{};
     if (::fstatat(parentFd, name.constData(), &observed, AT_SYMLINK_NOFOLLOW) != 0) {
         return errno == ENOENT ? 0 : -errno;
     }
-    if (!S_ISDIR(observed.st_mode) || observed.st_uid != 0 || observed.st_gid != 0
-        || (observed.st_mode & 07777) != 0700 || observed.st_dev != parentStat.st_dev) {
-        return -EPERM;
-    }
+    if (!isPrivateWrapper(observed)) return -EPERM;
 
     const int directoryFd = ::openat(parentFd, name.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (directoryFd < 0) return -errno;
@@ -811,9 +817,9 @@ int removeCopyScratchAt(int parentFd, const QString &scratchName)
         ::close(directoryFd);
         return -error;
     }
-    if (!S_ISDIR(opened.st_mode) || opened.st_dev != observed.st_dev || opened.st_ino != observed.st_ino
-        || opened.st_uid != 0 || opened.st_gid != 0 || (opened.st_mode & 07777) != 0700
-        || opened.st_dev != parentStat.st_dev) {
+    if (!isPrivateWrapper(opened) || opened.st_dev != observed.st_dev || opened.st_ino != observed.st_ino
+        || opened.st_uid != observed.st_uid || opened.st_gid != observed.st_gid
+        || opened.st_mode != observed.st_mode) {
         ::close(directoryFd);
         return -ESTALE;
     }

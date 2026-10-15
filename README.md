@@ -226,6 +226,13 @@ and directory inheritance. ACL mode grants read/traverse access at the original 
 it neither grants new write access nor projects files into the player home.
 Streaming outputs and audio sinks remain available until both the game and stream processes stop.
 
+Existing per-player Overlay data survives upgrades: correctly owned upper/work
+directories from older helpers are tightened to `0700` without discarding private edits.
+Session cleanup waits for stop calls to return, and stale cleanup retries cannot stop
+a replacement launch. Launch manifests remain available until terminal cleanup succeeds;
+recovery state is committed before manifest removal. Interrupted copy scratch directories
+under SGID destination parents can be recovered without accepting unsafe ownership or access.
+
 Profiles store the application selection, not a copied directory list. Legacy directory
 snapshots are removed after preserving the original profile in a sibling
 `.pre-directory-snapshot.bak` file (numbered siblings preserve differing older backups).

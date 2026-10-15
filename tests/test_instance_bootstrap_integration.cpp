@@ -2,6 +2,9 @@
 // SPDX-FileCopyrightText: 2026 CouchPlay Contributors
 
 #include "DirectoryPlan.h"
+#include "InstanceBootstrap.h"
+
+#include <QCryptographicHash>
 
 #include <QCoreApplication>
 #include <QDBusConnection>
@@ -17,6 +20,7 @@
 #include <QJsonObject>
 #include <QPair>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QScopeGuard>
 #include <QSet>
 #include <QTest>
@@ -201,7 +205,9 @@ private Q_SLOTS:
     void cleanup();
     void cleanupTestCase();
     void testLaunchManifestCollectionLimits();
+    void testEarlyGuardPreservesPrivateTmpMarker();
     void testCopyIntoSgidParent();
+    void testInterruptedSgidCopyScratchRecovery();
     void testAliasedSourceProjection_data();
     void testAliasedSourceProjection();
     void testCopyLongLeaf();
@@ -209,6 +215,7 @@ private Q_SLOTS:
     void testCopyStagingAndPrivateNamespace();
     void testBindAndAclKeepTheirDistinctVisibility();
     void testOverlayIsolationPersistenceAndBrokerRestart();
+    void testLegacyOverlayPermissionsPreservePrivateEdits();
     void testPreparationFailureCancellationAndExecFailure();
 
     void onInstanceReady(const QString &username, qlonglong pid);
@@ -269,6 +276,7 @@ private:
     bool m_externalRootOwned = false;
     bool m_overlayStorageOwned = false;
     bool m_fixtureRootOwned = false;
+    int m_privateTmpMarkerFd = -1;
     QHash<qint64, QString> m_hostMountInfoByPid;
     QHash<qint64, QString> m_ownedPids;
     QSet<qlonglong> m_readyPids;
@@ -497,11 +505,14 @@ bool InstanceBootstrapIntegrationTest::createFixtureFiles(QString *error)
         return false;
     }
     const QString privateTmpMarker = QStringLiteral("/tmp/couchplay-namespace-host-private-marker");
-    if (QFileInfo::exists(privateTmpMarker)) {
-        if (error) *error = QStringLiteral("Private-tmp marker path is already in use");
+    m_privateTmpMarkerFd = ::open(QFile::encodeName(privateTmpMarker).constData(),
+                                 O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (m_privateTmpMarkerFd < 0) {
+        if (error) *error = QStringLiteral("Private-tmp marker path is already in use or cannot be created");
         return false;
     }
-    if (!writeOwnedFile(privateTmpMarker, QByteArrayLiteral("host-only"), 0, 0, 0644)) {
+    if (::write(m_privateTmpMarkerFd, "host-only", 9) != 9
+        || ::fchown(m_privateTmpMarkerFd, 0, 0) != 0 || ::fchmod(m_privateTmpMarkerFd, 0644) != 0) {
         if (error) *error = QStringLiteral("Cannot create private-tmp observer marker");
         return false;
     }
@@ -657,7 +668,18 @@ void InstanceBootstrapIntegrationTest::cleanupTestCase()
     // Remove only paths this fixture created; setup refuses preexisting data and QDir("") means ".".
     if (m_overlayStorageOwned) QDir(m_overlayStorage).removeRecursively();
     if (m_externalRootOwned) QDir(m_externalRoot).removeRecursively();
-    QFile::remove(QStringLiteral("/tmp/couchplay-namespace-host-private-marker"));
+    if (m_privateTmpMarkerFd >= 0) {
+        const QByteArray marker = QByteArrayLiteral("/tmp/couchplay-namespace-host-private-marker");
+        struct stat owned {};
+        struct stat current {};
+        if (::fstat(m_privateTmpMarkerFd, &owned) == 0
+            && ::lstat(marker.constData(), &current) == 0
+            && current.st_dev == owned.st_dev && current.st_ino == owned.st_ino) {
+            (void)::unlink(marker.constData());
+        }
+        ::close(m_privateTmpMarkerFd);
+        m_privateTmpMarkerFd = -1;
+    }
     if (!m_privateSourceRoot.isEmpty()) {
         QDir(m_privateSourceRoot).removeRecursively();
     }
@@ -1058,6 +1080,34 @@ void InstanceBootstrapIntegrationTest::onInstanceStopped(const QString &username
     m_stoppedPids.insert(pid, reason);
 }
 
+void InstanceBootstrapIntegrationTest::testEarlyGuardPreservesPrivateTmpMarker()
+{
+    const QByteArray marker = QByteArrayLiteral("/tmp/couchplay-namespace-host-private-marker");
+    struct stat before {};
+    QVERIFY(::lstat(marker.constData(), &before) == 0);
+    const QByteArray contents = readFile(QString::fromLatin1(marker));
+    QCOMPARE(contents, QByteArrayLiteral("host-only"));
+    QProcess child;
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.remove(QStringLiteral("COUCHPLAY_NAMESPACE_CONTAINER"));
+    child.setProcessEnvironment(environment);
+    child.setProcessChannelMode(QProcess::MergedChannels);
+    child.start(QCoreApplication::applicationFilePath(),
+                {QStringLiteral("testEarlyGuardPreservesPrivateTmpMarker")});
+    QVERIFY(child.waitForStarted(5000));
+    QVERIFY(child.waitForFinished(30000));
+    QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+    QVERIFY(child.exitCode() != 0);
+    QVERIFY(child.readAllStandardOutput().contains(
+        "The privileged namespace test may run only inside its disposable Docker container"));
+    struct stat after {};
+    QVERIFY2(::lstat(marker.constData(), &after) == 0, "Failed child setup removed the parent's private-tmp marker");
+    QCOMPARE(after.st_dev, before.st_dev);
+    QCOMPARE(after.st_ino, before.st_ino);
+    QCOMPARE(after.st_mode, before.st_mode);
+    QCOMPARE(readFile(QString::fromLatin1(marker)), contents);
+}
+
 void InstanceBootstrapIntegrationTest::testLaunchManifestCollectionLimits()
 {
     LaunchManifest manifest;
@@ -1195,6 +1245,71 @@ void InstanceBootstrapIntegrationTest::testCopyIntoSgidParent()
     QCOMPARE(parentAfter.st_uid, uid_t(0));
     QCOMPARE(parentAfter.st_gid, m_caller.gid);
     QCOMPARE(parentAfter.st_mode & 07777, mode_t(02711));
+}
+
+void InstanceBootstrapIntegrationTest::testInterruptedSgidCopyScratchRecovery()
+{
+    const Account &target = m_players[0];
+    const QString source = m_sourceRoot + QStringLiteral("/interrupted-sgid-copy");
+    QVERIFY(createOwnedDirectory(source, m_caller.uid, m_caller.gid, 0700));
+    QVERIFY(writeOwnedFile(source + QStringLiteral("/Launcher.ini"), QByteArrayLiteral("RECOVERED"),
+                           m_caller.uid, m_caller.gid, 0600));
+    const QString parent = QDir(target.canonicalHome).filePath(QStringLiteral("interrupted-sgid-parent"));
+    QVERIFY(createOwnedDirectory(parent, 0, m_caller.gid, 02711));
+    const QString alias = QStringLiteral("interrupted-sgid-parent/copied");
+    const QString token = QStringLiteral("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    const QString scratchName = DirectoryPlan::copyScratchName(QStringLiteral("copied"), token);
+    QVERIFY(!scratchName.isEmpty());
+    const QString scratch = parent + QLatin1Char('/') + scratchName;
+    const QByteArray encoded = QFile::encodeName(scratch);
+    LaunchManifest manifest;
+    manifest.targetUid = target.uid;
+    manifest.targetCanonicalHome = target.canonicalHome;
+    manifest.directories.append({source, QStringLiteral("copy"), alias, {}});
+    QString error;
+    const auto scratchCleanup = qScopeGuard([&] { QDir(scratch).removeRecursively(); });
+
+    // Real mkdir under an SGID parent reproduces death before wrapper normalization.
+    QVERIFY(::mkdir(encoded.constData(), 0700) == 0);
+    struct stat interrupted {};
+    QVERIFY(::lstat(encoded.constData(), &interrupted) == 0);
+    QCOMPARE(interrupted.st_uid, uid_t(0));
+    QCOMPARE(interrupted.st_gid, m_caller.gid);
+    QCOMPARE(interrupted.st_mode & 07777, mode_t(02700));
+    QVERIFY2(InstanceBootstrap::cleanupCopyScratchDirectories(manifest, token, &error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(scratch));
+
+    // A token match never authorizes an exposed or player-owned wrapper.
+    for (const auto &identity : {QPair<uid_t, mode_t>{0, 02750},
+                                 QPair<uid_t, mode_t>{target.uid, 02700}}) {
+        QVERIFY(::mkdir(encoded.constData(), 0700) == 0);
+        QVERIFY(::chown(encoded.constData(), identity.first, m_caller.gid) == 0);
+        QVERIFY(::chmod(encoded.constData(), identity.second) == 0);
+        QVERIFY(writeOwnedFile(scratch + QStringLiteral("/sentinel"), QByteArrayLiteral("UNTOUCHED"),
+                               0, 0, 0600));
+        struct stat before {};
+        QVERIFY(::lstat(encoded.constData(), &before) == 0);
+        QVERIFY(!InstanceBootstrap::cleanupCopyScratchDirectories(manifest, token, &error));
+        struct stat after {};
+        QVERIFY(::lstat(encoded.constData(), &after) == 0);
+        QCOMPARE(after.st_ino, before.st_ino);
+        QCOMPARE(after.st_uid, before.st_uid);
+        QCOMPARE(after.st_mode, before.st_mode);
+        QCOMPARE(readFile(scratch + QStringLiteral("/sentinel")), QByteArrayLiteral("UNTOUCHED"));
+        QVERIFY(QDir(scratch).removeRecursively());
+    }
+
+    const QString label = QStringLiteral("recovered-sgid-copy");
+    const QString targetFile = QDir(target.canonicalHome).filePath(alias + QStringLiteral("/Launcher.ini"));
+    const qint64 pid = launch(target, plan(record(source, QStringLiteral("copy"), alias)),
+                              gameCommand(label, {{targetFile, QStringLiteral("RECOVERED")}}));
+    QVERIFY(pid > 0);
+    QVERIFY(waitForSignal({}, pid));
+    QJsonObject report;
+    QVERIFY(waitForReport(reportPath(label), &report));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("bytes")).toString(), QStringLiteral("RECOVERED"));
+    QVERIFY(stop(pid));
+    QVERIFY(waitForProcessExit(pid));
 }
 
 void InstanceBootstrapIntegrationTest::testAliasedSourceProjection_data()
@@ -1649,6 +1764,48 @@ void InstanceBootstrapIntegrationTest::testBindAndAclKeepTheirDistinctVisibility
     QCOMPARE(readFile(aclFile), QByteArrayLiteral("ACL-ORIGINAL"));
     QVERIFY(stop(aclPid));
     QVERIFY(waitForProcessExit(aclPid));
+}
+
+void InstanceBootstrapIntegrationTest::testLegacyOverlayPermissionsPreservePrivateEdits()
+{
+    const Account &target = m_players[0];
+    const QString source = m_sourceRoot + QStringLiteral("/legacy-overlay-permissions");
+    QVERIFY(createOwnedDirectory(source, m_caller.uid, m_caller.gid, 0700));
+    QVERIFY(writeOwnedFile(source + QStringLiteral("/Launcher.ini"), QByteArrayLiteral("LOWER"),
+                           m_caller.uid, m_caller.gid, 0600));
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(source.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
+    const QString base = m_overlayStorage + QLatin1Char('/') + target.username + QLatin1Char('/') + hash;
+    QVERIFY(createOwnedDirectory(base, 0, 0, 0700));
+    const QString upper = base + QStringLiteral("/upper");
+    const QString work = base + QStringLiteral("/work");
+    QVERIFY(createOwnedDirectory(upper, target.uid, target.gid, 0755));
+    QVERIFY(createOwnedDirectory(work, target.uid, target.gid, 0755));
+    QVERIFY(writeOwnedFile(upper + QStringLiteral("/Launcher.ini"), QByteArrayLiteral("LEGACY-PRIVATE"),
+                           target.uid, target.gid, 0600));
+    const QString destination = targetFor(target, source) + QStringLiteral("/Launcher.ini");
+    const QString label = QStringLiteral("legacy-overlay-permissions");
+    QString error;
+    const qint64 pid = launch(target, plan(record(source, QStringLiteral("overlay"))),
+                              gameCommand(label, {{destination, QStringLiteral("LEGACY-PRIVATE")}}),
+                              {}, true, {}, &error);
+    QVERIFY2(pid > 0, qPrintable(error));
+    QVERIFY(waitForSignal({}, pid));
+    QJsonObject report;
+    QVERIFY(waitForReport(reportPath(label), &report));
+    QCOMPARE(readResult(report, destination).value(QStringLiteral("bytes")).toString(),
+             QStringLiteral("LEGACY-PRIVATE"));
+    for (const QString &path : {upper, work}) {
+        struct stat normalized {};
+        QVERIFY(::lstat(QFile::encodeName(path).constData(), &normalized) == 0);
+        QCOMPARE(normalized.st_uid, target.uid);
+        QCOMPARE(normalized.st_gid, target.gid);
+        QCOMPARE(normalized.st_mode & 07777, mode_t(0700));
+    }
+    QCOMPARE(readFile(source + QStringLiteral("/Launcher.ini")), QByteArrayLiteral("LOWER"));
+    QVERIFY(stop(pid));
+    QVERIFY(waitForProcessExit(pid));
+    QCOMPARE(readFile(upper + QStringLiteral("/Launcher.ini")), QByteArrayLiteral("LEGACY-PRIVATE"));
 }
 
 void InstanceBootstrapIntegrationTest::testOverlayIsolationPersistenceAndBrokerRestart()
