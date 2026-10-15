@@ -39,11 +39,15 @@ void StreamManager::setHelperClient(CouchPlayHelperClient *helper)
         return;
     }
     if (m_helperClient) {
+        disconnect(m_helperClient, &CouchPlayHelperClient::instanceReady, this,
+                   &StreamManager::onHelperInstanceReady);
         disconnect(m_helperClient, &CouchPlayHelperClient::instanceStopped, this,
                    &StreamManager::onHelperInstanceStopped);
     }
     m_helperClient = helper;
     if (m_helperClient) {
+        connect(m_helperClient, &CouchPlayHelperClient::instanceReady, this,
+                &StreamManager::onHelperInstanceReady);
         connect(m_helperClient, &CouchPlayHelperClient::instanceStopped, this,
                 &StreamManager::onHelperInstanceStopped);
     }
@@ -136,6 +140,7 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     entry.lastConfig = config;
     entry.restartAttempts = 0;
     entry.state = NotStarted;
+    entry.launching = true;
     m_streams[instanceIndex] = entry;
 
     setStreamState(instanceIndex, Waiting);
@@ -156,16 +161,16 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
     const QStringList gamescopeArgs;
     const QStringList envVars;
 
-    const qint64 pid = m_helperClient->launchInstance(username,
-                                                       displayContext,
-                                                       gamescopeArgs,
-                                                       gameCommand,
-                                                       QString(),
-                                                       QStringList(),
-                                                       envVars,
-                                                       false);
+    const qint64 pid = m_helperClient->launchAuxiliaryInstance(username,
+                                                                displayContext,
+                                                                gamescopeArgs,
+                                                                gameCommand,
+                                                                QString(),
+                                                                QStringList(),
+                                                                envVars,
+                                                                false);
     if (pid <= 0) {
-        qWarning() << "StreamManager: LaunchInstance failed";
+        qWarning() << "StreamManager: LaunchAuxiliaryInstance failed";
         setStreamState(instanceIndex, Error);
         Q_EMIT streamError(instanceIndex, QStringLiteral("Failed to launch Sunshine"));
         cleanupConfigDir(instanceIndex);
@@ -174,13 +179,14 @@ bool StreamManager::startStream(int instanceIndex, const QVariantMap &config)
         return false;
     }
 
-    m_streams[instanceIndex].pid = pid;
-
-    QTimer *timer = new QTimer(this);
-    timer->setSingleShot(true);
-    connect(timer, &QTimer::timeout, this, &StreamManager::onStartupTimeout);
-    m_startupTimers[instanceIndex] = timer;
-    timer->start(m_startupTimeout);
+    StreamEntry &launchedEntry = m_streams[instanceIndex];
+    launchedEntry.pid = pid;
+    launchedEntry.launching = false;
+    if (launchedEntry.pendingReadyPid == pid) {
+        launchedEntry.pendingReadyPid = 0;
+        launchedEntry.ready = true;
+        startStartupTimer(instanceIndex);
+    }
 
     Q_EMIT streamsChanged();
 
@@ -192,8 +198,6 @@ bool StreamManager::stopStream(int instanceIndex)
     if (!m_streams.contains(instanceIndex)) {
         return false;
     }
-
-    StreamEntry &entry = m_streams[instanceIndex];
 
     if (m_startupTimers.contains(instanceIndex)) {
         delete m_startupTimers.take(instanceIndex);
@@ -207,28 +211,42 @@ bool StreamManager::stopStream(int instanceIndex)
         m_restartTimers.remove(instanceIndex);
     }
 
-    if (entry.pid == 0) {
+    const qint64 pid = m_streams[instanceIndex].pid;
+    if (pid <= 0) {
+        m_stoppingStreams.remove(instanceIndex);
         cleanupConfigDir(instanceIndex);
         m_streams.remove(instanceIndex);
         Q_EMIT streamsChanged();
+        Q_EMIT streamStopped(instanceIndex);
         return true;
     }
 
-    if (m_helperClient) {
-        if (!m_helperClient->stopInstance(entry.pid)) {
-            qWarning() << "StreamManager: StopInstance failed for PID" << entry.pid << ", trying KillInstance";
-            m_helperClient->killInstance(entry.pid);
-        }
+    m_stoppingStreams.insert(instanceIndex);
+    bool stopped = m_helperClient && m_helperClient->stopInstance(pid);
+    if (!stopped && m_helperClient) {
+        qWarning() << "StreamManager: StopInstance failed for PID" << pid << ", trying KillInstance";
+        stopped = m_helperClient->killInstance(pid);
+    }
+    if (!stopped) {
+        setStreamState(instanceIndex, Error);
+        Q_EMIT streamError(instanceIndex, QStringLiteral("Failed to stop Sunshine"));
+        Q_EMIT streamsChanged();
+        return false;
     }
 
-    entry.pid = 0;
+    if (!m_streams.contains(instanceIndex) || m_streams[instanceIndex].pid != pid) {
+        return true;
+    }
+    m_stoppingStreams.remove(instanceIndex);
+    m_streams[instanceIndex].pid = 0;
+    m_streams[instanceIndex].ready = false;
+    m_streams[instanceIndex].launching = false;
     setStreamState(instanceIndex, NotStarted);
     cleanupConfigDir(instanceIndex);
     m_streams.remove(instanceIndex);
 
     Q_EMIT streamsChanged();
     Q_EMIT streamStopped(instanceIndex);
-
     return true;
 }
 
@@ -253,26 +271,94 @@ bool StreamManager::isStreaming(int instanceIndex) const
 {
     return streamState(instanceIndex) == Streaming;
 }
+bool StreamManager::hasOwnedPids() const
+{
+    for (auto it = m_streams.constBegin(); it != m_streams.constEnd(); ++it) {
+        if (it.value().pid > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool StreamManager::hasOwnedPid(int instanceIndex) const
+{
+    const auto it = m_streams.constFind(instanceIndex);
+    return it != m_streams.constEnd() && it.value().pid > 0;
+}
+
+void StreamManager::onHelperInstanceReady(const QString &username, qint64 pid)
+{
+    for (auto it = m_streams.begin(); it != m_streams.end(); ++it) {
+        StreamEntry &entry = it.value();
+        if (entry.username != username) {
+            continue;
+        }
+        if (entry.pid == pid && pid > 0) {
+            if (entry.ready || m_stoppingStreams.contains(it.key())) {
+                return;
+            }
+            entry.ready = true;
+            entry.launching = false;
+            startStartupTimer(it.key());
+            Q_EMIT streamsChanged();
+            return;
+        }
+        if (entry.launching && entry.pid == 0 && pid > 0) {
+            entry.pendingReadyPid = pid;
+            return;
+        }
+    }
+}
+
+void StreamManager::startStartupTimer(int instanceIndex)
+{
+    if (!m_streams.contains(instanceIndex) || m_startupTimers.contains(instanceIndex)) {
+        return;
+    }
+    const StreamEntry &entry = m_streams[instanceIndex];
+    if (!entry.ready || entry.pid <= 0 || entry.state != Waiting || m_stoppingStreams.contains(instanceIndex)) {
+        return;
+    }
+    QTimer *timer = new QTimer(this);
+    timer->setSingleShot(true);
+    connect(timer, &QTimer::timeout, this, &StreamManager::onStartupTimeout);
+    m_startupTimers[instanceIndex] = timer;
+    timer->start(m_startupTimeout);
+}
 
 void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason)
 {
-    Q_UNUSED(username)
-
     int foundIndex = -1;
     for (auto it = m_streams.begin(); it != m_streams.end(); ++it) {
-        if (it.value().pid == pid) {
+        if (it.value().username == username && it.value().pid == pid && pid > 0) {
             foundIndex = it.key();
             break;
         }
     }
-
     if (foundIndex < 0) {
         return;
     }
 
-    bool crashedDuringStartup = m_startupTimers.contains(foundIndex);
-    if (crashedDuringStartup) {
+    const bool stopping = m_stoppingStreams.remove(foundIndex);
+    const bool crashedDuringStartup = !m_streams[foundIndex].ready || m_startupTimers.contains(foundIndex);
+    if (m_startupTimers.contains(foundIndex)) {
         delete m_startupTimers.take(foundIndex);
+    }
+
+    StreamEntry &entry = m_streams[foundIndex];
+    entry.pid = 0;
+    entry.ready = false;
+    entry.launching = false;
+    entry.pendingReadyPid = 0;
+    setStreamState(foundIndex, stopping ? NotStarted : Error);
+    cleanupConfigDir(foundIndex);
+
+    if (stopping) {
+        m_streams.remove(foundIndex);
+        Q_EMIT streamsChanged();
+        Q_EMIT streamStopped(foundIndex);
+        return;
     }
 
     const QString errorMsg = (reason == QStringLiteral("crashed"))
@@ -281,17 +367,9 @@ void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid,
             ? QStringLiteral("Sunshine failed to start")
             : QStringLiteral("Sunshine exited unexpectedly");
 
-    m_streams[foundIndex].pid = 0;
-    setStreamState(foundIndex, Error);
-    cleanupConfigDir(foundIndex);
-
-    if (m_autoRestart && m_streams[foundIndex].restartAttempts < StreamEntry::MAX_RESTART_ATTEMPTS) {
+    if (m_autoRestart && entry.restartAttempts < StreamEntry::MAX_RESTART_ATTEMPTS) {
         if (crashedDuringStartup) {
-            // Retry on a port no sibling stream is using -- each Sunshine instance
-            // owns a PORT_SPACING-wide range, so reusing a sibling's base port would
-            // evict it. (Bumping by exactly PORT_SPACING would otherwise land on the
-            // next instance's default slot: calculatePort(n+1) == calculatePort(n)+30.)
-            const int currentPort = m_streams[foundIndex].lastConfig.value(
+            const int currentPort = entry.lastConfig.value(
                 QStringLiteral("sunshinePort"), SunshineConfig::calculatePort(foundIndex)).toInt();
             QSet<int> usedPorts;
             for (auto it = m_streams.constBegin(); it != m_streams.constEnd(); ++it) {
@@ -304,13 +382,8 @@ void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid,
             while (usedPorts.contains(bumped) && bumped < static_cast<int>(SunshineConfig::MAX_PORT)) {
                 bumped += SunshineConfig::PORT_SPACING;
             }
-            m_streams[foundIndex].lastConfig[QStringLiteral("sunshinePort")] = bumped;
+            entry.lastConfig[QStringLiteral("sunshinePort")] = bumped;
         }
-        Q_EMIT streamError(foundIndex, QStringLiteral("%1 (auto-restarting attempt %2/%3)")
-            .arg(errorMsg)
-            .arg(m_streams[foundIndex].restartAttempts + 1)
-            .arg(StreamEntry::MAX_RESTART_ATTEMPTS));
-        Q_EMIT streamsChanged();
 
         QTimer *restartTimer = new QTimer(this);
         restartTimer->setSingleShot(true);
@@ -320,16 +393,25 @@ void StreamManager::onHelperInstanceStopped(const QString &username, qint64 pid,
         });
         m_restartTimers[foundIndex] = restartTimer;
         restartTimer->start(RESTART_DELAY_MS);
-    } else {
-        if (m_autoRestart) {
-            Q_EMIT streamError(foundIndex, QStringLiteral("%1 (max restart attempts reached)").arg(errorMsg));
-        } else {
-            Q_EMIT streamError(foundIndex, errorMsg);
-        }
-        m_streams.remove(foundIndex);
+        const QString restartMessage = QStringLiteral("%1 (auto-restarting attempt %2/%3)")
+            .arg(errorMsg)
+            .arg(entry.restartAttempts + 1)
+            .arg(StreamEntry::MAX_RESTART_ATTEMPTS);
         Q_EMIT streamsChanged();
-        Q_EMIT streamStopped(foundIndex);
+        Q_EMIT streamError(foundIndex, restartMessage);
+        return;
     }
+
+    const QString finalMessage = m_autoRestart
+        ? QStringLiteral("%1 (max restart attempts reached)").arg(errorMsg)
+        : errorMsg;
+    Q_EMIT streamError(foundIndex, finalMessage);
+    if (!m_streams.contains(foundIndex)) {
+        return;
+    }
+    m_streams.remove(foundIndex);
+    Q_EMIT streamsChanged();
+    Q_EMIT streamStopped(foundIndex);
 }
 
 void StreamManager::onStartupTimeout()
@@ -386,6 +468,9 @@ void StreamManager::attemptRestart(int instanceIndex)
 
     cleanupConfigDir(instanceIndex);
 
+    entry.ready = false;
+    entry.launching = true;
+    entry.pendingReadyPid = 0;
     setStreamState(instanceIndex, Waiting);
     Q_EMIT streamsChanged();
 
@@ -418,31 +503,33 @@ void StreamManager::attemptRestart(int instanceIndex)
     const QStringList gamescopeArgs;
     const QStringList envVars;
 
-    const qint64 pid = m_helperClient->launchInstance(entry.username,
-                                                       displayContext,
-                                                       gamescopeArgs,
-                                                       gameCommand,
-                                                       QString(),
-                                                       QStringList(),
-                                                       envVars,
-                                                       false);
+    const qint64 pid = m_helperClient->launchAuxiliaryInstance(entry.username,
+                                                                displayContext,
+                                                                gamescopeArgs,
+                                                                gameCommand,
+                                                                QString(),
+                                                                QStringList(),
+                                                                envVars,
+                                                                false);
     if (pid <= 0) {
         const QString detail = QStringLiteral("helper launch failed");
-        qWarning() << "StreamManager: restart LaunchInstance failed for instance" << instanceIndex << ":" << detail;
+        qWarning() << "StreamManager: restart LaunchAuxiliaryInstance failed for instance" << instanceIndex << ":" << detail;
+        entry.launching = false;
+        entry.pendingReadyPid = 0;
+        setStreamState(instanceIndex, Error);
 
         if (entry.restartAttempts >= StreamEntry::MAX_RESTART_ATTEMPTS) {
-            setStreamState(instanceIndex, Error);
-            Q_EMIT streamError(instanceIndex, QStringLiteral("Auto-restart failed after %1 attempts: %2")
-                .arg(entry.restartAttempts).arg(detail));
+            const QString message = QStringLiteral("Auto-restart failed after %1 attempts: %2")
+                .arg(entry.restartAttempts).arg(detail);
+            Q_EMIT streamError(instanceIndex, message);
+            if (!m_streams.contains(instanceIndex)) {
+                return;
+            }
             m_streams.remove(instanceIndex);
             Q_EMIT streamsChanged();
             Q_EMIT streamStopped(instanceIndex);
             return;
         }
-
-        setStreamState(instanceIndex, Error);
-        Q_EMIT streamError(instanceIndex, QStringLiteral("Auto-restart attempt %1 failed: %2")
-            .arg(entry.restartAttempts).arg(detail));
 
         QTimer *restartTimer = new QTimer(this);
         restartTimer->setSingleShot(true);
@@ -452,18 +539,24 @@ void StreamManager::attemptRestart(int instanceIndex)
         });
         m_restartTimers[instanceIndex] = restartTimer;
         restartTimer->start(RESTART_DELAY_MS);
+        Q_EMIT streamsChanged();
+        Q_EMIT streamError(instanceIndex, QStringLiteral("Auto-restart attempt %1 failed: %2")
+            .arg(entry.restartAttempts).arg(detail));
         return;
     }
 
-    entry.pid = pid;
+    if (!m_streams.contains(instanceIndex)) {
+        return;
+    }
+    StreamEntry &launchedEntry = m_streams[instanceIndex];
+    launchedEntry.pid = pid;
+    launchedEntry.launching = false;
     setStreamState(instanceIndex, Waiting);
-
-    QTimer *timer = new QTimer(this);
-    timer->setSingleShot(true);
-    connect(timer, &QTimer::timeout, this, &StreamManager::onStartupTimeout);
-    m_startupTimers[instanceIndex] = timer;
-    timer->start(m_startupTimeout);
-
+    if (launchedEntry.pendingReadyPid == pid) {
+        launchedEntry.pendingReadyPid = 0;
+        launchedEntry.ready = true;
+        startStartupTimer(instanceIndex);
+    }
     Q_EMIT streamsChanged();
 }
 

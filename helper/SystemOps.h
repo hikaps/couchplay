@@ -4,6 +4,9 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDBusConnection>
+#include <QDBusObjectPath>
+#include "DirectoryPlan.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QIODevice>
@@ -36,7 +39,13 @@ public:
     virtual struct group *getgrnam(const char *name) = 0;
     virtual uid_t connectionUnixUser(const QString &busName) = 0;
 
-    // Filesystem operations
+    virtual QDBusObjectPath startTransientService(const QString &name,
+                                                 const QList<SystemdProperty> &properties,
+                                                 QString *error) = 0;
+    virtual QDBusConnection systemBusConnection() const = 0;
+    virtual bool writeLaunchManifest(const LaunchManifest &manifest, QString *token, QString *error) = 0;
+    virtual bool readLaunchManifest(const QString &token, LaunchManifest *manifest, QString *error) = 0;
+    virtual bool unlinkLaunchManifest(const QString &token, QString *error) = 0;
     virtual bool fileExists(const QString &path) = 0;
     virtual bool isDirectory(const QString &path) = 0;
     virtual bool isSymLink(const QString &path) = 0;
@@ -92,6 +101,13 @@ public:
     struct passwd *getpwuid(uid_t uid) override;
     struct group *getgrnam(const char *name) override;
     uid_t connectionUnixUser(const QString &busName) override;
+    QDBusObjectPath startTransientService(const QString &name,
+                                         const QList<SystemdProperty> &properties,
+                                         QString *error) override;
+    QDBusConnection systemBusConnection() const override;
+    bool writeLaunchManifest(const LaunchManifest &manifest, QString *token, QString *error) override;
+    bool readLaunchManifest(const QString &token, LaunchManifest *manifest, QString *error) override;
+    bool unlinkLaunchManifest(const QString &token, QString *error) override;
 
     bool fileExists(const QString &path) override;
     bool isDirectory(const QString &path) override;

@@ -51,6 +51,60 @@ uid_t RealSystemOps::connectionUnixUser(const QString &busName)
     const QDBusReply<uint> reply = bus.call(QStringLiteral("GetConnectionUnixUser"), busName);
     return reply.isValid() ? static_cast<uid_t>(reply.value()) : static_cast<uid_t>(-1);
 }
+QDBusObjectPath RealSystemOps::startTransientService(const QString &name,
+                                                    const QList<SystemdProperty> &properties,
+                                                    QString *error)
+{
+    DirectoryPlan::registerSystemdTypes();
+    QDBusInterface manager(QStringLiteral("org.freedesktop.systemd1"),
+                           QStringLiteral("/org/freedesktop/systemd1"),
+                           QStringLiteral("org.freedesktop.systemd1.Manager"),
+                           systemBusConnection());
+    const QList<SystemdAuxiliaryUnit> auxiliaryUnits;
+    const QDBusMessage startReply = manager.callWithArgumentList(
+        QDBus::Block,
+        QStringLiteral("StartTransientUnit"),
+        {name, QStringLiteral("fail"), QVariant::fromValue(properties), QVariant::fromValue(auxiliaryUnits)});
+    if (startReply.type() == QDBusMessage::ErrorMessage) {
+        if (error) {
+            *error = startReply.errorMessage();
+        }
+        return {};
+    }
+    if (startReply.arguments().size() != 1 || !startReply.arguments().constFirst().canConvert<QDBusObjectPath>()) {
+        if (error) {
+            *error = QStringLiteral("StartTransientUnit returned an invalid job path");
+        }
+        return {};
+    }
+    const QDBusObjectPath jobPath = startReply.arguments().constFirst().value<QDBusObjectPath>();
+    if (!jobPath.path().startsWith(QStringLiteral("/org/freedesktop/systemd1/job/"))) {
+        if (error) {
+            *error = QStringLiteral("StartTransientUnit returned a non-job object path");
+        }
+        return {};
+    }
+
+    return jobPath;
+}
+QDBusConnection RealSystemOps::systemBusConnection() const
+{
+    return QDBusConnection::systemBus();
+}
+bool RealSystemOps::writeLaunchManifest(const LaunchManifest &manifest, QString *token, QString *error)
+{
+    return DirectoryPlan::writeLaunchManifest(manifest, token, error);
+}
+
+bool RealSystemOps::readLaunchManifest(const QString &token, LaunchManifest *manifest, QString *error)
+{
+    return DirectoryPlan::readLaunchManifest(token, manifest, error);
+}
+
+bool RealSystemOps::unlinkLaunchManifest(const QString &token, QString *error)
+{
+    return DirectoryPlan::unlinkLaunchManifest(token, error);
+}
 
 bool RealSystemOps::fileExists(const QString &path)
 {

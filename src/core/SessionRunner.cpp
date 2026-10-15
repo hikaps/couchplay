@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SessionRunner.h"
-#include "../../helper/MountSpec.h"
 #include "../../helper/HomePathMapping.h"
+#include "../../helper/DirectoryPlan.h"
 #include "../dbus/CouchPlayHelperClient.h"
 #include "DeviceManager.h"
 #include "GamescopeInstance.h"
@@ -23,6 +23,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QGuiApplication>
+#include <QMetaObject>
 #include <QScreen>
 #include <QSet>
 #include <QFileInfo>
@@ -74,10 +75,32 @@ SessionRunner::SessionRunner(QObject *parent)
     m_streamManager->setHelperClient(m_helperClient);
     connect(m_streamManager, &StreamManager::streamError,
             this, [this](int instanceIndex, const QString &error) {
-        Q_EMIT errorOccurred(QStringLiteral("Stream %1: %2").arg(instanceIndex).arg(error));
+        const QString message = QStringLiteral("Stream %1: %2").arg(instanceIndex).arg(error);
+        Q_EMIT errorOccurred(message);
+        if (!m_sessionStartupComplete && !m_finalizing
+            && instanceIndex == m_nextInstanceToStart
+            && m_streamingInstances.contains(instanceIndex)) {
+            m_streamStartupErrorReported = true;
+            beginFinalization(true, message);
+        }
+    });
+    connect(m_streamManager, &StreamManager::streamStarted, this, [this](int instanceIndex) {
+        if (m_finalizing || m_sessionStartupComplete || instanceIndex != m_nextInstanceToStart
+            || !m_streamingInstances.contains(instanceIndex)) {
+            return;
+        }
+        ++m_nextInstanceToStart;
+        startNextInstance();
+    });
+    connect(m_streamManager, &StreamManager::streamStopped, this, [this](int instanceIndex) {
+        cleanupStreamingInstance(instanceIndex);
+        QMetaObject::invokeMethod(this, [this]() {
+            if (m_finalizing) {
+                continueFinalizationAfterStopping();
+            }
+        }, Qt::QueuedConnection);
     });
 }
-
 SessionRunner::~SessionRunner()
 {
     m_streamManager->stopAll();
@@ -102,7 +125,7 @@ void SessionRunner::setActive(bool active)
 }
 const SessionProfile &SessionRunner::activeProfile() const
 {
-    return m_hasStartingProfile ? m_startingProfile : m_sessionManager->currentProfile();
+    return m_hasStartingProfile ? m_startingSnapshot.profile : m_sessionManager->currentProfile();
 }
 
 
@@ -287,13 +310,17 @@ bool SessionRunner::start()
     }
 
     cleanupInstances();
+    m_sessionStartupComplete = false;
     m_finalizing = false;
     m_startupFailure = false;
     m_preHookCompleted = false;
     m_postHookArmed = false;
     m_postHookStarted = false;
+    m_launchErrorReported = false;
+    m_streamStartupErrorReported = false;
     m_finalizationMessage.clear();
-    m_launchCommands.clear();
+    m_startingSnapshot = {};
+    m_hasStartingProfile = false;
 
     const SessionProfile profile = m_sessionManager->currentProfile();
     const int instanceCount = profile.instances.size();
@@ -302,6 +329,38 @@ bool SessionRunner::start()
         setStatus(QStringLiteral("Error"));
         return false;
     }
+    if (!m_presetManager) {
+        Q_EMIT errorOccurred(QStringLiteral("No preset manager configured"));
+        setStatus(QStringLiteral("Error"));
+        return false;
+    }
+    m_startingSnapshot.profile = profile;
+    m_startingSnapshot.syncSteamShortcuts = m_steamConfigManager && m_steamConfigManager->syncShortcutsEnabled();
+    m_startingSnapshot.shareSteamLibraries = m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled();
+    m_startingSnapshot.syncHeroicShortcuts = m_heroicConfigManager && m_heroicConfigManager->syncShortcutsEnabled();
+    for (int i = 0; i < instanceCount; ++i) {
+        const QString presetId = profile.instances[i].presetId.isEmpty()
+            ? QStringLiteral("steam") : profile.instances[i].presetId;
+        const LaunchPreset preset = m_presetManager->getPreset(presetId);
+        if (preset.id.isEmpty()) {
+            Q_EMIT errorOccurred(QStringLiteral("Launch preset not found: %1").arg(presetId));
+            setStatus(QStringLiteral("Error"));
+            m_startingSnapshot = {};
+            return false;
+        }
+        const LaunchCommand command = m_presetManager->buildLaunchCommand(preset, profile.instances[i].gameSelection);
+        if (!command.isValid()) {
+            Q_EMIT errorOccurred(QStringLiteral("Invalid launch command for player %1: %2")
+                                     .arg(i + 1)
+                                     .arg(command.errorMessage));
+            setStatus(QStringLiteral("Error"));
+            m_startingSnapshot = {};
+            return false;
+        }
+        m_startingSnapshot.presets.append(preset);
+        m_startingSnapshot.launchCommands.append(command);
+    }
+
 
     QSet<QString> usedUsers;
     for (int i = 0; i < instanceCount; ++i) {
@@ -343,15 +402,15 @@ bool SessionRunner::start()
 
     bool steamRequired = false;
     bool steamShortcutsNeeded = false;
-    for (const InstanceConfig &instance : profile.instances) {
-        const QString presetId = instance.presetId.isEmpty() ? QStringLiteral("steam") : instance.presetId;
+    for (int i = 0; i < instanceCount; ++i) {
+        const InstanceConfig &instance = profile.instances[i];
         const bool selectedShortcut = instance.gameSelection.launcherId == QStringLiteral("steam")
             && instance.gameSelection.backend == QStringLiteral("shortcut");
-        const bool requiresSteam = (m_presetManager
-            && m_presetManager->getRequiredIntegrations(presetId).contains(QStringLiteral("steam"))) || selectedShortcut;
+        const bool requiresSteam = m_startingSnapshot.presets[i].requiredIntegrations.contains(QStringLiteral("steam"))
+            || selectedShortcut;
         steamRequired |= requiresSteam;
         steamShortcutsNeeded |= requiresSteam && m_steamConfigManager
-            && (m_steamConfigManager->syncShortcutsEnabled() || selectedShortcut);
+            && (m_startingSnapshot.syncSteamShortcuts || selectedShortcut);
     }
     if (steamRequired && m_steamConfigManager) m_steamConfigManager->refreshSourceAccounts();
     if (steamShortcutsNeeded && m_steamConfigManager) {
@@ -377,28 +436,6 @@ bool SessionRunner::start()
         }
     }
 
-    for (int i = 0; i < instanceCount; ++i) {
-        const QString presetId = profile.instances[i].presetId.isEmpty()
-            ? QStringLiteral("steam")
-            : profile.instances[i].presetId;
-        LaunchCommand command;
-        if (m_presetManager) {
-            command = m_presetManager->buildLaunchCommand(presetId, profile.instances[i].gameSelection);
-        } else {
-            command.program = QStringLiteral("steam");
-            command.arguments = {QStringLiteral("-bigpicture")};
-        }
-        if (!command.isValid()) {
-            const QString message = QStringLiteral("Invalid launch command for player %1: %2")
-                .arg(i + 1)
-                .arg(command.errorMessage);
-            Q_EMIT errorOccurred(message);
-            setStatus(QStringLiteral("Error"));
-            return false;
-        }
-        m_launchCommands.append(command);
-    }
-    m_startingProfile = profile;
     m_hasStartingProfile = true;
 
     setActive(true);
@@ -515,9 +552,8 @@ void SessionRunner::continueStart()
         config[QStringLiteral("borderless")] = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
         const QString presetId = instConfig.presetId.isEmpty() ? QStringLiteral("steam") : instConfig.presetId;
         config[QStringLiteral("presetId")] = presetId;
-        config[QStringLiteral("launcherId")] = m_presetManager ? m_presetManager->getLauncherId(presetId)
-                                                                  : QStringLiteral("steam");
-        const LaunchCommand &command = m_launchCommands.at(i);
+        config[QStringLiteral("launcherId")] = m_startingSnapshot.presets.at(i).launcherId;
+        const LaunchCommand &command = m_startingSnapshot.launchCommands.at(i);
         config[QStringLiteral("gameCommand")] = QVariant::fromValue(
             QStringList{command.program} + command.arguments);
         config[QStringLiteral("workingDirectory")] = command.workingDirectory;
@@ -529,12 +565,10 @@ void SessionRunner::continueStart()
             }
             config[QStringLiteral("devicePaths")] = pathList;
         }
-        QStringList sharedRoots = m_instanceSharedRoots.value(i);
-        if (!command.workingDirectory.isEmpty() && !sharedRoots.contains(command.workingDirectory)) {
-            sharedRoots.append(command.workingDirectory);
-            m_instanceSharedRoots[i] = sharedRoots;
-        }
-        config[QStringLiteral("sharedRoots")] = sharedRoots;
+        // Directory preparations carry their own sources. Shared roots admit
+        // only the selected command's working directory, not every data source.
+        config[QStringLiteral("sharedRoots")] = command.workingDirectory.isEmpty()
+            ? QStringList{} : QStringList{command.workingDirectory};
         m_pendingInstanceConfigs.append(config);
     }
 
@@ -545,27 +579,31 @@ void SessionRunner::continueStart()
 void SessionRunner::beginFinalization(bool startupFailure, const QString &message)
 {
     if (m_finalizing) {
-        if (m_hookProcess && m_hookIsPost) {
+        if (m_hookProcess) {
             m_hookProcess->kill();
             m_hookProcess->deleteLater();
             m_hookProcess = nullptr;
             finishFinalization();
+            return;
         }
+        if (m_streamManager) {
+            m_streamManager->stopAll();
+        }
+        for (auto *instance : m_instances) {
+            if (instance->pid() > 0) {
+                instance->stop();
+            }
+        }
+        continueFinalizationAfterStopping();
         return;
     }
 
     m_finalizing = true;
+    m_finalizationCleanupStarted = false;
     m_startupFailure = startupFailure;
     m_finalizationMessage = message;
 
-    if (m_hookProcess && !m_hookIsPost) {
-        m_hookProcess->kill();
-        m_hookProcess->deleteLater();
-        m_hookProcess = nullptr;
-        finishFinalization();
-        return;
-    }
-    if (m_hookProcess && m_hookIsPost) {
+    if (m_hookProcess) {
         m_hookProcess->kill();
         m_hookProcess->deleteLater();
         m_hookProcess = nullptr;
@@ -573,7 +611,8 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
         return;
     }
 
-    if (!m_postHookArmed && !m_sharedStateActive && m_instances.isEmpty() && m_streamingInstances.isEmpty()) {
+    if (!m_postHookArmed && !m_sharedStateActive && m_instances.isEmpty()
+        && m_streamingInstances.isEmpty() && (!m_streamManager || !m_streamManager->hasOwnedPids())) {
         finishFinalization();
         return;
     }
@@ -585,10 +624,30 @@ void SessionRunner::beginFinalization(bool startupFailure, const QString &messag
     }
 
     for (auto *instance : m_instances) {
-        if (instance->isRunning()) {
+        if (instance->pid() > 0) {
             instance->stop();
         }
     }
+    continueFinalizationAfterStopping();
+}
+
+bool SessionRunner::hasOwnedPids() const
+{
+    for (const auto *instance : m_instances) {
+        if (instance->pid() > 0) {
+            return true;
+        }
+    }
+    return m_streamManager && m_streamManager->hasOwnedPids();
+}
+
+void SessionRunner::continueFinalizationAfterStopping()
+{
+    if (!m_finalizing || m_finalizationCleanupStarted || hasOwnedPids()) {
+        return;
+    }
+
+    m_finalizationCleanupStarted = true;
     restoreDeviceOwnership();
     teardownSharingState();
     teardownStreamingInstances();
@@ -623,7 +682,9 @@ void SessionRunner::finishFinalization()
     } else {
         Q_EMIT sessionStopped();
     }
+    m_sessionStartupComplete = false;
     m_finalizing = false;
+    m_finalizationCleanupStarted = false;
     m_startupFailure = false;
     m_preHookCompleted = false;
     m_postHookArmed = false;
@@ -631,7 +692,7 @@ void SessionRunner::finishFinalization()
     m_hookIsPost = false;
     m_finalizationMessage.clear();
     m_hasStartingProfile = false;
-    m_startingProfile = SessionProfile{};
+    m_startingSnapshot = {};
 }
 
 void SessionRunner::stop()
@@ -703,6 +764,7 @@ QVariantList SessionRunner::instancesAsVariant() const
 void SessionRunner::startNextInstance()
 {
     if (m_nextInstanceToStart >= m_pendingInstanceConfigs.size()) {
+        m_sessionStartupComplete = true;
         setStatus(QStringLiteral("Session running"));
         Q_EMIT runningChanged();
         Q_EMIT instancesChanged();
@@ -721,19 +783,15 @@ void SessionRunner::startNextInstance()
 
     m_instances.append(instance);
 
-    if (!instance->start(config, index)) {
+    m_launchErrorReported = false;
+    if (!instance->start(config, index, m_instanceDirectoryPreparations.value(index))) {
         qWarning() << "Failed to start instance" << index;
-        beginFinalization(true, QStringLiteral("Failed to start instance %1").arg(index + 1));
+        if (!m_launchErrorReported) {
+            beginFinalization(true, QStringLiteral("Failed to start instance %1").arg(index + 1));
+        }
         return;
     }
 
-    bool isStreamingInstance = config.value(QStringLiteral("outputMode")).toString() == QStringLiteral("streaming");
-    // Streaming instances and absent window manager: start next immediately
-    if (isStreamingInstance || !m_windowManager || !m_windowManager->isAvailable()) {
-        ++m_nextInstanceToStart;
-        startNextInstance();
-    }
-    // Otherwise wait for onWindowPositioned to trigger the next start
 }
 
 void SessionRunner::cleanupInstances()
@@ -753,6 +811,7 @@ void SessionRunner::cleanupInstances()
     teardownStreamingInstances();
     m_streamingInstances.clear();
     m_nextInstanceToStart = 0;
+    m_instanceDirectoryPreparations.clear();
 }
 
 
@@ -862,13 +921,12 @@ bool SessionRunner::setupSessionResources()
         qWarning() << "SessionRunner: Helper not available for session resource setup";
         return false;
     }
-
+    const bool shareSteamLibraries = m_startingSnapshot.shareSteamLibraries;
     // Arm the sharing-state tracker: teardown must run when the session ends,
     // including when the last game exits on its own
     m_sharedStateActive = true;
     m_steamSharedUsers.clear();
-    m_instanceSharedRoots.clear();
-
+    m_instanceDirectoryPreparations.clear();
     // Both paths must come from the host; Flatpak may hide its home symlink.
     const QVariantMap homeInfo = m_helperClient->getUserHomeInfoByUid(static_cast<uint>(::getuid()));
     const QString compositorHome = homeInfo.value(QStringLiteral("home")).toString();
@@ -885,13 +943,15 @@ bool SessionRunner::setupSessionResources()
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].username;
-        const QString &presetId = profile.instances[i].presetId;
-
+        const QString presetId = profile.instances[i].presetId.isEmpty()
+            ? QStringLiteral("steam") : profile.instances[i].presetId;
         if (username.isEmpty()) {
             continue;
         }
 
-        LaunchPreset preset = m_presetManager->getPreset(presetId.isEmpty() ? QStringLiteral("steam") : presetId);
+        const LaunchPreset preset = m_hasStartingProfile && i < m_startingSnapshot.presets.size()
+            ? m_startingSnapshot.presets.at(i)
+            : m_presetManager->getPreset(presetId.isEmpty() ? QStringLiteral("steam") : presetId);
         const QStringList requiredIntegrations = preset.requiredIntegrations;
         const bool selectedSteamShortcut = profile.instances[i].gameSelection.launcherId == QStringLiteral("steam")
             && profile.instances[i].gameSelection.backend == QStringLiteral("shortcut");
@@ -908,7 +968,7 @@ bool SessionRunner::setupSessionResources()
             allSucceeded = false;
         }
         if (requiresSteam && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
-            && (m_steamConfigManager->syncShortcutsEnabled() || selectedSteamShortcut)) {
+            && (m_startingSnapshot.syncSteamShortcuts || selectedSteamShortcut)) {
             if (!m_steamConfigManager->sourceAccountAvailable()) {
                 Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
                 return false;
@@ -945,7 +1005,7 @@ bool SessionRunner::setupSessionResources()
                 qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
                 allSucceeded = false;
             }
-            if (m_heroicConfigManager->syncShortcutsEnabled()) {
+            if (m_startingSnapshot.syncHeroicShortcuts) {
                 qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
                 if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
                     qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
@@ -954,45 +1014,45 @@ bool SessionRunner::setupSessionResources()
             }
         }
 
-        // Prefer the instance's persisted directories (snapshotted at preset
-        // selection and saved in the profile); fall back to the preset's
-        // current defaults only when no snapshot was ever taken. An explicitly
-        // empty snapshot must stay empty — it must not inherit later preset
-        // edits.
-        QList<DataDirectory> dataDirs = profile.instances[i].dataDirectories;
-        const bool usingPresetDataDirectories =
-            dataDirs.isEmpty() && !profile.instances[i].dataDirectoriesSnapshotted;
-        if (usingPresetDataDirectories) {
-            dataDirs = preset.dataDirectories;
-        }
-        if (i < m_launchCommands.size()) {
+        const QList<DataDirectory> dataDirs = preset.dataDirectories;
+        QVariantList directoryPlans;
+        QSet<QString> plannedAclPaths;
+        const auto isCoveredByConfiguredAcl = [&dataDirs](const QString &path) {
+            for (const DataDirectory &dir : dataDirs) {
+                if (dir.mode != QStringLiteral("acl") || !QDir::isAbsolutePath(dir.path)) {
+                    continue;
+                }
+                const QString aclPath = QDir::cleanPath(dir.path);
+                if (path == aclPath || aclPath == QStringLiteral("/")
+                    || path.startsWith(aclPath + QLatin1Char('/'))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto appendAclPreparation = [&directoryPlans, &plannedAclPaths](const QString &path) {
+            const QString cleanPath = QDir::cleanPath(path);
+            if (plannedAclPaths.contains(cleanPath)) {
+                return;
+            }
+            plannedAclPaths.insert(cleanPath);
+            directoryPlans.append(DirectoryPreparation{path, QStringLiteral("acl"), {}, {}}.toVariant());
+        };
+        if (i < m_startingSnapshot.launchCommands.size()) {
             const QStringList applicationDirectories =
-                applicationAccessDirectories(m_launchCommands.at(i), compositorHome);
+                applicationAccessDirectories(m_startingSnapshot.launchCommands.at(i), compositorHome);
             for (const QString &directory : applicationDirectories) {
                 const QString applicationDirectory = QDir::cleanPath(directory);
-                bool coveredByAclDataDirectory = false;
-                for (const DataDirectory &dir : dataDirs) {
-                    if (dir.mode != QStringLiteral("acl") || !QDir::isAbsolutePath(dir.path)) {
-                        continue;
-                    }
-                    const QString aclPath = QDir::cleanPath(dir.path);
-                    if (applicationDirectory == aclPath || aclPath == QStringLiteral("/")
-                        || applicationDirectory.startsWith(aclPath + QLatin1Char('/'))) {
-                        coveredByAclDataDirectory = true;
-                        break;
-                    }
-                }
-                if (coveredByAclDataDirectory) {
+                if (isCoveredByConfiguredAcl(applicationDirectory)) {
                     continue;
                 }
 
-                const bool parentsOk = m_helperClient->setPathAclWithParents(applicationDirectory, username);
-                const bool contentsOk = m_helperClient->setDirectoryAcl(applicationDirectory, username, true);
-                if (!parentsOk || !contentsOk) {
+                if (!m_helperClient->setPathAclWithParents(applicationDirectory, username)) {
                     qCWarning(couchplaySteam) << "Failed to set ACL for selected application directory"
                                               << applicationDirectory << "user" << username;
                     allSucceeded = false;
                 }
+                appendAclPreparation(applicationDirectory);
             }
         }
 
@@ -1053,23 +1113,10 @@ bool SessionRunner::setupSessionResources()
             }
         }
         if (dataDirs.isEmpty()) {
-
-
-
-
-
-
-
+            m_instanceDirectoryPreparations[i] = directoryPlans;
             qDebug() << "SessionRunner: No data directories for instance" << i << "user" << username;
             continue;
         }
-        QStringList sharedRoots;
-        for (const DataDirectory &sharedDir : dataDirs) {
-            if (!sharedDir.path.isEmpty() && !sharedRoots.contains(sharedDir.path)) {
-                sharedRoots.append(sharedDir.path);
-            }
-        }
-        m_instanceSharedRoots[i] = sharedRoots;
 
         qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
 
@@ -1080,16 +1127,15 @@ bool SessionRunner::setupSessionResources()
             // own Steam root, account state and userdata stay untouched) —
             // never mount it at the home-relative path, which would shadow
             // the player's installation
-            // The Steam-root overlay entry is a library-sharing marker, not a
-            // generic directory. Never let a stale Steam snapshot overlay the
-            // full compositor Steam root for a non-Steam launcher.
+            // The Steam-root overlay marker represents library sharing, not a generic directory.
+            // Never expose the compositor account root for a non-Steam launcher.
             if (dir.mode == QStringLiteral("overlay") && m_steamConfigManager
                 && m_steamConfigManager->isSteamRootPath(dir.path)) {
                 if (!requiresSteam) {
                     qCWarning(couchplaySteam) << "Ignoring Steam root data marker for non-Steam launcher" << username;
                     continue;
                 }
-                if (!m_steamConfigManager->shareLibraryEnabled()) {
+                if (!shareSteamLibraries) {
                     qDebug() << "SessionRunner: Library sharing disabled, skipping Steam root entry for" << dir.path;
                     continue;
                 }
@@ -1102,7 +1148,7 @@ bool SessionRunner::setupSessionResources()
                 }
                 DataDirectory steamMarker = dir;
                 steamMarker.path = m_steamConfigManager->steamPaths().steamRoot;
-                if (!m_steamConfigManager->prepareDataDir(steamMarker, username)) {
+                if (!m_steamConfigManager->prepareDataDir(steamMarker, username, directoryPlans)) {
                     qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
                     allSucceeded = false;
                     continue;
@@ -1115,19 +1161,11 @@ bool SessionRunner::setupSessionResources()
                 continue;
             }
 
-            // Stale snapshots may carry the heroic config root as a copy dir;
-            // config sync above replaces the generic whole-directory copy
+            // Heroic config is synchronized selectively above; skip a generic copy of its root.
             if (dir.mode == QStringLiteral("copy") && requiresHeroic && m_heroicConfigManager
                 && dir.path == m_heroicConfigManager->configPath()) {
                 qDebug() << "SessionRunner: Heroic config handled by config sync, skipping copy of" << dir.path;
                 continue;
-            }
-
-            if (requiresSteam && m_steamConfigManager) {
-                if (!m_steamConfigManager->prepareDataDir(dir, username)) {
-                    qCWarning(couchplaySteam) << "Steam prepareDataDir failed for" << dir.path;
-                    allSucceeded = false;
-                }
             }
 
             const HomePathMapping mapping = mapHomeRelativePath(dir.path, compositorHome, canonicalCompositorHome);
@@ -1136,127 +1174,69 @@ bool SessionRunner::setupSessionResources()
                 allSucceeded = false;
                 continue;
             }
-            QString playerViewRelative; // where the player sees this directory
-            if (dir.mode == QStringLiteral("copy")) {
-                QString relativePath;
-                if (mapping.kind == HomePathKind::Relative) {
-                    relativePath = mapping.relativePath;
-                } else {
-                    // External sources have no home-relative location; map the
-                    // full normalized path under .couchplay/copies — a basename
-                    // alone would collide (/mnt/a/save vs /media/b/save) and
-                    // replacement semantics would delete the first copy
-                    relativePath = QStringLiteral(".couchplay/copies/")
-                        + dataDirectoryStagingSlug(dir.path, compositorHome);
-                }
-                if (!m_helperClient->copyDirectoryToUser(username, dir.path, relativePath)) {
-                    qWarning() << "SessionRunner: Failed to copy directory" << dir.path << "for user" << username;
-                    allSucceeded = false;
-                } else {
-                    playerViewRelative = relativePath;
-                }
-            } else if (dir.mode == QStringLiteral("overlay") || dir.mode == QStringLiteral("bind")) {
-                // Both mount at the player's home-relative equivalent path
-                // (external paths land under .couchplay/mounts), mirroring
-                // computeMountTarget's empty-alias mapping. The player view is
-                // only recorded on success: mirroring staged data into a
-                // failed mount's plain target directory would put files where
-                // a later successful mount would hide them.
-                QString relativePath;
-                if (mapping.kind == HomePathKind::Relative) {
-                    relativePath = mapping.relativePath;
-                } else {
-                    relativePath = QStringLiteral(".couchplay/mounts") + dir.path;
-                }
-                bool mounted = false;
-                if (dir.mode == QStringLiteral("overlay")) {
-                    mounted = m_helperClient->setupOverlayMount(username, dir.path, QString());
-                    if (!mounted) {
-                        qWarning() << "SessionRunner: Failed to setup overlay mount for" << dir.path
-                                   << "user" << username;
-                        allSucceeded = false;
-                    }
-                } else {
-                    // Escaped spec: paths containing '|' or '\' survive the
-                    // helper's source|alias wire format
-                    const QStringList dirSpec = {encodeMountSpec(dir.path, QString())};
-                    mounted = m_helperClient->mountSharedDirectories(username, dirSpec) >= 1;
-                    if (!mounted) {
-                        qWarning() << "SessionRunner: Failed to bind mount" << dir.path << "for user" << username;
-                        allSucceeded = false;
-                    }
-                }
-                if (mounted) {
-                    playerViewRelative = relativePath;
-                }
-            } else if (dir.mode == QStringLiteral("acl")) {
-                const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
-                const bool contentsOk = m_helperClient->setDirectoryAcl(dir.path, username, true);
-                if (!parentsOk || !contentsOk) {
-                    qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
-                    allSucceeded = false;
-                }
+            QString targetAlias;
+            if (dir.mode == QStringLiteral("copy") && mapping.kind == HomePathKind::External) {
+                targetAlias = QStringLiteral(".couchplay/copies/")
+                    + DirectoryPlan::dataDirectoryStagingSlug(dir.path, compositorHome);
+            } else if (mapping.kind == HomePathKind::Relative) {
+                targetAlias = mapping.relativePath;
+            } else {
+                targetAlias = QStringLiteral(".couchplay/mounts") + QDir::cleanPath(dir.path);
             }
 
-            // Merge hand-staged per-player files into the player's view (after
-            // the mount/copy). Only copy and overlay qualify: both give the
-            // player a private tree, while bind mounts have no upper layer —
-            // mirroring into a bind mount would mutate and re-own the shared
-            // source itself.
-            if (!playerViewRelative.isEmpty()
-                && (dir.mode == QStringLiteral("copy") || dir.mode == QStringLiteral("overlay"))) {
-                const QString stagingDir = playerDataStagingRoot(presetId.isEmpty() ? QStringLiteral("steam") : presetId,
-                                                                 username)
-                    + QLatin1Char('/') + dataDirectoryStagingSlug(dir.path, compositorHome);
-                const QDir staging(stagingDir);
-                if (staging.exists() && !staging.entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot).isEmpty()) {
-                    qCDebug(couchplaySharing) << "Mirroring staged data" << stagingDir << "for user" << username;
-                    if (!m_helperClient->mirrorDirectoryContents(username, stagingDir, playerViewRelative)) {
-                        qWarning() << "SessionRunner: Failed to mirror staged data" << stagingDir;
+            if (dir.mode == QStringLiteral("acl")) {
+                if (!plannedAclPaths.contains(QDir::cleanPath(dir.path))) {
+                    const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
+                    appendAclPreparation(dir.path);
+                    if (!parentsOk) {
+                        qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
                         allSucceeded = false;
+                    }
+                }
+                continue;
+            }
+
+            QString stagingPath;
+            if (dir.mode == QStringLiteral("copy") || dir.mode == QStringLiteral("overlay")) {
+                const QString stagingDir = playerDataStagingRoot(presetId, username) + QLatin1Char('/')
+                    + DirectoryPlan::dataDirectoryStagingSlug(dir.path, compositorHome);
+                if (QDir(stagingDir).exists()) {
+                    // The GUI may use a caller-owned storage alias. Pass the
+                    // resolved directory; the helper still walks it no-follow.
+                    stagingPath = QFileInfo(stagingDir).canonicalFilePath();
+                    if (stagingPath.isEmpty()) {
+                        Q_EMIT errorOccurred(
+                            QStringLiteral("Could not resolve player staging directory: %1").arg(stagingDir));
+                        allSucceeded = false;
+                        continue;
                     }
                 }
             }
-
-            if (requiresSteam && m_steamConfigManager) {
-                if (!m_steamConfigManager->finalizeDataDir(dir, username)) {
-                    qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
-                    allSucceeded = false;
-                }
+            directoryPlans.append(DirectoryPreparation{dir.path, dir.mode, targetAlias, stagingPath}.toVariant());
+            if (requiresSteam && m_steamConfigManager
+                && !m_steamConfigManager->finalizeDataDir(dir, username)) {
+                qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
+                allSucceeded = false;
             }
         }
+        m_instanceDirectoryPreparations[i] = directoryPlans;
+
     }
+
 
     return allSucceeded;
 }
 
-void SessionRunner::teardownSharedDirectories()
-{
-    if (!m_helperClient) {
-        return;
-    }
-
-    if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, cannot unmount shared directories";
-        return;
-    }
-
-    m_helperClient->unmountAllSharedDirectories();
-}
 
 void SessionRunner::teardownSharingState()
 {
-    // Release the privileged sharing state exactly once per session: shared
-    // mounts plus per-player Steam library sharing. Invoked from stop() and
-    // from the natural-exit path (last game exited on its own) — without the
-    // latter, mounts persist for the helper's lifetime and the next session
-    // stacks on top or fails reusing the same overlay work directory.
+    // Restore generated per-player Steam configuration. Directory views are
+    // owned by each instance unit and disappear with its control group.
     if (!m_sharedStateActive) {
         return;
     }
     m_sharedStateActive = false;
 
-    teardownSharedDirectories();
 
     if (m_steamConfigManager && !m_steamSharedUsers.isEmpty()) {
         const QSet<QString> sharedUsers = m_steamSharedUsers;
@@ -1364,25 +1344,42 @@ QList<QRect> SessionRunner::calculateLayout(const QString &layout,
 void SessionRunner::onInstanceStarted()
 {
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
-    if (instance) {
-        int idx = instance->index();
+    if (!instance || m_finalizing) {
+        return;
+    }
 
-        if (m_streamingInstances.contains(idx)) {
-            if (idx < m_pendingInstanceConfigs.size()) {
-                m_streamManager->startStream(idx, m_pendingInstanceConfigs[idx]);
+    const int idx = instance->index();
+    if (idx != m_nextInstanceToStart) {
+        return;
+    }
+
+    Q_EMIT instanceStarted(idx);
+    Q_EMIT instancesChanged();
+    Q_EMIT runningInstanceCountChanged();
+
+    if (m_streamingInstances.contains(idx)) {
+        m_streamStartupErrorReported = false;
+        if (!m_streamManager || idx >= m_pendingInstanceConfigs.size()
+            || !m_streamManager->startStream(idx, m_pendingInstanceConfigs[idx])) {
+            if (!m_finalizing && !m_streamStartupErrorReported) {
+                beginFinalization(true, QStringLiteral("Failed to start streaming instance %1").arg(idx + 1));
             }
-        } else {
-            positionInstanceWindow(instance);
         }
-
-        Q_EMIT instanceStarted(idx);
-        Q_EMIT instancesChanged();
-        Q_EMIT runningInstanceCountChanged();
+        return;
+    }
+    if (m_windowManager && m_windowManager->isAvailable()) {
+        positionInstanceWindow(instance);
+    } else {
+        ++m_nextInstanceToStart;
+        startNextInstance();
     }
 }
 
 void SessionRunner::onInstanceStopped()
 {
+    if (!m_active && !m_hasStartingProfile) {
+        return;
+    }
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
     if (!instance) {
         return;
@@ -1390,21 +1387,47 @@ void SessionRunner::onInstanceStopped()
 
     const int idx = instance->index();
     if (m_streamingInstances.contains(idx)) {
-        m_streamManager->stopStream(idx);
-        cleanupStreamingInstance(idx);
+        bool stopRequested = false;
+        if (m_streamManager) {
+            stopRequested = m_streamManager->stopStream(idx);
+        }
+        if (stopRequested || !m_streamManager || !m_streamManager->hasOwnedPid(idx)) {
+            cleanupStreamingInstance(idx);
+        }
     }
 
     Q_EMIT instanceStopped(idx);
     Q_EMIT instancesChanged();
     Q_EMIT runningInstanceCountChanged();
 
-    if (!m_finalizing && !isRunning()) {
+    if (m_finalizing) {
+        continueFinalizationAfterStopping();
+        return;
+    }
+    if (!m_sessionStartupComplete) {
+        beginFinalization(true,
+                          QStringLiteral("Instance %1 stopped before session startup completed").arg(idx + 1));
+        return;
+    }
+    bool anyOwnedPid = false;
+    for (GamescopeInstance *activeInstance : m_instances) {
+        if (activeInstance->pid() > 0) {
+            anyOwnedPid = true;
+            break;
+        }
+    }
+    if (!anyOwnedPid) {
         beginFinalization(false);
     }
 }
-
 void SessionRunner::onInstanceError(const QString &message)
 {
+    if (!m_active && !m_hasStartingProfile) {
+        return;
+    }
+    if (m_sessionStartupComplete && message == QStringLiteral("exited")) {
+        return;
+    }
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
     QString fullMessage;
     if (instance) {
@@ -1413,6 +1436,12 @@ void SessionRunner::onInstanceError(const QString &message)
         fullMessage = message;
     }
     Q_EMIT errorOccurred(fullMessage);
+    if (!m_sessionStartupComplete && !m_finalizing) {
+        if (instance && instance->index() == m_nextInstanceToStart) {
+            m_launchErrorReported = true;
+        }
+        beginFinalization(true, fullMessage);
+    }
 }
 
 void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
@@ -1432,16 +1461,25 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 
 void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)
 {
-    Q_UNUSED(requestId)
+    if (m_finalizing || requestId != m_nextInstanceToStart) {
+        return;
+    }
+    GamescopeInstance *positionedInstance = nullptr;
+    for (GamescopeInstance *instance : m_instances) {
+        if (instance->index() == requestId) {
+            positionedInstance = instance;
+            break;
+        }
+    }
+    if (!positionedInstance || !positionedInstance->isRunning()) {
+        return;
+    }
+
     if (!m_positionedWindowIds.contains(windowId)) {
         m_positionedWindowIds.append(windowId);
     }
-
-    // Trigger next sequential instance launch
-    if (!m_pendingInstanceConfigs.isEmpty()) {
-        ++m_nextInstanceToStart;
-        startNextInstance();
-    }
+    ++m_nextInstanceToStart;
+    startNextInstance();
 }
 
 void SessionRunner::onWindowPositioningTimeout(int requestId)
@@ -1471,7 +1509,7 @@ void SessionRunner::setupGlobalShortcut()
 
 void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex)
 {
-    if (!isRunning()) {
+    if (!m_active || !m_hasStartingProfile || m_finalizing) {
         return;
     }
 
@@ -1661,8 +1699,14 @@ void SessionRunner::teardownStreamingInstances()
 
 void SessionRunner::cleanupStreamingInstance(int index)
 {
-    if (!m_streamingInstances.contains(index)) {
+    if (!m_streamingInstances.contains(index)
+        || (m_streamManager && m_streamManager->hasOwnedPid(index))) {
         return;
+    }
+    for (const auto *instance : m_instances) {
+        if (instance->index() == index && instance->pid() > 0) {
+            return;
+        }
     }
 
     const StreamingInstanceInfo &info = m_streamingInstances[index];

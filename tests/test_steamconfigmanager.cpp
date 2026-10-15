@@ -3,9 +3,17 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QList>
+#include <QPair>
+#include <QStringList>
+#include <QVariantList>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QVariantMap>
 
+#include "CouchPlayHelperClient.h"
+#include "PresetManager.h"
 #include "SteamConfigManager.h"
 
 namespace {
@@ -53,12 +61,116 @@ private:
     QByteArray m_value;
     bool m_wasSet;
 };
+class SteamPlanHelper final : public CouchPlayHelperClient
+{
+public:
+    bool isAvailable() const override { return true; }
+    QString targetHome;
+    QString targetSteamRoot;
+    QStringList parentAclPaths;
+    QList<QPair<QString, QByteArray>> writtenFiles;
+
+    QVariantMap getUserInfo(const QString &) override
+    {
+        return {{QStringLiteral("uid"), 5555u},
+                {QStringLiteral("gid"), 5555u},
+                {QStringLiteral("home"), targetHome}};
+    }
+    QString getUserSteamRoot(const QString &) override { return targetSteamRoot; }
+    QString getUserSteamId(const QString &) override { return QStringLiteral("76561198000000000"); }
+    bool setPathAclWithParents(const QString &path, const QString &) override
+    {
+        parentAclPaths.append(path);
+        return true;
+    }
+    bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &) override
+    {
+        if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) return false;
+        QFile file(targetPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+        if (file.write(content) != content.size()) return false;
+        writtenFiles.append({targetPath, content});
+        return true;
+    }
+};
 
 class TestSteamConfigManager : public QObject
 {
     Q_OBJECT
 
 private Q_SLOTS:
+    void testPreparationPlansOnlyCommonContentAndCleanupRestoresConfig()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString steamRoot = home.path() + QStringLiteral("/.steam/steam");
+        const QString externalLibrary = home.path() + QStringLiteral("/external library");
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+        const QString primaryCommon = steamRoot + QStringLiteral("/steamapps/common");
+        const QString externalCommon = externalLibrary + QStringLiteral("/steamapps/common");
+        QVERIFY(QDir().mkpath(primaryCommon));
+        QVERIFY(QDir().mkpath(externalCommon));
+        QFile sourceSentinel(primaryCommon + QStringLiteral("/source.txt"));
+        QVERIFY(sourceSentinel.open(QIODevice::WriteOnly));
+        QCOMPARE(sourceSentinel.write("source remains private\n"), qint64(23));
+        sourceSentinel.close();
+
+        QFile libraries(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        QVERIFY(libraries.open(QIODevice::WriteOnly | QIODevice::Text));
+        libraries.write("\"libraryfolders\"\n{\n"
+                        "  \"0\"\n  {\n    \"path\"\t\"" + steamRoot.toUtf8() + "\"\n  }\n"
+                        "  \"1\"\n  {\n    \"path\"\t\"" + externalLibrary.toUtf8() + "\"\n  }\n}\n");
+        libraries.close();
+
+        SteamPlanHelper helper;
+        helper.targetHome = home.path() + QStringLiteral("/player-home");
+        helper.targetSteamRoot = helper.targetHome + QStringLiteral("/.steam/steam");
+        SteamConfigManager manager;
+        manager.setHelperClient(&helper);
+        manager.setShareLibraryEnabled(true);
+        QVERIFY(manager.isSteamDetected());
+
+        DataDirectory marker;
+        marker.path = steamRoot;
+        marker.mode = QStringLiteral("overlay");
+        QVariantList preparations;
+        QVERIFY(manager.prepareDataDir(marker, QStringLiteral("player"), preparations));
+        QCOMPARE(preparations.size(), 2);
+        const QStringList expectedKeys{QStringLiteral("mode"), QStringLiteral("source"),
+                                       QStringLiteral("stagingPath"), QStringLiteral("targetAlias")};
+        const QVariantMap primary = preparations.at(0).toMap();
+        QCOMPARE(primary.keys(), expectedKeys);
+        QCOMPARE(primary.value(QStringLiteral("source")).toString(), primaryCommon);
+        QCOMPARE(primary.value(QStringLiteral("mode")).toString(), QStringLiteral("overlay"));
+        QCOMPARE(primary.value(QStringLiteral("targetAlias")).toString(),
+                 QStringLiteral(".couchplay/steam-libs/0/steamapps/common"));
+        QVERIFY(primary.value(QStringLiteral("stagingPath")).toString().isEmpty());
+        const QVariantMap external = preparations.at(1).toMap();
+        QCOMPARE(external.value(QStringLiteral("source")).toString(), externalCommon);
+        QCOMPARE(external.value(QStringLiteral("targetAlias")).toString(),
+                 QStringLiteral(".couchplay/steam-libs/1/steamapps/common"));
+        QVERIFY(helper.parentAclPaths.isEmpty());
+
+        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        const QString targetLibraryFolders = helper.targetSteamRoot + QStringLiteral("/config/libraryfolders.vdf");
+        QCOMPARE(helper.writtenFiles.size(), 1);
+        QCOMPARE(helper.writtenFiles.constFirst().first, targetLibraryFolders);
+        QVERIFY(QFile::exists(targetLibraryFolders));
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player")));
+        QCOMPARE(helper.writtenFiles.size(), 2);
+        QCOMPARE(helper.writtenFiles.constLast().first, targetLibraryFolders);
+        QFile restored(targetLibraryFolders);
+        QVERIFY(restored.open(QIODevice::ReadOnly));
+        QCOMPARE(restored.readAll(), QByteArray("\"libraryfolders\"\n{\n}\n"));
+        QVERIFY(sourceSentinel.open(QIODevice::ReadOnly));
+        QCOMPARE(sourceSentinel.readAll(), QByteArray("source remains private\n"));
+    }
+
     void testLoadGamesMergesNativeAndShortcut()
     {
         QTemporaryDir home;

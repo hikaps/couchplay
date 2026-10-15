@@ -188,9 +188,8 @@ public:
     Q_INVOKABLE QStringList extractShortcutDirectories() const;
 
     bool syncShortcutsToUser(const QString &targetUsername);
-    bool shareLibraryToUser(const QString &targetUsername);
     bool cleanupLibrarySharing(const QString &targetUsername);
-    bool prepareDataDir(const DataDirectory &dir, const QString &username);
+    bool prepareDataDir(const DataDirectory &dir, const QString &username, QVariantList &directoryPreparations);
     bool finalizeDataDir(const DataDirectory &dir, const QString &username);
 
 Q_SIGNALS:

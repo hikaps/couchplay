@@ -20,6 +20,7 @@
 #include <KSharedConfig>
 
 #include "PresetManager.h"
+#include "../helper/DirectoryPlan.h"
 #include "SteamConfigManager.h"
 
 using DocumentPaths = QMap<QString, QByteArray>;
@@ -34,7 +35,7 @@ public Q_SLOTS:
     {
         DocumentPaths paths;
         for (const QString &id : ids) {
-            QByteArray path("/srv/OFME-Linux");
+            QByteArray path("/srv/ExampleApp");
             path.append('\0');
             paths.insert(id, path);
         }
@@ -56,6 +57,7 @@ private Q_SLOTS:
     void testGetCommand();
     void testStaleFlatpakCacheIgnored();
     void testBuildLaunchCommand();
+    void testUnknownPresetDoesNotSelectAnotherApplication();
     void testGetWorkingDirectory();
     void testGetLauncherId();
     void testRequiredIntegrations();
@@ -121,8 +123,8 @@ void TestPresetManager::testResolvePortalHostPath()
     const QByteArray oldFlatpakId = qgetenv("FLATPAK_ID");
     qputenv("FLATPAK_ID", "io.github.hikaps.couchplay");
     PresetManager manager;
-    const QString root = manager.resolveHostPath(QStringLiteral("/run/flatpak/doc/test-id/OFME-Linux"));
-    const QString child = manager.resolveHostPath(QStringLiteral("/run/user/1000/doc/test-id/OFME-Linux/icons"));
+    const QString root = manager.resolveHostPath(QStringLiteral("/run/flatpak/doc/test-id/ExampleApp"));
+    const QString child = manager.resolveHostPath(QStringLiteral("/run/user/1000/doc/test-id/ExampleApp/icons"));
     if (hadFlatpakId) {
         qputenv("FLATPAK_ID", oldFlatpakId);
     } else {
@@ -130,8 +132,8 @@ void TestPresetManager::testResolvePortalHostPath()
     }
     bus.unregisterObject(QStringLiteral("/org/freedesktop/portal/documents"));
     bus.unregisterService(QStringLiteral("org.freedesktop.portal.Documents"));
-    QCOMPARE(root, QStringLiteral("/srv/OFME-Linux"));
-    QCOMPARE(child, QStringLiteral("/srv/OFME-Linux/icons"));
+    QCOMPARE(root, QStringLiteral("/srv/ExampleApp"));
+    QCOMPARE(child, QStringLiteral("/srv/ExampleApp/icons"));
 }
 
 void TestPresetManager::init()
@@ -243,9 +245,16 @@ void TestPresetManager::testBuildLaunchCommand()
     QVERIFY(!manager.buildLaunchCommand(QStringLiteral("steam"), invalid).isValid());
 }
 
+void TestPresetManager::testUnknownPresetDoesNotSelectAnotherApplication()
+{
+    PresetManager manager;
+    const LaunchPreset missing = manager.getPreset(QStringLiteral("deleted-preset-id"));
+    QVERIFY(missing.id.isEmpty());
+    QVERIFY(manager.buildLaunchCommand(QStringLiteral("deleted-preset-id"), {}).errorMessage
+                .contains(QStringLiteral("not found")));
+}
 void TestPresetManager::testStaleFlatpakCacheIgnored()
 {
-    // Pre-seed a stale v1 cache; a fresh timestamp keeps it inside the TTL so
     // only the version gate can prevent it from overriding the builtin.
     KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
     KConfigGroup cacheGroup = config->group(QStringLiteral("FlatpakCache"));
@@ -335,9 +344,9 @@ void TestPresetManager::testApplicationAccessDirectoriesSafety()
     QTemporaryDir temporaryHome;
     QVERIFY(temporaryHome.isValid());
     const QString home = temporaryHome.path();
-    const QString applicationDir = home + QStringLiteral("/.local/share/OnlineFix Linux Launcher");
+    const QString applicationDir = home + QStringLiteral("/.local/share/Example Launcher");
     QVERIFY(QDir().mkpath(applicationDir));
-    const QString executable = applicationDir + QStringLiteral("/onlinefix-linux-launcher");
+    const QString executable = applicationDir + QStringLiteral("/example-launcher");
     QFile executableFile(executable);
     QVERIFY(executableFile.open(QIODevice::WriteOnly));
     executableFile.close();
@@ -457,10 +466,10 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
 {
     QTemporaryDir applicationHome(QDir::homePath() + QStringLiteral("/couchplay-preset-test-XXXXXX"));
     QVERIFY(applicationHome.isValid());
-    const QString applicationDir = applicationHome.path() + QStringLiteral("/OnlineFix Linux Launcher");
+    const QString applicationDir = applicationHome.path() + QStringLiteral("/Example Launcher");
     QVERIFY(QDir().mkpath(applicationDir));
 
-    const QString executable = applicationDir + QStringLiteral("/onlinefix-linux-launcher");
+    const QString executable = applicationDir + QStringLiteral("/example-launcher");
     QFile executableFile(executable);
     QVERIFY(executableFile.open(QIODevice::WriteOnly));
     executableFile.close();
@@ -472,13 +481,13 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
     QVERIFY(updatedExecutableFile.open(QIODevice::WriteOnly));
     updatedExecutableFile.close();
 
-    const QString desktopFilePath = m_tempDir->filePath(QStringLiteral("OnlineFix.desktop"));
+    const QString desktopFilePath = m_tempDir->filePath(QStringLiteral("ExampleLauncher.desktop"));
     QFile desktopFile(desktopFilePath);
     QVERIFY(desktopFile.open(QIODevice::WriteOnly | QIODevice::Text));
     desktopFile.write(QStringLiteral(
         "[Desktop Entry]\n"
         "Type=Application\n"
-        "Name=OnlineFix\n"
+        "Name=Example Launcher\n"
         "Exec = \"%1\" --profile \"two  words\" %f\n"
         "Path=%2\n").arg(executable, applicationDir).toUtf8());
     desktopFile.close();
@@ -497,7 +506,7 @@ void TestPresetManager::testDesktopImportPreservesQuotedExecAndSharesApplication
         QVERIFY(manager.getDataDirectories(id).isEmpty());
 
         QVERIFY(manager.updateCustomPreset(id,
-                                           QStringLiteral("OnlineFix updated"),
+                                           QStringLiteral("Example Launcher updated"),
                                            QStringLiteral("\"%1\"").arg(updatedExecutable),
                                            updatedApplicationDir,
                                            QStringLiteral("updated-icon")));
@@ -819,14 +828,14 @@ void TestPresetManager::testStagingSlugInjective()
     // "/"-collapsing alone is not injective: these two paths collapsed to the
     // same name and would bleed staged data into each other's player views
     QString home = QStringLiteral("/home/compositor");
-    QString slugA = dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home);
-    QString slugB = dataDirectoryStagingSlug(QStringLiteral("/mnt/a/b_c"), home);
+    QString slugA = DirectoryPlan::dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home);
+    QString slugB = DirectoryPlan::dataDirectoryStagingSlug(QStringLiteral("/mnt/a/b_c"), home);
     QVERIFY(slugA.startsWith(QStringLiteral("mnt_a_b_c-")));
     QVERIFY(slugB.startsWith(QStringLiteral("mnt_a_b_c-")));
     QVERIFY(slugA != slugB);
 
     // Stable across calls
-    QCOMPARE(dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home), slugA);
+    QCOMPARE(DirectoryPlan::dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home), slugA);
 }
 
 void TestPresetManager::testKConfigMigrationLegacySharedDirectories()

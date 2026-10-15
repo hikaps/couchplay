@@ -8,7 +8,6 @@
 #include "SteamConfigManager.h"
 
 #include <QByteArray>
-#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDBusArgument>
 #include <QDBusConnection>
@@ -383,30 +382,6 @@ DataDirectory DataDirectory::fromVariant(const QVariant &var)
     return dir;
 }
 
-QString dataDirectoryStagingSlug(const QString &dirPath, const QString &compositorHome)
-{
-    // Persisted staging identity, not destination routing. Preserve its encoding
-    // so existing hand-seeded player files remain discoverable.
-    QString relative;
-    if (!compositorHome.isEmpty() && dirPath.startsWith(compositorHome + QLatin1Char('/'))) {
-        relative = dirPath.mid(compositorHome.length() + 1);
-    } else {
-        // External path: sanitize the full path into a unique folder name
-        relative = dirPath;
-        while (relative.startsWith(QLatin1Char('/'))) {
-            relative.remove(0, 1);
-        }
-    }
-    QString slug = relative;
-    slug.replace(QLatin1Char('/'), QLatin1Char('_'));
-    // "_"-collapsing is not injective (/a_b/c vs /a/b_c); append a short
-    // stable hash of the normalized path so distinct sources can't share
-    // a staging folder and bleed data into each other's player views
-    const QByteArray hash =
-        QCryptographicHash::hash(relative.toUtf8(), QCryptographicHash::Sha256).toHex().left(8);
-    slug += QLatin1Char('-') + QString::fromLatin1(hash);
-    return slug;
-}
 
 QString encodeDataDirectories(const QList<DataDirectory> &directories)
 {
@@ -799,10 +774,7 @@ LaunchPreset PresetManager::getPreset(const QString &id) const
             return copy;
         }
     }
-    if (!m_builtinPresets.isEmpty()) {
-        return m_builtinPresets.first();
-    }
-    return LaunchPreset();
+    return {};
 }
 
 QString PresetManager::getCommand(const QString &id) const
@@ -898,8 +870,22 @@ QVariantList PresetManager::gamesForPreset(const QString &id) const
 
 LaunchCommand PresetManager::buildLaunchCommand(const QString &id, const GameSelection &selection) const
 {
-    LaunchCommand result;
     const LaunchPreset preset = getPreset(id);
+    if (preset.id.isEmpty()) {
+        LaunchCommand result;
+        result.errorMessage = QStringLiteral("Launch preset not found: %1").arg(id);
+        return result;
+    }
+    return buildLaunchCommand(preset, selection);
+}
+
+LaunchCommand PresetManager::buildLaunchCommand(const LaunchPreset &preset, const GameSelection &selection) const
+{
+    LaunchCommand result;
+    if (preset.id.isEmpty()) {
+        result.errorMessage = QStringLiteral("Launch preset not found");
+        return result;
+    }
     const QStringList tokens = QProcess::splitCommand(preset.command);
     if (tokens.isEmpty()) {
         result.errorMessage = QStringLiteral("Launcher command is empty");

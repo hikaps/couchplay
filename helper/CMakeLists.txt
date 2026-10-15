@@ -2,21 +2,25 @@
 # SPDX-FileCopyrightText: 2024 hikaps
 
 # CouchPlay privileged helper daemon
-
 add_executable(couchplay-helper
     main.cpp
     CouchPlayHelper.cpp
     CouchPlayHelper.h
+    DirectoryPlan.cpp
+    DirectoryPlan.h
+    InstanceBootstrap.cpp
+    InstanceBootstrap.h
     SecureFs.cpp
     SecureFs.h
     SystemOps.cpp
     SystemOps.h
     PolkitActions.h
-    )
+)
 
 target_link_libraries(couchplay-helper PRIVATE
     Qt6::Core
     Qt6::DBus
+    ${LIBACL_LIBRARY}
 )
 
 if(PolkitQt6-1_FOUND)
@@ -26,9 +30,9 @@ endif()
 
 target_include_directories(couchplay-helper PRIVATE
     ${PROJECT_BINARY_DIR}
+    ${LIBACL_INCLUDE_DIR}
 )
 
-# Install to libexec
 install(TARGETS couchplay-helper
     DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}
 )

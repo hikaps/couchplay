@@ -2,14 +2,16 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "CouchPlayHelper.h"
+#include "InstanceBootstrap.h"
 #include "HomePathMapping.h"
-#include "MountSpec.h"
 #include "PolkitActions.h"
 #include "SecureFs.h"
 #include "SystemOps.h"
 
 #include <QCryptographicHash>
-#include <QDBusArgument>
+#include <QCoreApplication>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusVariant>
@@ -30,140 +32,223 @@
 
 #include <linux/input.h>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <QSocketNotifier>
 #include <QTimer>
 #include <QFileSystemWatcher>
 
 #include <cerrno>
 #include <cstring>
-#include <dirent.h>
 #include <functional>
+#include <utility>
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <algorithm>
 #include <limits>
 #ifndef O_PATH
 #define O_PATH 010000000
 #endif
 
+struct CouchPlayHelper::PendingLaunch
+{
+    explicit PendingLaunch(const QDBusConnection &connection)
+        : replyConnection(connection)
+    {
+    }
+    QDBusMessage request;
+    QDBusConnection replyConnection;
+    QString username;
+    QString token;
+    uid_t callerUid = 0;
+    QTimer *pollTimer = nullptr;
+    QTimer *deadlineTimer = nullptr;
+    bool pollInFlight = false;
+    bool replySent = false;
+};
+
 class UnitMonitor : public QObject
 {
     Q_OBJECT
 public:
-    UnitMonitor(const QString &unitPath,
-                const QString &serviceName,
-                const QString &username,
-                qint64 pid,
-                CouchPlayHelper *helper)
+    UnitMonitor(const QString &unitPath, const QString &serviceName, quint64 generation, CouchPlayHelper *helper)
         : QObject(helper)
         , m_unitPath(unitPath)
         , m_serviceName(serviceName)
-        , m_username(username)
-        , m_pid(pid)
+        , m_generation(generation)
         , m_helper(helper)
+        , m_connection(helper->m_ops->systemBusConnection())
     {
-        QDBusConnection::systemBus().connect(QStringLiteral("org.freedesktop.systemd1"),
-                                             m_unitPath,
-                                             QStringLiteral("org.freedesktop.DBus.Properties"),
-                                             QStringLiteral("PropertiesChanged"),
-                                             this,
-                                             SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
+        m_connection.connect(QStringLiteral("org.freedesktop.systemd1"),
+                             m_unitPath,
+                             QStringLiteral("org.freedesktop.DBus.Properties"),
+                             QStringLiteral("PropertiesChanged"),
+                             this,
+                             SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
     }
 
     ~UnitMonitor() override
     {
-        QDBusConnection::systemBus().disconnect(QStringLiteral("org.freedesktop.systemd1"),
-                                                m_unitPath,
-                                                QStringLiteral("org.freedesktop.DBus.Properties"),
-                                                QStringLiteral("PropertiesChanged"),
-                                                this,
-                                                SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
-    }
-
-    QString serviceName() const
-    {
-        return m_serviceName;
+        m_connection.disconnect(QStringLiteral("org.freedesktop.systemd1"),
+                                m_unitPath,
+                                QStringLiteral("org.freedesktop.DBus.Properties"),
+                                QStringLiteral("PropertiesChanged"),
+                                this,
+                                SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
     }
 
 public Q_SLOTS:
-    void onPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &)
-    {
-        if (interface != QStringLiteral("org.freedesktop.systemd1.Unit")) {
+    void onPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &) {
+        if (interface == QStringLiteral("org.freedesktop.systemd1.Service")) {
+            const QString status = changed.value(QStringLiteral("StatusText")).toString();
+            if (!status.isEmpty()) {
+                m_statusText = status;
+            }
+            const int statusErrno = changed.value(QStringLiteral("StatusErrno")).toInt();
+            if (statusErrno != 0) {
+                m_statusErrno = statusErrno;
+            }
+            const QString result = changed.value(QStringLiteral("Result")).toString();
+            if (!result.isEmpty()) {
+                m_result = result;
+            }
             return;
         }
-        if (!changed.contains(QStringLiteral("ActiveState"))) {
+        if (m_helper->m_unitGenerationByName.value(m_serviceName, 0) != m_generation
+            || interface != QStringLiteral("org.freedesktop.systemd1.Unit")
+            || !changed.contains(QStringLiteral("ActiveState"))) {
             return;
         }
-
-        QString activeState = changed.value(QStringLiteral("ActiveState")).toString();
-        if (activeState != QStringLiteral("inactive") && activeState != QStringLiteral("failed")
-            && activeState != QStringLiteral("dead")) {
-            return;
+        const QString activeState = changed.value(QStringLiteral("ActiveState")).toString();
+        if (activeState == QStringLiteral("active")) {
+            m_helper->onUnitReady(m_serviceName);
+        } else if (activeState == QStringLiteral("failed") || activeState == QStringLiteral("inactive")
+                   || activeState == QStringLiteral("dead")) {
+            m_helper->onUnitStopped(m_serviceName, QString());
         }
-
-        if (m_helper->m_stoppingUnits.contains(m_serviceName)) {
-            return;
-        }
-
-        QString result = queryResultProperty();
-        QString reason = mapResultToReason(result);
-
-        m_helper->m_usernameToUnitName.remove(m_username);
-        m_helper->m_pidToUsername.remove(m_pid);
-        m_helper->m_pidOwnerUid.remove(m_pid);
-        m_helper->cleanupTcpListenerIfLast(m_username);
-
-        m_helper->saveState();
-
-        qInfo() << "Unit" << m_serviceName << "(user:" << m_username << ", PID:" << m_pid
-                << ") stopped unexpectedly:" << reason;
-
-        Q_EMIT m_helper->instanceStopped(m_username, m_pid, reason);
-
-        deleteLater();
     }
+
+public:
+    QString unitPath() const { return m_unitPath; }
+    void observeInitialState(const QString &activeState, bool authoritativeInactive) {
+        if (activeState == QStringLiteral("active")) {
+            m_helper->onUnitReady(m_serviceName);
+        } else if (activeState == QStringLiteral("failed")
+                   || (authoritativeInactive
+                       && (activeState == QStringLiteral("inactive") || activeState == QStringLiteral("dead")))) {
+            m_helper->onUnitStopped(m_serviceName, QString());
+        } else if (activeState == QStringLiteral("inactive") || activeState == QStringLiteral("dead")) {
+            m_helper->noteInitialInactiveUnitState(m_serviceName);
+        }
+    }
+
+    QString result() const { return m_result; }
+    QString statusText() const { return m_statusText; }
+    int statusErrno() const { return m_statusErrno; }
 
 private:
-    QString queryResultProperty() const
-    {
-        QDBusMessage msg = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
-                                                          m_unitPath,
-                                                          QStringLiteral("org.freedesktop.DBus.Properties"),
-                                                          QStringLiteral("Get"));
-        msg << QStringLiteral("org.freedesktop.systemd1.Service") << QStringLiteral("Result");
-
-        QDBusMessage reply = QDBusConnection::systemBus().call(msg);
-        if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
-            QVariant result = reply.arguments().at(0);
-            if (result.canConvert<QDBusVariant>()) {
-                return result.value<QDBusVariant>().variant().toString();
-            }
-        }
-        return QStringLiteral("exit-code");
-    }
-
-    static QString mapResultToReason(const QString &result)
-    {
-        if (result == QStringLiteral("signal") || result == QStringLiteral("core-dump")) {
-            return QStringLiteral("crashed");
-        }
-        if (result == QStringLiteral("exit-code")) {
-            return QStringLiteral("exited");
-        }
-        return QStringLiteral("failed");
-    }
-
     QString m_unitPath;
     QString m_serviceName;
-    QString m_username;
-    qint64 m_pid;
+    quint64 m_generation;
     CouchPlayHelper *m_helper;
+    QDBusConnection m_connection;
+    QString m_result;
+    QString m_statusText;
+    int m_statusErrno = 0;
+};
+
+class UnitJobMonitor final : public QObject
+{
+    Q_OBJECT
+    struct JobResult { QString path; QString result; };
+public:
+    UnitJobMonitor(const QString &serviceName, CouchPlayHelper *helper)
+        : QObject(helper)
+        , m_serviceName(serviceName)
+        , m_helper(helper)
+        , m_connection(helper->m_ops->systemBusConnection())
+    {
+        m_connection.connect(QStringLiteral("org.freedesktop.systemd1"),
+                             QStringLiteral("/org/freedesktop/systemd1"),
+                             QStringLiteral("org.freedesktop.systemd1.Manager"),
+                             QStringLiteral("JobRemoved"),
+                             this,
+                             SLOT(onJobRemoved(uint,QDBusObjectPath,QString,QString)));
+    }
+
+    ~UnitJobMonitor() override
+    {
+        m_connection.disconnect(QStringLiteral("org.freedesktop.systemd1"),
+                                QStringLiteral("/org/freedesktop/systemd1"),
+                                QStringLiteral("org.freedesktop.systemd1.Manager"),
+                                QStringLiteral("JobRemoved"),
+                                this,
+                                SLOT(onJobRemoved(uint,QDBusObjectPath,QString,QString)));
+    }
+
+    void setGeneration(quint64 generation) { m_generation = generation; }
+
+    void setExpectedJobPath(const QString &jobPath)
+    {
+        if (m_helper->m_unitGenerationByName.value(m_serviceName, 0) != m_generation) {
+            return;
+        }
+        m_expectedJobPath = jobPath;
+        const QList<JobResult> earlyResults = m_earlyResults;
+        m_earlyResults.clear();
+        for (const JobResult &event : earlyResults) {
+            if (event.path == m_expectedJobPath) {
+                processJobResult(event.result);
+                break;
+            }
+        }
+    }
+
+public Q_SLOTS:
+    void onJobRemoved(uint jobId, const QDBusObjectPath &jobPath, const QString &unitName, const QString &result)
+    {
+        Q_UNUSED(jobId)
+        if (unitName != m_serviceName || m_generation == 0
+            || m_helper->m_unitGenerationByName.value(m_serviceName, 0) != m_generation) {
+            return;
+        }
+        if (m_expectedJobPath.isEmpty()) {
+            m_earlyResults.append(JobResult{jobPath.path(), result});
+            return;
+        }
+        if (jobPath.path() == m_expectedJobPath) {
+            processJobResult(result);
+        }
+    }
+private:
+
+    void processJobResult(const QString &result)
+    {
+        if (m_helper->m_jobMonitors.value(m_serviceName) == this) {
+            m_helper->m_jobMonitors.remove(m_serviceName);
+        }
+        deleteLater();
+        if (result == QStringLiteral("done")) {
+            return;
+        }
+        m_helper->m_failedJobResults.insert(m_serviceName, result);
+        if (m_helper->m_unitPathForUnit.contains(m_serviceName)) {
+            m_helper->m_failedJobResults.remove(m_serviceName);
+            m_helper->onUnitStopped(m_serviceName, QString());
+        }
+    }
+
+    QString m_serviceName;
+    QString m_expectedJobPath;
+    QList<JobResult> m_earlyResults;
+    CouchPlayHelper *m_helper;
+    QDBusConnection m_connection;
+    quint64 m_generation = 0;
 };
 
 static const QRegularExpression s_validUsername(QStringLiteral("^[a-z][a-z0-9_-]{0,31}$"));
-
 static const QString ACTION_DEVICE_OWNER = QStringLiteral("io.github.hikaps.couchplay.change-device-owner");
 static const QString ACTION_CREATE_USER = QStringLiteral("io.github.hikaps.couchplay.create-user");
 static const QString ACTION_DELETE_USER = QStringLiteral("io.github.hikaps.couchplay.delete-user");
@@ -231,40 +316,6 @@ CouchPlayHelper::~CouchPlayHelper()
     }
     m_runtimeAccessSetForUid.clear();
 
-    if (!m_activeMounts.isEmpty()) {
-        for (const QString &username : m_activeMounts.keys()) {
-            for (MountInfo &mount : m_activeMounts[username]) {
-                // Prefer the pinned FD: same race protections as explicit
-                // unmount, so shutdown cleanup cannot be redirected by an
-                // ancestor swap. Restored (post-restart) state has no FD and
-                // falls back to the path-based lazy umount.
-                if (mount.targetParentFd >= 0) {
-                    int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
-                    ::close(mount.targetParentFd);
-                    mount.targetParentFd = -1;
-                    if (result != 0) {
-                        qWarning() << "CouchPlayHelper: FD umount failed during shutdown for" << mount.target
-                                   << ":" << strerror(-result);
-                        runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 5000);
-                    }
-                    continue;
-                }
-                QProcess *umountProc = m_ops->createProcess();
-                m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {mount.target});
-                m_ops->waitForFinished(umountProc, 5000);
-                if (m_ops->processExitCode(umountProc) != 0) {
-                    QProcess *lazyProc = m_ops->createProcess();
-                    m_ops->startProcess(lazyProc,
-                                        QStringLiteral("/usr/bin/umount"),
-                                        {QStringLiteral("-l"), mount.target});
-                    m_ops->waitForFinished(lazyProc, 5000);
-                    delete lazyProc;
-                }
-                delete umountProc;
-            }
-        }
-        m_activeMounts.clear();
-    }
 
     for (const VirtualDisplayInfo &info : m_virtualDisplays) {
         if (info.pid > 0) {
@@ -283,14 +334,35 @@ CouchPlayHelper::~CouchPlayHelper()
     }
     m_nullSinks.clear();
 
-    for (const QString &serviceName : m_usernameToUnitName) {
+    QStringList ownedServices = m_usernameToUnitName.values();
+    ownedServices.append(m_auxiliaryUnitNameForUsername.values());
+    ownedServices.removeDuplicates();
+    for (const QString &serviceName : ownedServices) {
         m_stoppingUnits.insert(serviceName);
-        stopServiceInstance(serviceName);
+        if (stopServiceInstance(serviceName)) {
+            releaseOwnedUnit(serviceName, true);
+        } else {
+            m_stoppingUnits.remove(serviceName);
+            qWarning() << "Helper shutdown could not stop owned unit" << serviceName;
+        }
     }
-    m_usernameToUnitName.clear();
-    m_pidToUsername.clear();
-    m_pidOwnerUid.clear();
+    for (auto it = m_pendingLaunches.begin(); it != m_pendingLaunches.end(); ++it) {
+        PendingLaunch *pending = it.value();
+        pending->pollTimer->stop();
+        pending->deadlineTimer->stop();
+        if (!pending->replySent) {
+            pending->replyConnection.send(pending->request.createErrorReply(
+                QDBusError::Failed, QStringLiteral("Helper stopped while instance preparation was pending")));
+        }
+    }
+    saveState();
 
+    for (PendingLaunch *pending : m_pendingLaunches) {
+        delete pending->pollTimer;
+        delete pending->deadlineTimer;
+        delete pending;
+    }
+    m_pendingLaunches.clear();
     qDeleteAll(m_monitors);
     m_monitors.clear();
 
@@ -666,7 +738,7 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
         return 0;
     }
 
-    // Enable linger so systemd user session starts at boot (required for systemd-run transient units)
+    // Enable linger so the player's transient systemd instance units can start after logout.
     QProcess *lingerProcess = m_ops->createProcess();
     m_ops->startProcess(lingerProcess, QStringLiteral("loginctl"), {QStringLiteral("enable-linger"), username});
     m_ops->waitForFinished(lingerProcess, 30000);
@@ -1357,7 +1429,8 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username,
                                        const QString &workingDirectory,
                                        const QStringList &sharedRoots,
                                        const QStringList &environment,
-                                       bool privateTemporaryDirectories)
+                                       bool privateTemporaryDirectories,
+                                       const QVariantList &directoryPreparations)
 {
     if (!validateUserAndAuth(username, ACTION_LAUNCH_INSTANCE)) {
         return 0;
@@ -1366,60 +1439,58 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username,
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Child launch command cannot be empty"));
         return 0;
     }
-    if (!workingDirectory.isEmpty()
-        && (!QDir::isAbsolutePath(workingDirectory) || !m_ops->fileExists(workingDirectory))) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Working directory must be an existing absolute path"));
-        return 0;
-    }
-    if (!workingDirectory.isEmpty()) {
-        const QString targetHome = getUserHome(username);
-        bool allowed = !targetHome.isEmpty()
-            && (workingDirectory == targetHome || workingDirectory.startsWith(targetHome + QLatin1Char('/')));
-        for (const QString &root : sharedRoots) {
-            if (workingDirectory == root || workingDirectory.startsWith(root + QLatin1Char('/'))) {
-                allowed = true;
-                break;
-            }
-        }
-        if (!allowed) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid launch working directory"));
-            return 0;
-        }
-    }
-
-
-
-
-
-
-
-
-    const uint compositorUid = callerUid();
-    if (compositorUid == INVALID_CALLER_UID) {
-        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
-        return 0;
-    }
-    if (!m_runtimeAccessSetForUid.contains(compositorUid)) {
-        if (!SetupRuntimeAccess()) {
-            qWarning() << "Failed to set up runtime access for compositor" << compositorUid;
-        }
-    }
-
-
-    const qint64 pid = startTransientUnit(username,
-                                          displayContext,
-                                          gamescopeArgs,
-                                          gameCommand,
-                                          workingDirectory,
-                                          sharedRoots,
-                                          environment,
-                                          privateTemporaryDirectories);
-    if (pid <= 0) {
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to launch instance for user '%1'").arg(username));
-        return 0;
-    }
-    return pid;
+    const QDBusMessage request = message();
+    const QDBusConnection replyConnection = connection();
+    setDelayedReply(true);
+    startTransientUnit(username,
+                       displayContext,
+                       gamescopeArgs,
+                       gameCommand,
+                       workingDirectory,
+                       sharedRoots,
+                       environment,
+                       privateTemporaryDirectories,
+                       directoryPreparations,
+                       UnitRole::Main,
+                       request,
+                       replyConnection);
+    return 0;
 }
+
+qint64 CouchPlayHelper::LaunchAuxiliaryInstance(const QString &username,
+                                                const QString &displayContext,
+                                                const QStringList &gamescopeArgs,
+                                                const QStringList &gameCommand,
+                                                const QString &workingDirectory,
+                                                const QStringList &sharedRoots,
+                                                const QStringList &environment,
+                                                bool privateTemporaryDirectories)
+{
+    if (!validateUserAndAuth(username, ACTION_LAUNCH_INSTANCE)) {
+        return 0;
+    }
+    if (gameCommand.isEmpty() || gameCommand.constFirst().isEmpty()) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Child launch command cannot be empty"));
+        return 0;
+    }
+    const QDBusMessage request = message();
+    const QDBusConnection replyConnection = connection();
+    setDelayedReply(true);
+    startTransientUnit(username,
+                       displayContext,
+                       gamescopeArgs,
+                       gameCommand,
+                       workingDirectory,
+                       sharedRoots,
+                       environment,
+                       privateTemporaryDirectories,
+                       {},
+                       UnitRole::Stream,
+                       request,
+                       replyConnection);
+    return 0;
+}
+
 
 bool CouchPlayHelper::StopInstance(qint64 pid)
 {
@@ -1427,7 +1498,7 @@ bool CouchPlayHelper::StopInstance(qint64 pid)
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to stop instances"));
         return false;
     }
-    if (!m_pidToUsername.contains(pid) || !m_pidOwnerUid.contains(pid)) {
+    if (!m_pidToUsername.contains(pid) || !m_pidToUnitName.contains(pid) || !m_pidOwnerUid.contains(pid)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Unknown or untracked instance PID"));
         return false;
     }
@@ -1435,9 +1506,8 @@ bool CouchPlayHelper::StopInstance(qint64 pid)
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized for this instance"));
         return false;
     }
-    const QString username = m_pidToUsername.value(pid);
-    const QString serviceName = m_usernameToUnitName.value(username);
-    if (serviceName.isEmpty()) {
+    const QString serviceName = m_pidToUnitName.value(pid);
+    if (serviceName.isEmpty() || !m_unitUsernameByName.contains(serviceName)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Instance unit is not tracked"));
         return false;
     }
@@ -1447,13 +1517,7 @@ bool CouchPlayHelper::StopInstance(qint64 pid)
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to stop instance unit"));
         return false;
     }
-    delete m_monitors.take(serviceName);
-    m_usernameToUnitName.remove(username);
-    m_pidToUsername.remove(pid);
-    m_pidOwnerUid.remove(pid);
-    m_stoppingUnits.remove(serviceName);
-    cleanupTcpListenerIfLast(username);
-    saveState();
+    releaseOwnedUnit(serviceName, true);
     return true;
 }
 
@@ -1463,7 +1527,7 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to kill instances"));
         return false;
     }
-    if (!m_pidToUsername.contains(pid) || !m_pidOwnerUid.contains(pid)) {
+    if (!m_pidToUsername.contains(pid) || !m_pidToUnitName.contains(pid) || !m_pidOwnerUid.contains(pid)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Unknown or untracked instance PID"));
         return false;
     }
@@ -1471,9 +1535,8 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
         sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized for this instance"));
         return false;
     }
-    const QString username = m_pidToUsername.value(pid);
-    const QString serviceName = m_usernameToUnitName.value(username);
-    if (serviceName.isEmpty()) {
+    const QString serviceName = m_pidToUnitName.value(pid);
+    if (serviceName.isEmpty() || !m_unitUsernameByName.contains(serviceName)) {
         sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Instance unit is not tracked"));
         return false;
     }
@@ -1486,20 +1549,12 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
     const bool killFinished = m_ops->waitForFinished(killProc, 10000);
     const bool killed = killFinished && m_ops->processExitCode(killProc) == 0;
     delete killProc;
-    const bool stopped = killed && stopServiceInstance(serviceName);
-    if (!stopped) {
+    if (!killed || !stopServiceInstance(serviceName)) {
         m_stoppingUnits.remove(serviceName);
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to kill instance unit"));
         return false;
     }
-    delete m_monitors.take(serviceName);
-    m_usernameToUnitName.remove(username);
-    m_pidToUsername.remove(pid);
-    m_stoppingUnits.remove(serviceName);
-    m_pidOwnerUid.remove(pid);
-
-    cleanupTcpListenerIfLast(username);
-    saveState();
+    releaseOwnedUnit(serviceName, true);
     return true;
 }
 
@@ -1510,247 +1565,1402 @@ bool CouchPlayHelper::KillInstance(qint64 pid)
 
 
 
+
+static QString systemdUnitObjectPath(const QString &unitName)
+{
+    QString escaped;
+    escaped.reserve(unitName.size() * 3);
+    for (const QChar character : unitName) {
+        const ushort code = character.unicode();
+        if ((code >= QLatin1Char('a').unicode() && code <= QLatin1Char('z').unicode())
+            || (code >= QLatin1Char('A').unicode() && code <= QLatin1Char('Z').unicode())
+            || (code >= QLatin1Char('0').unicode() && code <= QLatin1Char('9').unicode())) {
+            escaped.append(character);
+        } else {
+            escaped += QLatin1Char('_') + QString::number(code, 16).rightJustified(2, QLatin1Char('0'));
+        }
+    }
+    return QStringLiteral("/org/freedesktop/systemd1/unit/") + escaped;
+}
 QString CouchPlayHelper::generateServiceName(const QString &username)
 {
     return QStringLiteral("couchplay-%1.service").arg(username);
 }
-
-qint64 CouchPlayHelper::startTransientUnit(const QString &username,
-                                           const QString &displayContext,
-                                           const QStringList &gamescopeArgs,
-                                           const QStringList &gameCommand,
-                                           const QString &workingDirectory,
-                                           const QStringList &sharedRoots,
-                                           const QStringList &environment,
-                                           bool privateTemporaryDirectories)
-
+QString CouchPlayHelper::generateStreamServiceName(const QString &username)
 {
-    Q_UNUSED(sharedRoots);
-    QString serviceName = generateServiceName(username);
+    return QStringLiteral("couchplay-%1-stream.service").arg(username);
+}
 
-    struct passwd *pwd = m_ops->getpwnam(username.toLocal8Bit().constData());
-    if (!pwd) {
-        qWarning() << "startTransientUnit: failed to resolve UID for user" << username;
-        return 0;
+QString CouchPlayHelper::usernameForUnit(const QString &serviceName) const
+{
+    return m_unitUsernameByName.value(serviceName);
+}
+
+bool CouchPlayHelper::subscribeSystemdManager(QString *error) const
+{
+    QDBusMessage subscribe = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                            QStringLiteral("/org/freedesktop/systemd1"),
+                                                            QStringLiteral("org.freedesktop.systemd1.Manager"),
+                                                            QStringLiteral("Subscribe"));
+    const QDBusMessage reply = m_ops->systemBusConnection().call(subscribe, QDBus::Block, 5000);
+    if (reply.type() != QDBusMessage::ReplyMessage
+        && reply.errorName() != QStringLiteral("org.freedesktop.systemd1.AlreadySubscribed")) {
+        if (error) {
+            *error = reply.errorMessage();
+        }
+        return false;
+    }
+    return true;
+}
+
+void CouchPlayHelper::startTransientUnit(const QString &username,
+                                         const QString &displayContext,
+                                         const QStringList &gamescopeArgs,
+                                         const QStringList &gameCommand,
+                                         const QString &workingDirectory,
+                                         const QStringList &sharedRoots,
+                                         const QStringList &environment,
+                                         bool privateTemporaryDirectories,
+                                         const QVariantList &directoryPreparations,
+                                         UnitRole role,
+                                         const QDBusMessage &request,
+                                         const QDBusConnection &replyConnection)
+{
+    const auto fail = [&](QDBusError::ErrorType type, const QString &reason) {
+        replyConnection.send(request.createErrorReply(type, reason));
+    };
+    QString subscriptionError;
+    if (!subscribeSystemdManager(&subscriptionError)) {
+        fail(QDBusError::Failed, QStringLiteral("Failed to subscribe to systemd Manager: %1").arg(subscriptionError));
+        return;
+    }
+    const QString serviceName = role == UnitRole::Main ? generateServiceName(username)
+                                                       : generateStreamServiceName(username);
+    const bool roleAlreadyTracked = role == UnitRole::Main ? m_usernameToUnitName.contains(username)
+                                                           : m_auxiliaryUnitNameForUsername.contains(username);
+    if (roleAlreadyTracked || m_pendingLaunches.contains(serviceName)
+        || m_launchTokenByUnitName.contains(serviceName)) {
+        fail(QDBusError::Failed,
+             QStringLiteral("An instance of this role is active, preparing, or has pending cleanup for %1")
+                 .arg(username));
+        return;
+    }
+
+    QList<DirectoryPreparation> plans;
+    QString error;
+    if (!DirectoryPlan::parseDirectoryPreparations(directoryPreparations, &plans, &error)) {
+        fail(QDBusError::InvalidArgs, error);
+        return;
     }
     const uint requestUid = callerUid();
-    if (requestUid == INVALID_CALLER_UID) {
-        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Could not resolve caller identity"));
-        return 0;
+    const QString otherRoleUnit = role == UnitRole::Main ? m_auxiliaryUnitNameForUsername.value(username)
+                                                         : m_usernameToUnitName.value(username);
+    if (!otherRoleUnit.isEmpty() && m_unitOwnerUid.value(otherRoleUnit, INVALID_CALLER_UID) != requestUid) {
+        fail(QDBusError::AccessDenied, QStringLiteral("An auxiliary/main instance for this player belongs to another caller"));
+        return;
+    }
+    struct passwd *callerRecord = requestUid == INVALID_CALLER_UID ? nullptr : m_ops->getpwuid(requestUid);
+    if (!callerRecord || requestUid == INVALID_CALLER_UID) {
+        fail(QDBusError::AccessDenied, QStringLiteral("Could not resolve authenticated caller identity"));
+        return;
+    }
+    const uid_t authenticatedCallerUid = callerRecord->pw_uid;
+    const gid_t authenticatedCallerGid = callerRecord->pw_gid;
+    const QString callerHome = QString::fromLocal8Bit(callerRecord->pw_dir ? callerRecord->pw_dir : "");
+    struct passwd *targetRecord = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!targetRecord) {
+        fail(QDBusError::AccessDenied, QStringLiteral("Could not resolve target player identity"));
+        return;
+    }
+    const uid_t targetUid = targetRecord->pw_uid;
+    const gid_t targetGid = targetRecord->pw_gid;
+    const QString targetHome = QString::fromLocal8Bit(targetRecord->pw_dir ? targetRecord->pw_dir : "");
+    const QString targetShell = QString::fromLocal8Bit(targetRecord->pw_shell ? targetRecord->pw_shell : "/bin/sh");
+    if (targetUid == 0) {
+        fail(QDBusError::AccessDenied, QStringLiteral("Target player must not be root"));
+        return;
+    }
+    const QString callerCanonicalHome = m_ops->canonicalFilePath(callerHome);
+    const QString targetCanonicalHome = m_ops->canonicalFilePath(targetHome);
+    if (callerHome.isEmpty() || targetHome.isEmpty() || callerCanonicalHome.isEmpty() || targetCanonicalHome.isEmpty()) {
+        fail(QDBusError::Failed, QStringLiteral("Could not resolve caller or player home directory"));
+        return;
+    }
+    const auto below = [](const QString &path, const QString &root) {
+        return !root.isEmpty() && (path == root || path.startsWith(root + QLatin1Char('/')));
+    };
+    const auto sourceAllowed = [&](const QString &path) {
+        if (below(path, callerHome) || below(path, callerCanonicalHome)) {
+            return true;
+        }
+        if (path.startsWith(QStringLiteral("/home/")) || path.startsWith(QStringLiteral("/var/home/"))) {
+            return false;
+        }
+        return isPathWithinAllowedPrefix(path);
+    };
+    for (const DirectoryPreparation &plan : plans) {
+        const bool privateTmpSource = plan.source.startsWith(QStringLiteral("/tmp/"));
+        if (!sourceAllowed(plan.source)) {
+            fail(QDBusError::InvalidArgs,
+                 QStringLiteral("Directory source is not admitted for this caller: %1").arg(plan.source));
+            return;
+        }
+        // systemd PrivateTmp changes /tmp in this broker's mount namespace. Do not
+        // resolve a caller-selected host path here; the bootstrap pins and validates
+        // its source FD after entering the host mount namespace.
+        if (!privateTmpSource) {
+            if (!m_ops->isDirectory(plan.source)) {
+                fail(QDBusError::InvalidArgs,
+                     QStringLiteral("Directory source is missing or not admitted for this caller: %1").arg(plan.source));
+                return;
+            }
+            const QString canonicalSource = m_ops->canonicalFilePath(plan.source);
+            if (canonicalSource.isEmpty() || !sourceAllowed(canonicalSource)) {
+                fail(QDBusError::InvalidArgs,
+                     QStringLiteral("Directory source resolves outside the caller's homes or permitted external roots: %1")
+                         .arg(plan.source));
+                return;
+            }
+            struct stat sourceStat {};
+            if (!m_ops->statPath(canonicalSource, &sourceStat) || !S_ISDIR(sourceStat.st_mode)) {
+                fail(QDBusError::InvalidArgs,
+                     QStringLiteral("Directory source is not a stable directory: %1").arg(plan.source));
+                return;
+            }
+            if ((below(plan.source, callerHome) || below(plan.source, callerCanonicalHome)
+                 || below(canonicalSource, callerHome) || below(canonicalSource, callerCanonicalHome))
+                && sourceStat.st_uid != requestUid) {
+                fail(QDBusError::AccessDenied,
+                     QStringLiteral("Directory source is not owned by the authenticated caller: %1").arg(plan.source));
+                return;
+            }
+        }
+        if (!plan.stagingPath.isEmpty()) {
+            const bool privateTmpStaging = plan.stagingPath.startsWith(QStringLiteral("/tmp/"));
+            if ((plan.mode != QStringLiteral("copy") && plan.mode != QStringLiteral("overlay"))
+                || !sourceAllowed(plan.stagingPath)) {
+                fail(QDBusError::AccessDenied,
+                     QStringLiteral("Staging directory is missing or not owned by the authenticated caller: %1")
+                         .arg(plan.stagingPath));
+                return;
+            }
+            if (!privateTmpStaging) {
+                const QString canonicalStaging = m_ops->canonicalFilePath(plan.stagingPath);
+                struct stat stagingStat {};
+                if (!m_ops->isDirectory(plan.stagingPath) || canonicalStaging.isEmpty()
+                    || !sourceAllowed(canonicalStaging) || !m_ops->statPath(canonicalStaging, &stagingStat)
+                    || !S_ISDIR(stagingStat.st_mode) || stagingStat.st_uid != requestUid) {
+                    fail(QDBusError::AccessDenied,
+                         QStringLiteral("Staging directory is missing or not owned by the authenticated caller: %1")
+                             .arg(plan.stagingPath));
+                    return;
+                }
+            }
+        }
+    }
+
+    for (const QString &root : sharedRoots) {
+        if (!QDir::isAbsolutePath(root) || DirectoryPlan::directoryPathHasTraversal(root)
+            || root.startsWith(QStringLiteral("/tmp/")) || !sourceAllowed(root)) {
+            fail(QDBusError::InvalidArgs, QStringLiteral("Invalid shared root: %1").arg(root));
+            return;
+        }
+        const QString canonicalRoot = m_ops->canonicalFilePath(root);
+        if (canonicalRoot.isEmpty() || !sourceAllowed(canonicalRoot)) {
+            fail(QDBusError::InvalidArgs, QStringLiteral("Invalid shared root: %1").arg(root));
+            return;
+        }
+    }
+    const QString selectedWorkingDirectory = workingDirectory.isEmpty() ? targetHome : workingDirectory;
+    if (!QDir::isAbsolutePath(selectedWorkingDirectory)
+        || DirectoryPlan::directoryPathHasTraversal(selectedWorkingDirectory)) {
+        fail(QDBusError::InvalidArgs, QStringLiteral("Working directory must be an absolute traversal-free path"));
+        return;
+    }
+    bool workingDirectoryAllowed = selectedWorkingDirectory == targetHome
+        || selectedWorkingDirectory.startsWith(targetHome + QLatin1Char('/'))
+        || selectedWorkingDirectory == targetCanonicalHome
+        || selectedWorkingDirectory.startsWith(targetCanonicalHome + QLatin1Char('/'));
+    for (const DirectoryPreparation &plan : plans) {
+        if (!plan.targetAlias.isEmpty()) {
+            const QString projected = QDir(targetHome).filePath(plan.targetAlias);
+            workingDirectoryAllowed = workingDirectoryAllowed || selectedWorkingDirectory == projected
+                || selectedWorkingDirectory.startsWith(projected + QLatin1Char('/'));
+        }
+    }
+    for (const QString &root : sharedRoots) {
+        workingDirectoryAllowed = workingDirectoryAllowed || selectedWorkingDirectory == root
+            || selectedWorkingDirectory.startsWith(root + QLatin1Char('/'));
+    }
+    if (!workingDirectoryAllowed) {
+        fail(QDBusError::InvalidArgs,
+             QStringLiteral("Working directory is not in the player home or a declared shared root"));
+        return;
+    }
+
+    const QString userUid = QString::number(targetUid);
+    const QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
+    if (!m_ops->fileExists(userRuntimeDir) || !m_ops->fileExists(userRuntimeDir + QStringLiteral("/bus"))) {
+        fail(QDBusError::Failed, QStringLiteral("Target user session bus is unavailable"));
+        return;
     }
     uint runtimeUid = requestUid;
     QString waylandSocket = QStringLiteral("wayland-0");
     if (!displayContext.isEmpty()) {
         bool foundContext = false;
-        for (const VirtualDisplayInfo &info : m_virtualDisplays) {
-            if (info.displayContext == displayContext) {
-                if (info.targetUsername != username || info.ownerUid != requestUid) {
-                    sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Invalid display context owner"));
-                    return 0;
-                }
-                runtimeUid = info.runtimeUid;
-                waylandSocket = info.waylandSocket;
-                foundContext = true;
-                break;
+        for (const VirtualDisplayInfo &info : std::as_const(m_virtualDisplays)) {
+            if (info.displayContext != displayContext) {
+                continue;
             }
+            if (info.targetUsername != username || info.ownerUid != requestUid) {
+                fail(QDBusError::AccessDenied, QStringLiteral("Invalid display context owner"));
+                return;
+            }
+            runtimeUid = info.runtimeUid;
+            waylandSocket = info.waylandSocket;
+            foundContext = true;
+            break;
         }
         if (!foundContext) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Unknown display context"));
-            return 0;
+            fail(QDBusError::InvalidArgs, QStringLiteral("Unknown display context"));
+            return;
         }
     }
-    const QString userUid = QString::number(pwd->pw_uid);
-    const QString compositorRuntimeDir = QStringLiteral("/run/user/%1").arg(runtimeUid);
-    const QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
 
-    // Runtime directory must exist (requires linger) — without it, PipeWire
-    // and gamescope lockfiles fail silently
-    if (!m_ops->fileExists(userRuntimeDir) || !m_ops->fileExists(userRuntimeDir + QStringLiteral("/bus"))) {
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Target user session bus is unavailable"));
-        return 0;
-    }
+    QMap<QString, QString> gameEnvironment;
+    gameEnvironment.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"),
+                           QStringLiteral("unix:path=%1/bus").arg(userRuntimeDir));
+    gameEnvironment.insert(QStringLiteral("WAYLAND_DISPLAY"),
+                           QStringLiteral("/run/user/%1/%2").arg(runtimeUid).arg(waylandSocket));
+    gameEnvironment.insert(QStringLiteral("XDG_RUNTIME_DIR"), userRuntimeDir);
+    gameEnvironment.insert(QStringLiteral("PIPEWIRE_RUNTIME_DIR"), QStringLiteral("/run/user/%1").arg(runtimeUid));
+    gameEnvironment.insert(QStringLiteral("PULSE_SERVER"), QStringLiteral("tcp:127.0.0.1:4713"));
+    gameEnvironment.insert(QStringLiteral("HOME"), targetHome);
+    gameEnvironment.insert(QStringLiteral("USER"), username);
+    gameEnvironment.insert(QStringLiteral("LOGNAME"), username);
+    gameEnvironment.insert(QStringLiteral("SHELL"), targetShell);
+    gameEnvironment.insert(QStringLiteral("PATH"), QStringLiteral("%1/.local/bin:/usr/local/bin:/usr/bin:/bin").arg(targetHome));
+    gameEnvironment.insert(QStringLiteral("PWD"), selectedWorkingDirectory);
+    gameEnvironment.insert(QStringLiteral("XDG_CONFIG_HOME"), targetHome + QStringLiteral("/.config"));
+    gameEnvironment.insert(QStringLiteral("XDG_DATA_HOME"), targetHome + QStringLiteral("/.local/share"));
+    gameEnvironment.insert(QStringLiteral("XDG_STATE_HOME"), targetHome + QStringLiteral("/.local/state"));
+    gameEnvironment.insert(QStringLiteral("XDG_CACHE_HOME"), targetHome + QStringLiteral("/.cache"));
 
-
-
-
-
-    QStringList systemdRunArgs;
-    systemdRunArgs << QStringLiteral("--unit") << serviceName;
-    systemdRunArgs << QStringLiteral("--uid") << username;
-    systemdRunArgs << QStringLiteral("--property=Type=simple");
-    systemdRunArgs << QStringLiteral("--property=KillMode=control-group");
-    systemdRunArgs << QStringLiteral("--property=TimeoutStopSec=10s");
-    systemdRunArgs << QStringLiteral("--property=SendSIGKILL=yes");
-    systemdRunArgs << (privateTemporaryDirectories ? QStringLiteral("--property=PrivateTmp=yes")
-                                                   : QStringLiteral("--property=PrivateTmp=no"));
-    systemdRunArgs << QStringLiteral("--property=Delegate=yes");
-    systemdRunArgs << QStringLiteral("--property=MemoryDenyWriteExecute=false");
-    const QString effectiveWorkingDirectory =
-        workingDirectory.isEmpty() ? QString::fromLocal8Bit(pwd->pw_dir) : workingDirectory;
-    systemdRunArgs << QStringLiteral("--property=WorkingDirectory=%1").arg(effectiveWorkingDirectory);
-
-
-
-    // -E flag avoids escaping issues with --property=Environment=
-    auto addEnv = [&](const QString &assignment) {
-        systemdRunArgs << QStringLiteral("-E") << assignment;
-    };
-    addEnv(QStringLiteral("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%1/bus").arg(userUid));
-    addEnv(QStringLiteral("WAYLAND_DISPLAY=%1/%2").arg(compositorRuntimeDir, waylandSocket));
-    addEnv(QStringLiteral("XDG_RUNTIME_DIR=/run/user/%1").arg(userUid));
-    addEnv(QStringLiteral("PIPEWIRE_RUNTIME_DIR=%1").arg(compositorRuntimeDir));
-    // Use TCP PulseAudio listener for cross-user audio routing.
-    // The unix socket rejects cross-UID connections, but TCP on localhost works.
-    // The TCP listener is configured by setupPulseTcpListener() during SetupRuntimeAccess().
-    addEnv(QStringLiteral("PULSE_SERVER=tcp:127.0.0.1:4713"));
-    addEnv(QStringLiteral("HOME=%1").arg(QString::fromLocal8Bit(pwd->pw_dir)));
-    addEnv(QStringLiteral("USER=%1").arg(QString::fromLocal8Bit(pwd->pw_name)));
-    addEnv(QStringLiteral("LOGNAME=%1").arg(QString::fromLocal8Bit(pwd->pw_name)));
-    addEnv(QStringLiteral("SHELL=%1").arg(QString::fromLocal8Bit(pwd->pw_shell)));
-    addEnv(QStringLiteral("PATH=%1/.local/bin:/usr/local/bin:/usr/bin:/bin").arg(QString::fromLocal8Bit(pwd->pw_dir)));
-    addEnv(QStringLiteral("PWD=%1").arg(workingDirectory.isEmpty()
-                                               ? QString::fromLocal8Bit(pwd->pw_dir)
-                                               : workingDirectory));
-    addEnv(QStringLiteral("XDG_CONFIG_HOME=%1/.config").arg(QString::fromLocal8Bit(pwd->pw_dir)));
-    addEnv(QStringLiteral("XDG_DATA_HOME=%1/.local/share").arg(QString::fromLocal8Bit(pwd->pw_dir)));
-    addEnv(QStringLiteral("XDG_STATE_HOME=%1/.local/state").arg(QString::fromLocal8Bit(pwd->pw_dir)));
-    addEnv(QStringLiteral("XDG_CACHE_HOME=%1/.cache").arg(QString::fromLocal8Bit(pwd->pw_dir)));
-    const QStringList protectedEnvironmentNames = {
+    static const QSet<QString> protectedEnvironmentNames = {
         QStringLiteral("HOME"), QStringLiteral("USER"), QStringLiteral("LOGNAME"), QStringLiteral("SHELL"),
         QStringLiteral("PATH"), QStringLiteral("PWD"), QStringLiteral("XDG_CONFIG_HOME"),
         QStringLiteral("XDG_DATA_HOME"), QStringLiteral("XDG_STATE_HOME"), QStringLiteral("XDG_CACHE_HOME"),
         QStringLiteral("XDG_RUNTIME_DIR"), QStringLiteral("DBUS_SESSION_BUS_ADDRESS"),
-        QStringLiteral("WAYLAND_DISPLAY"), QStringLiteral("PIPEWIRE_RUNTIME_DIR"), QStringLiteral("PULSE_SERVER")};
-    QStringList environmentNames;
-    for (const QString &var : environment) {
-        int eqPos = var.indexOf(QLatin1Char('='));
-        if (eqPos <= 0) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid environment assignment"));
-            return 0;
+        QStringLiteral("WAYLAND_DISPLAY"), QStringLiteral("PIPEWIRE_RUNTIME_DIR"), QStringLiteral("PULSE_SERVER"),
+        QStringLiteral("NOTIFY_SOCKET"), QStringLiteral("LISTEN_PID"), QStringLiteral("LISTEN_FDS"),
+        QStringLiteral("LISTEN_FDNAMES"), QStringLiteral("INVOCATION_ID"), QStringLiteral("JOURNAL_STREAM"),
+        QStringLiteral("SYSTEMD_EXEC_PID"), QStringLiteral("WATCHDOG_USEC"), QStringLiteral("WATCHDOG_PID")};
+    static const QRegularExpression environmentNamePattern(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$"));
+    for (const QString &assignment : environment) {
+        const qsizetype equals = assignment.indexOf(QLatin1Char('='));
+        const QString name = equals < 0 ? QString() : assignment.left(equals);
+        if (equals <= 0 || !environmentNamePattern.match(name).hasMatch()
+            || assignment.contains(QChar::Null) || assignment.contains(QChar(0x0a))
+            || assignment.contains(QChar(0x0d)) || protectedEnvironmentNames.contains(name)
+            || (name.startsWith(QStringLiteral("XDG_")) && name != QStringLiteral("XDG_CURRENT_DESKTOP"))
+            || name.startsWith(QStringLiteral("DBUS_")) || name.startsWith(QStringLiteral("WAYLAND_"))
+            || name.startsWith(QStringLiteral("PIPEWIRE_"))
+            || (name.startsWith(QStringLiteral("PULSE_")) && name != QStringLiteral("PULSE_SINK"))
+            || name.startsWith(QStringLiteral("LISTEN_")) || name.startsWith(QStringLiteral("WATCHDOG_"))) {
+            fail(QDBusError::InvalidArgs, QStringLiteral("Invalid or protected environment assignment"));
+            return;
         }
-        const QString name = var.left(eqPos);
-        const QString value = var.mid(eqPos + 1);
-        if (!QRegularExpression(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$")).match(name).hasMatch()
-            || value.contains(QChar::Null) || value.contains(QChar::LineFeed) || value.contains(QChar::CarriageReturn)
-            || protectedEnvironmentNames.contains(name) || environmentNames.contains(name)) {
-            sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid or reserved environment variable: %1").arg(name));
-            return 0;
-        }
-        environmentNames.append(name);
-        addEnv(var);
-
-
+        gameEnvironment.insert(name, assignment.mid(equals + 1));
     }
 
-    if (runtimeUid != pwd->pw_uid) {
-        systemdRunArgs << QStringLiteral("--property=BindReadOnlyPaths=%1").arg(compositorRuntimeDir);
+    const QString gamescopePath = findGamescopePath();
+    const QString helperPath = QCoreApplication::applicationFilePath();
+    if (gamescopePath.isEmpty() || !QDir::isAbsolutePath(helperPath)) {
+        fail(QDBusError::Failed, QStringLiteral("Gamescope or installed helper executable was not found"));
+        return;
     }
-    // On immutable distros, gamescope may not be at /usr/bin/gamescope
-    QString gamescopePath = QStringLiteral("/usr/bin/gamescope");
-    if (!m_ops->fileExists(gamescopePath)) {
-        QProcess *whichProc = m_ops->createProcess();
-        m_ops->startProcess(whichProc, QStringLiteral("which"), {QStringLiteral("gamescope")});
-        m_ops->waitForFinished(whichProc, 3000);
-        if (m_ops->processExitCode(whichProc) == 0) {
-            QString resolved = QString::fromLocal8Bit(m_ops->readAllStandardOutput(whichProc)).trimmed();
-            if (!resolved.isEmpty()) {
-                gamescopePath = resolved;
+    LaunchManifest manifest;
+    manifest.schemaVersion = 1;
+    manifest.unitRole = role == UnitRole::Main ? QStringLiteral("main") : QStringLiteral("stream");
+    manifest.unitName = serviceName;
+    manifest.callerUid = authenticatedCallerUid;
+    manifest.callerGid = authenticatedCallerGid;
+    manifest.targetUsername = username;
+    manifest.targetUid = targetUid;
+    manifest.targetGid = targetGid;
+    manifest.declaredHome = callerHome;
+    manifest.canonicalHome = callerCanonicalHome;
+    manifest.targetDeclaredHome = targetHome;
+    manifest.targetCanonicalHome = targetCanonicalHome;
+    manifest.directories = plans;
+    manifest.gamescopeArgv << gamescopePath << gamescopeArgs << QStringLiteral("--") << gameCommand;
+    manifest.workingDirectory = selectedWorkingDirectory;
+    manifest.environment = gameEnvironment;
+
+    QList<int> leaseFds;
+    QStringList leasePaths;
+    if (!acquireOverlayLeases(username, plans, &leaseFds, &leasePaths, &error)) {
+        fail(QDBusError::Failed, error);
+        return;
+    }
+    QString token;
+    const bool manifestWritten = m_ops->writeLaunchManifest(manifest, &token, &error);
+    if (!manifestWritten || !DirectoryPlan::isLaunchToken(token)) {
+        if (DirectoryPlan::isLaunchToken(token)) {
+            QString ignored;
+            m_ops->unlinkLaunchManifest(token, &ignored);
+        }
+        for (int fd : leaseFds) {
+            ::close(fd);
+        }
+        fail(QDBusError::Failed, error.isEmpty() ? QStringLiteral("Failed to create a secure launch manifest") : error);
+        return;
+    }
+
+    if (!m_runtimeAccessSetForUid.contains(requestUid) && !SetupRuntimeAccess()) {
+        qWarning() << "Failed to set up runtime access for compositor" << requestUid;
+    }
+    const QString helperPathArg = helperPath;
+    const QStringList bootstrapArgv{helperPathArg, QStringLiteral("--run-instance"), token};
+    const QList<SystemdExecCommand> execStart = {
+        SystemdExecCommand{helperPathArg, bootstrapArgv, {QStringLiteral("no-setuid")}}};
+    QList<SystemdProperty> properties;
+    const auto addProperty = [&properties](const QString &name, const QVariant &value) {
+        properties.append(SystemdProperty{name, QDBusVariant(value)});
+    };
+    addProperty(QStringLiteral("Type"), QStringLiteral("notify"));
+    addProperty(QStringLiteral("User"), username);
+    addProperty(QStringLiteral("Delegate"), true);
+    addProperty(QStringLiteral("KillMode"), QStringLiteral("control-group"));
+    addProperty(QStringLiteral("SendSIGKILL"), true);
+    addProperty(QStringLiteral("TimeoutStopUSec"), QVariant::fromValue<qulonglong>(10'000'000));
+    addProperty(QStringLiteral("TimeoutStartUSec"), QVariant::fromValue<qulonglong>(60'000'000));
+    addProperty(QStringLiteral("NotifyAccess"), QStringLiteral("main"));
+    addProperty(QStringLiteral("CollectMode"), QStringLiteral("inactive-or-failed"));
+    addProperty(QStringLiteral("PrivateMounts"), true);
+    addProperty(QStringLiteral("PrivateTmp"), privateTemporaryDirectories);
+    addProperty(QStringLiteral("MemoryDenyWriteExecute"), false);
+    addProperty(QStringLiteral("WorkingDirectory"), QStringLiteral("/"));
+    addProperty(QStringLiteral("ExecStartEx"), QVariant::fromValue(execStart));
+    if (runtimeUid != targetUid) {
+        const QString runtimePath = QStringLiteral("/run/user/%1").arg(runtimeUid);
+        const QList<SystemdBindPath> runtimeBindings{SystemdBindPath{runtimePath, runtimePath, false, 0}};
+        addProperty(QStringLiteral("BindReadOnlyPaths"), QVariant::fromValue(runtimeBindings));
+    }
+
+    const quint64 unitGeneration = ++m_nextUnitGeneration;
+    m_unitGenerationByName.insert(serviceName, unitGeneration);
+    m_failedJobResults.remove(serviceName);
+    m_readyUnitNames.remove(serviceName);
+    m_initialInactiveUnitNames.remove(serviceName);
+    m_announcedReadyUnitNames.remove(serviceName);
+    m_stoppingUnits.remove(serviceName);
+    const QString expectedUnitPath = systemdUnitObjectPath(serviceName);
+    auto *propertyMonitor = new UnitMonitor(expectedUnitPath, serviceName, unitGeneration, this);
+    auto *jobMonitor = new UnitJobMonitor(serviceName, this);
+    jobMonitor->setGeneration(unitGeneration);
+    m_jobMonitors.insert(serviceName, jobMonitor);
+    if (role == UnitRole::Main) {
+        m_usernameToUnitName.insert(username, serviceName);
+    } else {
+        m_auxiliaryUnitNameForUsername.insert(username, serviceName);
+    }
+    m_unitUsernameByName.insert(serviceName, username);
+    m_unitRoleByName.insert(serviceName, role);
+    m_unitOwnerUid.insert(serviceName, requestUid);
+    m_monitors.insert(serviceName, propertyMonitor);
+    m_targetIdentityByUnit.insert(serviceName, TargetIdentity{targetUid, targetGid, targetHome, targetCanonicalHome});
+    m_launchTokenByUnitName.insert(serviceName, token);
+    m_overlayLeaseFdsByUnit.insert(serviceName, leaseFds);
+    m_overlayLeasePathsByUnit.insert(serviceName, leasePaths);
+    m_compositorUidForUsername.insert(username, requestUid);
+    if (!saveState()) {
+        releaseOwnedUnit(serviceName, true);
+        fail(QDBusError::Failed, QStringLiteral("Failed to persist instance ownership before startup"));
+        return;
+    }
+    auto *pending = new PendingLaunch(replyConnection);
+    pending->request = request;
+    pending->replyConnection = replyConnection;
+    pending->username = username;
+    pending->token = token;
+    pending->callerUid = requestUid;
+    pending->pollTimer = new QTimer(this);
+    pending->pollTimer->setInterval(100);
+    pending->deadlineTimer = new QTimer(this);
+    pending->deadlineTimer->setSingleShot(true);
+    m_pendingLaunches.insert(serviceName, pending);
+    const QDBusObjectPath jobPath = m_ops->startTransientService(serviceName, properties, &error);
+    const bool jobPathReturned = jobPath.path().startsWith(QStringLiteral("/org/freedesktop/systemd1/job/"));
+    if (jobPathReturned) {
+        jobMonitor->setExpectedJobPath(jobPath.path());
+    }
+    if (!jobPathReturned) {
+        const QString failureReason = error.isEmpty() ? QStringLiteral("systemd did not return a valid job path") : error;
+        pending->replySent = true;
+        pending->replyConnection.send(request.createErrorReply(QDBusError::Failed, failureReason));
+        failPendingLaunch(serviceName, failureReason);
+        return;
+    }
+    const quint64 generation = m_unitGenerationByName.value(serviceName, 0);
+    connect(pending->pollTimer, &QTimer::timeout, this, [this, serviceName, generation]() {
+        if (m_unitGenerationByName.value(serviceName, 0) == generation) {
+            pollUnitMainPid(serviceName);
+        }
+    });
+    connect(pending->deadlineTimer, &QTimer::timeout, this, [this, serviceName, generation]() {
+        if (m_unitGenerationByName.value(serviceName, 0) == generation) {
+            failPendingLaunch(serviceName, QStringLiteral("Timed out waiting for systemd to report the preparing PID"));
+        }
+    });
+    pending->pollTimer->start();
+    pending->deadlineTimer->start(5000);
+    pollUnitMainPid(serviceName);
+}
+
+bool CouchPlayHelper::acquireOverlayLeases(const QString &username,
+                                           const QList<DirectoryPreparation> &plans,
+                                           QList<int> *leases,
+                                           QStringList *leasePaths,
+                                           QString *error)
+{
+    if (!leases || !leasePaths) {
+        if (error) {
+            *error = QStringLiteral("Invalid overlay lease output");
+        }
+        return false;
+    }
+    leases->clear();
+    leasePaths->clear();
+    bool hasOverlay = false;
+    for (const DirectoryPreparation &plan : plans) {
+        hasOverlay = hasOverlay || plan.mode == QStringLiteral("overlay");
+    }
+    if (!hasOverlay) {
+        return true;
+    }
+    struct passwd *target = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!target) {
+        if (error) {
+            *error = QStringLiteral("Could not resolve overlay owner for %1").arg(username);
+        }
+        return false;
+    }
+    const int varLibFd = SecureFs::openBaseDir(QStringLiteral("/var/lib"));
+    if (varLibFd < 0) {
+        if (error) {
+            *error = QStringLiteral("Could not securely open overlay storage: %1")
+                         .arg(QString::fromLocal8Bit(strerror(-varLibFd)));
+        }
+        return false;
+    }
+    QSet<QString> seenLocks;
+    auto closeAll = [&]() {
+        for (int fd : *leases) {
+            ::close(fd);
+        }
+        leases->clear();
+        leasePaths->clear();
+    };
+    const auto ensurePrivateDirectory = [&](int parentFd, const char *name, QString *failure) {
+        struct stat before {};
+        bool created = false;
+        if (::fstatat(parentFd, name, &before, AT_SYMLINK_NOFOLLOW) != 0) {
+            if (errno != ENOENT || ::mkdirat(parentFd, name, 0700) != 0) {
+                *failure = QStringLiteral("Could not create overlay %1 directory: %2")
+                               .arg(QString::fromLatin1(name), QString::fromLocal8Bit(strerror(errno)));
+                return false;
+            }
+            created = true;
+        } else if (!S_ISDIR(before.st_mode)) {
+            *failure = QStringLiteral("Overlay %1 path is not a real directory").arg(QString::fromLatin1(name));
+            return false;
+        }
+        const int fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) {
+            *failure = QStringLiteral("Could not open overlay %1 directory: %2")
+                           .arg(QString::fromLatin1(name), QString::fromLocal8Bit(strerror(errno)));
+            return false;
+        }
+        struct stat st {};
+        if (::fstat(fd, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            *failure = QStringLiteral("Overlay %1 path changed or is not a directory").arg(QString::fromLatin1(name));
+            ::close(fd);
+            return false;
+        }
+        if (created && (::fchown(fd, target->pw_uid, target->pw_gid) != 0 || ::fchmod(fd, 0700) != 0)) {
+            *failure = QStringLiteral("Could not protect new overlay %1 directory: %2")
+                           .arg(QString::fromLatin1(name), QString::fromLocal8Bit(strerror(errno)));
+            ::close(fd);
+            return false;
+        }
+        if (::fstat(fd, &st) != 0) {
+            *failure = QStringLiteral("Could not verify overlay %1 ownership").arg(QString::fromLatin1(name));
+            ::close(fd);
+            return false;
+        }
+        const bool finalOk = st.st_uid == target->pw_uid && st.st_gid == target->pw_gid
+            && (st.st_mode & 0077) == 0 && (st.st_mode & 0700) == 0700;
+        ::close(fd);
+        if (!finalOk) {
+            *failure = QStringLiteral("Existing overlay %1 directory has unsafe owner or permissions")
+                           .arg(QString::fromLatin1(name));
+            return false;
+        }
+        return true;
+    };
+    for (const DirectoryPreparation &plan : plans) {
+        if (plan.mode != QStringLiteral("overlay")) {
+            continue;
+        }
+        const QString sourceHash = QString::fromLatin1(
+            QCryptographicHash::hash(plan.source.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
+        const QString basePath = QStringLiteral("/var/lib/couchplay/overlays/%1/%2").arg(username, sourceHash);
+        const QString lockPath = basePath + QStringLiteral("/.lease");
+        if (seenLocks.contains(lockPath)) {
+            continue;
+        }
+        const int baseFd = SecureFs::openDirBelow(varLibFd,
+                                                  {QStringLiteral("couchplay"), QStringLiteral("overlays"), username, sourceHash},
+                                                  true,
+                                                  0,
+                                                  0,
+                                                  SecureFs::ChownMode::FinalOnly);
+        if (baseFd < 0) {
+            if (error) {
+                *error = QStringLiteral("Could not securely open overlay storage for %1: %2")
+                             .arg(plan.source, QString::fromLocal8Bit(strerror(-baseFd)));
+            }
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        struct stat baseStat {};
+        if (::fstat(baseFd, &baseStat) != 0 || !S_ISDIR(baseStat.st_mode) || baseStat.st_uid != 0
+            || baseStat.st_gid != 0 || (baseStat.st_mode & 0022) != 0) {
+            if (error) {
+                *error = QStringLiteral("Overlay storage parent is not protected for %1").arg(plan.source);
+            }
+            ::close(baseFd);
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+
+        int leaseFd = ::openat(baseFd,
+                               ".lease",
+                               O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                               0600);
+        bool createdLease = leaseFd >= 0;
+        if (leaseFd < 0 && errno == EEXIST) {
+            leaseFd = ::openat(baseFd, ".lease", O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+        }
+        if (leaseFd < 0) {
+            if (error) {
+                *error = QStringLiteral("Could not open overlay lease for %1: %2")
+                             .arg(plan.source, QString::fromLocal8Bit(strerror(errno)));
+            }
+            ::close(baseFd);
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        struct stat lockStat {};
+        if ((createdLease && (::fchown(leaseFd, 0, 0) != 0 || ::fchmod(leaseFd, 0600) != 0))
+            || ::fstat(leaseFd, &lockStat) != 0 || !S_ISREG(lockStat.st_mode) || lockStat.st_uid != 0
+            || lockStat.st_gid != 0 || (lockStat.st_mode & 0777) != 0600 || lockStat.st_nlink != 1) {
+            if (error) {
+                *error = QStringLiteral("Overlay lease file is not a protected root-owned regular file for %1")
+                             .arg(plan.source);
+            }
+            ::close(leaseFd);
+            ::close(baseFd);
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        if (::flock(leaseFd, LOCK_EX | LOCK_NB) != 0) {
+            if (error) {
+                *error = QStringLiteral("Overlay storage is already in use for %1").arg(plan.source);
+            }
+            ::close(leaseFd);
+            ::close(baseFd);
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        QString directoryError;
+        if (!ensurePrivateDirectory(baseFd, "upper", &directoryError)
+            || !ensurePrivateDirectory(baseFd, "work", &directoryError)) {
+            if (error) {
+                *error = directoryError;
+            }
+            ::close(leaseFd);
+            ::close(baseFd);
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        ::close(baseFd);
+        leases->append(leaseFd);
+        leasePaths->append(lockPath);
+        seenLocks.insert(lockPath);
+    }
+    ::close(varLibFd);
+    return true;
+}
+
+bool CouchPlayHelper::reacquireOverlayLeases(const QString &username,
+                                             const QStringList &leasePaths,
+                                             QList<int> *leases,
+                                             QString *error)
+{
+    if (!leases || !s_validUsername.match(username).hasMatch()) {
+        if (error) {
+            *error = QStringLiteral("Invalid overlay lease recovery identity");
+        }
+        return false;
+    }
+    leases->clear();
+    if (leasePaths.isEmpty()) {
+        return true;
+    }
+    struct passwd *record = m_ops->getpwnam(username.toLocal8Bit().constData());
+    if (!record) {
+        if (error) {
+            *error = QStringLiteral("Could not resolve overlay recovery owner for %1").arg(username);
+        }
+        return false;
+    }
+    const uid_t targetUid = record->pw_uid;
+    const gid_t targetGid = record->pw_gid;
+    const QString prefix = QStringLiteral("/var/lib/couchplay/overlays/%1/").arg(username);
+    static const QRegularExpression hashPattern(QStringLiteral("^[0-9a-f]{16}$"));
+    const int varLibFd = SecureFs::openBaseDir(QStringLiteral("/var/lib"));
+    if (varLibFd < 0) {
+        if (error) {
+            *error = QStringLiteral("Could not securely open overlay recovery root: %1")
+                         .arg(QString::fromLocal8Bit(strerror(-varLibFd)));
+        }
+        return false;
+    }
+    QSet<QString> seen;
+    const auto closeAll = [&]() {
+        for (int fd : *leases) {
+            ::close(fd);
+        }
+        leases->clear();
+    };
+    for (const QString &path : leasePaths) {
+        if (seen.contains(path)) {
+            continue;
+        }
+        if (!path.startsWith(prefix) || !path.endsWith(QStringLiteral("/.lease"))) {
+            if (error) {
+                *error = QStringLiteral("Invalid persisted overlay lease path");
+            }
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        const QString hash = path.mid(prefix.size(), path.size() - prefix.size() - QStringLiteral("/.lease").size());
+        if (!hashPattern.match(hash).hasMatch() || path != prefix + hash + QStringLiteral("/.lease")) {
+            if (error) {
+                *error = QStringLiteral("Invalid persisted overlay lease identity");
+            }
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        const int baseFd = SecureFs::openDirBelow(varLibFd,
+                                                  {QStringLiteral("couchplay"), QStringLiteral("overlays"), username, hash},
+                                                  false,
+                                                  0,
+                                                  0,
+                                                  SecureFs::ChownMode::FinalOnly);
+        if (baseFd < 0) {
+            if (error) {
+                *error = QStringLiteral("Could not open persisted overlay storage: %1")
+                             .arg(QString::fromLocal8Bit(strerror(-baseFd)));
+            }
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        struct stat baseStat {};
+        const bool protectedBase = ::fstat(baseFd, &baseStat) == 0 && S_ISDIR(baseStat.st_mode)
+            && baseStat.st_uid == 0 && baseStat.st_gid == 0 && (baseStat.st_mode & 0022) == 0;
+        int leaseFd = protectedBase ? ::openat(baseFd, ".lease", O_RDWR | O_NOFOLLOW | O_CLOEXEC) : -1;
+        struct stat lockStat {};
+        const bool validLock = leaseFd >= 0 && ::fstat(leaseFd, &lockStat) == 0 && S_ISREG(lockStat.st_mode)
+            && lockStat.st_uid == 0 && lockStat.st_gid == 0 && (lockStat.st_mode & 0777) == 0600
+            && lockStat.st_nlink == 1;
+        const bool locked = validLock && ::flock(leaseFd, LOCK_EX | LOCK_NB) == 0;
+        bool validLayers = locked;
+        for (const char *leaf : {"upper", "work"}) {
+            if (!validLayers) {
+                break;
+            }
+            const int layerFd = ::openat(baseFd, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            struct stat layerStat {};
+            validLayers = layerFd >= 0 && ::fstat(layerFd, &layerStat) == 0 && S_ISDIR(layerStat.st_mode)
+                && layerStat.st_uid == targetUid && layerStat.st_gid == targetGid
+                && (layerStat.st_mode & 0077) == 0 && (layerStat.st_mode & 0700) == 0700;
+            if (layerFd >= 0) {
+                ::close(layerFd);
             }
         }
-        delete whichProc;
-    }
-
-    QStringList cmdArgs;
-    cmdArgs << gamescopePath << gamescopeArgs;
-    cmdArgs << QStringLiteral("--") << gameCommand;
-    systemdRunArgs << QStringLiteral("--") << cmdArgs;
-
-    QProcess *proc = m_ops->createProcess();
-    m_ops->startProcess(proc, QStringLiteral("systemd-run"), systemdRunArgs);
-    m_ops->waitForFinished(proc, 10000);
-    int exitCode = m_ops->processExitCode(proc);
-    if (exitCode != 0) {
-        QByteArray errOutput = m_ops->readStandardError(proc);
-        delete proc;
-
-        if (errOutput.contains("already loaded")) {
-            qInfo() << "Stale unit" << serviceName << "found - stopping and retrying";
-            QProcess *stopProc = m_ops->createProcess();
-            m_ops->startProcess(stopProc, QStringLiteral("systemctl"), {QStringLiteral("stop"), serviceName});
-            m_ops->waitForFinished(stopProc, 5000);
-            delete stopProc;
-
-            QProcess *resetProc = m_ops->createProcess();
-            m_ops->startProcess(resetProc, QStringLiteral("systemctl"), {QStringLiteral("reset-failed"), serviceName});
-            m_ops->waitForFinished(resetProc, 5000);
-            delete resetProc;
-
-            QThread::msleep(200);
-
-            proc = m_ops->createProcess();
-            m_ops->startProcess(proc, QStringLiteral("systemd-run"), systemdRunArgs);
-            m_ops->waitForFinished(proc, 10000);
-            exitCode = m_ops->processExitCode(proc);
-            if (exitCode != 0) {
-                errOutput = m_ops->readStandardError(proc);
-                qWarning() << "systemd-run retry failed for" << serviceName << "exit code:" << exitCode << errOutput;
-                delete proc;
-                return 0;
+        ::close(baseFd);
+        if (!validLayers) {
+            if (leaseFd >= 0) {
+                ::close(leaseFd);
             }
-            delete proc;
+            if (error) {
+                *error = QStringLiteral("Persisted overlay storage has unsafe ownership or is already in use");
+            }
+            ::close(varLibFd);
+            closeAll();
+            return false;
+        }
+        leases->append(leaseFd);
+        seen.insert(path);
+    }
+    ::close(varLibFd);
+    return true;
+}
+
+void CouchPlayHelper::pollUnitMainPid(const QString &serviceName)
+{
+    const quint64 generation = m_unitGenerationByName.value(serviceName, 0);
+    if (generation == 0 || m_pidPollGenerationByUnit.value(serviceName, 0) == generation) {
+        return;
+    }
+    PendingLaunch *pending = m_pendingLaunches.value(serviceName, nullptr);
+    const QDBusObjectPath unitPath = m_unitPathForUnit.value(serviceName);
+    const QString username = usernameForUnit(serviceName);
+    if (username.isEmpty() || (pending && (pending->replySent || pending->pollInFlight))) {
+        return;
+    }
+    const auto scheduleRecoveryPoll = [this, serviceName, generation]() {
+        if (m_pendingLaunches.contains(serviceName)) {
+            return;
+        }
+        QTimer::singleShot(100, this, [this, serviceName, generation]() {
+            if (m_unitGenerationByName.value(serviceName, 0) == generation
+                && m_pidToUnitName.key(serviceName, 0) <= 0 && m_unitUsernameByName.contains(serviceName)) {
+                pollUnitMainPid(serviceName);
+            }
+        });
+    };
+    if (unitPath.path().isEmpty()) {
+        if (!pending) {
+            return;
+        }
+        pending->pollInFlight = true;
+        m_pidPollGenerationByUnit.insert(serviceName, generation);
+        QDBusMessage getUnit = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                              QStringLiteral("/org/freedesktop/systemd1"),
+                                                              QStringLiteral("org.freedesktop.systemd1.Manager"),
+                                                              QStringLiteral("GetUnit"));
+        getUnit << serviceName;
+        auto *watcher = new QDBusPendingCallWatcher(m_ops->systemBusConnection().asyncCall(getUnit), this);
+        connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, serviceName, generation]() {
+            watcher->deleteLater();
+            if (m_unitGenerationByName.value(serviceName, 0) != generation) {
+                return;
+            }
+            if (m_pidPollGenerationByUnit.value(serviceName, 0) == generation) {
+                m_pidPollGenerationByUnit.remove(serviceName);
+            }
+            PendingLaunch *current = m_pendingLaunches.value(serviceName, nullptr);
+            if (current) {
+                current->pollInFlight = false;
+            }
+            if (!current || current->replySent || m_unitPathForUnit.contains(serviceName)) {
+                return;
+            }
+            QDBusPendingReply<QDBusObjectPath> reply = *watcher;
+            if (reply.isError()) {
+                if (reply.error().name() == QStringLiteral("org.freedesktop.systemd1.NoSuchUnit")) {
+                    QString reason = QStringLiteral("Instance exited before systemd exposed its preparing PID");
+                    if (UnitMonitor *monitor = m_monitors.value(serviceName, nullptr)) {
+                        const QString status = monitor->statusText();
+                        if (!status.isEmpty()) {
+                            reason = QStringLiteral("Instance preparation failed: %1").arg(status);
+                            if (monitor->statusErrno() != 0) {
+                                reason += QStringLiteral(" (errno %1)").arg(monitor->statusErrno());
+                            }
+                        }
+                    }
+                    current->replySent = true;
+                    current->replyConnection.send(current->request.createErrorReply(QDBusError::Failed, reason));
+                    releaseOwnedUnit(serviceName, true);
+                }
+                return;
+            }
+            const QDBusObjectPath resolvedPath = reply.value();
+            if (resolvedPath.path() != systemdUnitObjectPath(serviceName)) {
+                failPendingLaunch(serviceName, QStringLiteral("systemd returned an unexpected unit path"));
+                return;
+            }
+            m_unitPathForUnit.insert(serviceName, resolvedPath);
+            monitorUnitState(serviceName, current->username, resolvedPath);
+            if (!m_failedJobResults.take(serviceName).isEmpty()) {
+                onUnitStopped(serviceName, QString());
+            }
+            pollUnitMainPid(serviceName);
+        });
+        return;
+    }
+    if (!pending && m_pidToUnitName.key(serviceName, 0) > 0) {
+        return;
+    }
+    QDBusMessage call = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                       unitPath.path(),
+                                                       QStringLiteral("org.freedesktop.DBus.Properties"),
+                                                       QStringLiteral("Get"));
+    call << QStringLiteral("org.freedesktop.systemd1.Service") << QStringLiteral("MainPID");
+    if (pending) {
+        pending->pollInFlight = true;
+    }
+    m_pidPollGenerationByUnit.insert(serviceName, generation);
+    auto *watcher = new QDBusPendingCallWatcher(m_ops->systemBusConnection().asyncCall(call), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, serviceName, generation, scheduleRecoveryPoll]() {
+        watcher->deleteLater();
+        if (m_unitGenerationByName.value(serviceName, 0) != generation) {
+            return;
+        }
+        if (m_pidPollGenerationByUnit.value(serviceName, 0) == generation) {
+            m_pidPollGenerationByUnit.remove(serviceName);
+        }
+        PendingLaunch *current = m_pendingLaunches.value(serviceName, nullptr);
+        if (current) {
+            current->pollInFlight = false;
+        }
+        if (!m_unitPathForUnit.contains(serviceName)) {
+            scheduleRecoveryPoll();
+            return;
+        }
+        QDBusPendingReply<QDBusVariant> reply = *watcher;
+        if (reply.isError()) {
+            scheduleRecoveryPoll();
+            return;
+        }
+        bool ok = false;
+        const qlonglong pid = reply.value().variant().toLongLong(&ok);
+        if (!ok || pid <= 0) {
+            scheduleRecoveryPoll();
+            return;
+        }
+        if (current && !current->replySent) {
+            completePendingLaunch(serviceName, pid);
+            return;
+        }
+        const QString username = usernameForUnit(serviceName);
+        const uint ownerUid = m_unitOwnerUid.value(serviceName, INVALID_CALLER_UID);
+        if (username.isEmpty() || ownerUid == INVALID_CALLER_UID) {
+            return;
+        }
+        m_pidToUsername.insert(pid, username);
+        m_pidToUnitName.insert(pid, serviceName);
+        m_pidOwnerUid.insert(pid, ownerUid);
+        saveState();
+        publishUnitReady(serviceName);
+    });
+}
+
+void CouchPlayHelper::completePendingLaunch(const QString &serviceName, qint64 pid)
+{
+    PendingLaunch *pending = m_pendingLaunches.value(serviceName, nullptr);
+    if (!pending || pending->replySent || pid <= 0) {
+        return;
+    }
+    pending->replySent = true;
+    pending->pollTimer->stop();
+    pending->deadlineTimer->stop();
+    m_pidToUsername.insert(pid, pending->username);
+    m_pidToUnitName.insert(pid, serviceName);
+    m_pidOwnerUid.insert(pid, pending->callerUid);
+    m_unitOwnerUid.insert(serviceName, pending->callerUid);
+    const QDBusMessage request = pending->request;
+    const QDBusConnection replyConnection = pending->replyConnection;
+    replyConnection.send(request.createReply(QVariantList{QVariant::fromValue<qlonglong>(pid)}));
+    m_pendingLaunches.remove(serviceName);
+    delete pending->pollTimer;
+    delete pending->deadlineTimer;
+    delete pending;
+    saveState();
+    if (m_initialInactiveUnitNames.remove(serviceName)) {
+        onUnitStopped(serviceName, QString());
+    }
+    publishUnitReady(serviceName);
+}
+
+void CouchPlayHelper::failPendingLaunch(const QString &serviceName, const QString &reason)
+{
+    PendingLaunch *pending = m_pendingLaunches.value(serviceName, nullptr);
+    if (!pending) {
+        return;
+    }
+    const bool pidAcknowledged = m_pidToUnitName.key(serviceName, 0) > 0;
+    pending->pollTimer->stop();
+    pending->deadlineTimer->stop();
+    if (!pending->replySent) {
+        pending->replySent = true;
+        pending->replyConnection.send(pending->request.createErrorReply(QDBusError::Failed, reason));
+    }
+    if (stopServiceInstance(serviceName)) {
+        if (pidAcknowledged) {
+            finalizeStoppedUnit(serviceName, reason);
         } else {
-            qWarning() << "systemd-run failed for" << serviceName << "exit code:" << exitCode << errOutput;
-            return 0;
+            releaseOwnedUnit(serviceName, true);
         }
     } else {
-        delete proc;
+        qWarning() << "Could not stop failed launch unit" << serviceName << ":" << reason;
+        saveState();
+        QTimer::singleShot(1000, this, [this, serviceName, pidAcknowledged, reason]() {
+            if (!m_pendingLaunches.contains(serviceName)) {
+                return;
+            }
+            if (stopServiceInstance(serviceName)) {
+                if (pidAcknowledged) {
+                    finalizeStoppedUnit(serviceName, reason);
+                } else {
+                    releaseOwnedUnit(serviceName, true);
+                }
+                return;
+            }
+            QTimer::singleShot(1000, this, [this, serviceName]() {
+                if (m_pendingLaunches.contains(serviceName)) {
+                    failPendingLaunch(serviceName, QStringLiteral("Retrying cleanup of failed instance unit"));
+                }
+            });
+        });
     }
+}
 
-    // Poll for MainPID (systemd needs a moment to register the unit)
-    qint64 mainPid = 0;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        QThread::msleep(500);
-        QProcess *showProc = m_ops->createProcess();
-        m_ops->startProcess(showProc,
-                            QStringLiteral("systemctl"),
-                            {QStringLiteral("show"),
-                             serviceName,
-                             QStringLiteral("-p"),
-                             QStringLiteral("MainPID"),
-                             QStringLiteral("--value")});
-        m_ops->waitForFinished(showProc, 5000);
-        QByteArray output = m_ops->readAllStandardOutput(showProc).trimmed();
-        delete showProc;
+void CouchPlayHelper::onUnitReady(const QString &serviceName)
+{
+    if (!m_unitPathForUnit.contains(serviceName)) {
+        return;
+    }
+    if (!m_readyUnitNames.contains(serviceName)) {
+        m_readyUnitNames.insert(serviceName);
+        saveState();
+    }
+    pollUnitMainPid(serviceName);
+    publishUnitReady(serviceName);
 
-        if (!output.isEmpty()) {
-            bool ok = false;
-            mainPid = output.toLongLong(&ok);
-            if (ok && mainPid > 0)
-                break;
+}
+
+void CouchPlayHelper::publishUnitReady(const QString &serviceName)
+{
+    if (m_terminalStateQueries.contains(serviceName) || !m_readyUnitNames.contains(serviceName)
+        || m_announcedReadyUnitNames.contains(serviceName)) {
+        return;
+    }
+    const QString username = usernameForUnit(serviceName);
+    if (username.isEmpty()) {
+        return;
+    }
+    qint64 pid = 0;
+    for (auto it = m_pidToUnitName.constBegin(); it != m_pidToUnitName.constEnd(); ++it) {
+        if (it.value() == serviceName) {
+            pid = it.key();
+            break;
         }
     }
-
-    if (mainPid <= 0) {
-        qWarning() << "Could not get MainPID for transient unit" << serviceName;
-        return 0;
+    if (pid <= 0) {
+        return;
     }
-
-    m_usernameToUnitName[username] = serviceName;
-    m_pidToUsername[mainPid] = username;
-    m_pidOwnerUid[mainPid] = requestUid;
-    m_compositorUidForUsername[username] = requestUid;
-
+    m_announcedReadyUnitNames.insert(serviceName);
+    const QString token = m_launchTokenByUnitName.value(serviceName);
+    if (!token.isEmpty()) {
+        LaunchManifest manifest;
+        QString error;
+        if (!readLaunchManifestForUnit(serviceName, token, &manifest, &error)) {
+            qWarning() << "Could not validate READY launch manifest for" << serviceName << ":" << error;
+        } else {
+            bool hasCopyDirectories = false;
+            for (const DirectoryRecord &directory : manifest.directories) {
+                if (directory.mode == QStringLiteral("copy")) {
+                    hasCopyDirectories = true;
+                    break;
+                }
+            }
+            if (!hasCopyDirectories) {
+                if (!m_ops->unlinkLaunchManifest(token, &error)) {
+                    qWarning() << "Could not unlink consumed launch manifest for" << serviceName << ":" << error;
+                } else {
+                    m_launchTokenByUnitName.remove(serviceName);
+                    m_cleanedLaunchManifestTokens.insert(token);
+                }
+            }
+        }
+    }
     saveState();
+    Q_EMIT instanceReady(username, pid);
+}
 
-    monitorUnitState(serviceName, username, mainPid);
+void CouchPlayHelper::noteInitialInactiveUnitState(const QString &serviceName)
+{
+    if (!m_unitPathForUnit.contains(serviceName)) {
+        return;
+    }
+    if (m_pidToUnitName.key(serviceName, 0) > 0) {
+        onUnitStopped(serviceName, QString());
+        return;
+    }
+    if (m_pendingLaunches.contains(serviceName)) {
+        m_initialInactiveUnitNames.insert(serviceName);
+    }
+}
 
-    qInfo() << "Started transient unit" << serviceName << "with PID" << mainPid;
-    return mainPid;
+void CouchPlayHelper::onUnitStopped(const QString &serviceName, const QString &reason)
+{
+    const quint64 generation = m_unitGenerationByName.value(serviceName, 0);
+    if (!m_unitPathForUnit.contains(serviceName) || generation == 0 || m_stoppingUnits.contains(serviceName)
+        || m_terminalStateQueries.contains(serviceName)) {
+        return;
+    }
+    m_terminalStateQueries.insert(serviceName);
+    queryUnitActiveState(serviceName, generation, m_unitPathForUnit.value(serviceName), reason, true);
+}
+
+void CouchPlayHelper::queryUnitActiveState(const QString &serviceName,
+                                          quint64 generation,
+                                          const QDBusObjectPath &unitPath,
+                                          const QString &reason,
+                                          bool resolveMissingUnit)
+{
+    if (m_unitGenerationByName.value(serviceName, 0) != generation
+        || !m_terminalStateQueries.contains(serviceName)
+        || m_unitPathForUnit.value(serviceName).path() != unitPath.path()) {
+        return;
+    }
+    QDBusMessage getActive = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                            unitPath.path(),
+                                                            QStringLiteral("org.freedesktop.DBus.Properties"),
+                                                            QStringLiteral("Get"));
+    getActive << QStringLiteral("org.freedesktop.systemd1.Unit") << QStringLiteral("ActiveState");
+    auto *watcher = new QDBusPendingCallWatcher(m_ops->systemBusConnection().asyncCall(getActive), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this, watcher, serviceName, generation, unitPath, reason, resolveMissingUnit]() {
+        watcher->deleteLater();
+        if (m_unitGenerationByName.value(serviceName, 0) != generation
+            || !m_terminalStateQueries.contains(serviceName)
+            || m_unitPathForUnit.value(serviceName).path() != unitPath.path()) {
+            return;
+        }
+        const QDBusPendingReply<QDBusVariant> stateReply = *watcher;
+        if (stateReply.isError()) {
+            if (resolveMissingUnit) {
+                resolveUnitAfterPropertyError(serviceName, generation, reason);
+            } else {
+                m_terminalStateQueries.remove(serviceName);
+            }
+            return;
+        }
+        const QString activeState = stateReply.value().variant().toString();
+        if (activeState == QStringLiteral("active")) {
+            m_terminalStateQueries.remove(serviceName);
+            onUnitReady(serviceName);
+            return;
+        }
+        if (activeState != QStringLiteral("inactive") && activeState != QStringLiteral("failed")) {
+            m_terminalStateQueries.remove(serviceName);
+            return;
+        }
+        if (reason.isEmpty()) {
+            queryTerminalUnitProperties(serviceName, generation);
+        } else {
+            m_terminalStateQueries.remove(serviceName);
+            finalizeStoppedUnit(serviceName, reason);
+        }
+    });
+}
+
+void CouchPlayHelper::resolveUnitAfterPropertyError(const QString &serviceName,
+                                                    quint64 generation,
+                                                    const QString &reason)
+{
+    if (m_unitGenerationByName.value(serviceName, 0) != generation
+        || !m_terminalStateQueries.contains(serviceName)) {
+        return;
+    }
+    QDBusMessage getUnit = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                          QStringLiteral("/org/freedesktop/systemd1"),
+                                                          QStringLiteral("org.freedesktop.systemd1.Manager"),
+                                                          QStringLiteral("GetUnit"));
+    getUnit << serviceName;
+    auto *watcher = new QDBusPendingCallWatcher(m_ops->systemBusConnection().asyncCall(getUnit), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, serviceName, generation, reason]() {
+        watcher->deleteLater();
+        if (m_unitGenerationByName.value(serviceName, 0) != generation
+            || !m_terminalStateQueries.contains(serviceName)) {
+            return;
+        }
+        const QDBusPendingReply<QDBusObjectPath> unitReply = *watcher;
+        if (unitReply.isError()) {
+            m_terminalStateQueries.remove(serviceName);
+            if (unitReply.error().name() != QStringLiteral("org.freedesktop.systemd1.NoSuchUnit")) {
+                return;
+            }
+            QString terminalReason = reason;
+            const bool ready = m_readyUnitNames.contains(serviceName);
+            if (terminalReason.isEmpty()) {
+                terminalReason = ready ? QStringLiteral("exited")
+                                      : QStringLiteral("Instance preparation failed before READY");
+                if (!ready) {
+                    if (UnitMonitor *monitor = m_monitors.value(serviceName, nullptr)) {
+                        if (!monitor->statusText().isEmpty()) {
+                            terminalReason = QStringLiteral("Instance preparation failed: %1")
+                                                 .arg(monitor->statusText());
+                            if (monitor->statusErrno() != 0) {
+                                terminalReason += QStringLiteral(" (errno %1)").arg(monitor->statusErrno());
+                            }
+                        }
+                    }
+                }
+            }
+            finalizeStoppedUnit(serviceName, terminalReason);
+            return;
+        }
+        if (unitReply.value().path() != systemdUnitObjectPath(serviceName)) {
+            m_terminalStateQueries.remove(serviceName);
+            return;
+        }
+        m_unitPathForUnit.insert(serviceName, unitReply.value());
+        queryUnitActiveState(serviceName, generation, unitReply.value(), reason, false);
+    });
+}
+
+void CouchPlayHelper::queueStoppedNotification(const QString &username, qint64 pid, const QString &reason)
+{
+    m_deferredStoppedNotifications.append(StoppedInstanceNotification{username, pid, reason});
+    QMetaObject::invokeMethod(this, [this]() {
+        auto notifications = std::move(m_deferredStoppedNotifications);
+        m_deferredStoppedNotifications.clear();
+        for (const StoppedInstanceNotification &item : notifications) {
+            Q_EMIT instanceStopped(item.username, item.pid, item.reason);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void CouchPlayHelper::finalizeStoppedUnit(const QString &serviceName, const QString &reason, bool deferNotification)
+{
+    if (!m_unitUsernameByName.contains(serviceName)) {
+        return;
+    }
+    if (m_stoppingUnits.contains(serviceName)) {
+        return;
+    }
+    PendingLaunch *pending = m_pendingLaunches.value(serviceName, nullptr);
+    if (pending && !pending->replySent) {
+        pending->replySent = true;
+        pending->replyConnection.send(pending->request.createErrorReply(
+            QDBusError::Failed, reason.isEmpty() ? QStringLiteral("Instance stopped before READY") : reason));
+    }
+    const QString username = usernameForUnit(serviceName);
+    const qint64 pid = m_pidToUnitName.key(serviceName, 0);
+    if (pid > 0) {
+        if (deferNotification) {
+            queueStoppedNotification(username, pid, reason);
+        } else {
+            Q_EMIT instanceStopped(username, pid, reason);
+        }
+    }
+    releaseOwnedUnit(serviceName, true);
+}
+
+void CouchPlayHelper::queryTerminalUnitProperties(const QString &serviceName, quint64 generation)
+{
+    if (m_unitGenerationByName.value(serviceName, 0) != generation
+        || !m_unitPathForUnit.contains(serviceName)) {
+        return;
+    }
+    const QDBusObjectPath unitPath = m_unitPathForUnit.value(serviceName);
+    QDBusMessage call = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                       unitPath.path(),
+                                                       QStringLiteral("org.freedesktop.DBus.Properties"),
+                                                       QStringLiteral("GetAll"));
+    call << QStringLiteral("org.freedesktop.systemd1.Service");
+    auto *watcher = new QDBusPendingCallWatcher(m_ops->systemBusConnection().asyncCall(call), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, serviceName, generation]() {
+        watcher->deleteLater();
+        if (m_unitGenerationByName.value(serviceName, 0) != generation) {
+            return;
+        }
+        m_terminalStateQueries.remove(serviceName);
+        if (!m_unitPathForUnit.contains(serviceName)) {
+            return;
+        }
+        QDBusPendingReply<QVariantMap> reply = *watcher;
+        QVariantMap properties;
+        if (!reply.isError()) {
+            properties = reply.value();
+        }
+        QString result = properties.value(QStringLiteral("Result")).toString();
+        QString status = properties.value(QStringLiteral("StatusText")).toString();
+        int statusErrno = properties.value(QStringLiteral("StatusErrno")).toInt();
+        if (UnitMonitor *monitor = m_monitors.value(serviceName, nullptr)) {
+            if (result.isEmpty()) {
+                result = monitor->result();
+            }
+            if (status.isEmpty()) {
+                status = monitor->statusText();
+            }
+            if (statusErrno == 0) {
+                statusErrno = monitor->statusErrno();
+            }
+        }
+        const bool ready = m_readyUnitNames.contains(serviceName);
+        QString reason;
+        if (!ready) {
+            reason = status.isEmpty() ? QStringLiteral("Instance preparation failed before READY")
+                                      : QStringLiteral("Instance preparation failed: %1").arg(status);
+            if (statusErrno != 0) {
+                reason += QStringLiteral(" (errno %1)").arg(statusErrno);
+            }
+        } else if (result == QStringLiteral("signal") || result == QStringLiteral("core-dump")) {
+            reason = QStringLiteral("crashed");
+        } else if (result == QStringLiteral("exit-code") || result == QStringLiteral("success")) {
+            reason = QStringLiteral("exited");
+        } else {
+            reason = result.isEmpty() ? QStringLiteral("failed") : result;
+        }
+        if (ready && !status.isEmpty()) {
+            reason += QStringLiteral(": %1").arg(status);
+            if (statusErrno != 0) {
+                reason += QStringLiteral(" (errno %1)").arg(statusErrno);
+            }
+        }
+        onUnitStopped(serviceName, reason);
+    });
+}
+
+bool CouchPlayHelper::readLaunchManifestForUnit(const QString &serviceName,
+                                                const QString &token,
+                                                LaunchManifest *manifest,
+                                                QString *error) const
+{
+    if (!manifest || !DirectoryPlan::isLaunchToken(token)) {
+        if (error) {
+            *error = QStringLiteral("Invalid launch manifest recovery identity");
+        }
+        return false;
+    }
+    if (!m_ops->readLaunchManifest(token, manifest, error)) {
+        return false;
+    }
+    if (manifest->unitName != serviceName) {
+        if (error) {
+            *error = QStringLiteral("Launch manifest does not belong to %1").arg(serviceName);
+        }
+        return false;
+    }
+    return true;
+}
+
+bool CouchPlayHelper::cleanupCopyScratchForUnit(const QString &serviceName, const QString &token) const
+{
+    LaunchManifest manifest;
+    QString error;
+    if (!readLaunchManifestForUnit(serviceName, token, &manifest, &error)) {
+        qWarning() << "Could not validate inactive launch manifest for" << serviceName << ":" << error;
+        return false;
+    }
+    bool hasCopyDirectories = false;
+    for (const DirectoryRecord &directory : manifest.directories) {
+        if (directory.mode == QStringLiteral("copy")) {
+            hasCopyDirectories = true;
+            break;
+        }
+    }
+    if (hasCopyDirectories && !InstanceBootstrap::cleanupCopyScratchDirectories(manifest, token, &error)) {
+        qWarning() << "Could not clean copy scratch directories for" << serviceName << ":" << error;
+        return false;
+    }
+    return true;
+}
+
+void CouchPlayHelper::releaseOwnedUnit(const QString &serviceName, bool unlinkManifest)
+{
+    QString username = usernameForUnit(serviceName);
+    PendingLaunch *pending = m_pendingLaunches.value(serviceName, nullptr);
+    if (username.isEmpty() && pending) {
+        username = pending->username;
+    }
+    if (pending) {
+        pending->pollTimer->stop();
+        pending->deadlineTimer->stop();
+        if (!pending->replySent) {
+            pending->replyConnection.send(pending->request.createErrorReply(
+                QDBusError::Failed, QStringLiteral("Instance stopped before its preparing PID was available")));
+        }
+        m_pendingLaunches.remove(serviceName);
+        delete pending->pollTimer;
+        delete pending->deadlineTimer;
+        delete pending;
+    }
+    const QString token = m_launchTokenByUnitName.value(serviceName);
+    if (unlinkManifest && !token.isEmpty()) {
+        QString error;
+        if (cleanupCopyScratchForUnit(serviceName, token)) {
+            if (m_ops->unlinkLaunchManifest(token, &error)) {
+                m_launchTokenByUnitName.remove(serviceName);
+                m_cleanedLaunchManifestTokens.insert(token);
+            } else {
+                qWarning() << "Could not unlink inactive launch manifest for" << serviceName << ":" << error;
+            }
+        }
+    }
+    if (UnitMonitor *monitor = m_monitors.take(serviceName)) {
+        monitor->deleteLater();
+    }
+    if (UnitJobMonitor *monitor = m_jobMonitors.take(serviceName)) {
+        monitor->deleteLater();
+    }
+    m_failedJobResults.remove(serviceName);
+    for (int fd : m_overlayLeaseFdsByUnit.take(serviceName)) {
+        ::close(fd);
+    }
+    m_overlayLeasePathsByUnit.remove(serviceName);
+    m_unitPathForUnit.remove(serviceName);
+    m_readyUnitNames.remove(serviceName);
+    m_announcedReadyUnitNames.remove(serviceName);
+    m_terminalStateQueries.remove(serviceName);
+    m_initialInactiveUnitNames.remove(serviceName);
+    m_stoppingUnits.remove(serviceName);
+    if (m_usernameToUnitName.value(username) == serviceName) {
+        m_usernameToUnitName.remove(username);
+    }
+    if (m_auxiliaryUnitNameForUsername.value(username) == serviceName) {
+        m_auxiliaryUnitNameForUsername.remove(username);
+    }
+    m_unitUsernameByName.remove(serviceName);
+    m_unitRoleByName.remove(serviceName);
+    m_unitGenerationByName.remove(serviceName);
+    m_pidPollGenerationByUnit.remove(serviceName);
+    m_unitOwnerUid.remove(serviceName);
+    m_targetIdentityByUnit.remove(serviceName);
+    for (auto it = m_pidToUsername.begin(); it != m_pidToUsername.end();) {
+        if (m_pidToUnitName.value(it.key()) == serviceName) {
+            m_pidToUnitName.remove(it.key());
+            m_pidOwnerUid.remove(it.key());
+            it = m_pidToUsername.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    cleanupTcpListenerIfLast(username);
+    saveState();
 }
 
 void CouchPlayHelper::cleanupTcpListenerIfLast(const QString &username)
 {
-    if (!m_compositorUidForUsername.contains(username)) {
+    if (m_usernameToUnitName.contains(username) || m_auxiliaryUnitNameForUsername.contains(username)
+        || !m_compositorUidForUsername.contains(username)) {
         return;
     }
     uint compositorUid = m_compositorUidForUsername.value(username);
@@ -1770,48 +2980,119 @@ void CouchPlayHelper::cleanupTcpListenerIfLast(const QString &username)
     }
 }
 
+bool CouchPlayHelper::confirmUnitInactive(const QString &serviceName, QString *error) const
+{
+    const QDBusConnection connection = m_ops->systemBusConnection();
+    QDBusMessage getUnit = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                          QStringLiteral("/org/freedesktop/systemd1"),
+                                                          QStringLiteral("org.freedesktop.systemd1.Manager"),
+                                                          QStringLiteral("GetUnit"));
+    getUnit << serviceName;
+    const QDBusReply<QDBusObjectPath> unitReply = connection.call(getUnit, QDBus::Block, 2000);
+    if (!unitReply.isValid()) {
+        if (unitReply.error().name() == QStringLiteral("org.freedesktop.systemd1.NoSuchUnit")) {
+            return true;
+        }
+        if (error) {
+            *error = unitReply.error().message();
+        }
+        return false;
+    }
+    if (unitReply.value().path() != systemdUnitObjectPath(serviceName)) {
+        if (error) {
+            *error = QStringLiteral("systemd returned an unexpected object path for %1").arg(serviceName);
+        }
+        return false;
+    }
+
+    QDBusMessage getState = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                           unitReply.value().path(),
+                                                           QStringLiteral("org.freedesktop.DBus.Properties"),
+                                                           QStringLiteral("Get"));
+    getState << QStringLiteral("org.freedesktop.systemd1.Unit") << QStringLiteral("ActiveState");
+    const QDBusReply<QDBusVariant> stateReply = connection.call(getState, QDBus::Block, 2000);
+    if (!stateReply.isValid()) {
+        if (error) {
+            *error = stateReply.error().message();
+        }
+        return false;
+    }
+    const QString state = stateReply.value().variant().toString();
+    if (state == QStringLiteral("inactive") || state == QStringLiteral("failed")) {
+        return true;
+    }
+    if (error) {
+        *error = QStringLiteral("systemd unit %1 is still %2").arg(serviceName, state);
+    }
+    return false;
+}
+
 bool CouchPlayHelper::stopServiceInstance(const QString &serviceName)
 {
     QProcess *stopProc = m_ops->createProcess();
     m_ops->startProcess(stopProc, QStringLiteral("systemctl"), {QStringLiteral("stop"), serviceName});
     const bool stopped = m_ops->waitForFinished(stopProc, 10000) && m_ops->processExitCode(stopProc) == 0;
+    if (!stopped) {
+        qWarning() << "systemctl stop failed for" << serviceName << m_ops->readStandardError(stopProc);
+        delete stopProc;
+        return false;
+    }
     delete stopProc;
 
-    QProcess *resetProc = m_ops->createProcess();
-    m_ops->startProcess(resetProc, QStringLiteral("systemctl"), {QStringLiteral("reset-failed"), serviceName});
-    m_ops->waitForFinished(resetProc, 5000);
-    delete resetProc;
-    return stopped;
+    QString confirmationError;
+    if (!confirmUnitInactive(serviceName, &confirmationError)) {
+        qWarning() << "Systemd has not confirmed that" << serviceName << "is inactive:" << confirmationError;
+        return false;
+    }
+    return true;
 }
-
-
-void CouchPlayHelper::monitorUnitState(const QString &serviceName, const QString &username, qint64 mainPid)
+void CouchPlayHelper::monitorUnitState(const QString &serviceName,
+                                       const QString &username,
+                                       const QDBusObjectPath &unitPath,
+                                       bool initialStateIsAuthoritative)
 {
-    QDBusMessage getUnitMsg = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
-                                                             QStringLiteral("/org/freedesktop/systemd1"),
-                                                             QStringLiteral("org.freedesktop.systemd1.Manager"),
-                                                             QStringLiteral("GetUnit"));
-    getUnitMsg << serviceName;
-
-    QDBusMessage reply = QDBusConnection::systemBus().call(getUnitMsg);
-    if (reply.type() == QDBusMessage::ErrorMessage) {
-        qWarning() << "monitorUnitState: GetUnit failed for" << serviceName << ":" << reply.errorMessage();
+    const QString path = unitPath.path();
+    const quint64 generation = m_unitGenerationByName.value(serviceName, 0);
+    if (path != systemdUnitObjectPath(serviceName) || usernameForUnit(serviceName) != username || generation == 0) {
+        qWarning() << "monitorUnitState: refusing invalid or unowned unit path for" << serviceName;
         return;
     }
-
-    QDBusObjectPath unitPath;
-    const QDBusArgument &arg = reply.arguments().at(0).value<QDBusArgument>();
-    arg >> unitPath;
-
-    QString path = unitPath.path();
-    if (path.isEmpty()) {
-        qWarning() << "monitorUnitState: empty unit path for" << serviceName;
-        return;
+    UnitMonitor *monitor = m_monitors.value(serviceName, nullptr);
+    if (monitor && monitor->unitPath() != path) {
+        m_monitors.remove(serviceName);
+        monitor->deleteLater();
+        monitor = nullptr;
     }
-
-    auto *monitor = new UnitMonitor(path, serviceName, username, mainPid, this);
-    m_monitors.insert(serviceName, monitor);
+    if (!monitor) {
+        monitor = new UnitMonitor(path, serviceName, generation, this);
+        m_monitors.insert(serviceName, monitor);
+    }
+    QDBusMessage getActive = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                            path,
+                                                            QStringLiteral("org.freedesktop.DBus.Properties"),
+                                                            QStringLiteral("Get"));
+    getActive << QStringLiteral("org.freedesktop.systemd1.Unit") << QStringLiteral("ActiveState");
+    auto *watcher = new QDBusPendingCallWatcher(m_ops->systemBusConnection().asyncCall(getActive), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this, watcher, serviceName, generation, initialStateIsAuthoritative]() {
+        watcher->deleteLater();
+        if (m_unitGenerationByName.value(serviceName, 0) != generation) {
+            return;
+        }
+        QDBusPendingReply<QDBusVariant> reply = *watcher;
+        if (!m_unitPathForUnit.contains(serviceName)) {
+            return;
+        }
+        if (reply.isError()) {
+            onUnitStopped(serviceName, QString());
+            return;
+        }
+        if (UnitMonitor *currentMonitor = m_monitors.value(serviceName, nullptr)) {
+            currentMonitor->observeInitialState(reply.value().variant().toString(), initialStateIsAuthoritative);
+        }
+    });
 }
+
 
 bool CouchPlayHelper::isPathWithinAllowedPrefix(const QString &path) const
 {
@@ -1909,446 +3190,6 @@ bool CouchPlayHelper::secureCreateUserDir(const QString &username, const QString
     }
     ::close(dirFd);
     return true;
-}
-
-QString CouchPlayHelper::computeMountTarget(const QString &source,
-                                            const QString &alias,
-                                            const QString &userHome,
-                                            const QString &compositorHome)
-{
-    // Reject alias with path traversal (whole ".." components only — names
-    // like "Foo..Bar" are valid)
-    if (pathHasDotDotComponent(alias)) {
-        qWarning() << "computeMountTarget: alias contains path traversal:" << alias;
-        return {};
-    }
-
-    QString target;
-    if (!alias.isEmpty()) {
-        if (!QDir::isAbsolutePath(source) || pathHasDotDotComponent(source)) {
-            return {};
-        }
-        target = userHome + (alias.startsWith(QLatin1Char('/')) ? alias : QLatin1Char('/') + alias);
-    } else {
-        const HomePathMapping mapping = mapHomeRelativePath(source, compositorHome,
-                                                            m_ops->canonicalFilePath(compositorHome));
-        if (mapping.kind == HomePathKind::Invalid) {
-            qWarning() << "computeMountTarget: invalid shared-directory source:" << source;
-            return {};
-        }
-        if (mapping.kind == HomePathKind::Relative) {
-            target = userHome + QLatin1Char('/') + mapping.relativePath;
-        } else {
-            target = userHome + QStringLiteral("/.couchplay/mounts") + source;
-        }
-    }
-    // Normalize, then require a strict descendant of the home: an alias or
-    // source that cleans to the home itself (".", "./", "/home/deck/.")
-    // would attach the shared source over the player's entire home
-    target = QDir::cleanPath(target);
-    if (!target.startsWith(userHome + QLatin1Char('/'))) {
-        qWarning() << "computeMountTarget: target is not a strict descendant of the user home:" << target;
-        return {};
-    }
-
-    return target;
-}
-
-int CouchPlayHelper::MountSharedDirectories(const QString &username, const QStringList &directories)
-{
-    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
-        return 0;
-    }
-
-    QString userHome = getUserHome(username);
-    if (userHome.isEmpty()) {
-        sendErrorReply(QDBusError::Failed,
-                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
-        return 0;
-    }
-
-    const uint compositorUid = callerUid();
-    QString compositorHome = getUserHomeByUid(compositorUid);
-    if (compositorHome.isEmpty()) {
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not determine home directory for compositor user"));
-        return 0;
-    }
-
-    int successCount = 0;
-
-    for (const QString &dirSpec : directories) {
-        // Specs escape '|' and '\' inside the fields (paths like
-        // /mnt/Game|Saves must survive the wire); malformed specs are skipped
-        QString source;
-        QString alias;
-        if (!decodeMountSpec(dirSpec, source, alias)) {
-            qWarning() << "MountSharedDirectories: Malformed directory spec:" << dirSpec;
-            continue;
-        }
-
-        if (!m_ops->fileExists(source)) {
-            qWarning() << "MountSharedDirectories: Source path does not exist:" << source;
-            continue;
-        }
-
-        if (!m_ops->isDirectory(source)) {
-            qWarning() << "MountSharedDirectories: Source is not a directory:" << source;
-            continue;
-        }
-
-        if (!isPathWithinAllowedPrefix(source)) {
-            qWarning() << "MountSharedDirectories: Source path is outside allowed prefixes:" << source;
-            continue;
-        }
-
-        QString canonicalSource = m_ops->canonicalFilePath(source);
-        if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
-            qWarning() << "MountSharedDirectories: Source path resolves outside allowed prefixes:" << source << "->"
-                       << canonicalSource;
-            continue;
-        }
-
-        QString target = computeMountTarget(source, alias, userHome, compositorHome);
-        if (target.isEmpty()) {
-            qWarning() << "MountSharedDirectories: Invalid mount target computed";
-            continue;
-        }
-
-        if (pathHasSymlinkComponents(target, userHome)) {
-            qWarning() << "MountSharedDirectories: Target contains a symlinked component:" << target;
-            continue;
-        }
-
-        if (!m_ops->fileExists(target)) {
-            if (!secureCreateUserDir(username, target)) {
-                qWarning() << "MountSharedDirectories: Failed to create target directory:" << target;
-                continue;
-            }
-        }
-
-        const QString targetLeaf = target.mid(target.lastIndexOf(QLatin1Char('/')) + 1);
-        const QString targetParentPath = target.left(target.lastIndexOf(QLatin1Char('/')));
-
-        MountInfo info;
-        info.source = source;
-        info.target = target;
-        info.mountType = QStringLiteral("bind");
-
-        // FD-anchored bind only — a mount(8) fallback would re-introduce the
-        // pathname race this design exists to close, so fail closed instead
-        // when the kernel mount API is unavailable
-        if (!SecureFs::mountApiAvailable()) {
-            qWarning() << "MountSharedDirectories: kernel mount API unavailable, refusing path-based mount";
-            continue;
-        }
-        // Pin the target parent (no-follow walk), clone the source with
-        // AT_SYMLINK_NOFOLLOW, attach with move_mount — no pathname
-        // re-resolution a player could race
-        int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
-        if (parentFd < 0) {
-            qWarning() << "MountSharedDirectories: Could not anchor target parent:" << targetParentPath;
-            continue;
-        }
-        int mountResult =
-            SecureFs::bindMountFd(canonicalSource.isEmpty() ? source : canonicalSource, parentFd, targetLeaf);
-        if (mountResult != 0) {
-            ::close(parentFd);
-            qWarning() << "MountSharedDirectories: FD bind mount failed for" << source << "->" << target << ":"
-                       << strerror(-mountResult);
-            continue;
-        }
-        info.targetParentFd = parentFd;
-        info.targetLeaf = targetLeaf;
-
-        m_activeMounts[username].append(info);
-
-        successCount++;
-    }
-
-    saveState();
-
-    return successCount;
-}
-
-bool CouchPlayHelper::SetupOverlayMount(const QString &username,
-                                        const QString &sourceDir,
-
-                                        const QString &targetAlias)
-{
-    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
-        return false;
-    }
-
-    if (!m_ops->fileExists(sourceDir)) {
-        qWarning() << "SetupOverlayMount: Source path does not exist:" << sourceDir;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path does not exist: %1").arg(sourceDir));
-        return false;
-    }
-
-    if (!m_ops->isDirectory(sourceDir)) {
-        qWarning() << "SetupOverlayMount: Source is not a directory:" << sourceDir;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source is not a directory: %1").arg(sourceDir));
-        return false;
-    }
-
-    if (!isPathWithinAllowedPrefix(sourceDir)) {
-        qWarning() << "SetupOverlayMount: Source path is outside allowed prefixes:" << sourceDir;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path is outside allowed prefixes"));
-        return false;
-    }
-
-    QString canonicalSource = m_ops->canonicalFilePath(sourceDir);
-    if (!canonicalSource.isEmpty() && !isPathWithinAllowedPrefix(canonicalSource)) {
-        qWarning() << "SetupOverlayMount: Source path resolves outside allowed prefixes:" << sourceDir << "->"
-                   << canonicalSource;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Source path resolves outside allowed prefixes"));
-        return false;
-    }
-
-    QString userHome = getUserHome(username);
-    if (userHome.isEmpty()) {
-        sendErrorReply(QDBusError::Failed,
-                       QStringLiteral("Could not determine home directory for user '%1'").arg(username));
-        return false;
-    }
-
-    const uint compositorUid = callerUid();
-    QString compositorHome = getUserHomeByUid(compositorUid);
-    if (compositorHome.isEmpty()) {
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not determine home directory for compositor user"));
-        return false;
-    }
-
-    QString target = computeMountTarget(sourceDir, targetAlias, userHome, compositorHome);
-    if (target.isEmpty()) {
-        qWarning() << "SetupOverlayMount: Invalid mount target computed";
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid mount target"));
-        return false;
-    }
-
-    if (pathHasSymlinkComponents(target, userHome)) {
-        qWarning() << "SetupOverlayMount: Target contains a symlinked component:" << target;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Target contains a symlinked component"));
-        return false;
-    }
-
-    if (!m_ops->fileExists(target)) {
-        if (!secureCreateUserDir(username, target)) {
-            qWarning() << "SetupOverlayMount: Failed to create target directory:" << target;
-            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create target directory: %1").arg(target));
-            return false;
-        }
-    }
-
-    QByteArray hashBytes =
-        QCryptographicHash::hash(sourceDir.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
-    QString hash = QString::fromUtf8(hashBytes);
-
-    // Overlay layer storage lives under root-owned /var/lib/couchplay, NOT
-    // the player's home: with every ancestor root-owned (the helper runs as
-    // root, players have no write access to the chain), the player cannot
-    // swap a component for a symlink between secure creation and the
-    // pathname-based mount(8) — closing the re-resolution race. Only the
-    // upper/work leaves are chowned to the player (the kernel writes overlay
-    // data with the player's credentials through the mount).
-    QString overlayBase = QStringLiteral("/var/lib/couchplay/overlays/%1/%2").arg(username, hash);
-    QString upperDir = overlayBase + QStringLiteral("/upper");
-    QString workDir = overlayBase + QStringLiteral("/work");
-
-    uint userUid = getUserUid(username);
-    struct passwd *pw = m_ops->getpwuid(userUid);
-    if (!pw) {
-        qWarning() << "SetupOverlayMount: Could not get user info for" << username;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
-        return false;
-    }
-
-    int varLibFd = SecureFs::openBaseDir(QStringLiteral("/var/lib"));
-    if (varLibFd < 0) {
-        qWarning() << "SetupOverlayMount: Could not open /var/lib:" << strerror(-varLibFd);
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open overlay storage root"));
-        return false;
-    }
-    const QStringList baseParts =
-        QStringList{QStringLiteral("couchplay"), QStringLiteral("overlays"), username, hash};
-    int baseFd =
-        SecureFs::openDirBelow(varLibFd, baseParts, true, 0, 0, SecureFs::ChownMode::FinalOnly);
-    ::close(varLibFd);
-    if (baseFd < 0) {
-        qWarning() << "SetupOverlayMount: Could not create overlay storage under /var/lib/couchplay:"
-                   << strerror(-baseFd);
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not create overlay storage"));
-        return false;
-    }
-    int upperFd = SecureFs::openDirBelow(baseFd, {QStringLiteral("upper")}, true, userUid, pw->pw_gid);
-    if (upperFd < 0) {
-        ::close(baseFd);
-        qWarning() << "SetupOverlayMount: Failed to securely create upper directory:" << upperDir;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay upper directory"));
-        return false;
-    }
-    ::close(upperFd);
-    int workFd = SecureFs::openDirBelow(baseFd, {QStringLiteral("work")}, true, userUid, pw->pw_gid);
-    ::close(baseFd);
-    if (workFd < 0) {
-        qWarning() << "SetupOverlayMount: Failed to securely create work directory:" << workDir;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create overlay work directory"));
-        return false;
-    }
-    ::close(workFd);
-
-    // FD-anchored attach when the kernel supports it: the target parent is
-    // pinned with a no-follow walk and move_mount does not follow symlinks on
-    // the leaf, so a raced target swap fails the mount instead of redirecting
-    // it. upper/work live under root-owned storage (see above) and cannot be
-    // raced. The mount(8) fallback is only for pre-5.2 kernels.
-    const QString targetLeaf = target.mid(target.lastIndexOf(QLatin1Char('/')) + 1);
-    const QString targetParentPath = target.left(target.lastIndexOf(QLatin1Char('/')));
-
-    MountInfo info;
-    info.source = sourceDir;
-    info.target = target;
-    info.mountType = QStringLiteral("overlay");
-    info.upperDir = upperDir;
-    info.workDir = workDir;
-
-    // FD-anchored attach only — no path-based fallback: a failed FD mount
-    // must fail closed instead of retrying through a raceable pathname
-    if (!SecureFs::overlayMountApiAvailable()) {
-        qWarning() << "SetupOverlayMount: overlayfs mount API unavailable, refusing path-based mount";
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Overlay filesystem mount API unavailable"));
-        return false;
-    }
-
-    // Pin the validated source with a no-follow walk; overlayMountFd passes
-    // the lowerdir through /proc/self/fd so fsconfig resolution follows the
-    // pinned inode, not the (mutable) namespace path. The FD stays open until
-    // the mount is attached.
-    int sourceFd = SecureFs::openExistingDirNoFollow(canonicalSource.isEmpty() ? sourceDir : canonicalSource);
-    if (sourceFd < 0) {
-        qWarning() << "SetupOverlayMount: Could not anchor source directory:" << sourceDir;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not anchor source directory"));
-        return false;
-    }
-
-    int parentFd = SecureFs::openExistingDirNoFollow(targetParentPath);
-    if (parentFd < 0) {
-        ::close(sourceFd);
-        qWarning() << "SetupOverlayMount: Could not anchor target parent:" << targetParentPath;
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not anchor target parent"));
-        return false;
-    }
-
-    int mountResult = SecureFs::overlayMountFd(sourceFd, upperDir, workDir, parentFd, targetLeaf);
-    ::close(sourceFd);
-    if (mountResult != 0) {
-        ::close(parentFd);
-        qWarning() << "SetupOverlayMount: FD overlay mount failed on" << target << ":" << strerror(-mountResult);
-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to mount overlay filesystem"));
-        return false;
-    }
-    info.targetParentFd = parentFd;
-    info.targetLeaf = targetLeaf;
-
-    m_activeMounts[username].append(info);
-
-    saveState();
-
-    return true;
-}
-
-bool CouchPlayHelper::unmountMountInfo(MountInfo &mount)
-{
-    // Prefer the FD-backed reference: /proc/self/fd/<pinned-parent>/leaf
-    // cannot be raced by a player swapping ancestors of the target path.
-    // The pinned FD is released only on success — a failed unmount (e.g.
-    // persistent EBUSY) must keep the entry AND its FD, so later teardown,
-    // restart reconciliation, or destruction can retry instead of orphaning
-    // a root mount nobody can clean up anymore.
-    if (mount.targetParentFd >= 0) {
-        int result = SecureFs::umountAtFd(mount.targetParentFd, mount.targetLeaf);
-        if (result != 0) {
-            qWarning() << "unmountMountInfo: FD umount failed for" << mount.target << ":" << strerror(-result);
-            return false;
-        }
-        ::close(mount.targetParentFd);
-        mount.targetParentFd = -1;
-        return true;
-    }
-
-    // No pinned FD (post-restart state): path-based umount with lazy fallback
-    if (!runCommand(QStringLiteral("/usr/bin/umount"), {mount.target}, 10000)) {
-        qWarning() << "unmountMountInfo: umount failed for" << mount.target << "- trying lazy unmount";
-        return runCommand(QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), mount.target}, 10000);
-    }
-    return true;
-}
-
-int CouchPlayHelper::UnmountSharedDirectories(const QString &username)
-{
-    if (!s_validUsername.match(username).hasMatch()) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid username format"));
-        return 0;
-    }
-
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to manage mounts"));
-        return 0;
-    }
-
-    if (!m_activeMounts.contains(username)) {
-        return 0;
-    }
-
-    int successCount = 0;
-    QList<MountInfo> mounts = m_activeMounts.take(username);
-    QList<MountInfo> remaining;
-
-    for (int i = mounts.size() - 1; i >= 0; --i) {
-        if (unmountMountInfo(mounts[i])) {
-            successCount++;
-        } else {
-            remaining.prepend(mounts[i]);
-        }
-    }
-
-    if (!remaining.isEmpty()) {
-        m_activeMounts[username] = remaining;
-    }
-    saveState();
-    return successCount;
-}
-
-int CouchPlayHelper::UnmountAllSharedDirectories()
-{
-    if (!checkAuthorization(ACTION_MANAGE_MOUNTS)) {
-        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Not authorized to manage mounts"));
-        return 0;
-    }
-
-    int successCount = 0;
-    QStringList users = m_activeMounts.keys();
-
-    for (const QString &username : users) {
-        QList<MountInfo> mounts = m_activeMounts.take(username);
-        QList<MountInfo> remaining;
-
-        for (int i = mounts.size() - 1; i >= 0; --i) {
-            if (unmountMountInfo(mounts[i])) {
-                successCount++;
-            } else {
-                remaining.prepend(mounts[i]);
-            }
-        }
-
-        if (!remaining.isEmpty()) {
-            m_activeMounts[username] = remaining;
-        }
-    }
-
-    saveState();
-
-    return successCount;
 }
 
 bool CouchPlayHelper::CopyFileToUser(const QString &sourcePath, const QString &targetPath, const QString &username)
@@ -2889,150 +3730,7 @@ bool runSetfaclOnFd(SystemOps *ops, int objectFd, const QStringList &options, in
     return success;
 }
 
-int openAclEntry(int parentFd, const char *name, const struct stat &entryStat)
-{
-    int fd;
-    if (S_ISDIR(entryStat.st_mode)) {
-        fd = ::openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    } else {
-        // O_PATH avoids blocking on a raced FIFO and pins the exact object for
-        // the ACL subprocess. Symlinks are rejected by the post-open fstat.
-        fd = ::openat(parentFd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
-    }
-    if (fd < 0) {
-        return -errno;
-    }
-
-    struct stat openedStat;
-    if (::fstat(fd, &openedStat) != 0) {
-        const int error = errno;
-        ::close(fd);
-        return -error;
-    }
-    if (S_ISLNK(openedStat.st_mode)) {
-        ::close(fd);
-        return -ELOOP;
-    }
-    return fd;
-}
-
-bool applyAclTree(SystemOps *ops, int dirFd, const QString &username, const QString &context)
-{
-    if (!runSetfaclOnFd(ops, dirFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000, context)) {
-        return false;
-    }
-
-    const int scanFd = ::fcntl(dirFd, F_DUPFD_CLOEXEC, 10);
-    if (scanFd < 0) {
-        qWarning() << "ACL:" << context << "failed to duplicate directory FD:" << strerror(errno);
-        return false;
-    }
-    DIR *directory = ::fdopendir(scanFd);
-    if (!directory) {
-        const int error = errno;
-        ::close(scanFd);
-        qWarning() << "ACL:" << context << "failed to enumerate directory:" << strerror(error);
-        return false;
-    }
-
-    bool success = true;
-    while (struct dirent *entry = ::readdir(directory)) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        struct stat entryStat;
-        if (::fstatat(dirFd, entry->d_name, &entryStat, AT_SYMLINK_NOFOLLOW) != 0) {
-            qWarning() << "ACL:" << context << "failed to inspect" << entry->d_name << ":" << strerror(errno);
-            success = false;
-            break;
-        }
-        if (S_ISLNK(entryStat.st_mode)) {
-            // Never follow a link while recursively applying permissions.
-            continue;
-        }
-
-        const int childFd = openAclEntry(dirFd, entry->d_name, entryStat);
-        if (childFd < 0) {
-            qWarning() << "ACL:" << context << "failed to open" << entry->d_name << ":" << strerror(-childFd);
-            success = false;
-            break;
-        }
-
-        struct stat openedStat;
-        if (::fstat(childFd, &openedStat) != 0) {
-            qWarning() << "ACL:" << context << "failed to stat" << entry->d_name << ":" << strerror(errno);
-            ::close(childFd);
-            success = false;
-            break;
-        }
-
-        const QString childContext = context + QLatin1Char('/') + QString::fromLocal8Bit(entry->d_name);
-        if (!runSetfaclOnFd(ops, childFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000,
-                             childContext)) {
-            success = false;
-        } else if (S_ISDIR(openedStat.st_mode) && !applyAclTree(ops, childFd, username, childContext)) {
-            success = false;
-        }
-        ::close(childFd);
-        if (!success) {
-            break;
-        }
-    }
-
-    ::closedir(directory);
-    return success;
-}
-
 } // namespace
-
-bool CouchPlayHelper::SetDirectoryAcl(const QString &path, const QString &username, bool recursive)
-{
-    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
-        return false;
-    }
-
-    if (!isPathWithinAllowedPrefix(path)) {
-        qWarning() << "SetDirectoryAcl: Path is outside allowed prefixes:" << path;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is outside allowed prefixes"));
-        return false;
-    }
-
-    if (!m_ops->fileExists(path)) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path does not exist: %1").arg(path));
-        return false;
-    }
-
-    const QString canonicalDir = m_ops->canonicalFilePath(path);
-    if (!canonicalDir.isEmpty() && !isPathWithinAllowedPrefix(canonicalDir)) {
-        qWarning() << "SetDirectoryAcl: Path resolves outside allowed prefixes:" << path << "->" << canonicalDir;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path resolves outside allowed prefixes"));
-        return false;
-    }
-    const QString safePath = canonicalDir.isEmpty() ? path : canonicalDir;
-
-    // Keep the ACL operation anchored to a no-follow FD. The canonical
-    // pathname check above is only a fast rejection; it cannot close a
-    // rename/symlink race before setfacl resolves a path.
-    const int directoryFd = SecureFs::openExistingDirNoFollow(safePath);
-    if (directoryFd < 0) {
-        qWarning() << "SetDirectoryAcl: Refusing unsafe or non-directory path:" << path;
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Path is not a safe directory"));
-        return false;
-    }
-
-    const QString context = QStringLiteral("SetDirectoryAcl ") + path;
-    const bool success = recursive
-        ? applyAclTree(m_ops, directoryFd, username, context)
-        : runSetfaclOnFd(m_ops, directoryFd, {QStringLiteral("-m"), QStringLiteral("u:%1:rx").arg(username)}, 60000,
-                         context);
-    ::close(directoryFd);
-
-    if (!success) {
-        sendErrorReply(QDBusError::Failed, QStringLiteral("setfacl failed for path: %1").arg(path));
-    }
-    return success;
-}
 
 bool CouchPlayHelper::SetPathAclWithParents(const QString &path, const QString &username)
 {
@@ -3533,10 +4231,11 @@ bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &si
     return true;
 }
 
-void CouchPlayHelper::saveState()
+bool CouchPlayHelper::saveState()
 {
     QJsonObject root;
     root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("activeMounts")] = m_legacyActiveMounts;
 
     QJsonArray devicesArray;
     for (const QString &device : m_modifiedDevices) {
@@ -3550,33 +4249,51 @@ void CouchPlayHelper::saveState()
     }
     root[QStringLiteral("modifiedHidDevices")] = hidDevicesArray;
 
-    QJsonObject mountsObject;
-    for (auto it = m_activeMounts.constBegin(); it != m_activeMounts.constEnd(); ++it) {
-        QJsonArray mountsArray;
-        for (const MountInfo &info : it.value()) {
-            QJsonObject mountObj;
-            mountObj[QStringLiteral("source")] = info.source;
-            mountObj[QStringLiteral("target")] = info.target;
-            if (!info.mountType.isEmpty()) {
-                mountObj[QStringLiteral("mountType")] = info.mountType;
-            }
-            if (!info.upperDir.isEmpty()) {
-                mountObj[QStringLiteral("upperDir")] = info.upperDir;
-            }
-            if (!info.workDir.isEmpty()) {
-                mountObj[QStringLiteral("workDir")] = info.workDir;
-            }
-            mountsArray.append(mountObj);
-        }
-        mountsObject[it.key()] = mountsArray;
-    }
-    root[QStringLiteral("activeMounts")] = mountsObject;
 
     QJsonObject unitsObject;
     for (auto it = m_usernameToUnitName.constBegin(); it != m_usernameToUnitName.constEnd(); ++it) {
         unitsObject[it.key()] = it.value();
     }
     root[QStringLiteral("activeUnits")] = unitsObject;
+    QJsonObject auxiliaryUnitsObject;
+    for (auto it = m_auxiliaryUnitNameForUsername.constBegin(); it != m_auxiliaryUnitNameForUsername.constEnd(); ++it) {
+        auxiliaryUnitsObject[it.key()] = it.value();
+    }
+    root[QStringLiteral("auxiliaryUnits")] = auxiliaryUnitsObject;
+    QJsonObject launchTokensObject;
+    for (auto it = m_launchTokenByUnitName.constBegin(); it != m_launchTokenByUnitName.constEnd(); ++it) {
+        launchTokensObject[it.key()] = it.value();
+    }
+    root[QStringLiteral("launchTokens")] = launchTokensObject;
+    QJsonArray readyUnitsArray;
+    for (const QString &unit : m_readyUnitNames) {
+        readyUnitsArray.append(unit);
+    }
+    root[QStringLiteral("readyUnits")] = readyUnitsArray;
+    QJsonObject leasePathsObject;
+    for (auto it = m_overlayLeasePathsByUnit.constBegin(); it != m_overlayLeasePathsByUnit.constEnd(); ++it) {
+        QJsonArray paths;
+        for (const QString &path : it.value()) {
+            paths.append(path);
+        }
+        leasePathsObject[it.key()] = paths;
+    }
+    root[QStringLiteral("overlayLeasePaths")] = leasePathsObject;
+    QJsonObject unitOwnerObject;
+    for (auto it = m_unitOwnerUid.constBegin(); it != m_unitOwnerUid.constEnd(); ++it) {
+        unitOwnerObject[it.key()] = static_cast<qint64>(it.value());
+    }
+    root[QStringLiteral("unitOwnerUid")] = unitOwnerObject;
+    QJsonObject targetIdentityObject;
+    for (auto it = m_targetIdentityByUnit.constBegin(); it != m_targetIdentityByUnit.constEnd(); ++it) {
+        QJsonObject identity;
+        identity[QStringLiteral("uid")] = static_cast<qint64>(it.value().uid);
+        identity[QStringLiteral("gid")] = static_cast<qint64>(it.value().gid);
+        identity[QStringLiteral("declaredHome")] = it.value().declaredHome;
+        identity[QStringLiteral("canonicalHome")] = it.value().canonicalHome;
+        targetIdentityObject[it.key()] = identity;
+    }
+    root[QStringLiteral("targetIdentityByUnit")] = targetIdentityObject;
     QJsonObject virtualDisplaysObject;
     for (auto it = m_virtualDisplays.constBegin(); it != m_virtualDisplays.constEnd(); ++it) {
         QJsonObject display;
@@ -3592,10 +4309,14 @@ void CouchPlayHelper::saveState()
     root[QStringLiteral("virtualDisplays")] = virtualDisplaysObject;
 
     QJsonObject pidObject;
+    QJsonObject pidUnitObject;
     for (auto it = m_pidToUsername.constBegin(); it != m_pidToUsername.constEnd(); ++it) {
-        pidObject[QString::number(it.key())] = it.value();
+        const QString pid = QString::number(it.key());
+        pidObject[pid] = it.value();
+        pidUnitObject[pid] = m_pidToUnitName.value(it.key());
     }
     root[QStringLiteral("pidToUsername")] = pidObject;
+    root[QStringLiteral("pidToUnitName")] = pidUnitObject;
     QJsonObject ownerObject;
     for (auto it = m_pidOwnerUid.constBegin(); it != m_pidOwnerUid.constEnd(); ++it) {
         ownerObject[QString::number(it.key())] = static_cast<qint64>(it.value());
@@ -3635,15 +4356,24 @@ void CouchPlayHelper::saveState()
     QSaveFile file(m_stateFilePath);
     if (!file.open(QIODevice::WriteOnly)) {
         qWarning() << "saveState: Failed to open" << m_stateFilePath << ":" << file.errorString();
-        return;
+        return false;
     }
-    file.write(data);
-    file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+    if (file.write(data) != data.size()) {
+        qWarning() << "saveState: Failed to write" << m_stateFilePath << ":" << file.errorString();
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) {
+        qWarning() << "saveState: Failed to protect" << m_stateFilePath << ":" << file.errorString();
+        file.cancelWriting();
+        return false;
+    }
     if (!file.commit()) {
         qWarning() << "saveState: Failed to commit" << m_stateFilePath << ":" << file.errorString();
+        return false;
     }
+    return true;
 }
-
 CouchPlayHelper::HidDeviceInfo CouchPlayHelper::findHidDevice(const QString &devicePath) const
 {
     QFileInfo info(devicePath);
@@ -3756,6 +4486,12 @@ bool CouchPlayHelper::removeTempUdevRule(const QString &deviceId)
 
 void CouchPlayHelper::loadAndReconcileState()
 {
+    m_cleanedLaunchManifestTokens.clear();
+    QString subscriptionError;
+    if (!subscribeSystemdManager(&subscriptionError)) {
+        qWarning() << "loadAndReconcileState: Could not subscribe to systemd Manager:" << subscriptionError;
+        return;
+    }
     QDir().mkpath(QStringLiteral("/run/couchplay"));
 
     QFile file(m_stateFilePath);
@@ -3784,9 +4520,12 @@ void CouchPlayHelper::loadAndReconcileState()
         return;
     }
 
+    m_legacyActiveMounts = root.value(QStringLiteral("activeMounts")).toObject();
     bool changed = false;
 
     QSet<QString> activeSystemdUnits;
+    QSet<QString> stoppedUnitNames;
+    bool activeSystemdUnitsKnown = false;
     {
         QProcess proc;
         proc.start(QStringLiteral("systemctl"),
@@ -3794,13 +4533,14 @@ void CouchPlayHelper::loadAndReconcileState()
                     QStringLiteral("couchplay-*.service"),
                     QStringLiteral("--no-legend"),
                     QStringLiteral("--no-pager")});
-        proc.waitForFinished(5000);
-        QByteArray output = proc.readAllStandardOutput();
+        activeSystemdUnitsKnown = proc.waitForFinished(5000) && proc.exitCode() == 0;
+        const QByteArray output = activeSystemdUnitsKnown ? proc.readAllStandardOutput() : QByteArray();
         for (const QByteArray &line : output.split('\n')) {
-            QByteArray trimmed = line.trimmed();
-            if (trimmed.isEmpty())
+            const QByteArray trimmed = line.trimmed();
+            if (trimmed.isEmpty()) {
                 continue;
-            int spacePos = trimmed.indexOf(' ');
+            }
+            const int spacePos = trimmed.indexOf(' ');
             if (spacePos > 0) {
                 activeSystemdUnits.insert(QString::fromUtf8(trimmed.left(spacePos)));
             }
@@ -3825,6 +4565,9 @@ void CouchPlayHelper::loadAndReconcileState()
             m_stoppingUnits.insert(serviceName);
             const bool stopped = stopServiceInstance(serviceName);
             m_stoppingUnits.remove(serviceName);
+            if (stopped) {
+                stoppedUnitNames.insert(serviceName);
+            }
             if (!stopped) {
                 VirtualDisplayInfo legacy;
                 legacy.pid = display.value(QStringLiteral("pid")).toInteger();
@@ -3853,71 +4596,359 @@ void CouchPlayHelper::loadAndReconcileState()
     }
 
     QJsonObject unitsObject = root.value(QStringLiteral("activeUnits")).toObject();
-    QMap<QString, QString> loadedUsernameToUnit;
-    for (auto it = unitsObject.constBegin(); it != unitsObject.constEnd(); ++it) {
-        QString unitName = it.value().toString();
-        if (activeSystemdUnits.contains(unitName)) {
-            loadedUsernameToUnit[it.key()] = unitName;
-        } else {
-            qDebug() << "loadAndReconcileState: Removing stale unit" << unitName << "for user" << it.key();
-            changed = true;
+    const QJsonObject auxiliaryUnitsObject = root.value(QStringLiteral("auxiliaryUnits")).toObject();
+    for (auto it = auxiliaryUnitsObject.constBegin(); it != auxiliaryUnitsObject.constEnd(); ++it) {
+        unitsObject.insert(QStringLiteral("stream:") + it.key(), it.value());
+    }
+    const QJsonObject launchTokensObject = root.value(QStringLiteral("launchTokens")).toObject();
+    const QJsonObject unitOwnerObject = root.value(QStringLiteral("unitOwnerUid")).toObject();
+    const QJsonObject targetIdentityObject = root.value(QStringLiteral("targetIdentityByUnit")).toObject();
+    const QJsonObject storedLeasePathsObject = root.value(QStringLiteral("overlayLeasePaths")).toObject();
+    const QJsonObject storedPidObject = root.value(QStringLiteral("pidToUsername")).toObject();
+    const QJsonObject storedPidUnits = root.value(QStringLiteral("pidToUnitName")).toObject();
+    const QJsonObject storedPidOwners = root.value(QStringLiteral("pidOwnerUid")).toObject();
+    QSet<QString> storedReadyUnits;
+    for (const QJsonValue &value : root.value(QStringLiteral("readyUnits")).toArray()) {
+        if (value.isString()) {
+            storedReadyUnits.insert(value.toString());
         }
     }
-    m_usernameToUnitName = loadedUsernameToUnit;
+    m_usernameToUnitName.clear();
+    m_auxiliaryUnitNameForUsername.clear();
+    m_unitUsernameByName.clear();
+    m_unitRoleByName.clear();
+    m_unitGenerationByName.clear();
+    m_pidPollGenerationByUnit.clear();
+    m_pidToUsername.clear();
+    m_pidToUnitName.clear();
+    m_pidOwnerUid.clear();
+    m_unitOwnerUid.clear();
+    m_targetIdentityByUnit.clear();
+    m_launchTokenByUnitName.clear();
+    m_readyUnitNames.clear();
+    m_overlayLeasePathsByUnit.clear();
+    QMap<QString, QString> recoveredUnits;
+    QMap<QString, QString> recoveredAuxiliaryUnits;
 
-    QJsonObject pidObject = root.value(QStringLiteral("pidToUsername")).toObject();
-    QMap<qint64, QString> loadedPidToUsername;
-    QSet<QString> activeUsernames;
-    for (const QString &unitName : m_usernameToUnitName) {
-        activeUsernames.insert(m_usernameToUnitName.key(unitName));
-    }
-    for (auto it = pidObject.constBegin(); it != pidObject.constEnd(); ++it) {
-        bool ok = false;
-        qint64 pid = it.key().toLongLong(&ok);
-        if (!ok) {
+    const auto trackRecoveredUnit = [&](const QString &username, const QString &unitName, UnitRole role) {
+        if (role == UnitRole::Main) {
+            recoveredUnits.insert(username, unitName);
+        } else {
+            recoveredAuxiliaryUnits.insert(username, unitName);
+        }
+        m_unitUsernameByName.insert(unitName, username);
+        m_unitRoleByName.insert(unitName, role);
+        m_unitGenerationByName.insert(unitName, ++m_nextUnitGeneration);
+    };
+    const auto manifestMatchesCurrentIdentity = [&](const LaunchManifest &manifest,
+                                                    const QString &username,
+                                                    const QString &unitName,
+                                                    UnitRole role) {
+        const QString expectedRole = role == UnitRole::Main ? QStringLiteral("main") : QStringLiteral("stream");
+        if (manifest.schemaVersion != 1 || manifest.unitRole != expectedRole || manifest.unitName != unitName
+            || manifest.targetUsername != username
+            || !DirectoryPlan::validateDirectoryPreparations(manifest.directories)) {
+            return false;
+        }
+        struct passwd *targetRecord = m_ops->getpwnam(username.toLocal8Bit().constData());
+        if (!targetRecord) {
+            return false;
+        }
+        const uid_t targetUid = targetRecord->pw_uid;
+        const gid_t targetGid = targetRecord->pw_gid;
+        const QString targetHome = QString::fromLocal8Bit(targetRecord->pw_dir ? targetRecord->pw_dir : "");
+        const QString targetCanonicalHome = m_ops->canonicalFilePath(targetHome);
+        struct passwd *callerRecord = m_ops->getpwuid(manifest.callerUid);
+        if (!callerRecord) {
+            return false;
+        }
+        const uid_t callerUid = callerRecord->pw_uid;
+        const gid_t callerGid = callerRecord->pw_gid;
+        const QString callerHome = QString::fromLocal8Bit(callerRecord->pw_dir ? callerRecord->pw_dir : "");
+        const QString callerCanonicalHome = m_ops->canonicalFilePath(callerHome);
+        return targetUid == manifest.targetUid && targetGid == manifest.targetGid
+            && targetHome == manifest.targetDeclaredHome && targetCanonicalHome == manifest.targetCanonicalHome
+            && callerUid == manifest.callerUid && callerGid == manifest.callerGid
+            && callerHome == manifest.declaredHome && callerCanonicalHome == manifest.canonicalHome;
+    };
+    const auto currentTargetIdentity = [&](const QString &username, TargetIdentity *identity) {
+        struct passwd *record = m_ops->getpwnam(username.toLocal8Bit().constData());
+        if (!record) {
+            return false;
+        }
+        identity->uid = record->pw_uid;
+        identity->gid = record->pw_gid;
+        identity->declaredHome = QString::fromLocal8Bit(record->pw_dir ? record->pw_dir : "");
+        identity->canonicalHome = m_ops->canonicalFilePath(identity->declaredHome);
+        return !identity->declaredHome.isEmpty() && !identity->canonicalHome.isEmpty();
+    };
+
+    const auto queueStoredPidStops = [&](const QString &username,
+                                         const QString &unitName,
+                                         UnitRole role,
+                                         const QString &reason) {
+        for (auto it = storedPidObject.constBegin(); it != storedPidObject.constEnd(); ++it) {
+            if (it.value().toString() != username) {
+                continue;
+            }
+            QString storedUnitName = storedPidUnits.value(it.key()).toString();
+            if (storedUnitName.isEmpty() && role == UnitRole::Main) {
+                storedUnitName = generateServiceName(username);
+            }
+            if (storedUnitName != unitName) {
+                continue;
+            }
+            bool pidOk = false;
+            const qint64 pid = it.key().toLongLong(&pidOk);
+            if (pidOk && pid > 0) {
+                queueStoppedNotification(username, pid, reason);
+            }
+        }
+    };
+
+    for (auto it = unitsObject.constBegin(); it != unitsObject.constEnd(); ++it) {
+        const bool streamRole = it.key().startsWith(QStringLiteral("stream:"));
+        const UnitRole role = streamRole ? UnitRole::Stream : UnitRole::Main;
+        const QString username = streamRole ? it.key().mid(7) : it.key();
+        const QString unitName = it.value().toString();
+        const QString expectedUnitName = role == UnitRole::Main ? generateServiceName(username)
+                                                                : generateStreamServiceName(username);
+        if (!s_validUsername.match(username).hasMatch() || unitName != expectedUnitName) {
             changed = true;
             continue;
         }
-        QString username = it.value().toString();
-        if (activeUsernames.contains(username)) {
-            loadedPidToUsername[pid] = username;
-        } else {
-            qDebug() << "loadAndReconcileState: Removing stale PID" << pid << "for user" << username;
-            changed = true;
+        QString token = launchTokensObject.value(unitName).toString();
+        if (token.isEmpty() && role == UnitRole::Main) {
+            token = launchTokensObject.value(username).toString();
         }
-    }
-    m_pidToUsername = loadedPidToUsername;
-    m_pidOwnerUid.clear();
-    const QJsonObject ownerObject = root.value(QStringLiteral("pidOwnerUid")).toObject();
-    for (auto it = m_pidToUsername.constBegin(); it != m_pidToUsername.constEnd();) {
-        if (ownerObject.contains(QString::number(it.key()))) {
-            m_pidOwnerUid[it.key()] = static_cast<uint>(ownerObject.value(QString::number(it.key())).toInteger());
-            ++it;
-        } else {
-            const QString ownerlessUsername = it.value();
-            const QString ownerlessService = m_usernameToUnitName.value(ownerlessUsername);
-            bool stopped = true;
-            if (!ownerlessService.isEmpty()) {
-                m_stoppingUnits.insert(ownerlessService);
-                stopped = stopServiceInstance(ownerlessService);
-                m_stoppingUnits.remove(ownerlessService);
+
+        const bool ready = storedReadyUnits.contains(unitName);
+        LaunchManifest manifest;
+        bool ownedStateValid = false;
+        uint ownerUid = INVALID_CALLER_UID;
+        TargetIdentity targetIdentity;
+        if (!ready && DirectoryPlan::isLaunchToken(token)
+            && m_ops->readLaunchManifest(token, &manifest, nullptr)
+            && manifestMatchesCurrentIdentity(manifest, username, unitName, role)) {
+            ownerUid = manifest.callerUid;
+            targetIdentity = TargetIdentity{manifest.targetUid,
+                                            manifest.targetGid,
+                                            manifest.targetDeclaredHome,
+                                            manifest.targetCanonicalHome};
+            ownedStateValid = true;
+        } else if (ready && unitOwnerObject.contains(unitName)
+                   && targetIdentityObject.value(unitName).isObject()) {
+            const qint64 serializedOwner = unitOwnerObject.value(unitName).toInteger(-1);
+            const QJsonObject serializedIdentity = targetIdentityObject.value(unitName).toObject();
+            TargetIdentity currentIdentity;
+            if (serializedOwner >= 0 && serializedOwner <= std::numeric_limits<uint>::max()
+                && currentTargetIdentity(username, &currentIdentity)
+                && currentIdentity.uid == static_cast<uid_t>(serializedIdentity.value(QStringLiteral("uid")).toInteger(-1))
+                && currentIdentity.gid == static_cast<gid_t>(serializedIdentity.value(QStringLiteral("gid")).toInteger(-1))
+                && currentIdentity.declaredHome == serializedIdentity.value(QStringLiteral("declaredHome")).toString()
+                && currentIdentity.canonicalHome == serializedIdentity.value(QStringLiteral("canonicalHome")).toString()) {
+                ownerUid = static_cast<uint>(serializedOwner);
+                targetIdentity = currentIdentity;
+                ownedStateValid = true;
             }
-            if (!stopped) {
-                ++it;
+        }
+
+        if (!ownedStateValid || ownerUid == INVALID_CALLER_UID) {
+            m_stoppingUnits.insert(unitName);
+            const bool stopped = stopServiceInstance(unitName);
+            m_stoppingUnits.remove(unitName);
+            if (stopped) {
+                stoppedUnitNames.insert(unitName);
+            }
+            if (stopped) {
+                queueStoredPidStops(username, unitName, role,
+                                    QStringLiteral("Instance was stopped because helper ownership could not be verified"));
+                changed = true;
                 continue;
             }
-            m_usernameToUnitName.remove(ownerlessUsername);
-            activeUsernames.remove(ownerlessUsername);
-            it = m_pidToUsername.erase(it);
+            qWarning() << "Could not stop active unit with invalid persisted ownership" << unitName;
+            trackRecoveredUnit(username, unitName, role);
+            if (ownerUid != INVALID_CALLER_UID) {
+                m_unitOwnerUid.insert(unitName, ownerUid);
+            }
+            if (DirectoryPlan::isLaunchToken(token)) {
+                m_launchTokenByUnitName.insert(unitName, token);
+            }
             changed = true;
+            continue;
+        }
+
+        QList<int> leaseFds;
+        QStringList leasePaths;
+        QString leaseError;
+        if (ready) {
+            for (const QJsonValue &value : storedLeasePathsObject.value(unitName).toArray()) {
+                if (!value.isString()) {
+                    leaseError = QStringLiteral("Malformed persisted overlay lease state");
+                    break;
+                }
+                leasePaths.append(value.toString());
+            }
+            if (leaseError.isEmpty()
+                && !reacquireOverlayLeases(username, leasePaths, &leaseFds, &leaseError)) {
+                leaseFds.clear();
+            }
+        } else if (!acquireOverlayLeases(username, manifest.directories, &leaseFds, &leasePaths, &leaseError)) {
+            leaseFds.clear();
+        }
+        if (!leaseError.isEmpty()) {
+            qWarning() << "Could not reacquire overlay lease for" << unitName << ":" << leaseError;
+            m_stoppingUnits.insert(unitName);
+            const bool stopped = stopServiceInstance(unitName);
+            m_stoppingUnits.remove(unitName);
+            if (stopped) {
+                stoppedUnitNames.insert(unitName);
+            }
+            if (stopped) {
+                queueStoredPidStops(username, unitName, role,
+                                    QStringLiteral("Instance was stopped because its overlay lease could not be recovered"));
+                changed = true;
+                continue;
+            }
+            trackRecoveredUnit(username, unitName, role);
+            m_unitOwnerUid.insert(unitName, ownerUid);
+            m_targetIdentityByUnit.insert(unitName, targetIdentity);
+            if (DirectoryPlan::isLaunchToken(token)) {
+                m_launchTokenByUnitName.insert(unitName, token);
+            }
+            changed = true;
+            continue;
+        }
+
+        trackRecoveredUnit(username, unitName, role);
+        m_unitOwnerUid.insert(unitName, ownerUid);
+        m_targetIdentityByUnit.insert(unitName, targetIdentity);
+        m_overlayLeaseFdsByUnit.insert(unitName, leaseFds);
+        m_overlayLeasePathsByUnit.insert(unitName, leasePaths);
+        if (ready) {
+            m_readyUnitNames.insert(unitName);
+        }
+        if (!ready) {
+            m_launchTokenByUnitName.insert(unitName, token);
+        } else if (DirectoryPlan::isLaunchToken(token)) {
+            LaunchManifest readyManifest;
+            QString manifestError;
+            if (!readLaunchManifestForUnit(unitName, token, &readyManifest, &manifestError)) {
+                qWarning() << "Could not validate READY launch manifest for" << unitName << ":" << manifestError;
+                m_launchTokenByUnitName.insert(unitName, token);
+            } else {
+                bool hasCopyDirectories = false;
+                for (const DirectoryRecord &directory : readyManifest.directories) {
+                    if (directory.mode == QStringLiteral("copy")) {
+                        hasCopyDirectories = true;
+                        break;
+                    }
+                }
+                if (hasCopyDirectories) {
+                    m_launchTokenByUnitName.insert(unitName, token);
+                } else {
+                    QString ignored;
+                    if (!m_ops->unlinkLaunchManifest(token, &ignored)) {
+                        m_launchTokenByUnitName.insert(unitName, token);
+                    } else {
+                        m_cleanedLaunchManifestTokens.insert(token);
+                    }
+                }
+            }
         }
     }
+    m_usernameToUnitName = recoveredUnits;
+    m_auxiliaryUnitNameForUsername = recoveredAuxiliaryUnits;
 
-    for (auto it = m_usernameToUnitName.constBegin(); it != m_usernameToUnitName.constEnd(); ++it) {
-        const qint64 pid = m_pidToUsername.key(it.key(), 0);
-        if (pid > 0) {
-            monitorUnitState(it.value(), it.key(), pid);
+    for (auto it = storedPidObject.constBegin(); it != storedPidObject.constEnd(); ++it) {
+        bool pidOk = false;
+        const qint64 pid = it.key().toLongLong(&pidOk);
+        const QString username = it.value().toString();
+        QString unitName = storedPidUnits.value(it.key()).toString();
+        if (unitName.isEmpty()) {
+            unitName = m_usernameToUnitName.value(username);
         }
+        if (!pidOk || pid <= 0 || unitName.isEmpty() || m_unitUsernameByName.value(unitName) != username) {
+            changed = true;
+            continue;
+        }
+        const qint64 serializedOwner = storedPidOwners.value(QString::number(pid)).toInteger(-1);
+        const uint ownerUid = serializedOwner >= 0 && serializedOwner <= std::numeric_limits<uint>::max()
+            ? static_cast<uint>(serializedOwner) : m_unitOwnerUid.value(unitName, INVALID_CALLER_UID);
+        if (ownerUid == INVALID_CALLER_UID) {
+            changed = true;
+            continue;
+        }
+        m_pidToUsername.insert(pid, username);
+        m_pidToUnitName.insert(pid, unitName);
+        m_pidOwnerUid.insert(pid, ownerUid);
+    }
+
+    const QMap<QString, QString> recoveredUnitNames = m_unitUsernameByName;
+    for (auto it = recoveredUnitNames.constBegin(); it != recoveredUnitNames.constEnd(); ++it) {
+        const QString unitName = it.key();
+        const QString username = it.value();
+
+        QDBusMessage getUnit = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
+                                                              QStringLiteral("/org/freedesktop/systemd1"),
+                                                              QStringLiteral("org.freedesktop.systemd1.Manager"),
+                                                              QStringLiteral("GetUnit"));
+        getUnit << unitName;
+        const QDBusReply<QDBusObjectPath> reply = m_ops->systemBusConnection().call(getUnit);
+        if (!reply.isValid() && reply.error().name() == QStringLiteral("org.freedesktop.systemd1.NoSuchUnit")) {
+            stoppedUnitNames.insert(unitName);
+            finalizeStoppedUnit(unitName, QStringLiteral("Instance exited while the helper was unavailable"), true);
+            changed = true;
+            continue;
+        }
+        if (!reply.isValid() || reply.value().path() != systemdUnitObjectPath(unitName)) {
+            m_stoppingUnits.insert(unitName);
+            const bool stopped = stopServiceInstance(unitName);
+            m_stoppingUnits.remove(unitName);
+            if (stopped) {
+                stoppedUnitNames.insert(unitName);
+            }
+            if (stopped) {
+                finalizeStoppedUnit(unitName,
+                                    QStringLiteral("Instance was stopped because its systemd unit could not be recovered"),
+                                    true);
+                changed = true;
+            }
+            continue;
+        }
+        m_unitPathForUnit.insert(unitName, reply.value());
+        monitorUnitState(unitName, username, reply.value(), true);
+        pollUnitMainPid(unitName);
+    }
+    for (auto it = launchTokensObject.constBegin(); it != launchTokensObject.constEnd(); ++it) {
+        const QString unitName = it.key();
+        const QString token = it.value().toString();
+        if (!DirectoryPlan::isLaunchToken(token)) {
+            changed = true;
+            continue;
+        }
+        if (m_unitUsernameByName.contains(unitName)) {
+            continue;
+        }
+        if (activeSystemdUnits.contains(unitName) && !stoppedUnitNames.contains(unitName)) {
+            m_launchTokenByUnitName.insert(unitName, token);
+            continue;
+        }
+        if (m_cleanedLaunchManifestTokens.contains(token)) {
+            continue;
+        }
+        m_launchTokenByUnitName.insert(unitName, token);
+        if (!cleanupCopyScratchForUnit(unitName, token)) {
+            continue;
+        }
+        QString unlinkError;
+        if (!m_ops->unlinkLaunchManifest(token, &unlinkError)) {
+            qWarning() << "Could not unlink reconciled launch manifest for" << unitName << ":" << unlinkError;
+            continue;
+        }
+        m_launchTokenByUnitName.remove(unitName);
+        m_cleanedLaunchManifestTokens.insert(token);
+        changed = true;
     }
     QJsonArray devicesArray = root.value(QStringLiteral("modifiedDevices")).toArray();
     QStringList loadedDevices;
@@ -3942,58 +4973,6 @@ void CouchPlayHelper::loadAndReconcileState()
     }
     m_modifiedHidDevices = loadedHidDevices;
 
-    QJsonObject mountsObject = root.value(QStringLiteral("activeMounts")).toObject();
-    QMap<QString, QList<MountInfo>> loadedMounts;
-    for (auto it = mountsObject.constBegin(); it != mountsObject.constEnd(); ++it) {
-        QString username = it.key();
-        QJsonArray mountsArray = it.value().toArray();
-        QList<MountInfo> userMounts;
-        for (const QJsonValue &mountVal : mountsArray) {
-            QJsonObject mountObj = mountVal.toObject();
-            QString target = mountObj.value(QStringLiteral("target")).toString();
-
-            QFile mountsFile(QStringLiteral("/proc/mounts"));
-            bool isMounted = false;
-            if (mountsFile.open(QIODevice::ReadOnly)) {
-                QByteArray mountsData = mountsFile.readAll();
-                mountsFile.close();
-                isMounted = mountsData.contains(target.toUtf8());
-            }
-
-            if (!activeUsernames.contains(username)) {
-                // Session gone: umount the orphan instead of re-tracking it.
-                if (isMounted) {
-                    qDebug() << "loadAndReconcileState: Umounting orphaned mount" << target << "for gone session" << username;
-                    QProcess *umountProc = m_ops->createProcess();
-                    m_ops->startProcess(umountProc, QStringLiteral("/usr/bin/umount"), {target});
-                    m_ops->waitForFinished(umountProc, 5000);
-                    if (m_ops->processExitCode(umountProc) != 0) {
-                        QProcess *lazyProc = m_ops->createProcess();
-                        m_ops->startProcess(lazyProc, QStringLiteral("/usr/bin/umount"), {QStringLiteral("-l"), target});
-                        m_ops->waitForFinished(lazyProc, 5000);
-                        delete lazyProc;
-                    }
-                    delete umountProc;
-                }
-                changed = true;
-            } else if (isMounted) {
-                MountInfo info;
-                info.source = mountObj.value(QStringLiteral("source")).toString();
-                info.target = target;
-                info.mountType = mountObj.value(QStringLiteral("mountType")).toString();
-                info.upperDir = mountObj.value(QStringLiteral("upperDir")).toString();
-                info.workDir = mountObj.value(QStringLiteral("workDir")).toString();
-                userMounts.append(info);
-            } else {
-                qDebug() << "loadAndReconcileState: Removing inactive mount" << target;
-                changed = true;
-            }
-        }
-        if (!userMounts.isEmpty()) {
-            loadedMounts[username] = userMounts;
-        }
-    }
-    m_activeMounts = loadedMounts;
 
     QJsonArray runtimeUids = root.value(QStringLiteral("runtimeAccessUids")).toArray();
     QSet<uint> loadedRuntimeUids;
@@ -4020,7 +4999,7 @@ void CouchPlayHelper::loadAndReconcileState()
     QHash<QString, uint> loadedCompositorUid;
     for (auto it = compositorUidObject.constBegin(); it != compositorUidObject.constEnd(); ++it) {
         QString user = it.key();
-        if (m_usernameToUnitName.contains(user)) {
+        if (m_usernameToUnitName.contains(user) || m_auxiliaryUnitNameForUsername.contains(user)) {
             loadedCompositorUid[user] = static_cast<uint>(it.value().toInteger());
         }
     }
@@ -4043,13 +5022,196 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
 
+    changed = reconcileLegacyMounts(activeSystemdUnits, stoppedUnitNames, activeSystemdUnitsKnown) || changed;
     if (changed) {
         saveState();
     }
 
-    qDebug() << "loadAndReconcileState: Restored" << m_usernameToUnitName.size() << "units," << m_modifiedDevices.size()
-             << "devices," << m_activeMounts.size() << "mount users," << m_runtimeAccessSetForUid.size()
-             << "runtime UIDs";
+    qDebug() << "loadAndReconcileState: Restored" << (m_usernameToUnitName.size() + m_auxiliaryUnitNameForUsername.size())
+             << "units," << m_modifiedDevices.size() << "devices," << m_runtimeAccessSetForUid.size() << "runtime UIDs";
+}
+
+bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUnits,
+                                             const QSet<QString> &stoppedUnitNames,
+                                             bool systemdStateKnown)
+{
+    if (m_legacyActiveMounts.isEmpty()) {
+        return false;
+    }
+
+    QProcess *mountInfoProcess = m_ops->createProcess();
+    m_ops->startProcess(mountInfoProcess, QStringLiteral("cat"), {QStringLiteral("/proc/self/mountinfo")});
+    const bool mountInfoAvailable = m_ops->waitForFinished(mountInfoProcess, 5000)
+        && m_ops->processExitCode(mountInfoProcess) == 0;
+    const QByteArray mountInfo = mountInfoAvailable ? m_ops->readAllStandardOutput(mountInfoProcess) : QByteArray();
+    delete mountInfoProcess;
+
+    const auto decodeMountInfoField = [](const QByteArray &encoded, QByteArray *decoded) {
+        decoded->clear();
+        for (int i = 0; i < encoded.size(); ++i) {
+            if (encoded.at(i) != '\\') {
+                decoded->append(encoded.at(i));
+                continue;
+            }
+            if (i + 3 >= encoded.size()) {
+                return false;
+            }
+            const char first = encoded.at(i + 1);
+            const char second = encoded.at(i + 2);
+            const char third = encoded.at(i + 3);
+            if (first < '0' || first > '7' || second < '0' || second > '7' || third < '0' || third > '7') {
+                return false;
+            }
+            const int value = ((first - '0') << 6) | ((second - '0') << 3) | (third - '0');
+            decoded->append(static_cast<char>(value));
+            i += 3;
+        }
+        return true;
+    };
+    const auto findMount = [&](const QByteArray &target, const QByteArray &source, bool *found, bool *sourceMatches) {
+        *found = false;
+        *sourceMatches = false;
+        for (const QByteArray &line : mountInfo.split('\n')) {
+            if (line.isEmpty()) {
+                continue;
+            }
+            const QList<QByteArray> fields = line.split(' ');
+            const int separator = fields.indexOf(QByteArray("-"));
+            if (fields.size() < 10 || separator < 6 || separator + 3 >= fields.size()) {
+                return false;
+            }
+            QByteArray mountedTarget;
+            QByteArray mountedType;
+            QByteArray mountedSource;
+            QByteArray superOptions;
+            if (!decodeMountInfoField(fields.at(4), &mountedTarget)
+                || !decodeMountInfoField(fields.at(separator + 1), &mountedType)
+                || !decodeMountInfoField(fields.at(separator + 2), &mountedSource)
+                || !decodeMountInfoField(fields.at(separator + 3), &superOptions)) {
+                return false;
+            }
+            if (mountedTarget == target) {
+                if (*found) {
+                    return false;
+                }
+                *found = true;
+                *sourceMatches = mountedSource == source;
+                if (!*sourceMatches && mountedType == QByteArray("overlay")) {
+                    const QByteArray lowerDirPrefix("lowerdir=");
+                    for (const QByteArray &option : superOptions.split(',')) {
+                        if (option.startsWith(lowerDirPrefix) && option.mid(lowerDirPrefix.size()) == source) {
+                            *sourceMatches = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    };
+
+    QJsonObject remainingMounts;
+    bool changed = false;
+    for (auto it = m_legacyActiveMounts.constBegin(); it != m_legacyActiveMounts.constEnd(); ++it) {
+        const QString username = it.key();
+        const QJsonValue storedMounts = it.value();
+        if (!s_validUsername.match(username).hasMatch() || !storedMounts.isArray()) {
+            remainingMounts.insert(username, storedMounts);
+            continue;
+        }
+
+        const QString mainUnit = generateServiceName(username);
+        const QString streamUnit = generateStreamServiceName(username);
+        const bool mainStopped = stoppedUnitNames.contains(mainUnit);
+        const bool streamStopped = stoppedUnitNames.contains(streamUnit);
+        const bool unitStillActive = m_usernameToUnitName.contains(username)
+            || m_auxiliaryUnitNameForUsername.contains(username)
+            || (activeSystemdUnits.contains(mainUnit) && !mainStopped)
+            || (activeSystemdUnits.contains(streamUnit) && !streamStopped);
+        if (unitStillActive || (!systemdStateKnown && !(mainStopped && streamStopped))) {
+            remainingMounts.insert(username, storedMounts);
+            continue;
+        }
+
+        struct passwd *record = m_ops->getpwnam(username.toLocal8Bit().constData());
+        const QString declaredHome = record ? QString::fromLocal8Bit(record->pw_dir ? record->pw_dir : "") : QString();
+        const QString home = declaredHome.isEmpty() ? QString() : m_ops->canonicalFilePath(declaredHome);
+        if (!QDir::isAbsolutePath(home) || home == QStringLiteral("/") || QDir::cleanPath(home) != home) {
+            remainingMounts.insert(username, storedMounts);
+            continue;
+        }
+
+        const QJsonArray mounts = storedMounts.toArray();
+        QList<QJsonValue> retained;
+        for (qsizetype i = mounts.size(); i-- > 0;) {
+            const QJsonValue value = mounts.at(i);
+            if (!value.isObject()) {
+                retained.append(value);
+                continue;
+            }
+            const QJsonObject object = value.toObject();
+            const QString source = object.value(QStringLiteral("source")).toString();
+            const QString target = object.value(QStringLiteral("target")).toString();
+            const QString targetPrefix = home + QLatin1Char('/');
+            if (!QDir::isAbsolutePath(source) || QDir::cleanPath(source) != source || source.contains(QChar::Null)
+                || !QDir::isAbsolutePath(target) || QDir::cleanPath(target) != target || target.contains(QChar::Null)
+                || !target.startsWith(targetPrefix)) {
+                retained.append(value);
+                continue;
+            }
+            if (!mountInfoAvailable) {
+                retained.append(value);
+                continue;
+            }
+
+            bool mounted = false;
+            bool sourceMatches = false;
+            if (!findMount(target.toUtf8(), source.toUtf8(), &mounted, &sourceMatches) || (mounted && !sourceMatches)) {
+                retained.append(value);
+                continue;
+            }
+            if (!mounted) {
+                changed = true;
+                continue;
+            }
+
+            const int targetFd = SecureFs::openExistingDirNoFollow(target);
+            struct stat targetStat {};
+            if (targetFd < 0 || ::fstat(targetFd, &targetStat) != 0 || !S_ISDIR(targetStat.st_mode)) {
+                if (targetFd >= 0) {
+                    ::close(targetFd);
+                }
+                retained.append(value);
+                continue;
+            }
+            QProcess *unmountProcess = m_ops->createProcess();
+            const QString fdPath = QStringLiteral("/proc/self/fd/%1").arg(targetFd);
+            unmountProcess->setStandardInputFile(fdPath);
+            m_ops->startProcess(unmountProcess, QStringLiteral("umount"),
+                                {QStringLiteral("--"), QStringLiteral("/proc/self/fd/0")});
+            const bool unmounted = m_ops->waitForFinished(unmountProcess, 5000)
+                && m_ops->processExitCode(unmountProcess) == 0;
+            delete unmountProcess;
+            ::close(targetFd);
+            if (unmounted) {
+                changed = true;
+            } else {
+                retained.append(value);
+            }
+        }
+        if (!retained.isEmpty()) {
+            std::reverse(retained.begin(), retained.end());
+            QJsonArray remaining;
+            for (const QJsonValue &value : retained) {
+                remaining.append(value);
+            }
+            remainingMounts.insert(username, remaining);
+        } else {
+            changed = true;
+        }
+    }
+    m_legacyActiveMounts = remainingMounts;
+    return changed;
 }
 
 void CouchPlayHelper::startWatchingDevice(const QString &devicePath)

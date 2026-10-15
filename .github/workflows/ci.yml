@@ -77,3 +77,75 @@ jobs:
         with:
           name: couchplay-build
           path: couchplay-*.tar.gz
+
+  namespace:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build Fedora 41 systemd test image
+        run: docker build --file tests/namespace.Dockerfile --tag couchplay-namespace:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} .
+
+      - name: Boot disposable privileged systemd container
+        run: |
+          set -euo pipefail
+          name="couchplay-namespace-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run --detach \
+            --name "$name" \
+            --label couchplay.namespace-test=owned \
+            --privileged \
+            --cgroupns=host \
+            --tmpfs /run:rw,nosuid,nodev,mode=755 \
+            --tmpfs /run/lock:rw,nosuid,nodev,mode=755 \
+            --volume /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/src,readonly" \
+            "couchplay-namespace:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+      - name: Build, install, and run real-kernel gate
+        run: |
+          set -euo pipefail
+          name="couchplay-namespace-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker exec "$name" bash -euc '
+            export COUCHPLAY_NAMESPACE_CONTAINER=1
+            for _ in $(seq 1 60); do
+              if systemctl is-system-running --quiet 2>/dev/null; then break; fi
+              sleep 1
+            done
+            systemctl start dbus-broker.service polkit.service
+            test -S /run/dbus/system_bus_socket
+            systemctl is-active --quiet polkit.service
+
+            cmake -S /src -B /tmp/couchplay-build \
+              -DBUILD_TESTING=ON \
+              -DCOUCHPLAY_PRIVILEGED_TESTS=ON \
+              -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cmake --build /tmp/couchplay-build --parallel 2
+
+            install_root=/tmp/couchplay-install
+            mkdir -p "$install_root"
+            cp -a /src/scripts "$install_root/scripts"
+            cp -a /src/data "$install_root/data"
+            ln -s /tmp/couchplay-build "$install_root/build"
+            "$install_root/scripts/install-helper.sh" install
+
+            if ! ctest --test-dir /tmp/couchplay-build \
+              --output-on-failure \
+              --label-regex "^privileged$" \
+              -R "^test_instance_bootstrap_integration$"; then
+              journalctl --no-pager --since "10 minutes ago" || true
+              systemctl list-units --all "couchplay-*" --no-pager || true
+              exit 1
+            fi
+          '
+
+      - name: Remove owned namespace-test container
+        if: always()
+        run: |
+          name="couchplay-namespace-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker inspect "$name" >/dev/null 2>&1; then
+            docker rm --force "$name"
+          fi

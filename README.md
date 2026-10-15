@@ -85,12 +85,15 @@ Normal session operations use the shared Polkit `manage-session` action (`auth_a
 On immutable hosts such as Bazzite, Heroic configuration and shortcut copies resolve the system `/home` alias before secure copying. Symlinked source files and directories inside the caller's home remain rejected.
 The Flatpak shares `~/.local/share/applications` read/write so newly generated Heroic desktop shortcuts are visible to the host helper; it does not require access to the entire home directory.
 Launcher availability is checked on the host, not against executable names inside the GUI sandbox.
-Heroic sessions resolve current registered game roots and executable-parent directories independently of older profile snapshots, granting bounded directory traversal without copying account credentials or per-player game settings. On atomic hosts, the helper admits the canonical `/var/mnt` storage alias only when the system `/mnt` path proves equivalent.
-Selecting a native application from the application list adds its bounded executable/working directories as read-only ACL shares. Session startup also grants required launcher access to every selected player without changing saved shared-data snapshots. Discovery runs against the host for Flatpak installations; whole home folders, common collection roots, credentials/configuration trees, and Flatpak runtime files are not automatically shared. Sensitive home trees, their canonical symlink targets, and directories containing those targets are excluded from automatic recursive sharing. Application directories under `/opt` and `/srv` are supported without granting access to either root itself. Missing Heroic catalog paths (for example, games on a disconnected drive) are skipped. Configured ACL shares and automatic Heroic data-directory defaults recursively grant read/execute access to game contents; additional catalog paths receive traversal access, and system-root paths such as `/usr` are left to normal host permissions. Desktop executable paths retain their quoting, including paths with spaces. On filesystems without ACL support, the helper accepts a failed grant only after verifying the required read/execute access as the target account on the pinned inode; inaccessible paths still fail. Native symlink paths are resolved before parent components are collapsed.
-Player settings are shown directly in **New Session**, without a separate Advanced section. **Private temporary directories** gives that player's Gamescope/launcher/game processes separate `/tmp` and `/var/tmp` storage. The option defaults off, is saved per player in the profile, and removes temporary files when the instance stops. It does not change shared-data snapshots or auxiliary Sunshine configuration. Install the matching GUI and host helper together; the launch D-Bus contract includes this option.
+Heroic sessions resolve current registered game roots and executable-parent directories, granting bounded directory traversal without copying account credentials or per-player game settings. On atomic hosts, the helper admits the canonical /var/mnt storage alias only when the system /mnt path proves equivalent.
+Native application selection adds bounded executable and working directories as read-only ACL shares; session startup applies the selected application's current shared-directory settings to each player. Host discovery supports Flatpak installations. CouchPlay does not automatically share whole home folders, collection roots, credentials/configuration trees, or Flatpak runtime files. Sensitive home trees and canonical targets are excluded from recursive sharing; application directories under /opt and /srv are supported without granting access to those roots.
+Player settings are shown directly in New Session, without a separate Advanced section. Private temporary directories gives that player's Gamescope/launcher/game processes separate /tmp and /var/tmp storage. The option defaults off, is saved per player in the profile, and removes temporary files when the instance stops. It does not affect shared-directory settings or auxiliary Sunshine configuration. Install the matching GUI and host helper together; the launch D-Bus contract includes this option.
+Application directory settings belong to the application, not a saved player profile. Editing them applies to all profiles on their next launch; a running session keeps the values captured when it started.
 
-**Player data** is shown only when the selected player has a configured Copy/Overlay directory that can receive staged files. ACL/bind shares and the special Steam library-sharing overlay do not qualify. The button opens a staging folder for the selected launcher and player, including under Flatpak. Each eligible directory has a generated subfolder: place files there with their relative paths preserved. Session startup prepares the player's private copy/overlay, then merges those staged files into it. Loose files at the staging root are ignored. This folder is not the player's Linux home or live `/tmp`. Automation hooks run once before/after the whole session, not before each instance.
+Directory modes differ: **Access original folder (ACL)** grants read/traverse permission at the source path; it does not project files into player HOME. **Copy files** replaces the entire mapped player directory on every launch, discarding player edits and player-only files; Player data staging is applied afterwards and wins conflicts. A copy is published atomically; failure or cancellation before publication retains the previous directory. **Bind** exposes the source only inside the player's unit namespace and preserves source permissions. **Overlay** provides a persistent private writable layer inside that namespace while leaving the source unchanged. Filesystem/kernel ownership-mapping support is required for Overlay; unsupported sources produce an explicit error recommending Copy files.
+Launch requests support desktop integration (`XDG_CURRENT_DESKTOP`) and per-instance audio routing (`PULSE_SINK`); identity, runtime-directory, and audio-server environment values remain helper-owned.
 
+**Player data** supports configured Copy/Overlay directories that receive staged files. ACL/bind shares and Steam library sharing do not qualify. The button opens a staging folder for the selected launcher and player, including under Flatpak. Each eligible directory has a generated subfolder: place files there with their relative paths preserved. Session startup prepares the mapped directory, then applies its staged files. Loose files at the staging root are ignored. This folder is not the player's Linux home or live /tmp. Automation hooks run once before/after the whole session, not before each instance.
 The former Config Overrides/file-pattern feature has been removed. Its old profile settings are ignored and discarded when profiles are saved; existing override files on disk are left untouched. Use configured Copy/Overlay directories and Player data for per-player configurations.
 Gamescope positioning uses host-visible scripts and waits for KWin to confirm the requested frame geometry before reporting success.
 
@@ -184,6 +187,8 @@ sudo ./install-helper.sh uninstall
 If only the first instance starts and CouchPlay reports a window-positioning timeout,
 check KWin window discovery rather than launcher PID locks. Session startup matches each
 window to the host Gamescope PID; Wayland Gamescope windows can have an empty application ID.
+Gamescope can replace its initial window after a launcher loads. A PID-scoped KWin
+listener positions replacement windows in the same player slot until the session stops.
 
 Flatpak directory selections are resolved from document-portal exports to host paths
 before being saved as shared directories. The GUI and helper share one mapping
@@ -192,10 +197,37 @@ path are home-relative. External paths remain external; traversal and whole-home
 sharing without an explicit target alias are rejected. This applies to any
 symlinked home, including `/home` → `/var/home` on Atomic desktops. Both home
 paths are resolved by the host helper, not inside the Flatpak sandbox. Update
-the GUI and helper together when installing this fix.
+the GUI and helper together when installing this fix. Secure path walks require
+only search permission on ancestor directories and retain read checks on the
+selected directory, without changing host permissions or allowing symlinks.
 
-Saved profiles retain their directory snapshot; reselect the application for each
-player and save to refresh it from application settings.
+Bind and Overlay views exist in each instance's private mount namespace, not in the
+host file manager or helper service. Startup reports preparation errors before Gamescope
+window discovery. Stop all sessions before updating the matching GUI and native helper.
+Directory sources are carried by the preparation plan, independently of working-directory admission.
+Detached source mounts are made private before attachment, so shared host mounts
+cannot propagate a player Overlay back onto the original source directory.
+If an older build leaked an Overlay, inspect the mount before changing ownership:
+the player-owned view may be hiding an unchanged host directory. After uncovering
+the host directory, restart the helper so its private namespace does not retain
+the old leaked view.
+Gamescope is projected read-only with `nosuid` inside each instance so distro file
+capabilities do not prevent an unprivileged launch; the host binary is unchanged.
+
+Player staging directories are resolved to canonical paths before helper handoff,
+including linked application-data storage. The helper still requires caller-owned
+home storage and no-follow traversal of the resolved directories and staged files.
+
+Recursive ACL preparation runs in cancellable instance startup, not a blocking GUI
+or helper D-Bus call. Native FD-based ACL updates preserve unrelated effective access
+and directory inheritance. ACL mode grants read/traverse access at the original path;
+it neither grants new write access nor projects files into the player home.
+Streaming outputs and audio sinks remain available until both the game and stream processes stop.
+
+Profiles store the application selection, not a copied directory list. Legacy directory
+snapshots are removed after preserving the original profile in a sibling
+`.pre-directory-snapshot.bak` file (numbered siblings preserve differing older backups).
+Application edits apply on the next launch without reselecting players' applications.
 
 ## Development
 
@@ -203,8 +235,8 @@ player and save to refresh it from application settings.
 - CMake 3.20+
 - Qt 6.5+ (Core, Quick, Qml, Gui, QuickControls2, Widgets, DBus)
 - KDE Frameworks 6 (Kirigami, I18n, Config, CoreAddons, IconThemes, QQC2DesktopStyle, GlobalAccel)
-- PolkitQt6-1 (optional — required for user management authorization)
-- PipeWire (devel headers)
+- PolkitQt6-1 (required)
+- PipeWire and libacl development headers
 - Gamescope (runtime dependency)
 
 ### Building
@@ -212,8 +244,6 @@ player and save to refresh it from application settings.
 cmake -B build
 cmake --build build
 ```
-Standalone diagnostic builds must retain `KDECompilerSettings`, including
-`QT_USE_QSTRINGBUILDER`, so string-expression compilation matches production.
 
 Run the app you just built (only on a distro with matching Qt6, e.g. Fedora — otherwise use the Flatpak):
 ```bash
@@ -222,7 +252,13 @@ Run the app you just built (only on a distro with matching Qt6, e.g. Fedora — 
 
 ### Running Tests
 ```bash
-dbus-run-session -- ctest --test-dir build --output-on-failure
+(
+    runtime=$(mktemp -d)
+    trap 'rm -rf -- "$runtime"' EXIT
+    chmod 700 "$runtime"
+    export XDG_RUNTIME_DIR="$runtime" QT_QPA_PLATFORM=offscreen
+    dbus-run-session -- ctest --test-dir build --output-on-failure
+)
 ```
 
 ## AI Disclosure

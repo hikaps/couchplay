@@ -93,7 +93,7 @@ Kirigami.Dialog {
         
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            text: i18nc("@info", "Choose how to share data: 'Shared (ACL)' shares a single folder among all users, 'Copy' duplicates it for each user, 'Overlay' creates a per-user copy-on-write overlay, and 'Bind mount' exposes the folder at the same path inside each player's home.")
+            text: i18nc("@info", "Access original folder (ACL) grants read/traverse access at the source path, not in player HOME. Copy replaces the entire player directory on every launch, discarding player edits and player-only files; Player data staging is applied afterwards. Bind preserves source permissions. Bind and Overlay views are session-only; Overlay retains private edits and requires filesystem ownership-mapping support. Application changes apply to saved profiles on their next launch.")
             type: Kirigami.MessageType.Information
             visible: true
         }
@@ -149,10 +149,10 @@ Kirigami.Dialog {
 
                     Controls.ComboBox {
                         model: [
-                            { value: "acl", text: i18nc("@item:inlistbox", "Shared (ACL)") },
+                            { value: "acl", text: i18nc("@item:inlistbox", "Access original folder (ACL)") },
                             { value: "copy", text: i18nc("@item:inlistbox", "Copy files") },
-                            { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay") },
-                            { value: "bind", text: i18nc("@item:inlistbox", "Bind mount (same home path)") }
+                            { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay (session)") },
+                            { value: "bind", text: i18nc("@item:inlistbox", "Bind at same HOME path (session)") }
                         ]
                         textRole: "text"
                         valueRole: "value"

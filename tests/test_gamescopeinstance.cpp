@@ -10,8 +10,65 @@
 #include <QTest>
 #include <QVariant> // Must be before QVariantMap
 #include <QVariantMap>
-
+#include "CouchPlayHelperClient.h"
 #include "GamescopeInstance.h"
+
+class MockCouchPlayHelperClient : public CouchPlayHelperClient
+{
+    Q_OBJECT
+public:
+    using CouchPlayHelperClient::CouchPlayHelperClient;
+    bool isAvailable() const override { return true; }
+
+    qint64 nextPid = 5000;
+    qint64 lastPid = 0;
+    QString lastUsername;
+    QStringList lastGameCommand;
+    QVariantList lastPreparations;
+    int launchCalls = 0;
+    QList<qint64> stopPids;
+    QList<qint64> killPids;
+    bool readyBeforeReply = true;
+    bool stoppedBeforeReply = false;
+    bool stopSucceeds = true;
+    bool killSucceeds = true;
+    QString earlyStopReason = QStringLiteral("failed");
+
+    qint64 launchInstance(const QString &username,
+                          const QString &,
+                          const QStringList &,
+                          const QStringList &gameCommand,
+                          const QString &,
+                          const QStringList &,
+                          const QStringList &,
+                          bool,
+                          const QVariantList &directoryPreparations) override
+    {
+        ++launchCalls;
+        lastUsername = username;
+        lastGameCommand = gameCommand;
+        lastPreparations = directoryPreparations;
+        lastPid = nextPid++;
+        if (readyBeforeReply) Q_EMIT instanceReady(username, lastPid);
+        if (stoppedBeforeReply) Q_EMIT instanceStopped(username, lastPid, earlyStopReason);
+        return lastPid;
+    }
+
+    bool stopInstance(qint64 pid) override
+    {
+        stopPids.append(pid);
+        if (stopSucceeds) Q_EMIT instanceStopped(lastUsername, pid, QStringLiteral("exited"));
+        return stopSucceeds;
+    }
+
+    bool killInstance(qint64 pid) override
+    {
+        killPids.append(pid);
+        if (killSucceeds) Q_EMIT instanceStopped(lastUsername, pid, QStringLiteral("failed"));
+        return killSucceeds;
+    }
+};
+
 
 class TestGamescopeInstance : public QObject
 {
@@ -39,23 +96,29 @@ private Q_SLOTS:
     void testBuildEnvBasic();
     void testBuildEnvCustomPulseServer();
 
-    // Instance state tests
+    // Instance state and readiness tests
     void testInitialState();
     void testNotRunningWithoutProcess();
     void testDoubleStartPrevention();
+    void testPreparingUntilMatchingReady();
+    void testReadySignalBeforeLaunchReply();
+    void testPreparationFailureBeforeLaunchReply();
+    void testStopWhilePreparing();
+    void testStopFailureRetainsPreparingPid();
+    void testEmptyLaunchCommandRejected();
 
     // Property tests
     void testIndexProperty();
     void testUsernameProperty();
     void testWindowGeometryProperty();
 
-    // Launch mode tests
+    // Structured launch tests
     void testSteamLaunchMode();
     void testSteamLaunchModeNoAppId();
-    void testSteamModeIsDefault();
 
 private:
     GamescopeInstance *m_instance = nullptr;
+    MockCouchPlayHelperClient *m_helperClient = nullptr;
 };
 
 void TestGamescopeInstance::initTestCase()
@@ -68,13 +131,17 @@ void TestGamescopeInstance::cleanupTestCase()
 
 void TestGamescopeInstance::init()
 {
+    m_helperClient = new MockCouchPlayHelperClient();
     m_instance = new GamescopeInstance();
+    m_instance->setHelperClient(m_helperClient);
 }
 
 void TestGamescopeInstance::cleanup()
 {
     delete m_instance;
     m_instance = nullptr;
+    delete m_helperClient;
+    m_helperClient = nullptr;
 }
 
 // ============ buildGamescopeArgs Tests ============
@@ -311,24 +378,136 @@ void TestGamescopeInstance::testNotRunningWithoutProcess()
 
 void TestGamescopeInstance::testDoubleStartPrevention()
 {
-    // Note: We can't actually start gamescope in tests, but we can verify
-    // the protection logic exists in the code
-    // The start() method checks m_process->state() before starting
-
-    // For now, just verify the instance can receive start() calls
-    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-
+    m_helperClient->readyBeforeReply = false;
     QVariantMap config;
-    config[QStringLiteral("internalWidth")] = 1920;
-    config[QStringLiteral("internalHeight")] = 1080;
-    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true"); // Use a real executable
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    QVERIFY(m_instance->start(config, 0, {}));
+    QCOMPARE(m_instance->pid(), m_helperClient->lastPid);
+    QCOMPARE(m_instance->gamescopePid(), qint64(0));
+    QVERIFY(!m_instance->isRunning());
 
-    // First start will attempt to run (may fail if gamescope not installed)
-    // We're mainly testing that the method is callable
-    m_instance->start(config, 0);
+    QVERIFY(!m_instance->start(config, 1, {}));
+    QCOMPARE(m_helperClient->launchCalls, 1);
+    QCOMPARE(m_instance->index(), 0);
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), m_helperClient->lastPid);
+    QVERIFY(m_instance->isRunning());
+    QVERIFY(!m_instance->start(config, 2, {}));
+    QCOMPARE(m_instance->gamescopePid(), m_helperClient->lastPid);
+    QCOMPARE(m_instance->index(), 0);
+    m_instance->stop();
+}
 
-    // We don't assert on the result because gamescope may not be installed
-    // in the test environment
+void TestGamescopeInstance::testPreparingUntilMatchingReady()
+{
+    QVariantMap config;
+    m_helperClient->readyBeforeReply = false;
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    const QVariantList preparations{QVariantMap{{QStringLiteral("source"), QStringLiteral("/source")},
+                                                {QStringLiteral("mode"), QStringLiteral("copy")},
+                                                {QStringLiteral("targetAlias"), QStringLiteral(".couchplay/copies/test")},
+                                                {QStringLiteral("stagingPath"), QStringLiteral("/staging")}}};
+    QSignalSpy startedSpy(m_instance, &GamescopeInstance::started);
+    QVERIFY(m_instance->start(config, 0, preparations));
+    const qint64 pid = m_helperClient->lastPid;
+    QCOMPARE(m_helperClient->lastPreparations, preparations);
+    QCOMPARE(m_instance->pid(), pid);
+    QCOMPARE(m_instance->gamescopePid(), qint64(0));
+    QCOMPARE(m_instance->status(), QStringLiteral("Preparing data"));
+    QVERIFY(!m_instance->isRunning());
+
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("other"), pid);
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), pid + 1);
+    QCOMPARE(m_instance->gamescopePid(), qint64(0));
+    QVERIFY(!m_instance->isRunning());
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), pid);
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), pid);
+    QCOMPARE(m_instance->gamescopePid(), pid);
+    QVERIFY(m_instance->isRunning());
+    QCOMPARE(startedSpy.count(), 1);
+    m_instance->stop();
+}
+
+void TestGamescopeInstance::testReadySignalBeforeLaunchReply()
+{
+    m_helperClient->readyBeforeReply = true;
+    QVariantMap config;
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    QSignalSpy startedSpy(m_instance, &GamescopeInstance::started);
+    QVERIFY(m_instance->start(config, 0, {}));
+    QCOMPARE(m_instance->pid(), m_helperClient->lastPid);
+    QCOMPARE(m_instance->gamescopePid(), m_helperClient->lastPid);
+    QVERIFY(m_instance->isRunning());
+    QCOMPARE(startedSpy.count(), 1);
+    m_instance->stop();
+}
+
+void TestGamescopeInstance::testPreparationFailureBeforeLaunchReply()
+{
+    m_helperClient->stoppedBeforeReply = true;
+    m_helperClient->readyBeforeReply = false;
+    QVariantMap config;
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
+    QSignalSpy startedSpy(m_instance, &GamescopeInstance::started);
+    QSignalSpy stoppedSpy(m_instance, &GamescopeInstance::stopped);
+    QVERIFY(m_instance->start(config, 0, {}));
+    QCOMPARE(m_instance->pid(), qint64(0));
+    QCOMPARE(m_instance->gamescopePid(), qint64(0));
+    QVERIFY(!m_instance->isRunning());
+    QCOMPARE(startedSpy.count(), 0);
+    QCOMPARE(stoppedSpy.count(), 1);
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(errorSpy.first().first().toString(), m_helperClient->earlyStopReason);
+}
+
+void TestGamescopeInstance::testStopWhilePreparing()
+{
+    m_helperClient->readyBeforeReply = false;
+    QVariantMap config;
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    QSignalSpy stoppedSpy(m_instance, &GamescopeInstance::stopped);
+    QVERIFY(m_instance->start(config, 0, {}));
+    const qint64 preparingPid = m_instance->pid();
+    QVERIFY(preparingPid > 0);
+    QVERIFY(!m_instance->isRunning());
+    m_instance->stop();
+    QCOMPARE(m_helperClient->stopPids, QList<qint64>{preparingPid});
+    QCOMPARE(m_instance->pid(), qint64(0));
+    QCOMPARE(stoppedSpy.count(), 1);
+}
+
+void TestGamescopeInstance::testStopFailureRetainsPreparingPid()
+{
+    m_helperClient->readyBeforeReply = false;
+    m_helperClient->stopSucceeds = false;
+    m_helperClient->killSucceeds = false;
+    QVariantMap config;
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    QVERIFY(m_instance->start(config, 0, {}));
+    const qint64 preparingPid = m_instance->pid();
+    m_instance->stop();
+    QCOMPARE(m_instance->pid(), preparingPid);
+    QVERIFY(!m_instance->isRunning());
+    m_helperClient->stopSucceeds = true;
+    m_instance->stop();
+    QCOMPARE(m_instance->pid(), qint64(0));
+}
+
+void TestGamescopeInstance::testEmptyLaunchCommandRejected()
+{
+    QVariantMap config;
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
+    QVERIFY(!m_instance->start(config, 0, {}));
+    QCOMPARE(m_helperClient->launchCalls, 0);
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Launch command is empty"));
 }
 
 // ============ Property Tests ============
@@ -336,8 +515,9 @@ void TestGamescopeInstance::testDoubleStartPrevention()
 void TestGamescopeInstance::testIndexProperty()
 {
     QVariantMap config;
-    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");
-    m_instance->start(config, 5);
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    QVERIFY(m_instance->start(config, 5, {}));
     QCOMPARE(m_instance->index(), 5);
     m_instance->stop();
 }
@@ -346,8 +526,8 @@ void TestGamescopeInstance::testUsernameProperty()
 {
     QVariantMap config;
     config[QStringLiteral("username")] = QStringLiteral("testuser");
-    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");
-    m_instance->start(config, 0);
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
+    QVERIFY(m_instance->start(config, 0, {}));
     QCOMPARE(m_instance->username(), QStringLiteral("testuser"));
     m_instance->stop();
 }
@@ -355,112 +535,49 @@ void TestGamescopeInstance::testUsernameProperty()
 void TestGamescopeInstance::testWindowGeometryProperty()
 {
     QVariantMap config;
+    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
     config[QStringLiteral("positionX")] = 100;
     config[QStringLiteral("positionY")] = 200;
     config[QStringLiteral("outputWidth")] = 800;
     config[QStringLiteral("outputHeight")] = 600;
-    config[QStringLiteral("executablePath")] = QStringLiteral("/usr/bin/true");
-
-    m_instance->start(config, 0);
-
-    QRect geometry = m_instance->windowGeometry();
+    QVERIFY(m_instance->start(config, 0, {}));
+    const QRect geometry = m_instance->windowGeometry();
     QCOMPARE(geometry.x(), 100);
     QCOMPARE(geometry.y(), 200);
     QCOMPARE(geometry.width(), 800);
     QCOMPARE(geometry.height(), 600);
-
     m_instance->stop();
 }
 
-// ============ Preset Tests ============
+// ============ Structured Launch Tests ============
 
 void TestGamescopeInstance::testSteamLaunchMode()
 {
-    // Test that Steam preset builds proper command with steamAppId
-    // We can't actually start the process, but we can verify the config is accepted
-    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-
+    m_helperClient->readyBeforeReply = true;
     QVariantMap config;
-    config[QStringLiteral("presetId")] = QStringLiteral("steam");
-    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -bigpicture");
-    config[QStringLiteral("steamIntegration")] = true;
+    config[QStringLiteral("username")] = QStringLiteral("player");
     config[QStringLiteral("launcherId")] = QStringLiteral("steam");
-    config[QStringLiteral("steamAppId")] = QStringLiteral("1426210"); // It Takes Two
-    config[QStringLiteral("internalWidth")] = 1920;
-    config[QStringLiteral("internalHeight")] = 1080;
-
-    // This will try to start gamescope (may fail if not installed)
-    m_instance->start(config, 0);
-
-    // Check that we didn't get any preset-related errors
-    bool hasPresetError = false;
-    for (int i = 0; i < errorSpy.count(); ++i) {
-        QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("preset")) || error.contains(QStringLiteral("No game command"))) {
-            hasPresetError = true;
-        }
-    }
-    QVERIFY(!hasPresetError);
-
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("steam"),
+                                                         QStringLiteral("-bigpicture"),
+                                                         QStringLiteral("-applaunch"),
+                                                         QStringLiteral("1426210")};
+    QVERIFY(m_instance->start(config, 0, {}));
+    QCOMPARE(m_helperClient->lastGameCommand, config.value(QStringLiteral("gameCommand")).toStringList());
+    QVERIFY(m_instance->isRunning());
     m_instance->stop();
 }
 
 void TestGamescopeInstance::testSteamLaunchModeNoAppId()
 {
-    // Test that Steam preset WITHOUT steamAppId is valid (launches Big Picture)
-    // This allows players to select games inside Steam
-    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-
+    m_helperClient->readyBeforeReply = true;
     QVariantMap config;
-    config[QStringLiteral("presetId")] = QStringLiteral("steam");
-    config[QStringLiteral("presetCommand")] = QStringLiteral("steam -bigpicture");
-    config[QStringLiteral("steamIntegration")] = true;
+    config[QStringLiteral("username")] = QStringLiteral("player");
     config[QStringLiteral("launcherId")] = QStringLiteral("steam");
-    // No steamAppId set - this is valid, launches Steam Big Picture
-    config[QStringLiteral("internalWidth")] = 1920;
-    config[QStringLiteral("internalHeight")] = 1080;
-
-    m_instance->start(config, 0);
-
-    // Check that we didn't get any preset-related errors
-    // (may still get "gamescope not found" in test environment, which is expected)
-    bool hasPresetError = false;
-    for (int i = 0; i < errorSpy.count(); ++i) {
-        QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("preset")) || error.contains(QStringLiteral("No game command"))) {
-            hasPresetError = true;
-        }
-    }
-    QVERIFY(!hasPresetError);
-
-    m_instance->stop();
-}
-
-void TestGamescopeInstance::testSteamModeIsDefault()
-{
-    // Test that Steam is the default when no preset command is provided
-    // The instance should fall back to Steam Big Picture
-    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-
-    QVariantMap config;
-    // No presetCommand set - should default to "steam -bigpicture"
-    config[QStringLiteral("internalWidth")] = 1920;
-    config[QStringLiteral("internalHeight")] = 1080;
-
-    m_instance->start(config, 0);
-
-    // Check that we didn't get "No game command" error
-    // (the fallback should provide a default command)
-    // May still get "gamescope not found" in test environment
-    bool hasCommandError = false;
-    for (int i = 0; i < errorSpy.count(); ++i) {
-        QString error = errorSpy.at(i).first().toString();
-        if (error.contains(QStringLiteral("No game command"))) {
-            hasCommandError = true;
-        }
-    }
-    QVERIFY(!hasCommandError);
-
+    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("steam"), QStringLiteral("-bigpicture")};
+    QVERIFY(m_instance->start(config, 0, {}));
+    QCOMPARE(m_helperClient->lastGameCommand, config.value(QStringLiteral("gameCommand")).toStringList());
+    QVERIFY(m_instance->isRunning());
     m_instance->stop();
 }
 

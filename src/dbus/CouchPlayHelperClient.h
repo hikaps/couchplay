@@ -9,6 +9,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
+#include <QVariantList>
 
 /**
  * @brief D-Bus client for the privileged CouchPlay helper
@@ -99,7 +100,18 @@ public:
                                                const QString &workingDirectory,
                                                const QStringList &sharedRoots,
                                                const QStringList &environment,
-                                               bool privateTemporaryDirectories);
+                                               bool privateTemporaryDirectories,
+                                               const QVariantList &directoryPreparations);
+
+    /** Launch a separate user-credentialed auxiliary process alongside Gamescope. */
+    Q_INVOKABLE virtual qint64 launchAuxiliaryInstance(const QString &username,
+                                                        const QString &displayContext,
+                                                        const QStringList &gamescopeArgs,
+                                                        const QStringList &gameCommand,
+                                                        const QString &workingDirectory,
+                                                        const QStringList &sharedRoots,
+                                                        const QStringList &environment,
+                                                        bool privateTemporaryDirectories);
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)
@@ -117,28 +129,6 @@ public:
 
     Q_INVOKABLE void checkAvailability();
 
-    /**
-     * @brief Mount shared directories for a user
-     * @param username Target user to mount for
-     * @param compositorUid UID of compositor user (source paths are resolved from this user's home)
-     * @param directories List of directories in "source|alias" format
-     * @return Number of successful mounts, or -1 on error
-     */
-    Q_INVOKABLE virtual int
-    mountSharedDirectories(const QString &username, const QStringList &directories);
-
-    /**
-     * @brief Unmount shared directories for a user
-     * @param username Target user to unmount for
-     * @return Number of successful unmounts, or -1 on error
-     */
-    Q_INVOKABLE int unmountSharedDirectories(const QString &username);
-
-    /**
-     * @brief Unmount all shared directories for all users
-     * @return Number of successful unmounts, or -1 on error
-     */
-    Q_INVOKABLE virtual int unmountAllSharedDirectories();
 
     /**
      * @brief Copy a file to a user's directory with proper ownership
@@ -157,15 +147,6 @@ public:
      * @return true if successful
      */
     Q_INVOKABLE virtual bool createUserDirectory(const QString &path, const QString &username);
-
-    /**
-     * @brief Set ACL on a directory to grant a user read+execute access
-     * @param path Directory path to set ACL on
-     * @param username User to grant access to
-     * @param recursive Apply recursively to all contents
-     * @return true if successful
-     */
-    Q_INVOKABLE virtual bool setDirectoryAcl(const QString &path, const QString &username, bool recursive);
 
     /**
      * @brief Set ACLs on a path and all parent directories needed for traversal
@@ -203,24 +184,14 @@ public:
      */
     Q_INVOKABLE virtual bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
-    Q_INVOKABLE QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
+    Q_INVOKABLE virtual QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
 
-    Q_INVOKABLE bool destroyVirtualOutput(const QString &username, const QString &waylandSocketName);
+    Q_INVOKABLE virtual bool destroyVirtualOutput(const QString &username, const QString &waylandSocketName);
 
-    Q_INVOKABLE QString createNullSink(const QString &username, const QString &sinkName);
+    Q_INVOKABLE virtual QString createNullSink(const QString &username, const QString &sinkName);
 
-    Q_INVOKABLE bool destroyNullSink(const QString &username, const QString &sinkName);
+    Q_INVOKABLE virtual bool destroyNullSink(const QString &username, const QString &sinkName);
 
-    /**
-     * @brief Set up an overlay mount for a user's instance
-     * @param username Target user
-     * @param compositorUid UID of compositor user (for resolving source paths)
-     * @param sourceDir Source directory to overlay
-     * @param targetAlias Alias path for the overlay target
-     * @return true if successful
-     */
-    Q_INVOKABLE virtual bool
-    setupOverlayMount(const QString &username, const QString &sourceDir, const QString &targetAlias);
 
     /**
      * @brief Copy a directory tree to a user's home with proper ownership
@@ -245,10 +216,12 @@ public:
 Q_SIGNALS:
     void availabilityChanged();
     void errorOccurred(const QString &message);
+    void instanceReady(const QString &username, qint64 pid);
     void instanceStopped(const QString &username, qint64 pid, const QString &reason);
     void exitChordTriggered();
 
 private Q_SLOTS:
+    void onInstanceReady(const QString &username, qint64 pid);
     void onInstanceStopped(const QString &username, qint64 pid, const QString &reason);
 
 private:

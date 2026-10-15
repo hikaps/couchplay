@@ -39,7 +39,6 @@ struct InstanceConfig {
     Q_PROPERTY(QStringList deviceStableIdNames MEMBER deviceStableIdNames)
     Q_PROPERTY(QVariantMap gameSelection READ gameSelectionAsVariant WRITE setGameSelectionFromVariant)
     Q_PROPERTY(QString presetId MEMBER presetId)
-    Q_PROPERTY(QVariantList dataDirectories READ dataDirectoriesAsVariant WRITE setDataDirectoriesFromVariant)
     Q_PROPERTY(bool privateTemporaryDirectories MEMBER privateTemporaryDirectories)
     Q_PROPERTY(QString outputMode MEMBER outputMode)
     Q_PROPERTY(QString streamResolution MEMBER streamResolution)
@@ -63,11 +62,7 @@ public:
     QStringList deviceStableIdNames; // Persistent: friendly names (parallel to stableIds)
     GameSelection gameSelection;
     QString presetId = QStringLiteral("steam"); // ID of the launch preset to use
-    QList<DataDirectory> dataDirectories; // Per-instance data directories (from preset)
-    bool dataDirectoriesSnapshotted = false; // True once a snapshot was taken (even an empty one)
     bool privateTemporaryDirectories = false;
-    QVariantList dataDirectoriesAsVariant() const;
-    void setDataDirectoriesFromVariant(const QVariantList &dirs);
     QVariantMap gameSelectionAsVariant() const { return gameSelection.toVariant(); }
     void setGameSelectionFromVariant(const QVariantMap &selection) { gameSelection = GameSelection::fromVariant(selection); }
     QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
@@ -168,7 +163,6 @@ public:
     Q_INVOKABLE void setInstanceDeviceStableIds(int index, const QStringList &stableIds, const QStringList &names);
     Q_INVOKABLE void setInstanceGame(int index, const QVariantMap &selection);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
-    Q_INVOKABLE void setInstanceDataDirectories(int index, const QVariantList &directories);
     QString preSessionExecutable() const { return m_currentProfile.preSessionExecutable; }
     void setPreSessionExecutable(const QString &path);
     QString postSessionExecutable() const { return m_currentProfile.postSessionExecutable; }
@@ -189,9 +183,7 @@ public:
 
     /**
      * @brief Whether this player has a private shared directory for staged data
-     *
-     * Checks the instance snapshot or current preset defaults without creating
-     * the staging folder.
+     * Checks the current application directories without creating the staging folder.
      */
     Q_INVOKABLE bool hasPlayerDataStagingDirectories(int index) const;
 
@@ -264,8 +256,8 @@ Q_SIGNALS:
 
 private:
     QString profilesDir() const;
+    bool migrateProfileDirectorySnapshots(const QString &path);
     QString profilePath(const QString &name) const;
-
     SessionProfile m_currentProfile;
     QList<SessionProfile> m_savedProfiles;
     PresetManager *m_presetManager = nullptr;
@@ -274,7 +266,7 @@ private:
 
 /**
  * Per-player staging root for hand-seeded data (one subfolder per writable
- * shared directory, named by dataDirectoryStagingSlug()):
+ * shared directory, named by DirectoryPlan::dataDirectoryStagingSlug()):
  *   <CouchPlay app data location>/player-data/<presetId>/<username>/
  */
 QString playerDataStagingRoot(const QString &presetId, const QString &username);
