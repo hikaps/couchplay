@@ -72,6 +72,8 @@ private Q_SLOTS:
     void testLoadProfileLegacySharedDirectories();
     void testMigrationPreservesExistingBackup();
     void testMigrationUnsafeBackupLeavesStateUnchanged();
+    void testSymlinkedProfileWithoutLegacyKeysStillWorks();
+    void testSymlinkedLegacyProfileIsNotReplaced();
     void testLegacyMigrationOnSaveAndDuplicate_data();
     void testLegacyMigrationOnSaveAndDuplicate();
     void testLegacyOverrideSettingsAreDiscardedOnSave();
@@ -488,6 +490,57 @@ void TestSessionManager::testMigrationUnsafeBackupLeavesStateUnchanged()
     QCOMPARE(source.readAll(), original);
     source.close();
     QVERIFY(QFile::remove(backupPath));
+    QVERIFY(QFile::remove(path));
+}
+
+void TestSessionManager::testSymlinkedProfileWithoutLegacyKeysStillWorks()
+{
+    const QString name = QStringLiteral("SymlinkedCurrent");
+    const QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles/") + name + QStringLiteral(".conf");
+    QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+    QTemporaryDir managed;
+    QVERIFY(managed.isValid());
+    const QString target = managed.path() + QStringLiteral("/managed.conf");
+    const QByteArray original("[General]\ninstanceCount=1\n[Instance0]\nusername=player1\npresetId=steam\n");
+    QFile file(target);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(original), qint64(original.size()));
+    file.close();
+    QFile::remove(path);
+    QVERIFY(QFile::link(target, path));
+    QSignalSpy errors(m_sessionManager, &SessionManager::errorOccurred);
+    QVERIFY(m_sessionManager->loadProfile(name));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("username")).toString(), QStringLiteral("player1"));
+    QVERIFY(m_sessionManager->saveProfile(name));
+    QCOMPARE(errors.count(), 0);
+    QVERIFY(QFileInfo(path).isSymLink());
+    QVERIFY(QFile::remove(path));
+}
+
+void TestSessionManager::testSymlinkedLegacyProfileIsNotReplaced()
+{
+    const QString name = QStringLiteral("SymlinkedLegacy");
+    const QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles/") + name + QStringLiteral(".conf");
+    QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+    QTemporaryDir managed;
+    QVERIFY(managed.isValid());
+    const QString target = managed.path() + QStringLiteral("/managed.conf");
+    const QByteArray original("[General]\ninstanceCount=1\n[Instance0]\nusername=player1\ndataDirectories=legacy\n");
+    QFile file(target);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(original), qint64(original.size()));
+    file.close();
+    QFile::remove(path);
+    QVERIFY(QFile::link(target, path));
+    QSignalSpy errors(m_sessionManager, &SessionManager::errorOccurred);
+    QVERIFY(!m_sessionManager->loadProfile(name));
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(QFileInfo(path).isSymLink());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), original);
+    file.close();
     QVERIFY(QFile::remove(path));
 }
 

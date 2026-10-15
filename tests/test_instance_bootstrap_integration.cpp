@@ -266,6 +266,9 @@ private:
     QString m_externalWorkingDirectory;
     QString m_hostTmpSource;
     bool m_ruleInstalled = false;
+    bool m_externalRootOwned = false;
+    bool m_overlayStorageOwned = false;
+    bool m_fixtureRootOwned = false;
     QHash<qint64, QString> m_hostMountInfoByPid;
     QHash<qint64, QString> m_ownedPids;
     QSet<qlonglong> m_readyPids;
@@ -407,6 +410,7 @@ bool InstanceBootstrapIntegrationTest::createFixtureFiles(QString *error)
         if (error) *error = QStringLiteral("External fixture mount path is already in use");
         return false;
     }
+    m_externalRootOwned = true;
     if (!mountTmpfs(m_externalRoot, m_caller.uid, m_caller.gid, 0755, &m_externalMounted, error)) {
         return false;
     }
@@ -419,6 +423,7 @@ bool InstanceBootstrapIntegrationTest::createFixtureFiles(QString *error)
         if (error) *error = QStringLiteral("Fixture overlay storage parent is not empty");
         return false;
     }
+    m_overlayStorageOwned = true;
     if (!mountTmpfs(m_overlayStorage, 0, 0, 0700, &m_overlayStorageMounted, error)) {
         return false;
     }
@@ -571,6 +576,7 @@ void InstanceBootstrapIntegrationTest::initTestCase()
     QCOMPARE(expectedSystemdProperty(QStringLiteral("polkit.service"), QStringLiteral("ActiveState")),
              QStringLiteral("active"));
     QVERIFY2(!QFileInfo::exists(fixtureRoot), "The fixed namespace fixture path must be unused");
+    m_fixtureRootOwned = true;
 
     QString error;
     QVERIFY2(createFixtureUsers(&error), qPrintable(error));
@@ -648,8 +654,9 @@ void InstanceBootstrapIntegrationTest::cleanupTestCase()
         ::umount2(QFile::encodeName(m_sourceRoot).constData(), 0);
         m_sourceMounted = false;
     }
-    QDir(m_overlayStorage).removeRecursively();
-    QDir(m_externalRoot).removeRecursively();
+    // Remove only paths this fixture created; setup refuses preexisting data and QDir("") means ".".
+    if (m_overlayStorageOwned) QDir(m_overlayStorage).removeRecursively();
+    if (m_externalRootOwned) QDir(m_externalRoot).removeRecursively();
     QFile::remove(QStringLiteral("/tmp/couchplay-namespace-host-private-marker"));
     if (!m_privateSourceRoot.isEmpty()) {
         QDir(m_privateSourceRoot).removeRecursively();
@@ -660,7 +667,7 @@ void InstanceBootstrapIntegrationTest::cleanupTestCase()
     if (!m_hostTmpSource.isEmpty()) {
         QDir(m_hostTmpSource).removeRecursively();
     }
-    QDir(fixtureRoot).removeRecursively();
+    if (m_fixtureRootOwned) QDir(fixtureRoot).removeRecursively();
 
     const QStringList usernames{fixtureUser, playerOne, playerTwo};
     const QStringList declaredHomes{QStringLiteral("/home/couchplay-ns-fixture"),

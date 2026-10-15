@@ -874,6 +874,7 @@ private Q_SLOTS:
     void testSetPathAclWithParentsSymlinkEscapeRejected();
     void testSetPathAclWithParentsCanonicalMntAliasEscapeRejected();
     void testSecureReadExecuteAclTreePreservesAclAndSkipsSymlinks();
+    void testSecureReadExecuteAclTreeSeedsOwnerOnlyDefault();
     void testSecureWriteRejectsSymlinkLeaf();
 
     // Device ownership tests
@@ -923,6 +924,7 @@ private Q_SLOTS:
     void testKillInstance_serviceKill();
     void testStopInstance_fallbackToDirectKill();
     void testLaunchInstance_startTransientFailure();
+    void testLaunchInstance_startTransientFailureWhenUnitWasNeverLoaded();
     void testLaunchInstance_preparationFailureReason();
     void testLaunchInstance_collectedUnitPreservesFailureReason();
     void testAuxiliaryInstanceCoexistsWithMainInstance();
@@ -2162,9 +2164,14 @@ void TestCouchPlayHelper::testDirectoryPreparationValidation()
     const QVariantList overlap{item(QStringLiteral("/home/source/a"), QStringLiteral("bind"),
                                     QStringLiteral(".config"), QString()),
                               item(QStringLiteral("/home/source/b"), QStringLiteral("copy"),
-                                    QStringLiteral(".config/game"), QStringLiteral(".couchplay/staging/b"))};
+                                    QStringLiteral(".config/game"), QString())};
     QVERIFY(!DirectoryPlan::parseDirectoryPreparations(overlap, &parsed));
     QVERIFY(parsed.isEmpty());
+    const QVariantList siblingTargets{item(QStringLiteral("/home/source/a"), QStringLiteral("bind"),
+                                           QStringLiteral(".config"), QString()),
+                                      item(QStringLiteral("/home/source/b"), QStringLiteral("copy"),
+                                           QStringLiteral(".local/game"), QString())};
+    QVERIFY(DirectoryPlan::parseDirectoryPreparations(siblingTargets, &parsed));
 
     const QVariantList aclWithTarget{item(QStringLiteral("/home/source"), QStringLiteral("acl"),
                                           QStringLiteral(".config"), QString())};
@@ -2412,6 +2419,53 @@ void TestCouchPlayHelper::testSecureReadExecuteAclTreePreservesAclAndSkipsSymlin
         QVERIFY(WIFEXITED(status));
         QCOMPARE(WEXITSTATUS(status), 0);
     }
+}
+
+void TestCouchPlayHelper::testSecureReadExecuteAclTreeSeedsOwnerOnlyDefault()
+{
+    QTemporaryDir directory(QStringLiteral("/tmp/couchplay-acl-test-XXXXXX"));
+    QVERIFY(directory.isValid());
+    const uid_t targetUid = ::geteuid() == 65534 ? 65533 : 65534;
+    const QString root = directory.filePath(QStringLiteral("share"));
+    QVERIFY(QDir().mkpath(root));
+    const QByteArray rootPath = QFile::encodeName(root);
+    QCOMPARE(::chmod(rootPath.constData(), 0777), 0);
+    const int rootFd = ::open(rootPath.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    QVERIFY(rootFd >= 0);
+    QCOMPARE(SecureFs::applyReadExecuteAclTree(rootFd, targetUid), 0);
+    ::close(rootFd);
+
+    acl_t defaultAcl = ::acl_get_file(rootPath.constData(), ACL_TYPE_DEFAULT);
+    QVERIFY(defaultAcl);
+    QHash<int, int> permissionsByTag;
+    int targetPermissions = -1;
+    acl_entry_t entry;
+    int next = ::acl_get_entry(defaultAcl, ACL_FIRST_ENTRY, &entry);
+    while (next == 1) {
+        acl_tag_t tag;
+        QVERIFY(::acl_get_tag_type(entry, &tag) == 0);
+        acl_permset_t permissions;
+        QVERIFY(::acl_get_permset(entry, &permissions) == 0);
+        const int bits = (::acl_get_perm(permissions, ACL_READ) > 0 ? ACL_READ : 0)
+            | (::acl_get_perm(permissions, ACL_WRITE) > 0 ? ACL_WRITE : 0)
+            | (::acl_get_perm(permissions, ACL_EXECUTE) > 0 ? ACL_EXECUTE : 0);
+        if (tag == ACL_USER) {
+            auto *qualifier = static_cast<uid_t *>(::acl_get_qualifier(entry));
+            QVERIFY(qualifier);
+            if (*qualifier == targetUid) targetPermissions = bits;
+            ::acl_free(qualifier);
+        } else {
+            permissionsByTag.insert(static_cast<int>(tag), bits);
+        }
+        next = ::acl_get_entry(defaultAcl, ACL_NEXT_ENTRY, &entry);
+    }
+    QCOMPARE(next, 0);
+    ::acl_free(defaultAcl);
+    // New files inherit only the target's read access, never group/other access copied from a 0777 directory.
+    QCOMPARE(targetPermissions, ACL_READ | ACL_EXECUTE);
+    QCOMPARE(permissionsByTag.value(ACL_GROUP_OBJ, -1), 0);
+    QCOMPARE(permissionsByTag.value(ACL_OTHER, -1), 0);
+    QCOMPARE(permissionsByTag.value(ACL_MASK, -1), ACL_READ | ACL_EXECUTE);
 }
 
 void TestCouchPlayHelper::testSecureWriteRejectsSymlinkLeaf()
@@ -3471,6 +3525,15 @@ void TestCouchPlayHelper::testKillInstance_serviceKill()
     const QDBusReply<bool> killReply = m_dbusInterface->call(QStringLiteral("KillInstance"), pid);
     QVERIFY(killReply.isValid());
     QVERIFY(killReply.value());
+    bool sentSigkill = false;
+    for (const auto &invocation : m_ops->m_processInvocations) {
+        sentSigkill = sentSigkill
+            || (invocation.command == QStringLiteral("systemctl")
+                && invocation.args.contains(QStringLiteral("kill"))
+                && invocation.args.contains(QStringLiteral("--signal=SIGKILL"))
+                && invocation.args.contains(QStringLiteral("couchplay-player1.service")));
+    }
+    QVERIFY(sentSigkill);
 
     const QDBusReply<qint64> nextLaunch = launchPlayer1();
     QVERIFY2(nextLaunch.isValid(), qPrintable(nextLaunch.error().message()));
@@ -3507,6 +3570,25 @@ void TestCouchPlayHelper::testLaunchInstance_startTransientFailure()
     QVERIFY(!m_helper->m_usernameToUnitName.contains(QStringLiteral("player1")));
     QCOMPARE(m_ops->m_transientServiceName, QStringLiteral("couchplay-player1.service"));
     QVERIFY(!m_ops->m_transientProperties.isEmpty());
+}
+
+void TestCouchPlayHelper::testLaunchInstance_startTransientFailureWhenUnitWasNeverLoaded()
+{
+    configureLaunchFixture();
+    m_ops->m_transientStartSucceeds = false;
+    // systemctl stop exits non-zero for a unit systemd never loaded; systemd itself reports it inactive.
+    m_ops->setProcessExitCodeForCommand(QStringLiteral("systemctl"), 5);
+
+    const QDBusReply<qint64> failed = launchPlayer1();
+    QVERIFY(!failed.isValid());
+    QTRY_VERIFY(m_helper->m_pendingLaunches.isEmpty());
+    QVERIFY(!m_helper->m_usernameToUnitName.contains(QStringLiteral("player1")));
+
+    m_ops->m_transientStartSucceeds = true;
+    m_ops->setProcessExitCodeForCommand(QStringLiteral("systemctl"), 0);
+    m_systemdUnit->reset();
+    const QDBusReply<qint64> retry = launchPlayer1();
+    QVERIFY2(retry.isValid(), qPrintable(retry.error().message()));
 }
 
 void TestCouchPlayHelper::testLaunchInstance_preparationFailureReason()

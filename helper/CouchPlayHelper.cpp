@@ -3033,9 +3033,8 @@ bool CouchPlayHelper::stopServiceInstance(const QString &serviceName)
     m_ops->startProcess(stopProc, QStringLiteral("systemctl"), {QStringLiteral("stop"), serviceName});
     const bool stopped = m_ops->waitForFinished(stopProc, 10000) && m_ops->processExitCode(stopProc) == 0;
     if (!stopped) {
+        // A unit that never loaded or was already collected makes `systemctl stop` fail; systemd decides.
         qWarning() << "systemctl stop failed for" << serviceName << m_ops->readStandardError(stopProc);
-        delete stopProc;
-        return false;
     }
     delete stopProc;
 

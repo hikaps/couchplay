@@ -242,7 +242,7 @@ bool SessionManager::saveProfile(const QString &name)
 bool SessionManager::migrateProfileDirectorySnapshots(const QString &path)
 {
     const QFileInfo sourceInfo(path);
-    if (sourceInfo.isSymLink() || !sourceInfo.isFile()) {
+    if (!sourceInfo.isFile()) {
         Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: unsafe profile file"));
         return false;
     }
@@ -273,6 +273,11 @@ bool SessionManager::migrateProfileDirectorySnapshots(const QString &path)
     }
     if (legacyGroups.isEmpty()) {
         return true;
+    }
+    // Only a rewrite replaces the file; a symlinked profile must not be replaced by a regular file.
+    if (sourceInfo.isSymLink()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: unsafe profile file"));
+        return false;
     }
 
     QTemporaryFile temporary(QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".profile-migration-XXXXXX")));

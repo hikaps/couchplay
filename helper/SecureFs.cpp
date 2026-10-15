@@ -319,9 +319,18 @@ static int applyReadExecuteAclToFd(int objectFd, TargetPrincipal *principal, acl
     acl_t original = ::acl_get_file(path, type);
     bool createDefault = false;
     if (original && type == ACL_TYPE_DEFAULT && ::acl_entries(original) == 0) {
-        // Like setfacl -d, seed a missing default ACL from the directory access ACL.
+        // Seed a missing default ACL with owner-only base entries. Copying group/other from the access ACL
+        // would make new files ignore the creator's umask; the target entry added below still inherits r-x.
         ::acl_free(original);
-        original = ::acl_get_file(path, ACL_TYPE_ACCESS);
+        original = ::acl_init(3);
+        int seeded = original ? 0 : negativeErrno();
+        if (seeded == 0) seeded = appendAclEntry(original, ACL_USER_OBJ, nullptr, (st.st_mode >> 6) & 07);
+        if (seeded == 0) seeded = appendAclEntry(original, ACL_GROUP_OBJ, nullptr, 0);
+        if (seeded == 0) seeded = appendAclEntry(original, ACL_OTHER, nullptr, 0);
+        if (seeded != 0) {
+            if (original) ::acl_free(original);
+            return seeded;
+        }
         createDefault = true;
     }
     if (!original) {
