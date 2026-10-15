@@ -5213,7 +5213,11 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
                 continue;
             }
             const QJsonObject object = value.toObject();
-            const QString source = object.value(QStringLiteral("source")).toString();
+            QString source = object.value(QStringLiteral("source")).toString();
+            // The old API accepted and persisted sources with trailing separators; the same directory is meant.
+            while (source.size() > 1 && source.endsWith(QLatin1Char('/'))) {
+                source.chop(1);
+            }
             const QString target = object.value(QStringLiteral("target")).toString();
             const QString targetPrefix = home + QLatin1Char('/');
             if (!QDir::isAbsolutePath(source) || QDir::cleanPath(source) != source || source.contains(QChar::Null)

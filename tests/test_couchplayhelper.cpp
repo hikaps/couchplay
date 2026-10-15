@@ -3263,6 +3263,8 @@ void TestCouchPlayHelper::testLegacyMountCleanupRecognizesBindMountByDirectoryId
     const QString linkedSource = QDir(home).filePath(QStringLiteral("linked-source"));
     QVERIFY(QFile::link(target, linkedSource));
     QCOMPARE(reconcile(linkedSource, true), std::make_tuple(true, 1, true));
+    // A source persisted with a trailing separator names the same directory.
+    QCOMPARE(reconcile(target + QLatin1Char('/'), true), std::make_tuple(true, 1, true));
     QCOMPARE(reconcile(otherSource, true), std::make_tuple(false, 0, false));
     m_helper->m_legacyActiveMounts = {};
 }
