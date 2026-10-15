@@ -946,6 +946,7 @@ private Q_SLOTS:
     void testLegacyMountCleanupPreservesFailedUnmount();
     void testLegacyMountCleanupRecognizesBindMountByDirectoryIdentity();
     void testFailedSubscriptionDoesNotOverwritePersistedState();
+    void testSecureReadExecuteAclTreeDefaultKeepsCreatorOwnerAccess();
     void testTreeRemovalReportsProgress();
     void testLegacyMountCleanupRecognizesOverlayByPersistedUpperDir();
     void testLegacyMountCleanupRejectsUntrustedTarget();
@@ -2521,6 +2522,42 @@ void TestCouchPlayHelper::testSecureReadExecuteAclTreeSeedsOwnerOnlyDefault()
     QCOMPARE(permissionsByTag.value(ACL_GROUP_OBJ, -1), 0);
     QCOMPARE(permissionsByTag.value(ACL_OTHER, -1), 0);
     QCOMPARE(permissionsByTag.value(ACL_MASK, -1), ACL_READ | ACL_EXECUTE);
+}
+
+void TestCouchPlayHelper::testSecureReadExecuteAclTreeDefaultKeepsCreatorOwnerAccess()
+{
+    QTemporaryDir directory(QStringLiteral("/tmp/couchplay-acl-test-XXXXXX"));
+    QVERIFY(directory.isValid());
+    const uid_t targetUid = ::geteuid() == 65534 ? 65533 : 65534;
+    const QString root = directory.filePath(QStringLiteral("share"));
+    QVERIFY(QDir().mkpath(root));
+    const QByteArray rootPath = QFile::encodeName(root);
+    // Owner r-x, group rwx: a group member creating files must still own them read-write.
+    QCOMPARE(::chmod(rootPath.constData(), 0570), 0);
+    const int rootFd = ::open(rootPath.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    QVERIFY(rootFd >= 0);
+    QCOMPARE(SecureFs::applyReadExecuteAclTree(rootFd, targetUid), 0);
+    ::close(rootFd);
+
+    acl_t defaultAcl = ::acl_get_file(rootPath.constData(), ACL_TYPE_DEFAULT);
+    QVERIFY(defaultAcl);
+    int ownerPermissions = -1;
+    acl_entry_t entry;
+    int next = ::acl_get_entry(defaultAcl, ACL_FIRST_ENTRY, &entry);
+    while (next == 1) {
+        acl_tag_t tag;
+        QVERIFY(::acl_get_tag_type(entry, &tag) == 0);
+        if (tag == ACL_USER_OBJ) {
+            acl_permset_t permissions;
+            QVERIFY(::acl_get_permset(entry, &permissions) == 0);
+            ownerPermissions = (::acl_get_perm(permissions, ACL_READ) > 0 ? ACL_READ : 0)
+                | (::acl_get_perm(permissions, ACL_WRITE) > 0 ? ACL_WRITE : 0)
+                | (::acl_get_perm(permissions, ACL_EXECUTE) > 0 ? ACL_EXECUTE : 0);
+        }
+        next = ::acl_get_entry(defaultAcl, ACL_NEXT_ENTRY, &entry);
+    }
+    ::acl_free(defaultAcl);
+    QCOMPARE(ownerPermissions, ACL_READ | ACL_WRITE | ACL_EXECUTE);
 }
 
 void TestCouchPlayHelper::testSecureWriteRejectsSymlinkLeaf()

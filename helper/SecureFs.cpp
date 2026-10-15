@@ -343,10 +343,12 @@ static int applyReadExecuteAclToFd(int objectFd, TargetPrincipal *principal, acl
     if (original && type == ACL_TYPE_DEFAULT && ::acl_entries(original) == 0) {
         // Seed a missing default ACL with owner-only base entries. Copying group/other from the access ACL
         // would make new files ignore the creator's umask; the target entry added below still inherits r-x.
+        // The owner entry is rwx so the creation mode alone limits what creators get on their own files,
+        // however restricted the directory's own owner bits are.
         ::acl_free(original);
         original = ::acl_init(3);
         int seeded = original ? 0 : negativeErrno();
-        if (seeded == 0) seeded = appendAclEntry(original, ACL_USER_OBJ, nullptr, (st.st_mode >> 6) & 07);
+        if (seeded == 0) seeded = appendAclEntry(original, ACL_USER_OBJ, nullptr, ACL_READ | ACL_WRITE | ACL_EXECUTE);
         if (seeded == 0) seeded = appendAclEntry(original, ACL_GROUP_OBJ, nullptr, 0);
         if (seeded == 0) seeded = appendAclEntry(original, ACL_OTHER, nullptr, 0);
         if (seeded != 0) {
