@@ -361,6 +361,7 @@ private Q_SLOTS:
     void testStreamingResourcesSurviveIncompleteStop_data();
     void testStreamingResourcesSurviveIncompleteStop();
     void testDeviceReconnectIgnoredDuringPostHook();
+    void testDeviceReconnectIgnoredDuringPreHook();
     void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
 
@@ -1981,6 +1982,41 @@ void TestSessionRunner::testDeviceReconnectIgnoredDuringPostHook()
     m_runner->onDeviceReconnected(QStringLiteral("test-device"), 99, 1);
     QCOMPARE(m_helperClient->deviceOwnerCalls.size(), ownerCalls);
     QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 2000);
+}
+
+void TestSessionRunner::testDeviceReconnectIgnoredDuringPreHook()
+{
+    QTemporaryDir scriptDir;
+    QVERIFY(scriptDir.isValid());
+    const QString scriptPath = scriptDir.filePath(QStringLiteral("pre.sh"));
+    QFile script(scriptPath);
+    QVERIFY(script.open(QIODevice::WriteOnly | QIODevice::Text));
+    script.write("#!/bin/sh\nsleep 0.4\n");
+    script.close();
+    QVERIFY(script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Prehook reconnect"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    m_sessionManager->setPreSessionExecutable(scriptPath);
+    m_runner->setDeviceManager(new DeviceManager(m_runner));
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QVERIFY(m_runner->start());
+    QVERIFY(m_runner->m_hookProcess && !m_runner->m_hookIsPost);
+
+    // A reconnect before the hook finishes must not take ownership: cancelling the hook skips device restore.
+    const qsizetype ownerCalls = m_helperClient->deviceOwnerCalls.size();
+    m_runner->onDeviceReconnected(QStringLiteral("test-device"), 99, 0);
+    QCOMPARE(m_helperClient->deviceOwnerCalls.size(), ownerCalls);
+    QVERIFY(m_runner->m_ownedDevicePaths.isEmpty());
+    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 3000);
+
+    // Positive control: once started, the same reconnect is handled.
+    m_runner->onDeviceReconnected(QStringLiteral("test-device"), 99, 0);
+    QVERIFY(m_helperClient->deviceOwnerCalls.size() > ownerCalls);
 }
 
 void TestSessionRunner::testInvalidPostSessionReportsError()

@@ -1524,7 +1524,7 @@ void SessionRunner::setupGlobalShortcut()
 
 void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex)
 {
-    if (!m_active || !m_hasStartingProfile || m_finalizing) {
+    if (!m_active || !m_hasStartingProfile || m_finalizing || !m_preHookCompleted) {
         return;
     }
 

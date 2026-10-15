@@ -567,6 +567,7 @@ private:
 
     QString m_stateFilePath;
     bool m_reconcilingState = false;
+    bool m_stateRecoveryPending = false;
     bool m_recoverySaveRequested = false;
     QSet<QString> m_deferredReleaseUnits;
     QJsonObject m_legacyActiveMounts;

@@ -1630,6 +1630,13 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
     const auto fail = [&](QDBusError::ErrorType type, const QString &reason) {
         replyConnection.send(request.createErrorReply(type, reason));
     };
+    if (m_stateRecoveryPending) {
+        loadAndReconcileState();
+        if (m_stateRecoveryPending) {
+            fail(QDBusError::Failed, QStringLiteral("Helper state recovery has not completed; retry shortly"));
+            return;
+        }
+    }
     QString subscriptionError;
     if (!subscribeSystemdManager(&subscriptionError)) {
         fail(QDBusError::Failed, QStringLiteral("Failed to subscribe to systemd Manager: %1").arg(subscriptionError));
@@ -4241,6 +4248,10 @@ bool CouchPlayHelper::saveState()
         m_recoverySaveRequested = true;
         return false;
     }
+    // Without a completed recovery the tracking maps are empty; saving would overwrite the persisted state.
+    if (m_stateRecoveryPending) {
+        return false;
+    }
     QJsonObject root;
     root[QStringLiteral("version")] = 1;
     root[QStringLiteral("activeMounts")] = m_legacyActiveMounts;
@@ -4503,8 +4514,10 @@ void CouchPlayHelper::loadAndReconcileState()
     QString subscriptionError;
     if (!subscribeSystemdManager(&subscriptionError)) {
         qWarning() << "loadAndReconcileState: Could not subscribe to systemd Manager:" << subscriptionError;
+        m_stateRecoveryPending = true;
         return;
     }
+    m_stateRecoveryPending = false;
     QDir().mkpath(QStringLiteral("/run/couchplay"));
 
     QFile file(m_stateFilePath);

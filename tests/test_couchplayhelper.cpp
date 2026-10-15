@@ -252,6 +252,7 @@ public:
     }
 
     bool isSubscribed() const { return m_subscribed; }
+    bool m_failSubscribe = false;
     bool m_unitMissing = false;
     QMap<QString, QString> m_extraUnitPaths;
     std::function<void()> m_beforeGetUnitReply;
@@ -266,6 +267,11 @@ public:
             return false;
         }
         if (message.member() == QLatin1String("Subscribe") && message.arguments().isEmpty()) {
+            if (m_failSubscribe) {
+                connection.send(message.createErrorReply(QStringLiteral("org.freedesktop.DBus.Error.Failed"),
+                                                         QStringLiteral("subscribe unavailable")));
+                return true;
+            }
             if (m_subscribed) {
                 connection.send(message.createErrorReply(QStringLiteral("org.freedesktop.systemd1.AlreadySubscribed"),
                                                          QStringLiteral("Client is already subscribed")));
@@ -939,6 +945,7 @@ private Q_SLOTS:
     void testLegacyMountCleanupUnmountsValidatedTarget();
     void testLegacyMountCleanupPreservesFailedUnmount();
     void testLegacyMountCleanupRecognizesBindMountByDirectoryIdentity();
+    void testFailedSubscriptionDoesNotOverwritePersistedState();
     void testLegacyMountCleanupRecognizesOverlayByPersistedUpperDir();
     void testLegacyMountCleanupRejectsUntrustedTarget();
     void testLaunchInstance_validationEmptyUsername();
@@ -3373,6 +3380,39 @@ void TestCouchPlayHelper::testManifestCleanupPersistsBeforeUnlink()
     m_systemdUnit->reset();
     const QDBusReply<qint64> replacement = launchPlayer1();
     QVERIFY2(replacement.isValid(), qPrintable(replacement.error().message()));
+}
+
+void TestCouchPlayHelper::testFailedSubscriptionDoesNotOverwritePersistedState()
+{
+    configureLaunchFixture();
+    const QDBusReply<qint64> launch = launchPlayer1();
+    QVERIFY2(launch.isValid(), qPrintable(launch.error().message()));
+    QVERIFY(m_helper->saveState());
+    QFile persisted(m_helper->m_stateFilePath);
+    QVERIFY(persisted.open(QIODevice::ReadOnly));
+    const QByteArray before = persisted.readAll();
+    persisted.close();
+    QVERIFY(before.contains("player1"));
+
+    // Restart with empty tracking maps while systemd refuses the subscription.
+    m_helper->m_usernameToUnitName.clear();
+    m_helper->m_unitUsernameByName.clear();
+    m_systemdManager->resetSubscription();
+    m_systemdManager->m_failSubscribe = true;
+    m_helper->loadAndReconcileState();
+    QVERIFY(!m_helper->saveState());
+    QVERIFY(persisted.open(QIODevice::ReadOnly));
+    QCOMPARE(persisted.readAll(), before);
+    persisted.close();
+
+    // A launch retries recovery; it must fail while the subscription is unavailable...
+    QVERIFY(!launchPlayer1().isValid());
+    QVERIFY(!m_helper->saveState());
+    // ...and recover the persisted state once systemd answers.
+    m_systemdManager->m_failSubscribe = false;
+    m_helper->loadAndReconcileState();
+    QVERIFY(m_helper->m_usernameToUnitName.contains(QStringLiteral("player1")));
+    QVERIFY(m_helper->saveState());
 }
 
 void TestCouchPlayHelper::testManifestCleanupRetainsManifestOnStateSaveFailure()
