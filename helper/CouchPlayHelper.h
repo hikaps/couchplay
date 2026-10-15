@@ -566,6 +566,9 @@ private:
     SystemOps *m_ops;
 
     QString m_stateFilePath;
+    bool m_reconcilingState = false;
+    bool m_recoverySaveRequested = false;
+    QSet<QString> m_deferredReleaseUnits;
     QJsonObject m_legacyActiveMounts;
     QSet<QString> m_cleanedLaunchManifestTokens;
     bool saveState();

@@ -251,6 +251,9 @@ public:
     }
 
     bool isSubscribed() const { return m_subscribed; }
+    bool m_unitMissing = false;
+    QMap<QString, QString> m_extraUnitPaths;
+    std::function<void()> m_beforeGetUnitReply;
     void resetSubscription()
     {
         m_subscribed = false;
@@ -275,10 +278,23 @@ public:
             return false;
         }
         const QString unitName = message.arguments().constFirst().toString();
+        const auto beforeReply = std::exchange(m_beforeGetUnitReply, {});
+        if (beforeReply) {
+            beforeReply();
+        }
+        if (m_unitMissing) {
+            connection.send(message.createErrorReply(QStringLiteral("org.freedesktop.systemd1.NoSuchUnit"), unitName));
+            return true;
+        }
+        if (m_extraUnitPaths.contains(unitName)) {
+            connection.send(message.createReply(QVariantList{
+                QVariant::fromValue(QDBusObjectPath(m_extraUnitPaths.value(unitName)))}));
+            return true;
+        }
         QString unitPath;
         if (unitName == QStringLiteral("couchplay-player1.service")) {
             unitPath = m_mainUnitPath;
-        } else if (unitName == QStringLiteral("couchplay-player1-stream.service")) {
+        } else if (unitName == QStringLiteral("couchplay-stream@player1.service")) {
             unitPath = m_auxiliaryUnitPath;
         }
         if (unitPath.isEmpty()) {
@@ -930,6 +946,8 @@ private Q_SLOTS:
     void testManifestCleanupPersistsBeforeUnlink_data();
     void testManifestCleanupPersistsBeforeUnlink();
     void testManifestCleanupRetainsManifestOnStateSaveFailure();
+    void testRecoveryCleanupPreservesDurableResources_data();
+    void testRecoveryCleanupPreservesDurableResources();
     void testManifestRecoveryRefusesUnverifiableManifest_data();
     void testManifestRecoveryRefusesUnverifiableManifest();
     void testFailedLaunchRetryDoesNotStopReplacement_data();
@@ -941,6 +959,9 @@ private Q_SLOTS:
     void testLaunchInstance_preparationFailureReason();
     void testLaunchInstance_collectedUnitPreservesFailureReason();
     void testAuxiliaryInstanceCoexistsWithMainInstance();
+    void testUnitRolesRemainIndependentAcrossUsernames();
+    void testRecoveryStopsLegacyStreamUnit_data();
+    void testRecoveryStopsLegacyStreamUnit();
     void testHostTmpSourceIsDeferredToBootstrap();
     void testLaunchInstancePreparingPidTimeout();
     void testInitialInactiveStateDoesNotReleasePreparingLaunch();
@@ -955,8 +976,9 @@ private Q_SLOTS:
 private:
     void configureLaunchFixture();
     QDBusReply<qint64> launchPlayer1(const QVariantList &directoryPreparations = {},
-                                    const QStringList &additionalEnvironment = {});
-    QDBusReply<qint64> launchAuxiliaryPlayer1();
+                                    const QStringList &additionalEnvironment = {},
+                                    const QString &username = QStringLiteral("player1"));
+    QDBusReply<qint64> launchAuxiliaryPlayer1(const QString &username = QStringLiteral("player1"));
     CouchPlayHelper *m_helper = nullptr;
     MockSystemOps *m_ops = nullptr;
     QTemporaryDir m_stateDirectory;
@@ -968,7 +990,7 @@ private:
     MockSystemdManager *m_systemdManager = nullptr;
     QString m_systemdManagerPath = QStringLiteral("/org/freedesktop/systemd1");
     QString m_systemdUnitPath = QStringLiteral("/org/freedesktop/systemd1/unit/couchplay_2dplayer1_2eservice");
-    QString m_auxSystemdUnitPath = QStringLiteral("/org/freedesktop/systemd1/unit/couchplay_2dplayer1_2dstream_2eservice");
+    QString m_auxSystemdUnitPath = QStringLiteral("/org/freedesktop/systemd1/unit/couchplay_2dstream_40player1_2eservice");
 };
 void TestCouchPlayHelper::initTestCase()
 {
@@ -1057,7 +1079,7 @@ void TestCouchPlayHelper::cleanup()
     m_ops->setOnSystemctlStop([this](const QString &unitName) {
         if (unitName == QStringLiteral("couchplay-player1.service")) {
             m_systemdUnit->setActiveState(QStringLiteral("inactive"));
-        } else if (unitName == QStringLiteral("couchplay-player1-stream.service")) {
+        } else if (unitName == QStringLiteral("couchplay-stream@player1.service")) {
             m_auxSystemdUnit->setActiveState(QStringLiteral("inactive"));
         }
     });
@@ -1094,14 +1116,15 @@ void TestCouchPlayHelper::configureLaunchFixture()
     m_ops->setOnSystemctlStop([this](const QString &unitName) {
         if (unitName == QStringLiteral("couchplay-player1.service")) {
             m_systemdUnit->setActiveState(QStringLiteral("inactive"));
-        } else if (unitName == QStringLiteral("couchplay-player1-stream.service")) {
+        } else if (unitName == QStringLiteral("couchplay-stream@player1.service")) {
             m_auxSystemdUnit->setActiveState(QStringLiteral("inactive"));
         }
     });
 }
 
 QDBusReply<qint64> TestCouchPlayHelper::launchPlayer1(const QVariantList &directoryPreparations,
-                                                    const QStringList &additionalEnvironment)
+                                                    const QStringList &additionalEnvironment,
+                                                    const QString &username)
 {
     const QString connectionName = QStringLiteral("couchplay-helper-delayed-reply-test");
     const QDBusReply<qint64> reply = [&]() {
@@ -1114,7 +1137,7 @@ QDBusReply<qint64> TestCouchPlayHelper::launchPlayer1(const QVariantList &direct
                                 QStringLiteral("XDG_CURRENT_DESKTOP=KDE"),
                                 QStringLiteral("PULSE_SINK=couchplay-fixture-sink")};
         environment.append(additionalEnvironment);
-        message.setArguments(QVariantList{QStringLiteral("player1"),
+        message.setArguments(QVariantList{username,
                          QString(),
                          QStringList{QStringLiteral("-W"), QStringLiteral("960")},
                          QStringList{QStringLiteral("steam"), QStringLiteral("-bigpicture")},
@@ -1140,7 +1163,7 @@ QDBusReply<qint64> TestCouchPlayHelper::launchPlayer1(const QVariantList &direct
     return reply;
 }
 
-QDBusReply<qint64> TestCouchPlayHelper::launchAuxiliaryPlayer1()
+QDBusReply<qint64> TestCouchPlayHelper::launchAuxiliaryPlayer1(const QString &username)
 {
     const QString connectionName = QStringLiteral("couchplay-helper-delayed-aux-reply-test");
     const QDBusReply<qint64> reply = [&]() {
@@ -1149,7 +1172,7 @@ QDBusReply<qint64> TestCouchPlayHelper::launchAuxiliaryPlayer1()
         QDBusMessage message = QDBusMessage::createMethodCall(
             m_serviceName, m_objectPath, QStringLiteral("io.github.hikaps.CouchPlayHelper"),
             QStringLiteral("LaunchAuxiliaryInstance"));
-        message.setArguments(QVariantList{QStringLiteral("player1"),
+        message.setArguments(QVariantList{username,
                          QString(),
                          QStringList{QStringLiteral("-W"), QStringLiteral("960")},
                          QStringList{QStringLiteral("sunshine")},
@@ -3045,7 +3068,7 @@ void TestCouchPlayHelper::testLegacyMountCleanupUnmountsValidatedTarget()
     m_ops->setOnSystemctlStop([this](const QString &unitName) {
         if (unitName == QStringLiteral("couchplay-player1.service")) {
             m_systemdUnit->setActiveState(QStringLiteral("inactive"));
-        } else if (unitName == QStringLiteral("couchplay-player1-stream.service")) {
+        } else if (unitName == QStringLiteral("couchplay-stream@player1.service")) {
             m_auxSystemdUnit->setActiveState(QStringLiteral("inactive"));
         }
     });
@@ -3063,7 +3086,7 @@ void TestCouchPlayHelper::testLegacyMountCleanupUnmountsValidatedTarget()
     activeUnits.insert(QStringLiteral("player1"), QStringLiteral("couchplay-player1.service"));
     root.insert(QStringLiteral("activeUnits"), activeUnits);
     QJsonObject auxiliaryUnits;
-    auxiliaryUnits.insert(QStringLiteral("player1"), QStringLiteral("couchplay-player1-stream.service"));
+    auxiliaryUnits.insert(QStringLiteral("player1"), QStringLiteral("couchplay-stream@player1.service"));
     root.insert(QStringLiteral("auxiliaryUnits"), auxiliaryUnits);
     root.insert(QStringLiteral("activeMounts"), stored);
     QFile stateFile(m_helper->m_stateFilePath);
@@ -3283,6 +3306,77 @@ void TestCouchPlayHelper::testManifestCleanupRetainsManifestOnStateSaveFailure()
     QVERIFY2(replacement.isValid(), qPrintable(replacement.error().message()));
 }
 
+void TestCouchPlayHelper::testRecoveryCleanupPreservesDurableResources_data()
+{
+    QTest::addColumn<bool>("nestedCallback");
+    QTest::newRow("no-such-unit") << false;
+    QTest::newRow("nested-dbus-callback") << true;
+}
+
+void TestCouchPlayHelper::testRecoveryCleanupPreservesDurableResources()
+{
+    QFETCH(bool, nestedCallback);
+    configureLaunchFixture();
+    const QDBusReply<qint64> launch = launchPlayer1();
+    QVERIFY(launch.isValid());
+    const QString device = QStringLiteral("/dev/input/event987");
+    const QString hid = QStringLiteral("0003:28DE:1304.0001");
+    m_ops->setFileExists(device, true);
+    m_helper->m_modifiedDevices = {device};
+    m_helper->m_modifiedHidDevices = {hid};
+    m_helper->m_runtimeAccessSetForUid = {54321};
+    QVERIFY(m_helper->saveState());
+    m_helper->m_modifiedDevices.clear();
+    m_helper->m_modifiedHidDevices.clear();
+    m_helper->m_runtimeAccessSetForUid.clear();
+    QByteArray crashState;
+    const auto reset = qScopeGuard([&] {
+        m_ops->m_beforeManifestUnlink = {};
+        m_systemdManager->m_unitMissing = false;
+        m_systemdManager->m_beforeGetUnitReply = {};
+    });
+    m_ops->m_beforeManifestUnlink = [&](const QString &) {
+        QFile file(m_helper->m_stateFilePath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        crashState = file.readAll();
+        const QJsonObject root = QJsonDocument::fromJson(crashState).object();
+        QCOMPARE(root.value(QStringLiteral("modifiedDevices")).toArray(), QJsonArray{device});
+        QCOMPARE(root.value(QStringLiteral("modifiedHidDevices")).toArray(), QJsonArray{hid});
+        QCOMPARE(root.value(QStringLiteral("runtimeAccessUids")).toArray(), QJsonArray{54321});
+    };
+    m_systemdManager->m_unitMissing = !nestedCallback;
+    if (nestedCallback) {
+        m_systemdManager->m_beforeGetUnitReply = [&] {
+            QTimer::singleShot(0, m_helper, [&] {
+                // Dispatch persistence and cleanup inside the recovery D-Bus call.
+                m_helper->saveState();
+                QFile snapshot(m_helper->m_stateFilePath);
+                QVERIFY(snapshot.open(QIODevice::ReadOnly));
+                const QJsonObject root = QJsonDocument::fromJson(snapshot.readAll()).object();
+                QCOMPARE(root.value(QStringLiteral("modifiedDevices")).toArray(), QJsonArray{device});
+                QCOMPARE(root.value(QStringLiteral("modifiedHidDevices")).toArray(), QJsonArray{hid});
+                QCOMPARE(root.value(QStringLiteral("runtimeAccessUids")).toArray(), QJsonArray{54321});
+                m_helper->finalizeStoppedUnit(QStringLiteral("couchplay-player1.service"),
+                                             QStringLiteral("nested terminal recovery"), true);
+            });
+            QCoreApplication::processEvents();
+        };
+    }
+    m_helper->loadAndReconcileState();
+    QVERIFY(!crashState.isEmpty());
+    QFile file(m_helper->m_stateFilePath);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(crashState), qint64(crashState.size()));
+    file.close();
+    m_helper->m_modifiedDevices.clear();
+    m_helper->m_modifiedHidDevices.clear();
+    m_helper->m_runtimeAccessSetForUid.clear();
+    m_helper->loadAndReconcileState();
+    QCOMPARE(m_helper->m_modifiedDevices, QStringList{device});
+    QCOMPARE(m_helper->m_modifiedHidDevices, QStringList{hid});
+    QVERIFY(m_helper->m_runtimeAccessSetForUid.contains(54321));
+}
+
 void TestCouchPlayHelper::testManifestRecoveryRefusesUnverifiableManifest_data()
 {
     QTest::addColumn<bool>("missing");
@@ -3315,13 +3409,16 @@ void TestCouchPlayHelper::testManifestRecoveryRefusesUnverifiableManifest()
 void TestCouchPlayHelper::testFailedLaunchRetryDoesNotStopReplacement_data()
 {
     QTest::addColumn<bool>("secondRetry");
-    QTest::newRow("first-callback") << false;
-    QTest::newRow("nested-callback") << true;
+    QTest::addColumn<bool>("earlyFailure");
+    QTest::newRow("first-callback") << false << false;
+    QTest::newRow("nested-callback") << true << false;
+    QTest::newRow("early-return") << false << true;
 }
 
 void TestCouchPlayHelper::testFailedLaunchRetryDoesNotStopReplacement()
 {
     QFETCH(bool, secondRetry);
+    QFETCH(bool, earlyFailure);
     configureLaunchFixture();
     const QString unit = QStringLiteral("couchplay-player1.service");
     m_ops->m_transientStartSucceeds = false;
@@ -3352,15 +3449,36 @@ void TestCouchPlayHelper::testFailedLaunchRetryDoesNotStopReplacement()
         m_systemdUnit->setActiveState(QStringLiteral("inactive"));
     });
     QSignalSpy readySpy(m_helper, &CouchPlayHelper::instanceReady);
-    QTimer::singleShot(1400, m_systemdUnit, [this]() {
-        m_systemdUnit->setMainPid(23456);
-        m_systemdUnit->setActiveState(QStringLiteral("active"));
-    });
-    const QDBusReply<qint64> replacement = launchPlayer1();
-    QVERIFY2(replacement.isValid(), qPrintable(replacement.error().message()));
-    QCOMPARE(replacement.value(), qint64(23456));
-    QTRY_COMPARE(readySpy.count(), 1);
-    QCOMPARE(replacementStops, 0);
+    [&] {
+        QTimer replacementReady;
+        replacementReady.setSingleShot(true);
+        connect(&replacementReady, &QTimer::timeout, &replacementReady, [this]() {
+            m_systemdUnit->setMainPid(23456);
+            m_systemdUnit->setActiveState(QStringLiteral("active"));
+        });
+        replacementReady.start(1400);
+        m_ops->m_transientStartSucceeds = !earlyFailure;
+        const QDBusReply<qint64> replacement = launchPlayer1();
+        if (earlyFailure) {
+            QVERIFY(!replacement.isValid());
+            return;
+        }
+        QVERIFY2(replacement.isValid(), qPrintable(replacement.error().message()));
+        QCOMPARE(replacement.value(), qint64(23456));
+        QTRY_COMPARE(readySpy.count(), 1);
+        QCOMPARE(replacementStops, 0);
+    }();
+    if (earlyFailure) {
+        // Model the next test's fixture after an early return. A suite-lifetime
+        // singleShot would overwrite this fixture and acknowledge the wrong PID.
+        m_ops->m_transientStartSucceeds = true;
+        m_systemdUnit->reset();
+        QTest::qWait(1500);
+        const QDBusReply<qint64> next = launchPlayer1();
+        QVERIFY2(next.isValid(), qPrintable(next.error().message()));
+        QCOMPARE(next.value(), qint64(12345));
+        QCOMPARE(readySpy.count(), 0);
+    }
 }
 
 void TestCouchPlayHelper::testInitialInactiveStateDoesNotReleasePreparingLaunch()
@@ -3507,7 +3625,7 @@ void TestCouchPlayHelper::testAuxiliaryInstanceCoexistsWithMainInstance()
     QVERIFY2(auxiliaryReply.isValid(), qPrintable(auxiliaryReply.error().message()));
     QCOMPARE(auxiliaryReply.value(), qint64(12346));
     QCOMPARE(m_helper->m_auxiliaryUnitNameForUsername.value(QStringLiteral("player1")),
-             QStringLiteral("couchplay-player1-stream.service"));
+             QStringLiteral("couchplay-stream@player1.service"));
     QCOMPARE(m_helper->m_usernameToUnitName.value(QStringLiteral("player1")), QStringLiteral("couchplay-player1.service"));
     QCOMPARE(m_ops->m_launchManifests.size(), 2);
     const auto roleForUnit = [this](const QString &name) {
@@ -3519,7 +3637,7 @@ void TestCouchPlayHelper::testAuxiliaryInstanceCoexistsWithMainInstance()
         return QString();
     };
     QCOMPARE(roleForUnit(QStringLiteral("couchplay-player1.service")), QStringLiteral("main"));
-    QCOMPARE(roleForUnit(QStringLiteral("couchplay-player1-stream.service")), QStringLiteral("stream"));
+    QCOMPARE(roleForUnit(QStringLiteral("couchplay-stream@player1.service")), QStringLiteral("stream"));
 
     m_systemdUnit->setActiveState(QStringLiteral("active"));
     m_auxSystemdUnit->setActiveState(QStringLiteral("active"));
@@ -3537,6 +3655,165 @@ void TestCouchPlayHelper::testAuxiliaryInstanceCoexistsWithMainInstance()
     QVERIFY(mainStop.isValid());
     QVERIFY(mainStop.value());
     QVERIFY(!m_helper->m_usernameToUnitName.contains(QStringLiteral("player1")));
+}
+
+void TestCouchPlayHelper::testUnitRolesRemainIndependentAcrossUsernames()
+{
+    configureLaunchFixture();
+    const QString username = QStringLiteral("player1-stream");
+    const QString mainName = m_helper->generateServiceName(username);
+    const QString streamName = m_helper->generateStreamServiceName(username);
+    const auto unitPath = [](QString name) {
+        return QStringLiteral("/org/freedesktop/systemd1/unit/")
+            + name.replace(QLatin1Char('-'), QStringLiteral("_2d"))
+                  .replace(QLatin1Char('@'), QStringLiteral("_40"))
+                  .replace(QLatin1Char('.'), QStringLiteral("_2e"));
+    };
+    const QString mainPath = unitPath(mainName);
+    const QString streamPath = unitPath(streamName);
+    MockSystemdUnit secondMain(mainPath, 12347);
+    MockSystemdUnit secondStream(streamPath, 12348);
+    const bool distinctMainPath = mainPath != m_auxSystemdUnitPath;
+    if (distinctMainPath) {
+        QVERIFY(QDBusConnection::sessionBus().registerVirtualObject(mainPath, &secondMain));
+    }
+    QVERIFY(QDBusConnection::sessionBus().registerVirtualObject(streamPath, &secondStream));
+    if (distinctMainPath) {
+        m_systemdManager->m_extraUnitPaths.insert(mainName, mainPath);
+    }
+    m_systemdManager->m_extraUnitPaths.insert(streamName, streamPath);
+    const auto unregister = qScopeGuard([&] {
+        m_ops->setOnSystemctlStop({});
+        m_systemdManager->m_extraUnitPaths.clear();
+        if (distinctMainPath) {
+            QDBusConnection::sessionBus().unregisterObject(mainPath);
+        }
+        QDBusConnection::sessionBus().unregisterObject(streamPath);
+    });
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {QStringLiteral("player1"), username});
+    m_ops->setUserExists(username, true, 1002, 1002, QStringLiteral("/home/player1-stream"));
+    m_ops->setDirectoryExists(QStringLiteral("/home/player1-stream"), true);
+    m_ops->setDirectoryExists(QStringLiteral("/run/user/1002"), true);
+    m_ops->setFileExists(QStringLiteral("/run/user/1002"), true);
+    m_ops->setFileExists(QStringLiteral("/run/user/1002/bus"), true);
+    QMap<QString, MockSystemdUnit *> units{
+        {m_helper->generateServiceName(QStringLiteral("player1")), m_systemdUnit},
+        {m_helper->generateStreamServiceName(QStringLiteral("player1")), m_auxSystemdUnit},
+        {mainName, &secondMain}, {streamName, &secondStream}};
+    m_ops->setOnSystemctlStop([&](const QString &name) {
+        if (MockSystemdUnit *unit = units.value(name)) {
+            unit->setActiveState(QStringLiteral("inactive"));
+        }
+    });
+    const QDBusReply<qint64> firstMain = launchPlayer1();
+    QVERIFY(firstMain.isValid());
+    const QDBusReply<qint64> firstStream = launchAuxiliaryPlayer1();
+    QVERIFY2(firstStream.isValid(), qPrintable(firstStream.error().message()));
+    const QDBusReply<qint64> otherMain = launchPlayer1({}, {}, username);
+    QVERIFY2(otherMain.isValid(), qPrintable(otherMain.error().message()));
+    const QDBusReply<qint64> otherStream = launchAuxiliaryPlayer1(username);
+    QVERIFY2(otherStream.isValid(), qPrintable(otherStream.error().message()));
+    QCOMPARE(m_helper->m_unitUsernameByName.size(), 4);
+    QSignalSpy ready(m_helper, &CouchPlayHelper::instanceReady);
+    for (MockSystemdUnit *unit : units) {
+        unit->setActiveState(QStringLiteral("active"));
+    }
+    QTRY_COMPARE(ready.count(), 4);
+    m_helper->loadAndReconcileState();
+    QCOMPARE(m_helper->m_unitUsernameByName.size(), 4);
+    QCOMPARE(m_helper->m_pidToUnitName.size(), 4);
+    const QList<qint64> stopOrder{otherMain.value(), firstStream.value(), firstMain.value(), otherStream.value()};
+    int remaining = 4;
+    for (qint64 pid : stopOrder) {
+        const QDBusReply<bool> stopped = m_dbusInterface->call(QStringLiteral("StopInstance"), pid);
+        QVERIFY2(stopped.isValid(), qPrintable(stopped.error().message()));
+        QVERIFY(stopped.value());
+        QCOMPARE(m_helper->m_unitUsernameByName.size(), --remaining);
+        QVERIFY(!m_helper->m_pidToUnitName.contains(pid));
+        for (auto it = m_helper->m_pidToUnitName.cbegin(); it != m_helper->m_pidToUnitName.cend(); ++it) {
+            QVERIFY(units.contains(it.value()));
+        }
+    }
+    QVERIFY(m_ops->m_launchManifests.isEmpty());
+}
+
+void TestCouchPlayHelper::testRecoveryStopsLegacyStreamUnit_data()
+{
+    QTest::addColumn<bool>("ready");
+    QTest::addColumn<bool>("stopFails");
+    QTest::newRow("preparing") << false << false;
+    QTest::newRow("ready") << true << false;
+    QTest::newRow("stop-failure-retry") << true << true;
+}
+
+void TestCouchPlayHelper::testRecoveryStopsLegacyStreamUnit()
+{
+    QFETCH(bool, ready);
+    QFETCH(bool, stopFails);
+    configureLaunchFixture();
+    const QString current = m_helper->generateStreamServiceName(QStringLiteral("player1"));
+    const QString legacy = QStringLiteral("couchplay-player1-stream.service");
+    const QString legacyPath = QStringLiteral("/org/freedesktop/systemd1/unit/couchplay_2dplayer1_2dstream_2eservice");
+    MockSystemdUnit legacyUnit(legacyPath, 12346);
+    legacyUnit.setActiveState(QStringLiteral("active"));
+    QVERIFY(QDBusConnection::sessionBus().registerVirtualObject(legacyPath, &legacyUnit));
+    m_systemdManager->m_extraUnitPaths.insert(legacy, legacyPath);
+    const auto unregister = qScopeGuard([&] {
+        m_ops->setOnSystemctlStop({});
+        m_systemdManager->m_extraUnitPaths.clear();
+        QDBusConnection::sessionBus().unregisterObject(legacyPath);
+    });
+    const QDBusReply<qint64> launch = launchAuxiliaryPlayer1();
+    QVERIFY(launch.isValid());
+    if (ready) {
+        QSignalSpy readySpy(m_helper, &CouchPlayHelper::instanceReady);
+        m_auxSystemdUnit->setActiveState(QStringLiteral("active"));
+        QTRY_COMPARE(readySpy.count(), 1);
+    }
+    QVERIFY(m_helper->saveState());
+    QFile file(m_helper->m_stateFilePath);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QByteArray state = file.readAll();
+    file.close();
+    state.replace(current.toUtf8(), legacy.toUtf8());
+    const QString token = m_helper->m_launchTokenByUnitName.value(current);
+    LaunchManifest manifest = m_ops->m_launchManifests.value(token);
+    manifest.unitName = legacy;
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(state), qint64(state.size()));
+    file.close();
+    m_ops->m_launchManifests.insert(token, manifest);
+    int legacyStops = 0;
+    m_ops->setProcessExitCodeForCommand(QStringLiteral("systemctl"), stopFails ? 1 : 0);
+    m_ops->setOnSystemctlStop([&](const QString &name) {
+        if (name == legacy) {
+            ++legacyStops;
+            if (!stopFails) {
+                legacyUnit.setActiveState(QStringLiteral("inactive"));
+            }
+        } else if (name == current) {
+            m_auxSystemdUnit->setActiveState(QStringLiteral("inactive"));
+        }
+    });
+    m_helper->loadAndReconcileState();
+    QVERIFY(legacyStops > 0);
+    if (stopFails) {
+        QCOMPARE(m_helper->m_auxiliaryUnitNameForUsername.value(QStringLiteral("player1")), legacy);
+        QCOMPARE(m_helper->m_launchTokenByUnitName.value(legacy), token);
+        QVERIFY(m_ops->m_launchManifests.contains(token));
+        stopFails = false;
+        m_ops->setProcessExitCodeForCommand(QStringLiteral("systemctl"), 0);
+        m_helper->loadAndReconcileState();
+    }
+    QVERIFY(!m_helper->m_auxiliaryUnitNameForUsername.contains(QStringLiteral("player1")));
+    QVERIFY(!m_helper->m_launchTokenByUnitName.contains(legacy));
+    QVERIFY(!m_ops->m_launchManifests.contains(token));
+    m_auxSystemdUnit->reset();
+    const QDBusReply<qint64> replacement = launchAuxiliaryPlayer1();
+    QVERIFY2(replacement.isValid(), qPrintable(replacement.error().message()));
+    QCOMPARE(m_helper->m_auxiliaryUnitNameForUsername.value(QStringLiteral("player1")), current);
+    const QDBusReply<bool> stopped = m_dbusInterface->call(QStringLiteral("StopInstance"), replacement.value());
+    QVERIFY(stopped.isValid() && stopped.value());
 }
 
 void TestCouchPlayHelper::testHostTmpSourceIsDeferredToBootstrap()

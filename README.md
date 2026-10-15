@@ -232,6 +232,10 @@ Session cleanup waits for stop calls to return, and stale cleanup retries cannot
 a replacement launch. Launch manifests remain available until terminal cleanup succeeds;
 recovery state is committed before manifest removal. Interrupted copy scratch directories
 under SGID destination parents can be recovered without accepting unsafe ownership or access.
+Helper recovery restores the complete device/runtime snapshot before persisting unit cleanup.
+Main services use `couchplay-<player>.service`; stream services use
+`couchplay-stream@<player>.service`, so player names cannot collide across roles.
+Owned stream units using the old naming scheme are stopped during upgrade recovery.
 
 Profiles store the application selection, not a copied directory list. Legacy directory
 snapshots are removed after preserving the original profile in a sibling
@@ -269,6 +273,11 @@ Run the app you just built (only on a distro with matching Qt6, e.g. Fedora — 
     dbus-run-session -- ctest --test-dir build --output-on-failure
 )
 ```
+
+The optional `COUCHPLAY_PRIVILEGED_TESTS=ON` namespace gate runs only in its disposable
+privileged Linux container and requires fanotify permission events. Preparation races,
+cancellation, and restart checks hold fixture-file opens explicitly rather than relying
+on copy size or scheduling speed.
 
 ## AI Disclosure
 

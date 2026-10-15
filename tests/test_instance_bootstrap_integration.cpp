@@ -33,6 +33,8 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
+#include <poll.h>
+#include <sys/fanotify.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -194,6 +196,112 @@ QString expectedSystemdProperty(const QString &unit, const QString &property)
     }
     return QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
 }
+
+// Gate only a fixture-owned regular inode. Preflight reads happen before the
+// root-owned copy wrapper exists; the bootstrap's copy open remains pending.
+class PreparationBarrier
+{
+public:
+    PreparationBarrier(const QString &sourceFile, const QString &destinationParent)
+        : m_path(QFile::encodeName(sourceFile)), m_parent(destinationParent)
+    {
+        m_group = ::fanotify_init(FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_CLOEXEC,
+                                  O_RDONLY | O_CLOEXEC | O_LARGEFILE);
+        if (m_group < 0
+            || ::fanotify_mark(m_group, FAN_MARK_ADD, FAN_OPEN_PERM, AT_FDCWD, m_path.constData()) != 0) {
+            m_error = QStringLiteral("Fixture fanotify preparation barrier: %1")
+                          .arg(QString::fromLocal8Bit(strerror(errno)));
+            release();
+        }
+    }
+
+    ~PreparationBarrier() { release(); }
+    PreparationBarrier(const PreparationBarrier &) = delete;
+    PreparationBarrier &operator=(const PreparationBarrier &) = delete;
+
+    QString error() const { return m_error; }
+
+    void service()
+    {
+        if (m_group < 0 || m_pending >= 0 || !m_error.isEmpty()) return;
+        struct fanotify_event_metadata event {};
+        ssize_t size;
+        do {
+            size = ::read(m_group, &event, sizeof(event));
+        } while (size < 0 && errno == EINTR);
+        if (size < 0 && errno == EAGAIN) return;
+        if (size != sizeof(event) || event.vers != FANOTIFY_METADATA_VERSION
+            || !(event.mask & FAN_OPEN_PERM) || event.fd < 0) {
+            m_error = QStringLiteral("Invalid fanotify preparation permission event");
+            if (size > 0 && event.fd >= 0) ::close(event.fd);
+            return;
+        }
+        for (const QString &name : QDir(m_parent).entryList(
+                 {QStringLiteral(".cptmp-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot)) {
+            struct stat wrapper {};
+            if (::lstat(QFile::encodeName(QDir(m_parent).filePath(name)).constData(), &wrapper) == 0
+                && S_ISDIR(wrapper.st_mode) && wrapper.st_uid == 0) {
+                m_pending = event.fd;
+                m_pid = event.pid;
+                return;
+            }
+        }
+        allow(event.fd);
+    }
+
+    bool waitForBlocked(qint64 pid)
+    {
+        QElapsedTimer timer;
+        timer.start();
+        while (m_pending < 0 && m_error.isEmpty() && timer.elapsed() < 30000) {
+            service();
+            QCoreApplication::processEvents();
+            if (m_pending < 0) {
+                struct pollfd descriptor {m_group, POLLIN, 0};
+                ::poll(&descriptor, 1, 20);
+            }
+        }
+        if (m_pending >= 0 && m_pid == pid) return true;
+        if (m_error.isEmpty()) {
+            m_error = QStringLiteral("Expected blocked bootstrap PID %1, observed %2").arg(pid).arg(m_pid);
+        }
+        return false;
+    }
+
+    void release()
+    {
+        if (m_group < 0) return;
+        if (m_pending >= 0) {
+            allow(m_pending);
+            m_pending = -1;
+        }
+        // Flush by inode, so path swaps cannot leave the original mark behind.
+        ::fanotify_mark(m_group, FAN_MARK_FLUSH, 0, AT_FDCWD, nullptr);
+        ::close(m_group); // Also allows any event queued during teardown.
+        m_group = -1;
+    }
+
+private:
+    void allow(int fd)
+    {
+        struct fanotify_response response {fd, FAN_ALLOW};
+        ssize_t size;
+        do {
+            size = ::write(m_group, &response, sizeof(response));
+        } while (size < 0 && errno == EINTR);
+        if (size != sizeof(response)) {
+            m_error = QStringLiteral("Could not release fixture fanotify permission event");
+        }
+        ::close(fd);
+    }
+
+    QByteArray m_path;
+    QString m_parent;
+    QString m_error;
+    int m_group = -1;
+    int m_pending = -1;
+    pid_t m_pid = 0;
+};
 }
 
 class InstanceBootstrapIntegrationTest final : public QObject
@@ -236,7 +344,8 @@ private:
     bool callAsFixtureCaller(const QString &method, const QVariantList &arguments) const;
     qint64 launch(const Account &target, const QVariantList &directoryPlan, const QStringList &command,
                   const QString &workingDirectory = QString(), bool privateTemporaryDirectories = true,
-                  const QStringList &sharedRoots = {}, QString *launchError = nullptr);
+                  const QStringList &sharedRoots = {}, QString *launchError = nullptr,
+                  PreparationBarrier *barrier = nullptr);
     bool stop(qint64 pid);
     bool waitForReport(const QString &path, QJsonObject *report, int timeoutMs = 30000) const;
 
@@ -781,7 +890,7 @@ QDBusMessage InstanceBootstrapIntegrationTest::call(const QString &method, const
 qint64 InstanceBootstrapIntegrationTest::launch(const Account &target, const QVariantList &directoryPlan,
                                                 const QStringList &command, const QString &workingDirectory,
                                                 bool privateTemporaryDirectories, const QStringList &sharedRoots,
-                                                QString *launchError)
+                                                QString *launchError, PreparationBarrier *barrier)
 {
     if (launchError) launchError->clear();
 
@@ -803,7 +912,14 @@ qint64 InstanceBootstrapIntegrationTest::launch(const Account &target, const QVa
                  {QStringLiteral("--fixture-dbus-call"), m_caller.username, QString::number(m_caller.uid),
                   QString::number(m_caller.gid),
                   QString::fromLatin1(QJsonDocument(request).toJson(QJsonDocument::Compact).toBase64())});
-    if (!client.waitForStarted(5000) || !client.waitForFinished(35000)
+    const bool started = client.waitForStarted(5000);
+    QElapsedTimer launchTimer;
+    launchTimer.start();
+    while (started && client.state() != QProcess::NotRunning && launchTimer.elapsed() < 35000) {
+        if (barrier) barrier->service();
+        client.waitForFinished(20);
+    }
+    if (!started || client.state() != QProcess::NotRunning
         || client.exitStatus() != QProcess::NormalExit || client.exitCode() != 0) {
         const QString failure = QString::fromLocal8Bit(client.readAllStandardError()).trimmed();
         if (launchError) *launchError = failure;
@@ -2288,12 +2404,6 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
     QVERIFY(createOwnedDirectory(attackerSource, m_caller.uid, m_caller.gid, 0700));
     QVERIFY(writeOwnedFile(attackerSource + QStringLiteral("/Launcher.ini"), QByteArrayLiteral("ATTACKER"),
                            m_caller.uid, m_caller.gid, 0600));
-    for (int i = 0; i < 8192; ++i) {
-        const QString path = raceSource + QStringLiteral("/race-file-%1").arg(i, 5, 10, QLatin1Char('0'));
-        if (!writeOwnedFile(path, QByteArrayLiteral("RACE-FILE"), m_caller.uid, m_caller.gid, 0600)) {
-            QFAIL("Could not create the tmpfs source-swap window fixture");
-        }
-    }
     const QString raceDestination = targetFor(target, raceSource) + QStringLiteral("/Launcher.ini");
     const QString raceStagedDestination = targetFor(target, raceSource) + QStringLiteral("/Staged.ini");
     const QString raceStaging = stagingPath(target, raceSource);
@@ -2306,19 +2416,23 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
     QVERIFY(createOwnedDirectory(attackerStaging, m_caller.uid, m_caller.gid, 0700));
     QVERIFY(writeOwnedFile(attackerStaging + QStringLiteral("/Staged.ini"), QByteArrayLiteral("STAGING-ATTACKER"),
                            m_caller.uid, m_caller.gid, 0600));
+    PreparationBarrier sourceSwapBarrier(raceSource + QStringLiteral("/Launcher.ini"),
+                                          QFileInfo(targetFor(target, raceSource)).path());
+    QVERIFY2(sourceSwapBarrier.error().isEmpty(), qPrintable(sourceSwapBarrier.error()));
     const qint64 racePid = launch(
         target, plan(record(raceSource, QStringLiteral("copy"), {}, raceStaging)),
         gameCommand(QStringLiteral("source-and-staging-swap"),
                     {{raceDestination, QStringLiteral("RACE-ORIGINAL")},
-                     {raceStagedDestination, QStringLiteral("STAGING-ORIGINAL")}}, {}, {}, true));
+                     {raceStagedDestination, QStringLiteral("STAGING-ORIGINAL")}}, {}, {}, true),
+        QString(), true, {}, nullptr, &sourceSwapBarrier);
     QVERIFY(racePid > 0);
-    QCoreApplication::processEvents();
-    QVERIFY2(!m_readyPids.contains(racePid) && !m_stoppedPids.contains(racePid),
-             "The source-swap fixture completed before its path replacement");
+    QVERIFY2(sourceSwapBarrier.waitForBlocked(racePid), qPrintable(sourceSwapBarrier.error()));
+    QVERIFY(!m_readyPids.contains(racePid) && !m_stoppedPids.contains(racePid));
     QVERIFY(::rename(QFile::encodeName(raceSource).constData(), QFile::encodeName(raceBackup).constData()) == 0);
     QVERIFY(::symlink(QFile::encodeName(attackerSource).constData(), QFile::encodeName(raceSource).constData()) == 0);
     QVERIFY(::rename(QFile::encodeName(raceStaging).constData(), QFile::encodeName(raceStagingBackup).constData()) == 0);
     QVERIFY(::symlink(QFile::encodeName(attackerStaging).constData(), QFile::encodeName(raceStaging).constData()) == 0);
+    sourceSwapBarrier.release();
     QTRY_VERIFY_WITH_TIMEOUT(m_readyPids.contains(racePid) || m_stoppedPids.contains(racePid), 30000);
     if (m_readyPids.contains(racePid)) {
         QJsonObject raceReport;
@@ -2346,15 +2460,17 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
     QVERIFY(QDir().mkpath(QFileInfo(targetSwapPath).path()));
     const QString targetSwapFile = targetSwapPath + QStringLiteral("/Launcher.ini");
     QString targetSwapError;
+    PreparationBarrier targetSwapBarrier(raceSource + QStringLiteral("/Launcher.ini"),
+                                          QFileInfo(targetSwapPath).path());
+    QVERIFY2(targetSwapBarrier.error().isEmpty(), qPrintable(targetSwapBarrier.error()));
     const qint64 targetSwapPid = launch(
         target, plan(record(raceSource, QStringLiteral("copy"), targetSwapAlias)),
         gameCommand(QStringLiteral("target-symlink-swap"),
                     {{targetSwapFile, QStringLiteral("RACE-ORIGINAL")}}, {}, {}, true),
-        QString(), true, {}, &targetSwapError);
+        QString(), true, {}, &targetSwapError, &targetSwapBarrier);
     QVERIFY2(targetSwapPid > 0, qPrintable(targetSwapError));
-    QCoreApplication::processEvents();
-    QVERIFY2(!m_readyPids.contains(targetSwapPid) && !m_stoppedPids.contains(targetSwapPid),
-             "The target-swap fixture completed before its path replacement");
+    QVERIFY2(targetSwapBarrier.waitForBlocked(targetSwapPid), qPrintable(targetSwapBarrier.error()));
+    QVERIFY(!m_readyPids.contains(targetSwapPid) && !m_stoppedPids.contains(targetSwapPid));
     struct stat targetSwapInfo {};
     const QByteArray targetSwapPathBytes = QFile::encodeName(targetSwapPath);
     const int targetSwapStat = ::lstat(targetSwapPathBytes.constData(), &targetSwapInfo);
@@ -2368,6 +2484,7 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
                          QFile::encodeName(targetSwapBackup).constData()) == 0);
     }
     QVERIFY(::symlink("/etc", QFile::encodeName(targetSwapPath).constData()) == 0);
+    targetSwapBarrier.release();
     QTRY_VERIFY_WITH_TIMEOUT(m_stoppedPids.contains(targetSwapPid) || m_readyPids.contains(targetSwapPid), 30000);
     QVERIFY2(!m_readyPids.contains(targetSwapPid), "A target symlink swap unexpectedly reported READY");
     QVERIFY(m_stoppedPids.contains(targetSwapPid));
@@ -2440,13 +2557,11 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
 
     const QString largeSource = m_sourceRoot + QStringLiteral("/large");
     QVERIFY(createOwnedDirectory(largeSource, m_caller.uid, m_caller.gid, 0700));
-    for (int i = 0; i < 8192; ++i) {
-        const QString path = largeSource + QStringLiteral("/file-%1").arg(i, 5, 10, QLatin1Char('0'));
-        if (!writeOwnedFile(path, QByteArrayLiteral("cancel-during-copy"), m_caller.uid, m_caller.gid, 0600)) {
-            QFAIL("Could not create the tmpfs copy-cancellation fixture");
-        }
-    }
-    const QString cancelledCopyTarget = QDir(target.canonicalHome).filePath(longCopyLeaf);
+    const QString preparationFile = largeSource + QStringLiteral("/Preparation.ini");
+    QVERIFY(writeOwnedFile(preparationFile, QByteArrayLiteral("cancel-during-copy"),
+                           m_caller.uid, m_caller.gid, 0600));
+    const QString cancellationLeaf(212, QLatin1Char('c'));
+    const QString cancelledCopyTarget = QDir(target.canonicalHome).filePath(cancellationLeaf);
     const QString cancelledCopyParent = QFileInfo(cancelledCopyTarget).path();
     QVERIFY(QDir().mkpath(cancelledCopyParent));
     QVERIFY(createOwnedDirectory(cancelledCopyTarget, target.uid, target.gid, 0700));
@@ -2468,14 +2583,19 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
         entries.removeAll(decoyScratchName);
         return entries;
     };
-    const qint64 killedCopyPid = launch(target, plan(record(largeSource, QStringLiteral("copy"), longCopyLeaf)),
-                                        gameCommand(QStringLiteral("kernel-killed-copy"), {}, {}, {}, false));
+    PreparationBarrier killedCopyBarrier(preparationFile, cancelledCopyParent);
+    QVERIFY2(killedCopyBarrier.error().isEmpty(), qPrintable(killedCopyBarrier.error()));
+    const qint64 killedCopyPid = launch(target, plan(record(largeSource, QStringLiteral("copy"), cancellationLeaf)),
+                                        gameCommand(QStringLiteral("kernel-killed-copy"), {}, {}, {}, false),
+                                        QString(), true, {}, nullptr, &killedCopyBarrier);
     QVERIFY2(killedCopyPid > 0, "The kernel-killed copy fixture was not acknowledged");
-    QTRY_VERIFY_WITH_TIMEOUT(!copyScratchEntries().isEmpty(), 30000);
+    QVERIFY2(killedCopyBarrier.waitForBlocked(killedCopyPid), qPrintable(killedCopyBarrier.error()));
+    QVERIFY(!copyScratchEntries().isEmpty());
     QVERIFY(!m_readyPids.contains(killedCopyPid));
     QVERIFY(::kill(static_cast<pid_t>(killedCopyPid), SIGKILL) == 0);
     QVERIFY(waitForProcessExit(killedCopyPid));
     QTRY_VERIFY_WITH_TIMEOUT(m_stoppedPids.contains(killedCopyPid), 30000);
+    killedCopyBarrier.release();
     QTRY_VERIFY_WITH_TIMEOUT(copyScratchEntries().isEmpty(), 30000);
     QVERIFY(QFileInfo::exists(decoyScratchPath));
     QCOMPARE(readFile(decoyScratchFile), QByteArrayLiteral("USER-OWNED"));
@@ -2484,115 +2604,60 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
     QCOMPARE(targetAfterKillStat.st_dev, originalTargetStat.st_dev);
     QCOMPARE(targetAfterKillStat.st_ino, originalTargetStat.st_ino);
     QCOMPARE(readFile(originalTargetFile), QByteArrayLiteral("ORIGINAL-DESTINATION"));
-    QCOMPARE(readFile(cancelledCopyTarget + QStringLiteral("/Launcher.ini")), QByteArrayLiteral("LONG-LEAF-COPY"));
     QVERIFY(!QFileInfo::exists(reportPath(QStringLiteral("kernel-killed-copy"))));
-    QCoreApplication::processEvents();
+    PreparationBarrier restartBarrier(preparationFile, QFileInfo(targetFor(m_players[1], largeSource)).path());
+    QVERIFY2(restartBarrier.error().isEmpty(), qPrintable(restartBarrier.error()));
     const qint64 restartPreparingPid = launch(m_players[1], plan(record(largeSource, QStringLiteral("copy"))),
-                                              gameCommand(QStringLiteral("restart-during-copy"), {}, {}, {}, true));
+                                              gameCommand(QStringLiteral("restart-during-copy"), {}, {}, {}, true),
+                                              QString(), true, {}, nullptr, &restartBarrier);
     QVERIFY2(restartPreparingPid > 0, "The preparing-copy restart fixture was not acknowledged");
-    QCoreApplication::processEvents();
-    QVERIFY2(!m_readyPids.contains(restartPreparingPid), "The slow copy unexpectedly reached READY before broker restart");
-    const QString restartUnitName = QStringLiteral("couchplay-%1.service").arg(m_players[1].username);
-    const auto captureCommand = [](const QString &program, const QStringList &arguments) {
-        QProcess process;
-        process.start(program, arguments);
-        if (!process.waitForStarted(2000) || !process.waitForFinished(3000)) {
-            return process.errorString();
-        }
-        return QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
-    };
-    const QString unitStateBeforeRestart = captureCommand(
-        QStringLiteral("systemctl"), {QStringLiteral("show"), restartUnitName, QStringLiteral("-p"),
-                                       QStringLiteral("ActiveState"), QStringLiteral("-p"),
-                                       QStringLiteral("MainPID"), QStringLiteral("-p"),
-                                       QStringLiteral("CollectMode")});
-    const QString playerUnitsBeforeRestart = captureCommand(
-        QStringLiteral("systemctl"), {QStringLiteral("list-units"), QStringLiteral("--all"),
-                                       QStringLiteral("--no-legend"), QStringLiteral("couchplay-*.service")});
-    const QString helperJournalBeforeRestart = captureCommand(
-        QStringLiteral("journalctl"), {QStringLiteral("--no-pager"), QStringLiteral("-n"),
-                                       QStringLiteral("30"), QStringLiteral("-u"), helperUnit,
-                                       QStringLiteral("-o"), QStringLiteral("short-iso")});
-    QString stateBeforeRestart = QStringLiteral("<unavailable>");
-    QFile stateFileBeforeRestart(QStringLiteral("/run/couchplay/state.json"));
-    if (stateFileBeforeRestart.open(QIODevice::ReadOnly)) {
-        stateBeforeRestart = QString::fromUtf8(stateFileBeforeRestart.readAll()).trimmed();
-    }
-    const QStringList manifestsBeforeRestart = QDir(QStringLiteral("/run/couchplay/launch-plans"))
-                                                   .entryList(QDir::Files | QDir::NoDotAndDotDot);
+    QVERIFY2(restartBarrier.waitForBlocked(restartPreparingPid), qPrintable(restartBarrier.error()));
+    QVERIFY(!m_readyPids.contains(restartPreparingPid));
     const QString helperBeforePreparationRestart = helperPid();
     QString restartError;
     QVERIFY2(runCommand(QStringLiteral("systemctl"), {QStringLiteral("restart"), helperUnit}, &restartError),
              qPrintable(restartError));
     QTRY_VERIFY_WITH_TIMEOUT(!helperPid().isEmpty() && helperPid() != helperBeforePreparationRestart, 30000);
-    if (!waitForSignal({}, restartPreparingPid, 55000)) {
-        const QString unitName = QStringLiteral("couchplay-%1.service").arg(m_players[1].username);
-        QProcess showUnit;
-        showUnit.start(QStringLiteral("systemctl"),
-                       {QStringLiteral("show"), unitName, QStringLiteral("-p"), QStringLiteral("ActiveState"),
-                        QStringLiteral("-p"), QStringLiteral("SubState"), QStringLiteral("-p"),
-                        QStringLiteral("MainPID"), QStringLiteral("-p"), QStringLiteral("Result"),
-                        QStringLiteral("-p"), QStringLiteral("StatusText"), QStringLiteral("-p"),
-                        QStringLiteral("StatusErrno")});
-        const bool showFinished = showUnit.waitForStarted(2000) && showUnit.waitForFinished(3000);
-        qWarning().noquote() << "PREPARING-BEFORE-RESTART-UNIT" << unitStateBeforeRestart;
-        qWarning().noquote() << "PREPARING-BEFORE-RESTART-UNITS" << playerUnitsBeforeRestart;
-        qWarning().noquote() << "PREPARING-BEFORE-RESTART-STATE" << stateBeforeRestart;
-        qWarning().noquote() << "PREPARING-BEFORE-RESTART-MANIFESTS" << manifestsBeforeRestart;
-        qWarning().noquote() << "PREPARING-BEFORE-RESTART-JOURNAL" << helperJournalBeforeRestart;
-        qWarning().noquote() << "PREPARING-RESTART-UNIT" << restartPreparingPid << helperPid()
-                             << (showFinished ? QString::fromLocal8Bit(showUnit.readAllStandardOutput()).trimmed()
-                                              : showUnit.errorString());
-        QFile stateFile(QStringLiteral("/run/couchplay/state.json"));
-        if (stateFile.open(QIODevice::ReadOnly)) {
-            const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
-            qWarning().noquote() << "PREPARING-RESTART-STATE" << document.toJson(QJsonDocument::Compact);
-        } else {
-            qWarning() << "PREPARING-RESTART-STATE-ERROR" << stateFile.errorString();
-        }
-        qWarning().noquote() << "PREPARING-RESTART-MANIFESTS"
-                             << QDir(QStringLiteral("/run/couchplay/launch-plans"))
-                                    .entryList(QDir::Files | QDir::NoDotAndDotDot);
-        qWarning().noquote() << "PREPARING-RESTART-STOPPED" << m_stoppedPids.value(restartPreparingPid);
-        QProcess unitJournal;
-        unitJournal.start(QStringLiteral("journalctl"),
-                          {QStringLiteral("--no-pager"), QStringLiteral("-n"), QStringLiteral("60"),
-                           QStringLiteral("-u"), unitName, QStringLiteral("-u"), helperUnit,
-                           QStringLiteral("-o"), QStringLiteral("short-iso")});
-        if (unitJournal.waitForStarted(2000) && unitJournal.waitForFinished(3000)) {
-            qWarning().noquote() << "PREPARING-RESTART-JOURNAL"
-                                 << QString::fromLocal8Bit(unitJournal.readAllStandardOutput()).trimmed();
-        }
-    }
-    QVERIFY2(m_readyPids.contains(restartPreparingPid), "The restarted broker did not recover preparing-unit readiness");
+    // The same kernel permission event remains held across broker recovery.
+    QVERIFY(!m_readyPids.contains(restartPreparingPid));
+    restartBarrier.release();
+    QVERIFY2(waitForSignal({}, restartPreparingPid, 55000),
+             "The restarted broker did not recover preparing-unit readiness");
     QJsonObject restartReport;
     QVERIFY(waitForReport(reportPath(QStringLiteral("restart-during-copy")), &restartReport));
     QVERIFY(assertDroppedCredentials(restartReport, m_players[1]));
     QVERIFY(stop(restartPreparingPid));
     QVERIFY(waitForProcessExit(restartPreparingPid));
 
+    PreparationBarrier timeoutBarrier(preparationFile, QFileInfo(targetFor(target, largeSource)).path());
+    QVERIFY2(timeoutBarrier.error().isEmpty(), qPrintable(timeoutBarrier.error()));
     const qint64 timeoutPid = launch(target, plan(record(largeSource, QStringLiteral("copy"))),
-                                      gameCommand(QStringLiteral("timeout-preparing")));
+                                      gameCommand(QStringLiteral("timeout-preparing")),
+                                      QString(), true, {}, nullptr, &timeoutBarrier);
     QVERIFY(timeoutPid > 0);
-    QCoreApplication::processEvents();
-    QVERIFY2(!m_readyPids.contains(timeoutPid), "The slow-copy timeout fixture reached READY before it was frozen");
-    QVERIFY(::kill(static_cast<pid_t>(timeoutPid), SIGSTOP) == 0);
+    QVERIFY2(timeoutBarrier.waitForBlocked(timeoutPid), qPrintable(timeoutBarrier.error()));
+    QVERIFY(!m_readyPids.contains(timeoutPid));
     QTRY_VERIFY_WITH_TIMEOUT(m_stoppedPids.contains(timeoutPid), 160000);
     QVERIFY(!m_readyPids.contains(timeoutPid));
     QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(QStringLiteral("/proc/%1").arg(timeoutPid)), 120000);
+    timeoutBarrier.release();
     const QString timeoutState = expectedSystemdProperty(
         QStringLiteral("couchplay-%1.service").arg(target.username), QStringLiteral("ActiveState"));
     QVERIFY(timeoutState.isEmpty() || timeoutState == QStringLiteral("inactive")
             || timeoutState == QStringLiteral("failed"));
 
+    PreparationBarrier cancelBarrier(preparationFile, QFileInfo(targetFor(target, largeSource)).path());
+    QVERIFY2(cancelBarrier.error().isEmpty(), qPrintable(cancelBarrier.error()));
     const qint64 preparingPid = launch(target, plan(record(largeSource, QStringLiteral("copy"))),
-                                       gameCommand(QStringLiteral("cancel-preparing")));
+                                       gameCommand(QStringLiteral("cancel-preparing")),
+                                       QString(), true, {}, nullptr, &cancelBarrier);
     QVERIFY(preparingPid > 0);
-    QCoreApplication::processEvents();
-    const bool wasReadyBeforeStop = m_readyPids.contains(preparingPid);
+    QVERIFY2(cancelBarrier.waitForBlocked(preparingPid), qPrintable(cancelBarrier.error()));
+    QVERIFY(!m_readyPids.contains(preparingPid));
     QVERIFY(stop(preparingPid));
     QVERIFY(waitForProcessExit(preparingPid));
-    QVERIFY2(!wasReadyBeforeStop, "The copy preparation completed before the cancellation assertion could run");
+    cancelBarrier.release();
+    QVERIFY(!m_readyPids.contains(preparingPid));
 
     const QStringList naturalCommand = gameCommand(QStringLiteral("natural-exit"), {}, {}, {}, false)
         + QStringList{QStringLiteral("--sleep-ms"), QStringLiteral("500")};

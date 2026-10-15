@@ -28,6 +28,7 @@
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QThread>
 
 #include <linux/input.h>
@@ -1588,7 +1589,7 @@ QString CouchPlayHelper::generateServiceName(const QString &username)
 }
 QString CouchPlayHelper::generateStreamServiceName(const QString &username)
 {
-    return QStringLiteral("couchplay-%1-stream.service").arg(username);
+    return QStringLiteral("couchplay-stream@%1.service").arg(username);
 }
 
 QString CouchPlayHelper::usernameForUnit(const QString &serviceName) const
@@ -2875,6 +2876,11 @@ bool CouchPlayHelper::cleanupCopyScratchForUnit(const QString &serviceName, cons
 
 void CouchPlayHelper::releaseOwnedUnit(const QString &serviceName, bool unlinkManifest)
 {
+    if (m_reconcilingState) {
+        m_deferredReleaseUnits.insert(serviceName);
+        return;
+    }
+    m_deferredReleaseUnits.remove(serviceName);
     QString username = usernameForUnit(serviceName);
     PendingLaunch *pending = m_pendingLaunches.value(serviceName, nullptr);
     if (username.isEmpty() && pending) {
@@ -4229,6 +4235,12 @@ bool CouchPlayHelper::DestroyNullSink(const QString &username, const QString &si
 
 bool CouchPlayHelper::saveState()
 {
+    // Recovery may dispatch nested D-Bus callbacks before the snapshot is hydrated.
+    // Refuse persistence (and therefore manifest unlink) until recovery is complete.
+    if (m_reconcilingState) {
+        m_recoverySaveRequested = true;
+        return false;
+    }
     QJsonObject root;
     root[QStringLiteral("version")] = 1;
     root[QStringLiteral("activeMounts")] = m_legacyActiveMounts;
@@ -4482,6 +4494,11 @@ bool CouchPlayHelper::removeTempUdevRule(const QString &deviceId)
 
 void CouchPlayHelper::loadAndReconcileState()
 {
+    if (m_reconcilingState) {
+        return;
+    }
+    m_reconcilingState = true;
+    const auto finishRecovery = qScopeGuard([this] { m_reconcilingState = false; });
     m_cleanedLaunchManifestTokens.clear();
     QString subscriptionError;
     if (!subscribeSystemdManager(&subscriptionError)) {
@@ -4710,7 +4727,9 @@ void CouchPlayHelper::loadAndReconcileState()
         const QString unitName = it.value().toString();
         const QString expectedUnitName = role == UnitRole::Main ? generateServiceName(username)
                                                                 : generateStreamServiceName(username);
-        if (!s_validUsername.match(username).hasMatch() || unitName != expectedUnitName) {
+        const bool legacyStream = streamRole
+            && unitName == QStringLiteral("couchplay-%1-stream.service").arg(username);
+        if (!s_validUsername.match(username).hasMatch() || (unitName != expectedUnitName && !legacyStream)) {
             changed = true;
             continue;
         }
@@ -4770,6 +4789,26 @@ void CouchPlayHelper::loadAndReconcileState()
             }
             if (DirectoryPlan::isLaunchToken(token)) {
                 m_launchTokenByUnitName.insert(unitName, token);
+            }
+            changed = true;
+            continue;
+        }
+        if (legacyStream) {
+            // Never adopt the ambiguous old stream namespace. Keep ownership
+            // tracked if stopping fails, so neither it nor its resources orphan.
+            trackRecoveredUnit(username, unitName, role);
+            m_unitOwnerUid.insert(unitName, ownerUid);
+            m_targetIdentityByUnit.insert(unitName, targetIdentity);
+            if (DirectoryPlan::isLaunchToken(token)) {
+                m_launchTokenByUnitName.insert(unitName, token);
+            }
+            m_stoppingUnits.insert(unitName);
+            const bool stopped = stopServiceInstance(unitName);
+            m_stoppingUnits.remove(unitName);
+            if (stopped) {
+                stoppedUnitNames.insert(unitName);
+                queueStoredPidStops(username, unitName, role, QStringLiteral("Stream stopped for unit-name upgrade"));
+                m_deferredReleaseUnits.insert(unitName);
             }
             changed = true;
             continue;
@@ -4991,6 +5030,13 @@ void CouchPlayHelper::loadAndReconcileState()
     }
 
     changed = reconcileLegacyMounts(activeSystemdUnits, stoppedUnitNames, activeSystemdUnitsKnown) || changed;
+    changed = std::exchange(m_recoverySaveRequested, false) || changed;
+    m_reconcilingState = false;
+    const QSet<QString> deferredReleases = std::exchange(m_deferredReleaseUnits, {});
+    for (const QString &unitName : deferredReleases) {
+        releaseOwnedUnit(unitName, true);
+        changed = true;
+    }
     if (changed && saveState()) {
         // Only unreferenced manifests may be deleted. A crash before unlink
         // leaves a harmless protected file, not a token with missing authority.

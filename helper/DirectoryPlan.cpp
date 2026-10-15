@@ -132,7 +132,7 @@ QString resolvedTargetAlias(const DirectoryPreparation &record,
     return QStringLiteral(".couchplay/mounts/") + record.source.mid(1);
 }
 
-bool validateManifest(const LaunchManifest &manifest, QString *error)
+bool validateManifest(const LaunchManifest &manifest, QString *error, bool recovering = false)
 {
     if (manifest.directories.size() > maximumDirectoryRecords
         || manifest.gamescopeArgv.size() > maximumGamescopeArguments
@@ -142,11 +142,14 @@ bool validateManifest(const LaunchManifest &manifest, QString *error)
     const QString expectedUnitName = manifest.unitRole == QStringLiteral("main")
         ? QStringLiteral("couchplay-%1.service").arg(manifest.targetUsername)
         : manifest.unitRole == QStringLiteral("stream")
-            ? QStringLiteral("couchplay-%1-stream.service").arg(manifest.targetUsername)
+            ? QStringLiteral("couchplay-stream@%1.service").arg(manifest.targetUsername)
             : QString();
+    // Read-only upgrade authority; new manifests always use disjoint names.
+    const bool legacyStream = recovering && manifest.unitRole == QStringLiteral("stream")
+        && manifest.unitName == QStringLiteral("couchplay-%1-stream.service").arg(manifest.targetUsername);
     if (manifest.schemaVersion != 1 || !isSafeUsername(manifest.targetUsername)
         || expectedUnitName.isEmpty() || !isSafeUnitName(manifest.unitName)
-        || manifest.unitName != expectedUnitName
+        || (manifest.unitName != expectedUnitName && !legacyStream)
         || !validUid(manifest.callerUid) || !validUid(manifest.callerGid)
         || manifest.targetUid == 0 || !validUid(manifest.targetUid) || !validUid(manifest.targetGid)) {
         return fail(error, QStringLiteral("Invalid launch manifest identity or schema"));
@@ -345,7 +348,7 @@ bool readManifestJson(const QByteArray &bytes, LaunchManifest *manifest, QString
         }
         result.environment.insert(it.key(), it.value().toString());
     }
-    if (!validateManifest(result, error)) {
+    if (!validateManifest(result, error, true)) {
         return false;
     }
     *manifest = std::move(result);
