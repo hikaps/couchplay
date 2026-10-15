@@ -9,6 +9,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <atomic>
 #include <QMap>
 #include <QProcessEnvironment>
 #include <QSet>
@@ -37,6 +38,7 @@
 #include <sys/wait.h>
 #include <cstddef>
 #include <limits.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <vector>
@@ -370,6 +372,7 @@ int readableTree(int directoryFd)
             break;
         }
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0) continue;
+        SecureFs::noteProgress();
         struct stat before{};
         if (::fstatat(::dirfd(directory), entry->d_name, &before, AT_SYMLINK_NOFOLLOW) != 0) {
             result = errno;
@@ -1364,28 +1367,88 @@ bool verifyHelperExecutable(const QString &path, QString *error, int *errorNumbe
     return true;
 }
 
-bool sendSystemdNotification(const QByteArray &message)
+bool notifyAddress(sockaddr_un *address, socklen_t *addressLength)
 {
     const char *path = ::getenv("NOTIFY_SOCKET");
     if (!path || !*path) return false;
     const size_t pathLength = std::strlen(path);
+    if (pathLength >= sizeof(address->sun_path)) return false;
+    *address = {};
+    address->sun_family = AF_UNIX;
+    if (path[0] == '@') {
+        std::memcpy(address->sun_path + 1, path + 1, pathLength - 1);
+        *addressLength = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + pathLength);
+    } else {
+        std::memcpy(address->sun_path, path, pathLength + 1);
+        *addressLength = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + pathLength + 1);
+    }
+    return true;
+}
+
+bool sendSystemdNotification(const QByteArray &message)
+{
     struct sockaddr_un address{};
-    if (pathLength == 0 || pathLength >= sizeof(address.sun_path)) return false;
+    socklen_t addressLength = 0;
+    if (!notifyAddress(&address, &addressLength)) return false;
     const int fd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return false;
-    address.sun_family = AF_UNIX;
-    socklen_t addressLength = 0;
-    if (path[0] == '@') {
-        std::memcpy(address.sun_path + 1, path + 1, pathLength - 1);
-        addressLength = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + pathLength);
-    } else {
-        std::memcpy(address.sun_path, path, pathLength + 1);
-        addressLength = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + pathLength + 1);
-    }
     const bool sent = ::sendto(fd, message.constData(), static_cast<size_t>(message.size()), MSG_NOSIGNAL,
                                reinterpret_cast<sockaddr *>(&address), addressLength) == message.size();
     ::close(fd);
     return sent;
+}
+
+// Preparation runs before READY=1 under a fixed systemd start timeout. While tree work makes progress
+// (SecureFs::progressCount advances), a SIGALRM tick asks systemd for a fresh window; a stalled
+// preparation still hits the original timeout. A timer signal, not a thread: setns(CLONE_NEWNS) needs
+// a single-threaded process.
+constexpr char kExtendMessage[] = "EXTEND_TIMEOUT_USEC=60000000\nSTATUS=Preparing directories\n";
+int g_heartbeatSocket = -1;
+struct sockaddr_un g_heartbeatAddress{};
+socklen_t g_heartbeatAddressLength = 0;
+std::atomic<uint64_t> g_heartbeatProgress{0};
+
+void heartbeatTick(int)
+{
+    const int savedErrno = errno;
+    const uint64_t progress = SecureFs::progressCount();
+    if (progress != g_heartbeatProgress.load(std::memory_order_relaxed)) {
+        g_heartbeatProgress.store(progress, std::memory_order_relaxed);
+        (void)::sendto(g_heartbeatSocket, kExtendMessage, sizeof(kExtendMessage) - 1, MSG_NOSIGNAL,
+                       reinterpret_cast<sockaddr *>(&g_heartbeatAddress), g_heartbeatAddressLength);
+    }
+    errno = savedErrno;
+}
+
+void startPreparationHeartbeat()
+{
+    if (!notifyAddress(&g_heartbeatAddress, &g_heartbeatAddressLength)) return;
+    g_heartbeatSocket = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (g_heartbeatSocket < 0) return;
+    SecureFs::shareProgressAcrossFork(); // the caller-readability preflight walks the tree in a forked child
+    g_heartbeatProgress.store(SecureFs::progressCount(), std::memory_order_relaxed);
+    struct sigaction action{};
+    action.sa_handler = heartbeatTick;
+    action.sa_flags = SA_RESTART;
+    ::sigemptyset(&action.sa_mask);
+    struct itimerval interval{};
+    interval.it_interval.tv_sec = 10;
+    interval.it_value.tv_sec = 10;
+    if (::sigaction(SIGALRM, &action, nullptr) != 0 || ::setitimer(ITIMER_REAL, &interval, nullptr) != 0) {
+        ::close(g_heartbeatSocket);
+        g_heartbeatSocket = -1;
+    }
+}
+
+void stopPreparationHeartbeat()
+{
+    const struct itimerval stop{};
+    ::setitimer(ITIMER_REAL, &stop, nullptr);
+    ::signal(SIGALRM, SIG_DFL);
+    if (g_heartbeatSocket >= 0) {
+        ::close(g_heartbeatSocket);
+        g_heartbeatSocket = -1;
+    }
 }
 
 int failBootstrap(const QString &message, int errorNumber)
@@ -1554,6 +1617,7 @@ int run(const QString &token, const QString &helperExecutablePath)
                              EINVAL);
     }
 
+    startPreparationHeartbeat();
     UniqueFd instanceNamespace(::open("/proc/self/ns/mnt", O_RDONLY | O_CLOEXEC));
     UniqueFd hostNamespace(::open("/proc/1/ns/mnt", O_RDONLY | O_CLOEXEC));
     if (!instanceNamespace || !hostNamespace) {
@@ -1614,6 +1678,7 @@ int run(const QString &token, const QString &helperExecutablePath)
     prepared.clear();
     targetHomeFd.reset();
     instanceNamespace.reset();
+    stopPreparationHeartbeat();
     if (!execGamescope(manifest, workingDirectory, &error, &failureErrno)) {
         const int result = failBootstrap(error, failureErrno);
         ::unsetenv("NOTIFY_SOCKET");

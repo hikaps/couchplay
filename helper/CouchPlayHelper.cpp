@@ -5094,7 +5094,8 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
         }
         return true;
     };
-    const auto findMount = [&](const QByteArray &target, const QByteArray &source, bool *found, bool *sourceMatches) {
+    const auto findMount = [&](const QByteArray &target, const QByteArray &source, const QByteArray &upperDir,
+                               bool *found, bool *sourceMatches) {
         *found = false;
         *sourceMatches = false;
         for (const QByteArray &line : mountInfo.split('\n')) {
@@ -5122,10 +5123,12 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
                 }
                 *found = true;
                 *sourceMatches = mountedSource == source;
-                if (!*sourceMatches && mountedType == QByteArray("overlay")) {
-                    const QByteArray lowerDirPrefix("lowerdir=");
+                if (!*sourceMatches && mountedType == QByteArray("overlay") && !upperDir.isEmpty()) {
+                    // Legacy overlays passed lowerdir as /proc/self/fd/N, so mountinfo never shows the
+                    // source path; the persisted private upper directory is the stable identity.
+                    const QByteArray upperDirPrefix("upperdir=");
                     for (const QByteArray &option : superOptions.split(',')) {
-                        if (option.startsWith(lowerDirPrefix) && option.mid(lowerDirPrefix.size()) == source) {
+                        if (option.startsWith(upperDirPrefix) && option.mid(upperDirPrefix.size()) == upperDir) {
                             *sourceMatches = true;
                             break;
                         }
@@ -5211,7 +5214,8 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
 
             bool mounted = false;
             bool sourceMatches = false;
-            if (!findMount(target.toUtf8(), source.toUtf8(), &mounted, &sourceMatches)) {
+            const QByteArray upperDir = object.value(QStringLiteral("upperDir")).toString().toUtf8();
+            if (!findMount(target.toUtf8(), source.toUtf8(), upperDir, &mounted, &sourceMatches)) {
                 retained.append(value);
                 continue;
             }

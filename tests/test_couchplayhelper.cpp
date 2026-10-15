@@ -939,6 +939,7 @@ private Q_SLOTS:
     void testLegacyMountCleanupUnmountsValidatedTarget();
     void testLegacyMountCleanupPreservesFailedUnmount();
     void testLegacyMountCleanupRecognizesBindMountByDirectoryIdentity();
+    void testLegacyMountCleanupRecognizesOverlayByPersistedUpperDir();
     void testLegacyMountCleanupRejectsUntrustedTarget();
     void testLaunchInstance_validationEmptyUsername();
     void testLaunchInstance_validationNonexistentUser();
@@ -3196,6 +3197,55 @@ void TestCouchPlayHelper::testLegacyMountCleanupRecognizesBindMountByDirectoryId
 
     QCOMPARE(reconcile(target, true), std::make_tuple(true, 1, true));
     QCOMPARE(reconcile(otherSource, true), std::make_tuple(false, 0, false));
+    m_helper->m_legacyActiveMounts = {};
+}
+
+void TestCouchPlayHelper::testLegacyMountCleanupRecognizesOverlayByPersistedUpperDir()
+{
+    QTemporaryDir homeDirectory;
+    QVERIFY(homeDirectory.isValid());
+    const QString home = QFileInfo(homeDirectory.path()).canonicalFilePath();
+    const QString target = QDir(home).filePath(QStringLiteral(".couchplay/mounts/overlay"));
+    QVERIFY(QDir().mkpath(target));
+    const QString source = QDir(home).filePath(QStringLiteral("shared-lower"));
+    QVERIFY(QDir().mkpath(source));
+    const QString upper = QStringLiteral("/var/lib/couchplay/overlays/player1/abc/upper");
+    const QString work = QStringLiteral("/var/lib/couchplay/overlays/player1/abc/work");
+
+    // The legacy FD-based mount recorded lowerdir=/proc/self/fd/N, never the source path.
+    const auto reconcile = [&](const QString &mountedUpper) {
+        m_ops->clear();
+        m_ops->setMockProcessStart(true);
+        m_ops->setStandardOutput(QByteArray("34 1 0:40 / ") + target.toUtf8()
+                                 + " rw - overlay overlay rw,lowerdir=/proc/self/fd/7,upperdir="
+                                 + mountedUpper.toUtf8() + ",workdir=" + work.toUtf8() + "\n");
+        m_ops->setProcessExitCode(0);
+        m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
+        m_helper->m_usernameToUnitName.clear();
+        m_helper->m_auxiliaryUnitNameForUsername.clear();
+        m_helper->m_unitUsernameByName.clear();
+        QJsonObject mount;
+        mount.insert(QStringLiteral("source"), source);
+        mount.insert(QStringLiteral("target"), target);
+        mount.insert(QStringLiteral("mountType"), QStringLiteral("overlay"));
+        mount.insert(QStringLiteral("upperDir"), upper);
+        mount.insert(QStringLiteral("workDir"), work);
+        QJsonObject stored;
+        stored.insert(QStringLiteral("player1"), QJsonArray{mount});
+        m_helper->m_legacyActiveMounts = stored;
+        const QSet<QString> noUnits;
+        const bool changed = m_helper->reconcileLegacyMounts(noUnits, noUnits, true);
+        int unmounts = 0;
+        for (const MockSystemOps::ProcessInvocation &invocation : m_ops->m_processInvocations) {
+            unmounts += invocation.command == QStringLiteral("umount");
+        }
+        return std::make_tuple(changed, unmounts, m_helper->m_legacyActiveMounts.isEmpty());
+    };
+
+    QCOMPARE(reconcile(upper), std::make_tuple(true, 1, true));
+    // Another overlay at the same target (different upper) is not ours to unmount.
+    QCOMPARE(reconcile(QStringLiteral("/var/lib/couchplay/overlays/other/abc/upper")),
+             std::make_tuple(false, 0, false));
     m_helper->m_legacyActiveMounts = {};
 }
 

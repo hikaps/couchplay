@@ -1397,6 +1397,10 @@ void SessionRunner::onInstanceStopped()
     }
 
     const int idx = instance->index();
+    if (m_windowManager) {
+        // The replacement-window listener is PID-scoped; it must not outlive its Gamescope process.
+        m_windowManager->cancelPositionRequest(idx);
+    }
     if (m_streamingInstances.contains(idx)) {
         bool stopRequested = false;
         if (m_streamManager) {

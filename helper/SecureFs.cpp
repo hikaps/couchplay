@@ -5,6 +5,10 @@
 
 #include <QDebug>
 
+#include <sys/mman.h>
+#include <new>
+#include <atomic>
+#include <cstdint>
 #include <dirent.h>
 #include <errno.h>
 #include <sys/acl.h>
@@ -29,6 +33,23 @@
 
 namespace SecureFs
 {
+static std::atomic<uint64_t> s_localProgress{0};
+static std::atomic<uint64_t> *s_progress = &s_localProgress;
+void shareProgressAcrossFork()
+{
+    void *page = ::mmap(nullptr, sizeof(std::atomic<uint64_t>), PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) return;
+    s_progress = new (page) std::atomic<uint64_t>(s_progress->load(std::memory_order_relaxed));
+}
+uint64_t progressCount()
+{
+    return s_progress->load(std::memory_order_relaxed);
+}
+void noteProgress()
+{
+    s_progress->fetch_add(1, std::memory_order_relaxed);
+}
 static void logMountFailure(const char *operation, int error)
 {
     qWarning().nospace() << "SecureFs: " << operation << " failed with errno " << error << ": "
@@ -536,6 +557,7 @@ static int applyReadExecuteAclTreeAt(int directoryFd, TargetPrincipal *principal
         }
         const char *name = entry->d_name;
         if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) continue;
+        noteProgress();
         struct stat observed{};
         if (::fstatat(directoryFd, name, &observed, AT_SYMLINK_NOFOLLOW) != 0) {
             result = negativeErrno();
@@ -683,6 +705,7 @@ static int copyTree(int srcDirFd, int dstDirFd, uid_t uid, gid_t gid)
 
 static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gid_t gid)
 {
+    noteProgress();
     struct stat st{};
     if (::fstatat(srcDirFd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return -errno;
 
@@ -743,6 +766,7 @@ static int copyEntry(int srcDirFd, const char *name, int dstDirFd, uid_t uid, gi
     }
     char buffer[65536];
     while (result == 0) {
+        noteProgress();
         const ssize_t bytesRead = ::read(srcFile, buffer, sizeof(buffer));
         if (bytesRead < 0) {
             if (errno == EINTR) continue;

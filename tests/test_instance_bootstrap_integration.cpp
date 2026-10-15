@@ -303,6 +303,71 @@ private:
     int m_pending = -1;
     pid_t m_pid = 0;
 };
+
+// Delays every foreign open below a directory, so a copy keeps making progress for longer than the
+// helper's fixed unit start timeout. Filesystem-wide mark: bind clones of the source share the filesystem.
+class PacedOpenGate
+{
+public:
+    PacedOpenGate(const QString &fixtureFilesystemPath, const QString &pacedDirectory, int delayMs)
+        : m_directory(pacedDirectory), m_delayMs(delayMs)
+    {
+        m_group = ::fanotify_init(FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_CLOEXEC,
+                                  O_RDONLY | O_CLOEXEC | O_LARGEFILE);
+        const QByteArray path = QFile::encodeName(fixtureFilesystemPath);
+        if (m_group < 0
+            || ::fanotify_mark(m_group, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, FAN_OPEN_PERM, AT_FDCWD,
+                               path.constData()) != 0) {
+            m_error = QStringLiteral("Fixture fanotify paced gate: %1").arg(QString::fromLocal8Bit(strerror(errno)));
+        }
+    }
+    ~PacedOpenGate()
+    {
+        if (m_group >= 0) ::close(m_group); // Closing allows any queued event.
+    }
+    PacedOpenGate(const PacedOpenGate &) = delete;
+    PacedOpenGate &operator=(const PacedOpenGate &) = delete;
+
+    QString error() const { return m_error; }
+    int delayedOpens() const { return m_delayed; }
+
+    // Handle at most one event; returns after the delay for gated opens.
+    void service()
+    {
+        if (m_group < 0 || !m_error.isEmpty()) return;
+        struct fanotify_event_metadata event {};
+        ssize_t size;
+        do {
+            size = ::read(m_group, &event, sizeof(event));
+        } while (size < 0 && errno == EINTR);
+        if (size < 0 && errno == EAGAIN) return;
+        if (size != sizeof(event) || event.vers != FANOTIFY_METADATA_VERSION || event.fd < 0) {
+            m_error = QStringLiteral("Invalid fanotify paced event");
+            return;
+        }
+        char link[PATH_MAX] = {};
+        const QByteArray proc = QByteArrayLiteral("/proc/self/fd/") + QByteArray::number(event.fd);
+        const ssize_t length = ::readlink(proc.constData(), link, sizeof(link) - 1);
+        const bool gated = length > 0 && event.pid != ::getpid()
+            && QString::fromLocal8Bit(link, length).startsWith(m_directory + QLatin1Char('/'));
+        if (gated) {
+            ++m_delayed;
+            QTest::qWait(m_delayMs);
+        }
+        struct fanotify_response response {event.fd, FAN_ALLOW};
+        if (::write(m_group, &response, sizeof(response)) != sizeof(response)) {
+            m_error = QStringLiteral("Could not answer fanotify paced event");
+        }
+        ::close(event.fd);
+    }
+
+private:
+    QString m_directory;
+    QString m_error;
+    int m_delayMs;
+    int m_group = -1;
+    int m_delayed = 0;
+};
 }
 
 class InstanceBootstrapIntegrationTest final : public QObject
@@ -321,6 +386,7 @@ private Q_SLOTS:
     void testAliasedSourceProjection_data();
     void testAliasedSourceProjection();
     void testCopyLongLeaf();
+    void testLongCopyWithProgressOutlivesStartTimeout();
     void testStagedCopyRollbackOnFullTarget();
     void testCopyStagingAndPrivateNamespace();
     void testBindAndAclKeepTheirDistinctVisibility();
@@ -1571,6 +1637,49 @@ void InstanceBootstrapIntegrationTest::testCopyLongLeaf()
     QVERIFY(stop(runningPid));
     QVERIFY(waitForProcessExit(runningPid));
     runningPid = 0;
+}
+
+void InstanceBootstrapIntegrationTest::testLongCopyWithProgressOutlivesStartTimeout()
+{
+    const Account &target = m_players[0];
+    const QString source = m_sourceRoot + QStringLiteral("/paced-copy");
+    QVERIFY(createOwnedDirectory(source, m_caller.uid, m_caller.gid, 0700));
+    constexpr int fileCount = 20;
+    for (int index = 0; index < fileCount; ++index) {
+        QVERIFY(writeOwnedFile(source + QStringLiteral("/file-%1.dat").arg(index), QByteArrayLiteral("PACED"),
+                               m_caller.uid, m_caller.gid, 0600));
+    }
+    const QString targetFile = targetFor(target, source) + QStringLiteral("/file-0.dat");
+    const QString label = QStringLiteral("paced-copy");
+    qint64 pid = 0;
+    const auto unitCleanup = qScopeGuard([&] {
+        if (pid > 0) {
+            (void)stop(pid);
+            (void)waitForProcessExit(pid);
+        }
+    });
+
+    // Each foreign open waits 2s: preparation exceeds the unit's 60s start timeout while still progressing.
+    PacedOpenGate gate(m_sourceRoot, source, 2000);
+    QVERIFY2(gate.error().isEmpty(), qPrintable(gate.error()));
+    QElapsedTimer elapsed;
+    elapsed.start();
+    pid = launch(target, plan(record(source, QStringLiteral("copy"))),
+                 gameCommand(label, {{targetFile, QStringLiteral("PACED")}}));
+    QVERIFY(pid > 0);
+    while (!m_readyPids.contains(pid) && !m_stoppedPids.contains(pid) && elapsed.elapsed() < 240000
+           && gate.error().isEmpty()) {
+        gate.service();
+        QCoreApplication::processEvents();
+        QTest::qWait(20);
+    }
+    QVERIFY2(gate.error().isEmpty(), qPrintable(gate.error()));
+    QVERIFY2(m_readyPids.contains(pid), qPrintable(m_stoppedPids.value(pid, QStringLiteral("no stop reason"))));
+    QVERIFY2(elapsed.elapsed() > 62000, "The fixture did not outlast the 60 second start timeout");
+    QVERIFY(gate.delayedOpens() >= fileCount);
+    QJsonObject report;
+    QVERIFY(waitForReport(reportPath(label), &report));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("bytes")).toString(), QStringLiteral("PACED"));
 }
 
 void InstanceBootstrapIntegrationTest::testStagedCopyRollbackOnFullTarget()

@@ -238,6 +238,9 @@ Main services use `couchplay-<player>.service`; stream services use
 Owned stream units using the old naming scheme are stopped during upgrade recovery.
 ACL shares on read-only filesystems are accepted only when the player already has read/execute access to every
 object; otherwise preparation fails. The game inherits the host locale (`LANG`, `LANGUAGE`, `LC_*`).
+Instance units keep a 60 second start timeout. While directory preparation makes progress (entries or copy chunks
+processed), the bootstrap asks systemd to extend it every 10 seconds, so large copies finish while a stalled
+preparation still times out.
 
 Profiles store the application selection, not a copied directory list. Legacy directory
 snapshots are removed after preserving the original profile in a sibling

@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #define private public
+#include "WindowManager.h"
 #include "SessionRunner.h"
 #include "PresetManager.h"
 #undef private
@@ -353,6 +354,7 @@ private Q_SLOTS:
     void testStopFailureRetainsPreparingInstanceForRetry();
     void testStopDefersCleanupUntilStopReturns_data();
     void testStopDefersCleanupUntilStopReturns();
+    void testStoppedInstanceCancelsItsPositionListener();
     void testSynchronousLaunchFailureRunsPostHookOnce();
     void testStreamingStartupWaitsForAuxiliaryReadiness();
     void testStreamingLaunchFailureAbortsStartup();
@@ -1759,6 +1761,36 @@ void TestSessionRunner::testStopDefersCleanupUntilStopReturns()
     QVERIFY(!m_runner->m_sharedStateActive);
     QVERIFY(m_runner->m_instances.isEmpty());
     QVERIFY(m_runner->m_instanceDirectoryPreparations.isEmpty());
+}
+
+void TestSessionRunner::testStoppedInstanceCancelsItsPositionListener()
+{
+    const QString presetId = m_presetManager->addCustomPreset(
+        QStringLiteral("Listener lifetime"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    WindowManager windowManager;
+    m_runner->m_windowManager = &windowManager;
+    const auto detach = qScopeGuard([&] {
+        if (m_runner->isActive()) m_runner->stop();
+        m_runner->m_windowManager = nullptr;
+    });
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 2000);
+
+    // A PID-scoped listener for each instance; only the exited instance's one must go.
+    windowManager.m_positionScripts.insert(0, QStringLiteral("listener-0"));
+    windowManager.m_positionScripts.insert(1, QStringLiteral("listener-1"));
+    const auto instances = m_runner->m_instances;
+    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player2"), instances.at(1)->pid(),
+                                         QStringLiteral("exited"));
+    QVERIFY(m_runner->isActive());
+    QVERIFY(!windowManager.m_positionScripts.contains(1));
+    QVERIFY(windowManager.m_positionScripts.contains(0));
 }
 
 void TestSessionRunner::testSynchronousLaunchFailureRunsPostHookOnce()

@@ -13,6 +13,11 @@
 
 namespace SecureFs
 {
+// Monotonic count of entries/chunks processed by long tree operations; lock-free, async-signal-safe to read.
+// Call shareProgressAcrossFork() once, before forking, so forked tree walkers report into the same counter.
+uint64_t progressCount();
+void noteProgress();
+void shareProgressAcrossFork();
 enum class ChownMode {
     All,
     FinalOnly,
