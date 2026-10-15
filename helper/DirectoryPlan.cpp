@@ -26,6 +26,9 @@
 namespace
 {
 constexpr qsizetype maximumManifestBytes = 1024 * 1024;
+constexpr qsizetype maximumDirectoryRecords = 512;
+constexpr qsizetype maximumGamescopeArguments = 4096;
+constexpr qsizetype maximumEnvironmentEntries = 512;
 
 bool fail(QString *error, const QString &message)
 {
@@ -131,6 +134,11 @@ QString resolvedTargetAlias(const DirectoryPreparation &record,
 
 bool validateManifest(const LaunchManifest &manifest, QString *error)
 {
+    if (manifest.directories.size() > maximumDirectoryRecords
+        || manifest.gamescopeArgv.size() > maximumGamescopeArguments
+        || manifest.environment.size() > maximumEnvironmentEntries) {
+        return fail(error, QStringLiteral("Launch manifest collection limit exceeded"));
+    }
     const QString expectedUnitName = manifest.unitRole == QStringLiteral("main")
         ? QStringLiteral("couchplay-%1.service").arg(manifest.targetUsername)
         : manifest.unitRole == QStringLiteral("stream")
@@ -302,8 +310,10 @@ bool readManifestJson(const QByteArray &bytes, LaunchManifest *manifest, QString
     const QJsonValue dirs = object.value(QStringLiteral("directories"));
     const QJsonValue argv = object.value(QStringLiteral("gamescopeArgv"));
     const QJsonValue environment = object.value(QStringLiteral("environment"));
-    if (!dirs.isArray() || !argv.isArray() || !environment.isObject() || dirs.toArray().size() > 512
-        || argv.toArray().size() > 4096 || environment.toObject().size() > 512) {
+    if (!dirs.isArray() || !argv.isArray() || !environment.isObject()
+        || dirs.toArray().size() > maximumDirectoryRecords
+        || argv.toArray().size() > maximumGamescopeArguments
+        || environment.toObject().size() > maximumEnvironmentEntries) {
         return fail(error, QStringLiteral("Malformed launch manifest arrays"));
     }
     static const QSet<QString> recordKeys = {QStringLiteral("source"), QStringLiteral("mode"),
@@ -531,6 +541,9 @@ bool parseDirectoryPreparations(const QVariantList &input,
         return fail(error, QStringLiteral("Missing directory plan output"));
     }
     output->clear();
+    if (input.size() > maximumDirectoryRecords) {
+        return fail(error, QStringLiteral("Too many directory preparations"));
+    }
     static const QSet<QString> keys = {QStringLiteral("source"), QStringLiteral("mode"),
                                        QStringLiteral("targetAlias"), QStringLiteral("stagingPath")};
     QList<DirectoryPreparation> parsed;
@@ -578,6 +591,9 @@ bool parseDirectoryPreparations(const QVariantList &input,
 
 bool validateDirectoryPreparations(const QList<DirectoryPreparation> &input, QString *error)
 {
+    if (input.size() > maximumDirectoryRecords) {
+        return fail(error, QStringLiteral("Too many directory preparations"));
+    }
     QSet<QString> explicitTargets;
     for (const DirectoryPreparation &record : input) {
         if (!validateDirectoryRecord(record, error)) {
@@ -628,7 +644,8 @@ QString copyScratchName(const QString &leafName, const QString &launchToken)
         || leafName.contains(QLatin1Char('/')) || containsNul(leafName) || !isLaunchToken(launchToken)) {
         return {};
     }
-    return QStringLiteral(".%1.cptmp-%2").arg(leafName, launchToken);
+    const QByteArray hash = QCryptographicHash::hash(leafName.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+    return QStringLiteral(".cptmp-%1-%2").arg(launchToken, QString::fromLatin1(hash));
 }
 
 bool writeLaunchManifest(const LaunchManifest &manifest, QString *token, QString *error)

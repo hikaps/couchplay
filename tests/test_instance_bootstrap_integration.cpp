@@ -17,6 +17,7 @@
 #include <QJsonObject>
 #include <QPair>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QSet>
 #include <QTest>
 #include <QVector>
@@ -43,6 +44,7 @@ const QString fixtureRoot = QStringLiteral("/run/couchplay-namespace-test");
 const QString fixtureUser = QStringLiteral("couchplay-ns-fixture");
 const QString playerOne = QStringLiteral("couchplay-ns-player1");
 const QString playerTwo = QStringLiteral("couchplay-ns-player2");
+const QString longCopyLeaf(212, QLatin1Char('l'));
 const QString polkitRulePath = QStringLiteral("/etc/polkit-1/rules.d/00-couchplay-namespace-test.rules");
 
 struct Account {
@@ -198,6 +200,12 @@ private Q_SLOTS:
     void initTestCase();
     void cleanup();
     void cleanupTestCase();
+    void testLaunchManifestCollectionLimits();
+    void testCopyIntoSgidParent();
+    void testAliasedSourceProjection_data();
+    void testAliasedSourceProjection();
+    void testCopyLongLeaf();
+    void testStagedCopyRollbackOnFullTarget();
     void testCopyStagingAndPrivateNamespace();
     void testBindAndAclKeepTheirDistinctVisibility();
     void testOverlayIsolationPersistenceAndBrokerRestart();
@@ -1043,6 +1051,322 @@ void InstanceBootstrapIntegrationTest::onInstanceStopped(const QString &username
     m_stoppedPids.insert(pid, reason);
 }
 
+void InstanceBootstrapIntegrationTest::testLaunchManifestCollectionLimits()
+{
+    LaunchManifest manifest;
+    manifest.unitName = QStringLiteral("couchplay-player1.service");
+    manifest.unitRole = QStringLiteral("main");
+    manifest.callerUid = 1000;
+    manifest.callerGid = 1000;
+    manifest.targetUsername = QStringLiteral("player1");
+    manifest.targetUid = 1001;
+    manifest.targetGid = 1001;
+    manifest.declaredHome = QStringLiteral("/home/compositor");
+    manifest.canonicalHome = manifest.declaredHome;
+    manifest.targetDeclaredHome = QStringLiteral("/home/player1");
+    manifest.targetCanonicalHome = manifest.targetDeclaredHome;
+    manifest.workingDirectory = manifest.targetDeclaredHome;
+    for (int index = 0; index < 512; ++index) {
+        const QString suffix = QString::number(index);
+        manifest.directories.append({QStringLiteral("/source/%1").arg(suffix), QStringLiteral("bind"),
+                                     QStringLiteral(".config/item-%1").arg(suffix), {}});
+    }
+    manifest.gamescopeArgv.append(QStringLiteral("/usr/bin/gamescope"));
+    for (int index = 1; index < 4096; ++index) {
+        manifest.gamescopeArgv.append(QStringLiteral("--arg-%1").arg(index));
+    }
+    for (int index = 0; index < 512; ++index) {
+        manifest.environment.insert(QStringLiteral("CPLIMIT_%1").arg(index), QStringLiteral("value"));
+    }
+
+    QString token;
+    QString error;
+    const bool written = DirectoryPlan::writeLaunchManifest(manifest, &token, &error);
+    if (!written) {
+        QFAIL(qPrintable(error));
+    }
+    LaunchManifest roundTripped;
+    const bool readable = DirectoryPlan::readLaunchManifest(token, &roundTripped, &error);
+    QString cleanupError;
+    const bool removed = DirectoryPlan::unlinkLaunchManifest(token, &cleanupError);
+    QVERIFY2(removed, qPrintable(cleanupError));
+    QVERIFY2(readable, qPrintable(error));
+    QCOMPARE(roundTripped.directories.size(), 512);
+    QCOMPARE(roundTripped.gamescopeArgv.size(), 4096);
+    QCOMPARE(roundTripped.environment.size(), 512);
+
+    QList<LaunchManifest> overLimit;
+    LaunchManifest tooManyDirectories = manifest;
+    tooManyDirectories.directories.append({QStringLiteral("/source/extra"), QStringLiteral("bind"),
+                                           QStringLiteral(".config/extra"), {}});
+    overLimit.append(std::move(tooManyDirectories));
+    LaunchManifest tooManyArguments = manifest;
+    tooManyArguments.gamescopeArgv.append(QStringLiteral("--extra"));
+    overLimit.append(std::move(tooManyArguments));
+    LaunchManifest tooManyEnvironment = manifest;
+    tooManyEnvironment.environment.insert(QStringLiteral("CPLIMIT_EXTRA"), QStringLiteral("value"));
+    overLimit.append(std::move(tooManyEnvironment));
+
+    const QStringList collectionNames{QStringLiteral("directories"), QStringLiteral("argv"),
+                                      QStringLiteral("environment")};
+    QStringList persistedCollections;
+    QStringList unreadableCollections;
+    QStringList cleanupFailures;
+    for (qsizetype index = 0; index < overLimit.size(); ++index) {
+        const QString &name = collectionNames.at(index);
+        const LaunchManifest &candidate = overLimit.at(index);
+        QString rejectedToken;
+        QString writeError;
+        const bool persisted = DirectoryPlan::writeLaunchManifest(candidate, &rejectedToken, &writeError);
+        if (persisted) {
+            persistedCollections.append(name);
+            LaunchManifest rejected;
+            QString readError;
+            if (!DirectoryPlan::readLaunchManifest(rejectedToken, &rejected, &readError)) {
+                unreadableCollections.append(name);
+            }
+            QString unlinkError;
+            if (!DirectoryPlan::unlinkLaunchManifest(rejectedToken, &unlinkError)) {
+                cleanupFailures.append(name);
+            }
+        }
+    }
+    QVERIFY2(cleanupFailures.isEmpty(), qPrintable(cleanupFailures.join(QLatin1Char(','))));
+    QVERIFY2(unreadableCollections.isEmpty(), qPrintable(unreadableCollections.join(QLatin1Char(','))));
+    QVERIFY2(persistedCollections.isEmpty(), qPrintable(persistedCollections.join(QLatin1Char(','))));
+}
+
+void InstanceBootstrapIntegrationTest::testCopyIntoSgidParent()
+{
+    const Account &target = m_players[0];
+    const QString source = m_sourceRoot + QStringLiteral("/sgid-parent-source");
+    QVERIFY(createOwnedDirectory(source, m_caller.uid, m_caller.gid, 0700));
+    const QString sourceFile = source + QStringLiteral("/Launcher.ini");
+    QVERIFY(writeOwnedFile(sourceFile, QByteArrayLiteral("SGID-SOURCE"), m_caller.uid, m_caller.gid, 0600));
+
+    const QString parent = QDir(target.canonicalHome).filePath(QStringLiteral("sgid-parent"));
+    QVERIFY(createOwnedDirectory(parent, 0, m_caller.gid, 02711));
+    struct stat parentBefore {};
+    QVERIFY(::stat(QFile::encodeName(parent).constData(), &parentBefore) == 0);
+    QCOMPARE(parentBefore.st_uid, uid_t(0));
+    QCOMPARE(parentBefore.st_gid, m_caller.gid);
+    QCOMPARE(parentBefore.st_mode & 07777, mode_t(02711));
+    const QString targetAlias = QStringLiteral("sgid-parent/copied");
+    const QString targetFile = QDir(target.canonicalHome).filePath(targetAlias + QStringLiteral("/Launcher.ini"));
+    const QString label = QStringLiteral("copy-into-sgid-parent");
+    qint64 runningPid = 0;
+    const auto unitCleanup = qScopeGuard([&] {
+        if (runningPid > 0) {
+            (void)stop(runningPid);
+            (void)waitForProcessExit(runningPid);
+        }
+    });
+    runningPid = launch(target, plan(record(source, QStringLiteral("copy"), targetAlias)),
+                        gameCommand(label, {{targetFile, QStringLiteral("SGID-SOURCE")}},
+                                    {{targetFile, QStringLiteral("PLAYER-UPDATED")}}));
+    QVERIFY2(runningPid > 0, "Copying below an SGID target parent was not acknowledged");
+    QTRY_VERIFY_WITH_TIMEOUT(m_readyPids.contains(runningPid) || m_stoppedPids.contains(runningPid), 30000);
+    QVERIFY2(m_readyPids.contains(runningPid), qPrintable(m_stoppedPids.value(runningPid)));
+    QJsonObject report;
+    QVERIFY(waitForReport(reportPath(label), &report));
+    QVERIFY(assertDroppedCredentials(report, target));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("bytes")).toString(),
+             QStringLiteral("SGID-SOURCE"));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("uid")).toVariant().toLongLong(),
+             static_cast<qint64>(target.uid));
+    QVERIFY(writeResult(report, targetFile).value(QStringLiteral("written")).toBool());
+    QCOMPARE(readFile(targetFile), QByteArrayLiteral("PLAYER-UPDATED"));
+    QVERIFY(stop(runningPid));
+    QVERIFY(waitForProcessExit(runningPid));
+    runningPid = 0;
+    QCOMPARE(readFile(sourceFile), QByteArrayLiteral("SGID-SOURCE"));
+
+    struct stat parentAfter {};
+    QVERIFY(::stat(QFile::encodeName(parent).constData(), &parentAfter) == 0);
+    QCOMPARE(parentAfter.st_dev, parentBefore.st_dev);
+    QCOMPARE(parentAfter.st_ino, parentBefore.st_ino);
+    QCOMPARE(parentAfter.st_uid, uid_t(0));
+    QCOMPARE(parentAfter.st_gid, m_caller.gid);
+    QCOMPARE(parentAfter.st_mode & 07777, mode_t(02711));
+}
+
+void InstanceBootstrapIntegrationTest::testAliasedSourceProjection_data()
+{
+    QTest::addColumn<QString>("mode");
+    QTest::newRow("copy") << QStringLiteral("copy");
+    QTest::newRow("overlay") << QStringLiteral("overlay");
+}
+
+void InstanceBootstrapIntegrationTest::testAliasedSourceProjection()
+{
+    QFETCH(QString, mode);
+    const Account &target = m_players[0];
+    const QString canonicalSource = m_externalRoot + QStringLiteral("/one");
+    const QString sourceAlias = m_sourceRoot + QStringLiteral("/external-source-alias");
+    QVERIFY(!QFileInfo::exists(sourceAlias));
+    QVERIFY(::symlink(QFile::encodeName(canonicalSource).constData(), QFile::encodeName(sourceAlias).constData()) == 0);
+    const auto aliasCleanup = qScopeGuard([&] { (void)::unlink(QFile::encodeName(sourceAlias).constData()); });
+    QVERIFY(::lchown(QFile::encodeName(sourceAlias).constData(), m_caller.uid, m_caller.gid) == 0);
+
+    const QString targetAlias = QStringLiteral(".couchplay/source-alias");
+    const QString targetFile = QDir(target.canonicalHome).filePath(targetAlias + QStringLiteral("/Launcher.ini"));
+    const QString label = QStringLiteral("source-alias-%1").arg(mode);
+    QString launchError;
+    qint64 runningPid = 0;
+    const auto unitCleanup = qScopeGuard([&] {
+        if (runningPid > 0) {
+            (void)stop(runningPid);
+            (void)waitForProcessExit(runningPid);
+        }
+    });
+    runningPid = launch(target, plan(record(sourceAlias, mode, targetAlias)),
+                        gameCommand(label, {{targetFile, QStringLiteral("EXTERNAL-ONE")}},
+                                    {{targetFile, QStringLiteral("PRIVATE-ALIAS-WRITE")}}),
+                        QString(), true, {}, &launchError);
+    QVERIFY2(runningPid > 0, qPrintable(launchError));
+    QTRY_VERIFY_WITH_TIMEOUT(m_readyPids.contains(runningPid) || m_stoppedPids.contains(runningPid), 30000);
+    QVERIFY2(m_readyPids.contains(runningPid), qPrintable(m_stoppedPids.value(runningPid)));
+    QJsonObject report;
+    QVERIFY(waitForReport(reportPath(label), &report));
+    QVERIFY(assertDroppedCredentials(report, target));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("bytes")).toString(),
+             QStringLiteral("EXTERNAL-ONE"));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("uid")).toVariant().toLongLong(),
+             static_cast<qint64>(target.uid));
+    QVERIFY(writeResult(report, targetFile).value(QStringLiteral("written")).toBool());
+    QVERIFY(assertViewIsPrivate(runningPid, target, targetAlias, mode == QStringLiteral("overlay")));
+    QCOMPARE(readFile(canonicalSource + QStringLiteral("/Launcher.ini")), QByteArrayLiteral("EXTERNAL-ONE"));
+    QVERIFY(stop(runningPid));
+    QVERIFY(waitForProcessExit(runningPid));
+    runningPid = 0;
+}
+
+void InstanceBootstrapIntegrationTest::testCopyLongLeaf()
+{
+    const Account &target = m_players[0];
+    const QString source = m_sourceRoot + QStringLiteral("/long-leaf");
+    QVERIFY(createOwnedDirectory(source, m_caller.uid, m_caller.gid, 0700));
+    const QString sourceFile = source + QStringLiteral("/Launcher.ini");
+    QVERIFY(writeOwnedFile(sourceFile, QByteArrayLiteral("LONG-LEAF-COPY"), m_caller.uid, m_caller.gid, 0600));
+
+    QVERIFY(longCopyLeaf.toUtf8().size() >= 212);
+    const QString destination = QDir(target.canonicalHome).filePath(longCopyLeaf);
+    const QString targetFile = destination + QStringLiteral("/Launcher.ini");
+    const QString label = QStringLiteral("copy-long-leaf");
+    QString launchError;
+    qint64 runningPid = 0;
+    const auto unitCleanup = qScopeGuard([&] {
+        if (runningPid > 0) {
+            (void)stop(runningPid);
+            (void)waitForProcessExit(runningPid);
+        }
+    });
+    runningPid = launch(target, plan(record(source, QStringLiteral("copy"), longCopyLeaf)),
+                        gameCommand(label, {{targetFile, QStringLiteral("LONG-LEAF-COPY")}}),
+                        QString(), true, {}, &launchError);
+    QVERIFY2(runningPid > 0, qPrintable(launchError));
+    QTRY_VERIFY_WITH_TIMEOUT(m_readyPids.contains(runningPid) || m_stoppedPids.contains(runningPid), 30000);
+    QVERIFY2(m_readyPids.contains(runningPid), qPrintable(m_stoppedPids.value(runningPid)));
+    QJsonObject report;
+    QVERIFY(waitForReport(reportPath(label), &report));
+    QVERIFY(assertDroppedCredentials(report, target));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("bytes")).toString(),
+             QStringLiteral("LONG-LEAF-COPY"));
+    QCOMPARE(readResult(report, targetFile).value(QStringLiteral("uid")).toVariant().toLongLong(),
+             static_cast<qint64>(target.uid));
+    QCOMPARE(readFile(sourceFile), QByteArrayLiteral("LONG-LEAF-COPY"));
+    QVERIFY(stop(runningPid));
+    QVERIFY(waitForProcessExit(runningPid));
+    runningPid = 0;
+}
+
+void InstanceBootstrapIntegrationTest::testStagedCopyRollbackOnFullTarget()
+{
+    const Account &target = m_players[0];
+    const QString source = m_sourceRoot + QStringLiteral("/copy");
+    const QString staged = stagingPath(target, source);
+    const QString oversizedStageFile = staged + QStringLiteral("/oversized-staging-file");
+    QVERIFY(!QFileInfo::exists(oversizedStageFile));
+    const auto stagingCleanup = qScopeGuard([&] { (void)QFile::remove(oversizedStageFile); });
+    QFile sparseFile(oversizedStageFile);
+    QVERIFY(sparseFile.open(QIODevice::WriteOnly));
+    constexpr qint64 sparseSize = 2 * 1024 * 1024;
+    QVERIFY(sparseFile.resize(sparseSize));
+    QVERIFY(sparseFile.flush());
+    sparseFile.close();
+    const QByteArray sparsePath = QFile::encodeName(oversizedStageFile);
+    QVERIFY(::chown(sparsePath.constData(), m_caller.uid, m_caller.gid) == 0);
+    QVERIFY(::chmod(sparsePath.constData(), 0600) == 0);
+
+    const QString mountPath = QDir(target.canonicalHome).filePath(QStringLiteral(".couchplay/staging-full"));
+    QVERIFY(!QFileInfo::exists(mountPath));
+    bool mounted = false;
+    const auto mountCleanup = qScopeGuard([&] {
+        const QByteArray path = QFile::encodeName(mountPath);
+        if (mounted && ::umount2(path.constData(), MNT_DETACH) != 0) return;
+        (void)QDir(mountPath).removeRecursively();
+    });
+    QVERIFY(QDir().mkpath(mountPath));
+    const QByteArray mountBytes = QFile::encodeName(mountPath);
+    const QByteArray mountOptions = QByteArrayLiteral("size=1m,mode=0700");
+    QVERIFY2(::mount("tmpfs", mountBytes.constData(), "tmpfs", MS_NOSUID | MS_NODEV,
+                     mountOptions.constData()) == 0,
+             qPrintable(QString::fromLocal8Bit(strerror(errno))));
+    mounted = true;
+    QVERIFY2(::mount(nullptr, mountBytes.constData(), nullptr, MS_SHARED, nullptr) == 0,
+             qPrintable(QString::fromLocal8Bit(strerror(errno))));
+    QVERIFY(::chown(mountBytes.constData(), target.uid, target.gid) == 0);
+    QVERIFY(::chmod(mountBytes.constData(), 0700) == 0);
+
+    const QString targetAlias = QStringLiteral(".couchplay/staging-full/destination");
+    const QString destination = QDir(target.canonicalHome).filePath(targetAlias);
+    QVERIFY(createOwnedDirectory(destination, target.uid, target.gid, 0700));
+    const QString destinationFile = destination + QStringLiteral("/Launcher.ini");
+    QVERIFY(writeOwnedFile(destinationFile, QByteArrayLiteral("ORIGINAL-DESTINATION"),
+                          target.uid, target.gid, 0600));
+    struct stat destinationBefore {};
+    QVERIFY(::stat(QFile::encodeName(destination).constData(), &destinationBefore) == 0);
+    const QStringList scratchBefore = QDir(mountPath).entryList(
+        {QStringLiteral(".cptmp-*")}, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
+
+    const QString label = QStringLiteral("staged-copy-full-target");
+    QString launchError;
+    QString failureReason;
+    qint64 preparingPid = 0;
+    const auto processCleanup = qScopeGuard([&] {
+        if (preparingPid > 0) {
+            (void)stop(preparingPid);
+            (void)waitForProcessExit(preparingPid);
+        }
+    });
+    preparingPid = launch(target, plan(record(source, QStringLiteral("copy"), targetAlias, staged)),
+                          gameCommand(label), QString(), true, {}, &launchError);
+    if (preparingPid > 0) {
+        QTRY_VERIFY_WITH_TIMEOUT(m_stoppedPids.contains(preparingPid) || m_readyPids.contains(preparingPid), 30000);
+        QVERIFY2(!m_readyPids.contains(preparingPid), "A staged copy unexpectedly fit on the full target");
+        QVERIFY(m_stoppedPids.contains(preparingPid));
+        failureReason = m_stoppedPids.value(preparingPid);
+        QVERIFY2(failureReason.contains(source), qPrintable(failureReason));
+        QVERIFY(waitForProcessExit(preparingPid));
+        preparingPid = 0;
+    } else {
+        failureReason = launchError;
+        QVERIFY2(failureReason.contains(source), qPrintable(failureReason));
+    }
+    QVERIFY2(failureReason.contains(QStringLiteral("No space left on device")), qPrintable(failureReason));
+
+    struct stat destinationAfter {};
+    QVERIFY(::stat(QFile::encodeName(destination).constData(), &destinationAfter) == 0);
+    QCOMPARE(destinationAfter.st_dev, destinationBefore.st_dev);
+    QCOMPARE(destinationAfter.st_ino, destinationBefore.st_ino);
+    QCOMPARE(readFile(destinationFile), QByteArrayLiteral("ORIGINAL-DESTINATION"));
+    QCOMPARE(QDir(mountPath).entryList({QStringLiteral(".cptmp-*")},
+                                      QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
+             scratchBefore);
+    QCOMPARE(readFile(source + QStringLiteral("/Launcher.ini")), QByteArrayLiteral("COPY-ORIGINAL"));
+    QVERIFY(!QFileInfo::exists(reportPath(label)));
+}
+
 void InstanceBootstrapIntegrationTest::testCopyStagingAndPrivateNamespace()
 {
     const Account &target = m_players[0];
@@ -1094,6 +1418,8 @@ void InstanceBootstrapIntegrationTest::testCopyStagingAndPrivateNamespace()
     QCOMPARE(sourceStat.st_uid, m_caller.uid);
     QCOMPARE(sourceStat.st_gid, m_caller.gid);
     QCOMPARE(sourceStat.st_mode & 07777, mode_t(0600));
+
+
     const QString firstPlayerOnly = destination + QStringLiteral("/player-only.txt");
     const QJsonObject firstPlayerOnlyWrite = writeResult(result, firstPlayerOnly);
     QVERIFY2(firstPlayerOnlyWrite.value(QStringLiteral("written")).toBool(),
@@ -1135,30 +1461,6 @@ void InstanceBootstrapIntegrationTest::testCopyStagingAndPrivateNamespace()
     QVERIFY(stop(replacementPid));
     QVERIFY(waitForProcessExit(replacementPid));
 
-    const QString specialFile = source + QStringLiteral("/unsupported-special-entry");
-    QVERIFY(::mkfifo(QFile::encodeName(specialFile).constData(), 0600) == 0);
-    QVERIFY(::chown(QFile::encodeName(specialFile).constData(), m_caller.uid, m_caller.gid) == 0);
-    QString failedReplacementError;
-    const qint64 failedReplacement = launch(target, plan(record(source, QStringLiteral("copy"), {}, staged)),
-                                            gameCommand(QStringLiteral("copy-special-failure")), QString(), true, {},
-                                            &failedReplacementError);
-    const auto hasSourceSpecificFailure = [&source](const QString &failure) {
-        return failure.contains(source);
-    };
-    if (failedReplacement > 0) {
-        QTRY_VERIFY_WITH_TIMEOUT(m_stoppedPids.contains(failedReplacement), 30000);
-        QVERIFY(!m_readyPids.contains(failedReplacement));
-        QVERIFY(waitForProcessExit(failedReplacement));
-        const QString reason = m_stoppedPids.value(failedReplacement);
-        QVERIFY2(hasSourceSpecificFailure(reason), qPrintable(reason));
-    } else {
-        QVERIFY2(hasSourceSpecificFailure(failedReplacementError), qPrintable(failedReplacementError));
-    }
-
-    QCOMPARE(readFile(targetFile), QByteArrayLiteral("COPY-STAGED-SECOND"));
-    QCOMPARE(readFile(destination + QStringLiteral("/Games.ini")), QByteArrayLiteral("GAMES-UPDATED"));
-    QVERIFY(!QFileInfo::exists(playerOnly));
-    QVERIFY(::unlink(QFile::encodeName(specialFile).constData()) == 0);
     QCOMPARE(readFile(source + QStringLiteral("/Launcher.ini")), QByteArrayLiteral("COPY-UPDATED"));
     const QString secondPlayerDestination = targetFor(m_players[1], source);
     const QString secondPlayerFile = secondPlayerDestination + QStringLiteral("/Launcher.ini");
@@ -1699,14 +2001,20 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
     const QString inaccessible = m_sourceRoot + QStringLiteral("/inaccessible");
     const QString inaccessibleDestination = targetFor(target, inaccessible);
     const QString inaccessibleReport = reportPath(QStringLiteral("inaccessible-source"));
+    QString inaccessibleError;
     const qint64 inaccessiblePid = launch(target, plan(record(inaccessible, QStringLiteral("bind"))),
                                           gameCommand(QStringLiteral("inaccessible-source"),
                                                       {{inaccessibleDestination + QStringLiteral("/Launcher.ini"),
-                                                        QStringLiteral("INACCESSIBLE")}}));
-    QVERIFY(inaccessiblePid > 0);
-    QTRY_VERIFY_WITH_TIMEOUT(m_stoppedPids.contains(inaccessiblePid), 30000);
-    QVERIFY2(!m_readyPids.contains(inaccessiblePid), "An inaccessible bind view incorrectly reported READY");
-    QVERIFY(m_stoppedPids.contains(inaccessiblePid));
+                                                        QStringLiteral("INACCESSIBLE")}}),
+                                          QString(), true, {}, &inaccessibleError);
+    if (inaccessiblePid > 0) {
+        QTRY_VERIFY_WITH_TIMEOUT(m_stoppedPids.contains(inaccessiblePid) || m_readyPids.contains(inaccessiblePid), 30000);
+        QVERIFY2(!m_readyPids.contains(inaccessiblePid), "An inaccessible bind view incorrectly reported READY");
+        QVERIFY(m_stoppedPids.contains(inaccessiblePid));
+        QVERIFY(waitForProcessExit(inaccessiblePid));
+    } else {
+        QVERIFY(!inaccessibleError.isEmpty());
+    }
     QVERIFY(!QFileInfo::exists(inaccessibleReport));
 
     const QString unsafeSource = m_sourceRoot + QStringLiteral("/source-symlink");
@@ -1974,7 +2282,7 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
             QFAIL("Could not create the tmpfs copy-cancellation fixture");
         }
     }
-    const QString cancelledCopyTarget = targetFor(target, largeSource);
+    const QString cancelledCopyTarget = QDir(target.canonicalHome).filePath(longCopyLeaf);
     const QString cancelledCopyParent = QFileInfo(cancelledCopyTarget).path();
     QVERIFY(QDir().mkpath(cancelledCopyParent));
     QVERIFY(createOwnedDirectory(cancelledCopyTarget, target.uid, target.gid, 0700));
@@ -1983,19 +2291,20 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
                            target.uid, target.gid, 0600));
     struct stat originalTargetStat {};
     QVERIFY(::stat(QFile::encodeName(cancelledCopyTarget).constData(), &originalTargetStat) == 0);
-    const QString decoyScratchName = QStringLiteral(".large.cptmp-00000000-0000-4000-8000-000000000000-0");
+    const QString decoyScratchName =
+        QStringLiteral(".cptmp-00000000-0000-4000-8000-000000000000-0000000000000000");
     const QString decoyScratchPath = QDir(cancelledCopyParent).filePath(decoyScratchName);
     QVERIFY(createOwnedDirectory(decoyScratchPath, target.uid, target.gid, 0700));
     const QString decoyScratchFile = decoyScratchPath + QStringLiteral("/User.ini");
     QVERIFY(writeOwnedFile(decoyScratchFile, QByteArrayLiteral("USER-OWNED"), target.uid, target.gid, 0600));
-    const QStringList copyScratchPattern{QStringLiteral(".large.cptmp-*")};
+    const QStringList copyScratchPattern{QStringLiteral(".cptmp-*")};
     const auto copyScratchEntries = [&]() {
         QStringList entries = QDir(cancelledCopyParent).entryList(
             copyScratchPattern, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
         entries.removeAll(decoyScratchName);
         return entries;
     };
-    const qint64 killedCopyPid = launch(target, plan(record(largeSource, QStringLiteral("copy"))),
+    const qint64 killedCopyPid = launch(target, plan(record(largeSource, QStringLiteral("copy"), longCopyLeaf)),
                                         gameCommand(QStringLiteral("kernel-killed-copy"), {}, {}, {}, false));
     QVERIFY2(killedCopyPid > 0, "The kernel-killed copy fixture was not acknowledged");
     QTRY_VERIFY_WITH_TIMEOUT(!copyScratchEntries().isEmpty(), 30000);
@@ -2011,6 +2320,7 @@ void InstanceBootstrapIntegrationTest::testPreparationFailureCancellationAndExec
     QCOMPARE(targetAfterKillStat.st_dev, originalTargetStat.st_dev);
     QCOMPARE(targetAfterKillStat.st_ino, originalTargetStat.st_ino);
     QCOMPARE(readFile(originalTargetFile), QByteArrayLiteral("ORIGINAL-DESTINATION"));
+    QCOMPARE(readFile(cancelledCopyTarget + QStringLiteral("/Launcher.ini")), QByteArrayLiteral("LONG-LEAF-COPY"));
     QVERIFY(!QFileInfo::exists(reportPath(QStringLiteral("kernel-killed-copy"))));
     QCoreApplication::processEvents();
     const qint64 restartPreparingPid = launch(m_players[1], plan(record(largeSource, QStringLiteral("copy"))),

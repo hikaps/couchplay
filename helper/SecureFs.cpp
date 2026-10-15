@@ -778,7 +778,8 @@ static bool validLeafName(const QString &name)
 
 int removeCopyScratchAt(int parentFd, const QString &scratchName)
 {
-    if (parentFd < 0 || !validLeafName(scratchName)) return -EINVAL;
+    if (parentFd < 0 || !validLeafName(scratchName)
+        || !scratchName.startsWith(QStringLiteral(".cptmp-"))) return -EINVAL;
     const QByteArray name = scratchName.toUtf8();
     struct stat parentStat{};
     if (::fstat(parentFd, &parentStat) != 0) return -errno;
@@ -827,7 +828,7 @@ int replaceTreeContents(int srcDirFd, int stagingDirFd, int targetParentFd, cons
                         const QString &scratchName, uid_t uid, gid_t gid)
 {
     if (srcDirFd < 0 || targetParentFd < 0 || !validLeafName(leafName) || !validLeafName(scratchName)
-        || !scratchName.startsWith(QStringLiteral(".") + leafName + QStringLiteral(".cptmp-"))) {
+        || !scratchName.startsWith(QStringLiteral(".cptmp-"))) {
         return -EINVAL;
     }
     struct stat sourceStat{};
@@ -852,21 +853,34 @@ int replaceTreeContents(int srcDirFd, int stagingDirFd, int targetParentFd, cons
     }
     struct stat wrapperPathStat{};
     struct stat wrapperStat{};
-    if (::fstatat(targetParentFd, tempName.constData(), &wrapperPathStat, AT_SYMLINK_NOFOLLOW) != 0
-        || ::fstat(wrapperFd, &wrapperStat) != 0 || !S_ISDIR(wrapperPathStat.st_mode) || !S_ISDIR(wrapperStat.st_mode)
-        || wrapperPathStat.st_dev != wrapperStat.st_dev || wrapperPathStat.st_ino != wrapperStat.st_ino
-        || wrapperStat.st_uid != 0 || wrapperStat.st_gid != 0 || wrapperStat.st_dev != wrapperPathStat.st_dev
-        || ::fchown(wrapperFd, 0, 0) != 0 || ::fchmod(wrapperFd, 0700) != 0) {
-        const int error = errno ? errno : ESTALE;
-        ::close(wrapperFd);
-        (void)removeCopyScratchAt(targetParentFd, scratchName);
-        return -error;
-    }
     auto discardScratch = [&](int error) {
         if (::close(wrapperFd) != 0 && error == 0) error = -errno;
         (void)removeCopyScratchAt(targetParentFd, scratchName);
         return error;
     };
+    if (::fstatat(targetParentFd, tempName.constData(), &wrapperPathStat, AT_SYMLINK_NOFOLLOW) != 0) {
+        return discardScratch(-errno);
+    }
+    if (::fstat(wrapperFd, &wrapperStat) != 0) return discardScratch(-errno);
+    if (!S_ISDIR(wrapperPathStat.st_mode) || !S_ISDIR(wrapperStat.st_mode)
+        || wrapperPathStat.st_dev != wrapperStat.st_dev || wrapperPathStat.st_ino != wrapperStat.st_ino
+        || wrapperStat.st_uid != 0) {
+        return discardScratch(wrapperStat.st_uid == 0 ? -ESTALE : -EPERM);
+    }
+    if (::fchown(wrapperFd, 0, 0) != 0) return discardScratch(-errno);
+    if (::fchmod(wrapperFd, 0700) != 0) return discardScratch(-errno);
+    struct stat normalizedPathStat{};
+    struct stat normalizedStat{};
+    if (::fstatat(targetParentFd, tempName.constData(), &normalizedPathStat, AT_SYMLINK_NOFOLLOW) != 0) {
+        return discardScratch(-errno);
+    }
+    if (::fstat(wrapperFd, &normalizedStat) != 0) return discardScratch(-errno);
+    if (!S_ISDIR(normalizedPathStat.st_mode) || !S_ISDIR(normalizedStat.st_mode)
+        || normalizedPathStat.st_dev != normalizedStat.st_dev || normalizedPathStat.st_ino != normalizedStat.st_ino
+        || normalizedStat.st_uid != 0 || normalizedStat.st_gid != 0
+        || (normalizedStat.st_mode & 07777) != 0700) {
+        return discardScratch(-ESTALE);
+    }
 
     if (::mkdirat(wrapperFd, payloadName.constData(), 0700) != 0) return discardScratch(-errno);
     const int payloadFd = ::openat(wrapperFd, payloadName.constData(),

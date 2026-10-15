@@ -870,6 +870,7 @@ private Q_SLOTS:
     void testIsPathWithinAllowedPrefixCanonicalAtomicAliases();
     void testIsPathWithinAllowedPrefixCanonicalAtomicAliasesAbsent();
     void testDirectoryPreparationValidation();
+    void testLaunchInstanceRejectsTooManyDirectoryPreparations();
     void testSetPathAclWithParentsSymlinkEscapeRejected();
     void testSetPathAclWithParentsCanonicalMntAliasEscapeRejected();
     void testSecureReadExecuteAclTreePreservesAclAndSkipsSymlinks();
@@ -2183,6 +2184,28 @@ void TestCouchPlayHelper::testDirectoryPreparationValidation()
 }
 
 
+void TestCouchPlayHelper::testLaunchInstanceRejectsTooManyDirectoryPreparations()
+{
+    configureLaunchFixture();
+    QVariantList preparations;
+    preparations.reserve(513);
+    for (int index = 0; index < 513; ++index) {
+        const QString source = QStringLiteral("/home/compositor/source-%1").arg(index);
+        m_ops->setDirectoryExists(source, true);
+        preparations.append(DirectoryPreparation{source,
+                                                  QStringLiteral("bind"),
+                                                  QStringLiteral(".config/item-%1").arg(index),
+                                                  {}}
+                                .toVariant());
+    }
+    const QDBusReply<qint64> reply = launchPlayer1(preparations);
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QVERIFY(m_ops->m_launchManifests.isEmpty());
+    QVERIFY(m_ops->m_transientServiceName.isEmpty());
+}
+
+
 
 void TestCouchPlayHelper::testSetPathAclWithParentsSymlinkEscapeRejected()
 {
@@ -3074,6 +3097,17 @@ void TestCouchPlayHelper::testLegacyMountCleanupRejectsUntrustedTarget()
 void TestCouchPlayHelper::testStopInstancePreservesManifestOnScratchCleanupFailure()
 {
     configureLaunchFixture();
+    QTemporaryDir playerHome;
+    QVERIFY(playerHome.isValid());
+    struct stat homeStat {};
+    const QByteArray homePath = QFile::encodeName(playerHome.path());
+    QVERIFY(::stat(homePath.constData(), &homeStat) == 0);
+    const uid_t mismatchedTargetUid = homeStat.st_uid == 1001 ? 1002 : 1001;
+    m_ops->setUserExists(QStringLiteral("player1"), true, mismatchedTargetUid, 1001, playerHome.path());
+    const QString targetRuntimeDirectory = QStringLiteral("/run/user/%1").arg(mismatchedTargetUid);
+    m_ops->setFileExists(targetRuntimeDirectory, true);
+    m_ops->setFileExists(targetRuntimeDirectory + QStringLiteral("/bus"), true);
+    m_ops->setDirectoryExists(targetRuntimeDirectory, true);
     const QVariantList preparations{DirectoryPreparation{QStringLiteral("/home/compositor/.config/example app"),
                                                          QStringLiteral("copy"),
                                                          QStringLiteral(".config/example app"),
@@ -3304,12 +3338,6 @@ void TestCouchPlayHelper::testHostTmpSourceIsDeferredToBootstrap()
     QTRY_COMPARE(stoppedSpy.count(), 1);
     QVERIFY(stoppedSpy.first().at(2).toString().contains(hostSource));
     QVERIFY(stoppedSpy.first().at(2).toString().contains(QStringLiteral("2")));
-    const QString unitName = QStringLiteral("couchplay-player1.service");
-    const QString token = m_helper->m_launchTokenByUnitName.value(unitName);
-    QVERIFY(!token.isEmpty());
-    QVERIFY(m_ops->m_launchManifests.contains(token));
-    m_helper->m_launchTokenByUnitName.remove(unitName);
-    m_ops->m_launchManifests.remove(token);
 }
 
 void TestCouchPlayHelper::testLaunchInstancePreparingPidTimeout()

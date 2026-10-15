@@ -261,7 +261,19 @@ bool pinValidatedDirectory(const QString &requestedPath,
                         QStringLiteral("Directory is outside the caller's permitted roots: %1").arg(requestedPath));
     }
 
-    const HomePathMapping home = mapHomeRelativePath(requestedPath, manifest.declaredHome,
+    // Resolve explicitly projected sources on the host; their target alias keeps routing stable.
+    QString canonicalSource;
+    if (!staging && allowHomeRoot) {
+        int lookupError = 0;
+        canonicalSource = canonicalPath(requestedPath, &lookupError);
+        if (canonicalSource.isEmpty()) {
+            return setError(error, errorNumber, lookupError,
+                            QStringLiteral("Could not resolve source directory %1: %2")
+                                .arg(requestedPath, systemError(lookupError)));
+        }
+    }
+    const QString &sourcePath = canonicalSource.isEmpty() ? requestedPath : canonicalSource;
+    const HomePathMapping home = mapHomeRelativePath(sourcePath, manifest.declaredHome,
                                                      manifest.canonicalHome);
     QString rootPath;
     QString relativePath;
@@ -269,10 +281,10 @@ bool pinValidatedDirectory(const QString &requestedPath,
         rootPath = manifest.canonicalHome;
         relativePath = home.relativePath;
     } else if (!staging && allowHomeRoot && home.kind == HomePathKind::Invalid
-               && isCallerHomeRoot(requestedPath, manifest)) {
+               && isCallerHomeRoot(sourcePath, manifest)) {
         rootPath = manifest.canonicalHome;
     } else if (!staging && home.kind == HomePathKind::External) {
-        if (!externalSourceRoot(requestedPath, &rootPath, &relativePath)) {
+        if (!externalSourceRoot(sourcePath, &rootPath, &relativePath)) {
             return setError(error, errorNumber, EACCES,
                             QStringLiteral("Directory is outside the caller's permitted roots: %1")
                                 .arg(requestedPath));
@@ -1094,31 +1106,13 @@ bool prepareMounts(const LaunchManifest &manifest, const QString &launchToken,
         UniqueFd parentFd(parent);
         if (mode == QStringLiteral("copy")) {
             const QString scratchName = DirectoryPlan::copyScratchName(leaf, launchToken);
-            const int result = SecureFs::replaceTreeContents(item.sourceFd.get(), -1, parent,
+            const int result = SecureFs::replaceTreeContents(item.sourceFd.get(), item.stagingFd.get(), parent,
                                                               leaf, scratchName, manifest.targetUid, manifest.targetGid);
             if (result != 0) {
                 const int value = -result;
                 return setError(error, errorNumber, value,
                                 QStringLiteral("Failed to copy directory %1 into player HOME: %2")
                                     .arg(item.record.source, systemError(value)));
-            }
-            if (item.stagingFd) {
-                const QByteArray name = leaf.toUtf8();
-                const int target = ::openat(parent, name.constData(),
-                                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-                if (target < 0) {
-                    return setError(error, errorNumber, errno,
-                                    QStringLiteral("Could not open copied directory for staging: %1")
-                                        .arg(item.record.source));
-                }
-                UniqueFd targetFd(target);
-                const int staged = SecureFs::copyTreeContents(item.stagingFd.get(), target,
-                                                               manifest.targetUid, manifest.targetGid);
-                if (staged != 0) {
-                    return setError(error, errorNumber, -staged,
-                                    QStringLiteral("Could not apply staged files to %1: %2")
-                                        .arg(item.record.source, systemError(-staged)));
-                }
             }
             continue;
         }
