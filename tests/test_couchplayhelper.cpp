@@ -946,6 +946,7 @@ private Q_SLOTS:
     void testLegacyMountCleanupPreservesFailedUnmount();
     void testLegacyMountCleanupRecognizesBindMountByDirectoryIdentity();
     void testFailedSubscriptionDoesNotOverwritePersistedState();
+    void testTreeRemovalReportsProgress();
     void testLegacyMountCleanupRecognizesOverlayByPersistedUpperDir();
     void testLegacyMountCleanupRejectsUntrustedTarget();
     void testLaunchInstance_validationEmptyUsername();
@@ -3116,13 +3117,30 @@ void TestCouchPlayHelper::testLegacyMountCleanupUnmountsValidatedTarget()
         }
         if (invocation.command == QStringLiteral("umount")) {
             ++unmountCount;
-            QCOMPARE(invocation.args.size(), 2);
-            QCOMPARE(invocation.args.at(0), QStringLiteral("--"));
-            QCOMPARE(invocation.args.at(1), QStringLiteral("/proc/self/fd/0"));
+            QCOMPARE(invocation.args, (QStringList{QStringLiteral("-l"), QStringLiteral("--"),
+                                                   QStringLiteral("/proc/self/fd/0")}));
         }
     }
     QCOMPARE(stoppedUnits, 2);
     QCOMPARE(unmountCount, 1);
+}
+
+void TestCouchPlayHelper::testTreeRemovalReportsProgress()
+{
+    // The start-timeout heartbeat only extends while progressCount() advances; removal must count.
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("a/b")));
+    for (const QString &name : {QStringLiteral("a/one"), QStringLiteral("a/b/two"), QStringLiteral("three")}) {
+        QFile file(QDir(root.path()).filePath(name));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+    }
+    const int fd = ::open(QFile::encodeName(root.path()).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    QVERIFY(fd >= 0);
+    const uint64_t before = SecureFs::progressCount();
+    QCOMPARE(SecureFs::removeTreeAt(fd), 0);
+    ::close(fd);
+    QVERIFY(SecureFs::progressCount() - before >= 5); // a, a/one, a/b, a/b/two, three
 }
 
 void TestCouchPlayHelper::testLegacyMountCleanupPreservesFailedUnmount()

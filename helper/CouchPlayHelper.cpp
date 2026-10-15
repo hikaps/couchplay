@@ -5256,8 +5256,9 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
             QProcess *unmountProcess = m_ops->createProcess();
             const QString fdPath = QStringLiteral("/proc/self/fd/%1").arg(targetFd);
             unmountProcess->setStandardInputFile(fdPath);
+            // Our own descriptors pin the mount, so a plain umount always fails with EBUSY; detach lazily.
             m_ops->startProcess(unmountProcess, QStringLiteral("umount"),
-                                {QStringLiteral("--"), QStringLiteral("/proc/self/fd/0")});
+                                {QStringLiteral("-l"), QStringLiteral("--"), QStringLiteral("/proc/self/fd/0")});
             const bool unmounted = m_ops->waitForFinished(unmountProcess, 5000)
                 && m_ops->processExitCode(unmountProcess) == 0;
             delete unmountProcess;

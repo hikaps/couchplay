@@ -612,6 +612,7 @@ static int removeTree(int dirFd)
         if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
             continue;
         }
+        noteProgress();
 
         struct stat st;
         // fstatat without AT_SYMLINK_NOFOLLOW would stat through links;
