@@ -24,5 +24,6 @@ dnf install -y \
   kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
   kf6-kglobalaccel-devel extra-cmake-modules \
   kf6-kdbusaddons-devel \
+  libacl-devel \
   pipewire-devel polkit-devel polkit-qt6-1-devel \
   "$@"

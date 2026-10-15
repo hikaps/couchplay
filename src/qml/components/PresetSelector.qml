@@ -27,8 +27,26 @@ Controls.ComboBox {
 
     signal presetSelected(string presetId)
 
-    // Model from PresetManager
-    model: presetManager ? presetManager.presets : []
+    function presetList() {
+        const presets = presetManager ? presetManager.presets : []
+        const result = []
+        let foundCurrent = currentPresetId === ""
+        for (let i = 0; i < presets.length; ++i) {
+            result.push(presets[i])
+            foundCurrent = foundCurrent || presets[i].id === currentPresetId
+        }
+        if (!foundCurrent) {
+            result.unshift({
+                id: currentPresetId,
+                name: i18nc("@item", "%1 (unavailable)", currentPresetId),
+                iconName: "dialog-warning",
+                isBuiltin: false,
+                unavailable: true
+            })
+        }
+        return result
+    }
+    model: presetList()
     textRole: "name"
     valueRole: "id"
 
@@ -102,7 +120,6 @@ Controls.ComboBox {
             }
         }
         
-        // Default to first preset (Steam) if not found
-        currentIndex = 0
+        currentIndex = currentPresetId === "" ? 0 : -1
     }
 }

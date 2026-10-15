@@ -39,6 +39,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/WindowManager.h
     ../src/core/PresetManager.cpp
     ../src/core/PresetManager.h
+    ../helper/DirectoryPlan.cpp
+    ../helper/DirectoryPlan.h
     ../src/core/HeroicConfigManager.cpp
     ../src/core/HeroicConfigManager.h
     ../src/core/SteamConfigManager.cpp
@@ -68,6 +70,10 @@ set(TEST_MANAGER_SOURCES
 set(HELPER_TEST_SOURCES
     ../helper/CouchPlayHelper.cpp
     ../helper/CouchPlayHelper.h
+    ../helper/DirectoryPlan.h
+    ../helper/DirectoryPlan.cpp
+    ../helper/InstanceBootstrap.cpp
+    ../helper/InstanceBootstrap.h
     ../helper/SecureFs.cpp
     ../helper/SecureFs.h
     ../helper/SystemOps.cpp
@@ -122,6 +128,7 @@ function(add_helper_test TEST_NAME)
         Qt6::Core
         Qt6::DBus
         Qt6::Test
+        ${LIBACL_LIBRARY}
     )
 
     if(PolkitQt6-1_FOUND)
@@ -132,6 +139,7 @@ function(add_helper_test TEST_NAME)
     target_include_directories(${TEST_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../helper
+        ${LIBACL_INCLUDE_DIR}
     )
 
     # Enable automoc for QtTest
@@ -162,6 +170,9 @@ add_couchplay_test(test_presetmanager_integration)
 add_couchplay_test(test_scanapplications)
 add_couchplay_test(test_sessionmanager)
 add_couchplay_test(test_sessionrunner)
+target_sources(test_sessionrunner PRIVATE ../helper/SecureFs.cpp)
+target_include_directories(test_sessionrunner PRIVATE ${LIBACL_INCLUDE_DIR})
+target_link_libraries(test_sessionrunner PRIVATE ${LIBACL_LIBRARY})
 add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
 add_couchplay_test(test_streammanager)
@@ -170,3 +181,15 @@ add_couchplay_test(test_usermanager)
 
 # Add helper tests
 add_helper_test(test_couchplayhelper)
+option(COUCHPLAY_PRIVILEGED_TESTS "Build tests requiring a disposable privileged systemd host" OFF)
+if(COUCHPLAY_PRIVILEGED_TESTS)
+    add_helper_test(test_instance_bootstrap_integration)
+    add_executable(namespace_gamescope_probe namespace_gamescope_probe.cpp)
+    target_link_libraries(namespace_gamescope_probe PRIVATE Qt6::Core)
+    add_dependencies(test_instance_bootstrap_integration namespace_gamescope_probe)
+    set_tests_properties(test_instance_bootstrap_integration PROPERTIES
+        LABELS "privileged"
+        RUN_SERIAL TRUE
+        TIMEOUT 900
+    )
+endif()

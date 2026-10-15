@@ -12,6 +12,7 @@
 #include <QSet>
 #include <QString>
 #include <QVariantMap>
+#include <QVariantList>
 #include "LaunchTypes.h"
 #include "SessionManager.h"
 
@@ -204,11 +205,9 @@ private:
     void finishFinalization();
     void setActive(bool active);
     const SessionProfile &activeProfile() const;
-    bool prepareLaunchCommands();
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
     bool setupSessionResources();
-    void teardownSharedDirectories();
     void teardownSharingState();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
@@ -218,6 +217,17 @@ private:
     bool setupStreamingInstance(int instanceIndex, const QVariantMap &config);
     void teardownStreamingInstances();
     void cleanupStreamingInstance(int index);
+    void continueFinalizationAfterStopping();
+    bool hasOwnedPids() const;
+
+    struct SessionRuntimeSnapshot {
+        SessionProfile profile;
+        QList<LaunchPreset> presets;
+        QList<LaunchCommand> launchCommands;
+        bool syncSteamShortcuts = false;
+        bool shareSteamLibraries = false;
+        bool syncHeroicShortcuts = false;
+    };
 
     struct StreamingInstanceInfo {
         QString username;
@@ -227,14 +237,14 @@ private:
         bool nullSinkCreated = false;
     };
 
-    QMap<int, QStringList> m_instanceSharedRoots;
+    QMap<int, QVariantList> m_instanceDirectoryPreparations;
     uint m_screenSaverCookie = 0;
 
 
     QList<qint64> getGamescopePids() const;
 
     SessionManager *m_sessionManager = nullptr;
-    SessionProfile m_startingProfile;
+    SessionRuntimeSnapshot m_startingSnapshot;
     bool m_hasStartingProfile = false;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
@@ -248,15 +258,19 @@ private:
     QAction *m_stopAction = nullptr;
     QString m_status;
     bool m_active = false;
+    bool m_sessionStartupComplete = false;
     bool m_finalizing = false;
     bool m_startupFailure = false;
+    bool m_finalizationCleanupStarted = false;
+    bool m_stoppingInstances = false;
+    bool m_launchErrorReported = false;
+    bool m_streamStartupErrorReported = false;
     bool m_preHookCompleted = false;
     bool m_postHookArmed = false;
     bool m_hookIsPost = false;
     bool m_postHookStarted = false;
     QString m_finalizationMessage;
     QProcess *m_hookProcess = nullptr;
-    QList<LaunchCommand> m_launchCommands;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
 

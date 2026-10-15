@@ -7,6 +7,8 @@ add_library(couchplay_core STATIC
     core/CommandVerifier.h
     core/Logging.cpp
     core/Logging.h
+    ../helper/DirectoryPlan.cpp
+    ../helper/DirectoryPlan.h
 )
 
 # Link libraries for core library

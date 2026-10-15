@@ -10,6 +10,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
+#include <QVariantList>
 
 class CouchPlayHelperClient;
 struct InstanceConfig;
@@ -34,7 +35,7 @@ public:
     explicit GamescopeInstance(QObject *parent = nullptr);
     ~GamescopeInstance() override;
 
-    Q_INVOKABLE bool start(const QVariantMap &config, int index);
+    Q_INVOKABLE bool start(const QVariantMap &config, int index, const QVariantList &directoryPreparations);
 
     Q_INVOKABLE void stop(int timeoutMs = 5000);
     Q_INVOKABLE void kill();
@@ -83,6 +84,7 @@ Q_SIGNALS:
     void errorOccurred(const QString &message);
 
 private Q_SLOTS:
+    void onHelperInstanceReady(const QString &username, qint64 pid);
     void onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason);
 
 private:
@@ -96,4 +98,10 @@ private:
     qint64 m_helperPid = 0;
     CouchPlayHelperClient *m_helperClient = nullptr;
     qint64 m_gamescopePid = 0;
+    QString m_pendingReadyUsername;
+    qint64 m_pendingReadyPid = 0;
+    bool m_launchRequestPending = false;
+    QString m_pendingStoppedUsername;
+    qint64 m_pendingStoppedPid = 0;
+    QString m_pendingStopReason;
 };

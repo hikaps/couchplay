@@ -39,13 +39,6 @@ public:
 Q_DECLARE_METATYPE(DataDirectory)
 
 /**
- * Stable folder name for a shared directory's per-player staging area:
- * the directory's path relative to the compositor home with '/' replaced by
- * '_' (external paths use the sanitized full path).
- */
-QString dataDirectoryStagingSlug(const QString &dirPath, const QString &compositorHome);
-
-/**
  * @brief Reversible persistence encoding for data-directory lists
  *
  * JSON (compact array of {path, mode} objects), so paths containing '|' or
@@ -163,6 +156,7 @@ public:
     Q_INVOKABLE QVariantList availableIntegrations() const;
     Q_INVOKABLE QVariantList gamesForPreset(const QString &id) const;
     LaunchCommand buildLaunchCommand(const QString &id, const GameSelection &selection) const;
+    LaunchCommand buildLaunchCommand(const LaunchPreset &preset, const GameSelection &selection) const;
 
     /**
      * @brief Get data directories for a preset

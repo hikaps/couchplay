@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QMap>
 #include <QObject>
 #include <QRect>
 #include <QString>
@@ -66,6 +67,7 @@ public:
      * The matched window remains reserved while KWin applies the geometry.
      * gamescopeWindowPositioned is emitted only after KWin reports the requested geometry.
      * If the timeout expires, positioningTimedOut is emitted.
+     * A PID-scoped KWin listener keeps replacement windows in this slot until cancellation.
      */
     Q_INVOKABLE void queuePositionRequest(int requestId,
                                           qint64 gamescopePid,
@@ -75,13 +77,13 @@ public:
                                           int timeoutMs = 60000);
 
     /**
-     * @brief Cancel a pending positioning request
+     * @brief Cancel a positioning request and its replacement-window listener
      * @param requestId The request ID to cancel
      */
     Q_INVOKABLE void cancelPositionRequest(int requestId);
 
     /**
-     * @brief Cancel all pending positioning requests
+     * @brief Cancel all positioning requests and replacement-window listeners
      */
     Q_INVOKABLE void cancelAllRequests();
 
@@ -149,12 +151,15 @@ private:
         QRect geometry;
         bool queued;
         qint64 expiresAt;
+        qint64 gamescopePid = 0;
     };
 
     /**
      * @brief Execute a KWin script to position a specific window
      */
-    bool executePositionScript(const QString &windowId, const QRect &geometry, bool borderless);
+    bool executePositionScript(const QString &windowId, const QRect &geometry, bool borderless,
+                               const PositionRequest *request = nullptr);
+    void unloadPositionScript(const QString &pluginName);
     void stopPositionConfirmationIfEmpty();
     void releaseWindowReservation(const QString &windowId);
 
@@ -172,6 +177,7 @@ private:
     QTimer *m_positionTimer = nullptr;
     QList<PositionRequest> m_pendingRequests;
     QList<PendingPosition> m_pendingPositions;
+    QMap<int, QString> m_positionScripts; // PID-scoped listeners live until request/session cancellation.
     QStringList m_knownWindowIds; // Windows confirmed at their requested geometry
     QStringList m_reservedWindowIds; // Windows assigned to an in-flight positioning request
     bool m_kwinAvailable = false;

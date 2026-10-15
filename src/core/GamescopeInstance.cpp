@@ -37,17 +37,21 @@ void GamescopeInstance::setHelperClient(CouchPlayHelperClient *client)
         return;
     }
     if (m_helperClient) {
+        disconnect(m_helperClient, &CouchPlayHelperClient::instanceReady, this,
+                   &GamescopeInstance::onHelperInstanceReady);
         disconnect(m_helperClient, &CouchPlayHelperClient::instanceStopped, this,
                    &GamescopeInstance::onHelperInstanceStopped);
     }
     m_helperClient = client;
     if (m_helperClient) {
+        connect(m_helperClient, &CouchPlayHelperClient::instanceReady, this,
+                &GamescopeInstance::onHelperInstanceReady);
         connect(m_helperClient, &CouchPlayHelperClient::instanceStopped, this,
                 &GamescopeInstance::onHelperInstanceStopped);
     }
 }
 
-bool GamescopeInstance::start(const QVariantMap &config, int index)
+bool GamescopeInstance::start(const QVariantMap &config, int index, const QVariantList &directoryPreparations)
 {
     if (m_helperPid > 0) {
         Q_EMIT errorOccurred(QStringLiteral("Instance already running"));
@@ -73,22 +77,26 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
 
     const QStringList gamescopeArgs = buildGamescopeArgs(config);
     const QStringList envVars = buildEnvironment(config);
-    QStringList gameCommand = config.value(QStringLiteral("gameCommand")).toStringList();
+    const QStringList gameCommand = config.value(QStringLiteral("gameCommand")).toStringList();
     if (gameCommand.isEmpty()) {
-        gameCommand = QProcess::splitCommand(config.value(QStringLiteral("presetCommand")).toString());
-    }
-    if (gameCommand.isEmpty()) {
-        gameCommand = QProcess::splitCommand(PresetManager::defaultSteamCommand());
+        Q_EMIT errorOccurred(QStringLiteral("Launch command is empty"));
+        return false;
     }
 
     const QString displayContext = config.value(QStringLiteral("displayContext")).toString();
     const QString workingDirectory = config.value(QStringLiteral("workingDirectory")).toString();
     const QStringList sharedRoots = config.value(QStringLiteral("sharedRoots")).toStringList();
+    m_pendingReadyUsername.clear();
+    m_pendingReadyPid = 0;
+    m_pendingStoppedUsername.clear();
+    m_pendingStoppedPid = 0;
+    m_pendingStopReason.clear();
     QString helperError;
     const QMetaObject::Connection helperErrorConnection = connect(
         m_helperClient, &CouchPlayHelperClient::errorOccurred, this, [&helperError](const QString &message) {
             helperError = message;
         });
+    m_launchRequestPending = true;
     const qint64 pid = m_helperClient->launchInstance(m_username,
                                                        displayContext,
                                                        gamescopeArgs,
@@ -96,9 +104,16 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
                                                        workingDirectory,
                                                        sharedRoots,
                                                        envVars,
-                                                       config.value(QStringLiteral("privateTemporaryDirectories")).toBool());
+                                                       config.value(QStringLiteral("privateTemporaryDirectories")).toBool(),
+                                                       directoryPreparations);
+    m_launchRequestPending = false;
     disconnect(helperErrorConnection);
     if (pid <= 0) {
+        m_pendingReadyUsername.clear();
+        m_pendingReadyPid = 0;
+        m_pendingStoppedUsername.clear();
+        m_pendingStoppedPid = 0;
+        m_pendingStopReason.clear();
         qWarning() << "Instance" << m_index << "helper LaunchInstance failed";
         Q_EMIT errorOccurred(helperError.isEmpty()
                                   ? QStringLiteral("Failed to launch instance through CouchPlay Helper")
@@ -107,56 +122,72 @@ bool GamescopeInstance::start(const QVariantMap &config, int index)
     }
 
     m_helperPid = pid;
-    m_gamescopePid = pid;
-    Q_EMIT gamescopePidChanged();
-    setStatus(QStringLiteral("Running as %1").arg(m_username));
-    Q_EMIT runningChanged();
-    Q_EMIT started();
+    if (m_pendingStoppedUsername == m_username && m_pendingStoppedPid == pid) {
+        const QString reason = m_pendingStopReason;
+        onHelperInstanceStopped(m_username, pid, reason);
+    } else if (m_pendingReadyUsername == m_username && m_pendingReadyPid == pid) {
+        onHelperInstanceReady(m_username, pid);
+    } else {
+        setStatus(QStringLiteral("Preparing data"));
+        Q_EMIT runningChanged();
+    }
     return true;
 }
 
 void GamescopeInstance::stop(int timeoutMs)
 {
     Q_UNUSED(timeoutMs)
-
-    if (m_helperPid <= 0) {
+    const qint64 pid = m_helperPid;
+    if (pid <= 0) return;
+    setStatus(QStringLiteral("Stopping..."));
+    bool didStop = m_helperClient && m_helperClient->stopInstance(pid);
+    if (!didStop && m_helperClient) didStop = m_helperClient->killInstance(pid);
+    if (!didStop) {
+        setStatus(QStringLiteral("Stop failed"));
+        Q_EMIT errorOccurred(QStringLiteral("Failed to stop instance %1").arg(m_username));
         return;
     }
-
-    setStatus(QStringLiteral("Stopping..."));
-    if (m_helperClient && (!m_helperClient->stopInstance(m_helperPid))) {
-        qWarning() << "Instance" << m_index << "helper StopInstance failed, trying KillInstance";
-        m_helperClient->killInstance(m_helperPid);
-    }
-
+    if (m_helperPid != pid) return;
     m_helperPid = 0;
     m_gamescopePid = 0;
+    m_pendingReadyUsername.clear();
+    m_pendingReadyPid = 0;
+    m_pendingStoppedUsername.clear();
+    m_pendingStoppedPid = 0;
+    m_pendingStopReason.clear();
     setStatus(QStringLiteral("Stopped"));
+    Q_EMIT gamescopePidChanged();
     Q_EMIT runningChanged();
     Q_EMIT stopped();
 }
 
 void GamescopeInstance::kill()
 {
-    if (m_helperPid <= 0) {
+    const qint64 pid = m_helperPid;
+    if (pid <= 0) return;
+    setStatus(QStringLiteral("Killing..."));
+    if (!m_helperClient || !m_helperClient->killInstance(pid)) {
+        setStatus(QStringLiteral("Kill failed"));
+        Q_EMIT errorOccurred(QStringLiteral("Failed to kill instance %1").arg(m_username));
         return;
     }
-
-    setStatus(QStringLiteral("Killing..."));
-    if (m_helperClient) {
-        m_helperClient->killInstance(m_helperPid);
-    }
-
+    if (m_helperPid != pid) return;
     m_helperPid = 0;
     m_gamescopePid = 0;
+    m_pendingReadyUsername.clear();
+    m_pendingReadyPid = 0;
+    m_pendingStoppedUsername.clear();
+    m_pendingStoppedPid = 0;
+    m_pendingStopReason.clear();
     setStatus(QStringLiteral("Killed"));
+    Q_EMIT gamescopePidChanged();
     Q_EMIT runningChanged();
     Q_EMIT stopped();
 }
 
 bool GamescopeInstance::isRunning() const
 {
-    return m_helperPid > 0;
+    return m_gamescopePid > 0;
 }
 
 void GamescopeInstance::setStatus(const QString &status)
@@ -271,28 +302,54 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
     return envVars;
 }
 
-void GamescopeInstance::onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason)
+void GamescopeInstance::onHelperInstanceReady(const QString &username, qint64 pid)
 {
-    Q_UNUSED(username)
-
-    if (pid != m_helperPid) {
+    if (username != m_username || pid <= 0 || (m_pendingStoppedUsername == username && m_pendingStoppedPid == pid)) {
         return;
     }
-
-
-    QString statusMsg;
-    if (reason == QStringLiteral("crashed")) {
-        statusMsg = QStringLiteral("Crashed");
-    } else if (reason == QStringLiteral("failed")) {
-        statusMsg = QStringLiteral("Failed");
-    } else {
-        statusMsg = QStringLiteral("Exited unexpectedly");
+    if (m_helperPid <= 0) {
+        if (m_launchRequestPending) {
+            m_pendingReadyUsername = username;
+            m_pendingReadyPid = pid;
+        }
+        return;
     }
+    if (pid != m_helperPid || m_gamescopePid == pid) return;
+    m_pendingReadyUsername.clear();
+    m_pendingReadyPid = 0;
+    m_gamescopePid = pid;
+    setStatus(QStringLiteral("Running as %1").arg(m_username));
+    Q_EMIT gamescopePidChanged();
+    Q_EMIT runningChanged();
+    Q_EMIT started();
+}
 
+void GamescopeInstance::onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason)
+{
+    if (username != m_username || pid <= 0) return;
+    if (m_helperPid <= 0) {
+        if (m_launchRequestPending) {
+            m_pendingStoppedUsername = username;
+            m_pendingStoppedPid = pid;
+            m_pendingStopReason = reason;
+        }
+        return;
+    }
+    if (pid != m_helperPid) return;
+    const QString statusMsg = reason == QStringLiteral("crashed")
+        ? QStringLiteral("Crashed")
+        : reason == QStringLiteral("failed") ? QStringLiteral("Failed")
+                                               : QStringLiteral("Exited unexpectedly");
     m_helperPid = 0;
     m_gamescopePid = 0;
+    m_pendingReadyUsername.clear();
+    m_pendingReadyPid = 0;
+    m_pendingStoppedUsername.clear();
+    m_pendingStoppedPid = 0;
+    m_pendingStopReason.clear();
     setStatus(statusMsg);
+    Q_EMIT gamescopePidChanged();
     Q_EMIT runningChanged();
+    Q_EMIT errorOccurred(reason.isEmpty() ? statusMsg : reason);
     Q_EMIT stopped();
-    Q_EMIT errorOccurred(statusMsg);
 }

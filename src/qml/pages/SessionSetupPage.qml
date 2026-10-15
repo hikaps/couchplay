@@ -591,20 +591,17 @@ Kirigami.ScrollablePage {
                             onPresetSelected: function(presetId) {
                                 if (instanceCard.cardSessionManager) {
                                     instanceCard.cardSessionManager.setInstancePreset(instanceCard.index, presetId)
-
-                                    if (instanceCard.cardPresetManager) {
-                                        let directories = instanceCard.cardPresetManager.getDataDirectories(presetId) || []
-                                        instanceCard.cardSessionManager.setInstanceDataDirectories(instanceCard.index, directories)
-                                    }
                                 }
                             }
                         }
                         Kirigami.InlineMessage {
                             objectName: "sandboxedLauncherWarning"
                             Layout.fillWidth: true
-                            visible: instanceCard.cardPresetManager
-                                     && instanceCard.currentPresetId !== ""
-                                     && instanceCard.cardPresetManager.getPreset(instanceCard.currentPresetId).sandboxed
+                            visible: {
+                                if (!instanceCard.cardPresetManager || instanceCard.currentPresetId === "") return false
+                                const preset = instanceCard.cardPresetManager.getPreset(instanceCard.currentPresetId)
+                                return preset && preset.id !== "" && preset.sandboxed
+                            }
 
                             text: i18nc("@info", "Flatpak sandboxing may block applications launched by this launcher. Use a native launcher for generic child-process support.")
                             type: Kirigami.MessageType.Warning

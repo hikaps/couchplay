@@ -38,6 +38,13 @@ CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
     QDBusConnection::systemBus().connect(SERVICE_NAME,
                                          OBJECT_PATH,
                                          INTERFACE_NAME,
+                                         QStringLiteral("instanceReady"),
+                                         this,
+                                         SLOT(onInstanceReady(QString, qint64)));
+
+    QDBusConnection::systemBus().connect(SERVICE_NAME,
+                                         OBJECT_PATH,
+                                         INTERFACE_NAME,
                                          QStringLiteral("exitChordTriggered"),
                                          this,
                                          SIGNAL(exitChordTriggered()));
@@ -58,6 +65,11 @@ void CouchPlayHelperClient::checkAvailability()
     if (m_available != wasAvailable) {
         Q_EMIT availabilityChanged();
     }
+}
+
+void CouchPlayHelperClient::onInstanceReady(const QString &username, qint64 pid)
+{
+    Q_EMIT instanceReady(username, pid);
 }
 
 void CouchPlayHelperClient::onInstanceStopped(const QString &username, qint64 pid, const QString &reason)
@@ -244,7 +256,8 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username,
                                              const QString &workingDirectory,
                                              const QStringList &sharedRoots,
                                              const QStringList &environment,
-                                             bool privateTemporaryDirectories)
+                                             bool privateTemporaryDirectories,
+                                             const QVariantList &directoryPreparations)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
@@ -253,8 +266,41 @@ qint64 CouchPlayHelperClient::launchInstance(const QString &username,
 
     QDBusReply<qint64> reply = m_interface->callWithArgumentList(
         QDBus::Block, QStringLiteral("LaunchInstance"),
-        QVariantList{username, displayContext, gamescopeArgs, gameCommand,
-                     workingDirectory, sharedRoots, environment,
+        QVariantList{username, displayContext, gamescopeArgs, gameCommand, workingDirectory, sharedRoots, environment,
+                     privateTemporaryDirectories, directoryPreparations});
+
+    if (!reply.isValid()) {
+        const QString errorText = reply.error().message();
+        if (reply.error().name() == QStringLiteral("org.freedesktop.DBus.Error.UnknownMethod")
+            || (reply.error().name() == QStringLiteral("org.freedesktop.DBus.Error.InvalidArgs")
+                && errorText.contains(QStringLiteral("signature"), Qt::CaseInsensitive))) {
+            Q_EMIT errorOccurred(QStringLiteral("CouchPlay Helper is outdated; reinstall the helper"));
+        } else {
+            Q_EMIT errorOccurred(errorText);
+        }
+        return 0;
+    }
+
+    return reply.value();
+}
+
+qint64 CouchPlayHelperClient::launchAuxiliaryInstance(const QString &username,
+                                                       const QString &displayContext,
+                                                       const QStringList &gamescopeArgs,
+                                                       const QStringList &gameCommand,
+                                                       const QString &workingDirectory,
+                                                       const QStringList &sharedRoots,
+                                                       const QStringList &environment,
+                                                       bool privateTemporaryDirectories)
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return 0;
+    }
+
+    QDBusReply<qint64> reply = m_interface->callWithArgumentList(
+        QDBus::Block, QStringLiteral("LaunchAuxiliaryInstance"),
+        QVariantList{username, displayContext, gamescopeArgs, gameCommand, workingDirectory, sharedRoots, environment,
                      privateTemporaryDirectories});
 
     if (!reply.isValid()) {
@@ -306,63 +352,8 @@ bool CouchPlayHelperClient::killInstance(qint64 pid)
     return reply.value();
 }
 
-int CouchPlayHelperClient::mountSharedDirectories(const QString &username,
-                                                  const QStringList &directories)
 
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return -1;
-    }
 
-    if (directories.isEmpty()) {
-        return 0;
-    }
-
-    QDBusReply<int> reply =
-        m_interface->call(QStringLiteral("MountSharedDirectories"), username, directories);
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return -1;
-    }
-
-    return reply.value();
-}
-
-int CouchPlayHelperClient::unmountSharedDirectories(const QString &username)
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return -1;
-    }
-
-    QDBusReply<int> reply = m_interface->call(QStringLiteral("UnmountSharedDirectories"), username);
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return -1;
-    }
-
-    return reply.value();
-}
-
-int CouchPlayHelperClient::unmountAllSharedDirectories()
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return -1;
-    }
-
-    QDBusReply<int> reply = m_interface->call(QStringLiteral("UnmountAllSharedDirectories"));
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return -1;
-    }
-
-    return reply.value();
-}
 
 bool CouchPlayHelperClient::copyFileToUser(const QString &sourcePath,
                                            const QString &targetPath,
@@ -411,23 +402,6 @@ bool CouchPlayHelperClient::createUserDirectory(const QString &path, const QStri
     }
 
     QDBusReply<bool> reply = m_interface->call(QStringLiteral("CreateUserDirectory"), path, username);
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return false;
-    }
-
-    return reply.value();
-}
-
-bool CouchPlayHelperClient::setDirectoryAcl(const QString &path, const QString &username, bool recursive)
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
-    }
-
-    QDBusReply<bool> reply = m_interface->call(QStringLiteral("SetDirectoryAcl"), path, username, recursive);
 
     if (!reply.isValid()) {
         Q_EMIT errorOccurred(reply.error().message());
@@ -571,26 +545,6 @@ bool CouchPlayHelperClient::destroyVirtualOutput(const QString &username, const 
     return reply.value();
 }
 
-bool CouchPlayHelperClient::setupOverlayMount(const QString &username,
-                                               const QString &sourceDir,
-                                               const QString &targetAlias)
-
-{
-    if (!m_available) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
-        return false;
-    }
-
-    QDBusReply<bool> reply =
-        m_interface->call(QStringLiteral("SetupOverlayMount"), username, sourceDir, targetAlias);
-
-    if (!reply.isValid()) {
-        Q_EMIT errorOccurred(reply.error().message());
-        return false;
-    }
-
-    return reply.value();
-}
 
 QString CouchPlayHelperClient::createNullSink(const QString &username, const QString &sinkName)
 {
