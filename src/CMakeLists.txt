@@ -7,6 +7,8 @@ add_library(couchplay_core STATIC
     core/CommandVerifier.h
     core/Logging.cpp
     core/Logging.h
+    ../helper/DirectoryPlan.cpp
+    ../helper/DirectoryPlan.h
 )
 
 # Link libraries for core library
@@ -23,6 +25,7 @@ target_link_libraries(couchplay_core PUBLIC
     KF6::ConfigCore
     KF6::ConfigGui
     KF6::IconThemes
+    KF6::DBusAddons
     KF6::GlobalAccel
 )
 
@@ -55,17 +58,18 @@ ecm_add_qml_module(couchplay
         qml/pages/DeviceAssignmentPage.qml
         qml/pages/ProfilesPage.qml
         qml/pages/UsersPage.qml
+        qml/components/GameSelector.qml
         qml/pages/SettingsPage.qml
         qml/components/PresetSelector.qml
         qml/components/SelectableCard.qml
         qml/components/InfoCard.qml
-        qml/components/CollapsibleSection.qml
         qml/components/ActionCard.qml
         qml/components/dialogs/ResetSettingsDialog.qml
         qml/components/dialogs/InstallHelperDialog.qml
         qml/components/dialogs/EditPresetDialog.qml
         qml/components/dialogs/DeletePresetDialog.qml
         qml/components/dialogs/AddPresetDialog.qml
+        qml/components/dialogs/AddToSteamDialog.qml
 )
 
 # C++ sources for main executable (includes QML_ELEMENT classes)
@@ -74,7 +78,11 @@ target_sources(couchplay PRIVATE
     core/DeviceManager.cpp
     core/DeviceManager.h
     core/SessionManager.cpp
+    core/CommandLineOptions.cpp
+    core/CommandLineOptions.h
+    core/CommandLineBridge.h
     core/SessionManager.h
+    core/LaunchTypes.h
     core/SessionRunner.cpp
     core/SessionRunner.h
     core/GamescopeInstance.cpp
@@ -92,8 +100,14 @@ target_sources(couchplay PRIVATE
      core/PresetManager.h
      core/HeroicConfigManager.cpp
      core/HeroicConfigManager.h
+    core/SteamAccountDiscovery.cpp
+    core/SteamAccountDiscovery.h
      core/SteamConfigManager.cpp
      core/SteamConfigManager.h
+    core/SteamShortcutManager.cpp
+    core/SteamShortcutManager.h
+    core/SteamShortcutsVdf.cpp
+    core/SteamShortcutsVdf.h
     core/SettingsManager.cpp
     core/SettingsManager.h
     core/SunshineConfig.cpp

@@ -39,16 +39,47 @@ Kirigami.Dialog {
     function setDirectoriesFromBackend(dirs) {
         directoriesModel.clear()
         for (let i = 0; i < dirs.length; i++) {
-            directoriesModel.append({ path: dirs[i] })
+            directoriesModel.append({ path: dirs[i].path, mode: dirs[i].mode })
         }
     }
 
     function getDirectoriesArray() {
         let arr = []
         for (let i = 0; i < directoriesModel.count; i++) {
-            arr.push(directoriesModel.get(i).path)
+            let item = directoriesModel.get(i)
+            arr.push({ path: item.path, mode: item.mode })
         }
         return arr
+    }
+    function integrationSelected(integrationId) {
+        if (!root.presetManager) return false
+        return root.presetManager.getRequiredIntegrations(root.presetId).indexOf(integrationId) >= 0
+    }
+
+    function setIntegration(integrationId, enabled) {
+        if (!root.presetManager) return
+        let integrations = root.presetManager.getRequiredIntegrations(root.presetId)
+        let position = integrations.indexOf(integrationId)
+        if (enabled && position < 0) {
+            integrations.push(integrationId)
+            root.presetManager.setRequiredIntegrations(root.presetId, integrations)
+            let defaults = root.presetManager.getDataDirectories(integrationId) || []
+            for (let i = 0; i < defaults.length; ++i) {
+                let exists = false
+                for (let j = 0; j < directoriesModel.count; ++j) {
+                    let current = directoriesModel.get(j)
+                    if (current.path === defaults[i].path && current.mode === defaults[i].mode) {
+                        exists = true
+                        break
+                    }
+                }
+                if (!exists) directoriesModel.append({ path: defaults[i].path, mode: defaults[i].mode })
+            }
+            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
+        } else if (!enabled && position >= 0) {
+            integrations.splice(position, 1)
+            root.presetManager.setRequiredIntegrations(root.presetId, integrations)
+        }
     }
 
     ColumnLayout {
@@ -56,15 +87,34 @@ Kirigami.Dialog {
         
         Kirigami.Heading {
             level: 3
-            text: i18nc("@title", "Shared Directories")
+            text: i18nc("@title", "Data Directories")
             Layout.fillWidth: true
         }
         
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            text: i18nc("@info", "These directories will be accessible to this application when running.")
+            text: i18nc("@info", "Access original folder (ACL) grants read/traverse access at the source path, not in player HOME. Copy replaces the entire player directory on every launch, discarding player edits and player-only files; Player data staging is applied afterwards. Bind preserves source permissions. Bind and Overlay views are session-only; Overlay retains private edits and requires filesystem ownership-mapping support. Application changes apply to saved profiles on their next launch.")
             type: Kirigami.MessageType.Information
             visible: true
+        }
+        Kirigami.Heading {
+            level: 3
+            text: i18nc("@title", "Required integrations")
+            Layout.fillWidth: true
+        }
+
+        Repeater {
+            model: root.presetManager ? root.presetManager.availableIntegrations() : []
+            delegate: Controls.CheckBox {
+                objectName: "integration_" + modelData.id
+                text: modelData.id === "steam"
+                      ? i18nc("@option:check", "Steam")
+                      : i18nc("@option:check", "Heroic Games Launcher")
+                checked: root.integrationSelected(modelData.id)
+                enabled: modelData.available || checked
+                Accessible.name: text
+                onToggled: root.setIntegration(modelData.id, checked)
+            }
         }
 
         Controls.ScrollView {
@@ -81,6 +131,10 @@ Kirigami.Dialog {
                     width: ListView.view.width
                     spacing: Kirigami.Units.smallSpacing
 
+                    // Capture the delegate's row before ComboBox handlers
+                    // shadow `index` with their own signal parameter
+                    readonly property int rowIndex: index
+
                     Kirigami.Icon {
                         source: "folder"
                         Layout.preferredWidth: Kirigami.Units.iconSizes.small
@@ -93,6 +147,27 @@ Kirigami.Dialog {
                         elide: Text.ElideMiddle
                     }
 
+                    Controls.ComboBox {
+                        model: [
+                            { value: "acl", text: i18nc("@item:inlistbox", "Access original folder (ACL)") },
+                            { value: "copy", text: i18nc("@item:inlistbox", "Copy files") },
+                            { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay (session)") },
+                            { value: "bind", text: i18nc("@item:inlistbox", "Bind at same HOME path (session)") }
+                        ]
+                        textRole: "text"
+                        valueRole: "value"
+                        currentIndex: {
+                            if (mode === "copy") return 1;
+                            if (mode === "overlay") return 2;
+                            if (mode === "bind") return 3;
+                            return 0;
+                        }
+                        onActivated: {
+                            directoriesModel.setProperty(rowIndex, "mode", currentValue)
+                            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
+                        }
+                    }
+
                     Controls.Button {
                         objectName: "btnRemoveDirectory"
                         icon.name: "edit-delete"
@@ -102,7 +177,7 @@ Kirigami.Dialog {
                         Accessible.onPressAction: clicked()
                         onClicked: {
                             directoriesModel.remove(index)
-                            root.presetManager.setSharedDirectories(root.presetId, root.getDirectoriesArray())
+                            root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
                         }
                     }
                 }
@@ -110,7 +185,7 @@ Kirigami.Dialog {
                 Kirigami.PlaceholderMessage {
                     anchors.centerIn: parent
                     visible: sharedDirsList.count === 0
-                    text: i18nc("@info", "No shared directories configured")
+                    text: i18nc("@info", "No data directories configured")
                     icon.name: "folder-open"
                 }
             }
@@ -119,11 +194,18 @@ Kirigami.Dialog {
 
     FolderDialog {
         id: folderDialog
-        title: i18nc("@title:dialog", "Select Directory to Share")
+        title: i18nc("@title:dialog", "Select Directory")
         onAccepted: {
             let path = selectedFolder.toString()
             if (path.startsWith("file://")) path = path.substring(7)
             path = decodeURIComponent(path)
+            const resolvedPath = root.presetManager.resolveHostPath(path)
+            if (resolvedPath === "") {
+                applicationWindow().showPassiveNotification(
+                    i18nc("@info", "Could not resolve the selected directory for the host helper"), "long")
+                return
+            }
+            path = resolvedPath
             
             let exists = false
             for (let i = 0; i < directoriesModel.count; i++) {
@@ -134,8 +216,8 @@ Kirigami.Dialog {
             }
             
             if (!exists) {
-                directoriesModel.append({ path: path })
-                root.presetManager.setSharedDirectories(root.presetId, root.getDirectoriesArray())
+                directoriesModel.append({ path: path, mode: "acl" })
+                root.presetManager.setDataDirectories(root.presetId, root.getDirectoriesArray())
             }
         }
     }

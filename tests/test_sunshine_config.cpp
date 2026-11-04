@@ -237,9 +237,8 @@ void TestSunshineConfig::testCustomCredentials()
 {
     // Self-consistency / regression guard ONLY: recomputes the hash with the
     // SAME algorithm SunshineConfig uses. This catches accidental changes to
-    // the hash scheme, NOT whether Sunshine accepts it -- that requires a real
-    // pairing (test_sunshine_integration covers config-key acceptance; hash
-    // validation against real Sunshine is a deferred follow-up).
+    // the hash scheme. It does not check whether Sunshine accepts the generated
+    // credentials or completes pairing; those are manual release checks.
     QString configDir = m_tempDir->path() + QStringLiteral("/custom-creds");
     QVariantMap config;
     config.insert(QStringLiteral("username"), QStringLiteral("admin"));

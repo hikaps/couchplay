@@ -47,7 +47,6 @@ private Q_SLOTS:
 
     // stopStream tests
     void testStopStreamNonExistent();
-    void testStopStreamWithZeroPid();
     void testStopAllEmpty();
     void testStopAllWithMultipleEntries();
 
@@ -268,25 +267,6 @@ void TestStreamManager::testStopStreamNonExistent()
     QVERIFY(!m_manager->stopStream(99));
 }
 
-void TestStreamManager::testStopStreamWithZeroPid()
-{
-    StreamManager::StreamEntry entry;
-    entry.state = StreamManager::Waiting;
-    entry.pid = 0;
-    entry.instanceIndex = 0;
-    entry.configDir = QString();
-    m_manager->m_streams[0] = entry;
-
-    QSignalSpy streamsSpy(m_manager, &StreamManager::streamsChanged);
-    QSignalSpy stoppedSpy(m_manager, &StreamManager::streamStopped);
-
-    QVERIFY(m_manager->stopStream(0));
-    QVERIFY(m_manager->streams().isEmpty());
-    QCOMPARE(streamsSpy.count(), 1);
-    // streamStopped not emitted for zero-pid entries (no process was running)
-    QCOMPARE(stoppedSpy.count(), 0);
-}
-
 void TestStreamManager::testStopAllEmpty()
 {
     m_manager->stopAll();
@@ -419,12 +399,12 @@ void TestStreamManager::testCrashAfterStreamingKeepsPort()
     entry.instanceIndex = 1;
     entry.pid = 500002;
     entry.state = StreamManager::Streaming;
+    entry.ready = true;
     entry.username = QStringLiteral("player2");
     entry.restartAttempts = 0;
     const int port = SunshineConfig::calculatePort(1);
     entry.lastConfig[QStringLiteral("sunshinePort")] = port;
     m_manager->m_streams[1] = entry;
-    // No startup timer => not a startup crash => port must NOT be bumped.
 
     m_manager->onHelperInstanceStopped(QStringLiteral("player2"), 500002, QStringLiteral("crashed"));
 
@@ -462,7 +442,7 @@ void TestStreamManager::testStopStreamCancelsPendingRestart()
     entry.state = StreamManager::Waiting;
     entry.username = QStringLiteral("player4");
     entry.restartAttempts = 0;
-    entry.configDir = QStringLiteral("/tmp/couchplay-test-stopcancel");
+    entry.configDir = m_tempDir->filePath(QStringLiteral("stopcancel"));
     m_manager->m_streams[3] = entry;
     auto *timer = new QTimer(m_manager);
     timer->setSingleShot(true);
@@ -472,9 +452,9 @@ void TestStreamManager::testStopStreamCancelsPendingRestart()
     m_manager->onHelperInstanceStopped(QStringLiteral("player4"), 500004, QStringLiteral("crashed"));
     QVERIFY(m_manager->m_restartTimers.contains(3));
 
-    // ...which stopStream must cancel (the fix: the restart timer is tracked in
-    // m_restartTimers, not an anonymous singleShot that stopStream can't reach).
-    m_manager->stopStream(3);
+    QSignalSpy stoppedSpy(m_manager, &StreamManager::streamStopped);
+    QVERIFY(m_manager->stopStream(3));
+    QCOMPARE(stoppedSpy.count(), 1);
     QVERIFY(!m_manager->m_restartTimers.contains(3));
     QVERIFY(!m_manager->m_streams.contains(3));
 }

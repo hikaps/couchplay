@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-project(couchplay VERSION 0.4.0 LANGUAGES CXX)
+project(couchplay VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,11 +47,14 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     IconThemes
     QQC2DesktopStyle
     GlobalAccel
+    DBusAddons
 )
 
 # PolkitQt6-1 is required for user management authorization.
 # Without it the helper silently denies all user creation/deletion at runtime.
 find_package(PolkitQt6-1 REQUIRED)
+find_path(LIBACL_INCLUDE_DIR NAMES sys/acl.h REQUIRED)
+find_library(LIBACL_LIBRARY NAMES acl REQUIRED)
 
 # Find QML modules at runtime
 ecm_find_qmlmodule(org.kde.kirigami REQUIRED)

@@ -42,3 +42,22 @@ inline UserIdentity resolveUserIdentity(const QString &username, CouchPlayHelper
 
     return id;
 }
+
+// Resolve the compositor's own home directory. Under Flatpak the sandbox's
+// getpwuid(getuid()) cannot see CouchPlay-created host accounts and may
+// return a sandbox-local entry, so prefer the root helper's host-side answer
+// before falling back to the process-local lookup.
+inline QString resolveCompositorHome(CouchPlayHelperClient *helper)
+{
+    if (helper && helper->isAvailable()) {
+        const QVariantMap info = helper->getUserHomeInfoByUid(static_cast<uint>(::getuid()));
+        const QString home = info.value(QStringLiteral("home")).toString();
+        if (!home.isEmpty()) {
+            return home;
+        }
+    }
+    if (struct passwd *pw = ::getpwuid(::getuid())) {
+        return QString::fromLocal8Bit(pw->pw_dir);
+    }
+    return QString();
+}

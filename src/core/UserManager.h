@@ -5,6 +5,7 @@
 
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <qqmlintegration.h>
 #include <QSet>
 #include <QString>
@@ -35,10 +36,7 @@ public:
      * Note: This should be called from C++, not QML
      */
     void setHelperClient(CouchPlayHelperClient *client);
-    CouchPlayHelperClient *helperClient() const
-    {
-        return m_helperClient;
-    }
+    CouchPlayHelperClient *helperClient() const;
 
     /**
      * @brief Set the helper client from QML (takes QObject* for type safety)
@@ -99,6 +97,10 @@ Q_SIGNALS:
     void userDeleted(const QString &username);
     void errorOccurred(const QString &message);
 
+private Q_SLOTS:
+    void onHelperAvailabilityChanged();
+    void onHelperDestroyed(QObject *helper);
+
 private:
     void parseUsers();
     QSet<QString> getCouchPlayGroupMembers() const;
@@ -110,7 +112,7 @@ private:
         QString shell;
     };
 
-    CouchPlayHelperClient *m_helperClient = nullptr;
+    QPointer<CouchPlayHelperClient> m_helperClient;
     QString m_currentUser;
     QList<UserInfo> m_users;
 };

@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import QtQuick.Dialogs
 
 import "../components" as Components
 
@@ -19,13 +20,23 @@ Kirigami.ScrollablePage {
     required property var monitorManager
     required property var userManager
     required property var presetManager
+    required property var steamConfigManager
+    required property var heroicConfigManager
 
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
+
+    function selectedHostFile(fileUrl) {
+        let path = fileUrl.toString()
+        if (path.startsWith("file://")) path = path.substring(7)
+        path = decodeURIComponent(path)
+        return presetManager ? presetManager.resolveHostPath(path) : path
+    }
     property string gridSubLayout: sessionManager ? sessionManager.currentGridSubLayout : ""
 
     property int instancesRevision: 0
     property int devicesRevision: 0
+    property int presetsRevision: 0
 
     Connections {
         target: root.sessionManager
@@ -33,6 +44,13 @@ Kirigami.ScrollablePage {
             root.instancesRevision++
         }
     }
+    Connections {
+        target: root.presetManager
+        function onPresetsChanged() {
+            root.presetsRevision++
+        }
+    }
+
     
     Connections {
         target: root.deviceManager
@@ -98,16 +116,16 @@ Kirigami.ScrollablePage {
         Kirigami.Action {
             objectName: "actionStartSession"
             Accessible.role: Accessible.Button
-            Accessible.name: sessionRunner && sessionRunner.running
+            Accessible.name: sessionRunner && sessionRunner.active
                 ? i18nc("@action:button", "Stop Session")
                 : i18nc("@action:button", "Start Session")
             Accessible.onPressAction: triggered()
             icon.name: "media-playback-start"
-            text: sessionRunner && sessionRunner.running 
+            text: sessionRunner && sessionRunner.active
                 ? i18nc("@action:button", "Stop Session")
                 : i18nc("@action:button", "Start Session")
             onTriggered: {
-                if (sessionRunner.running) {
+                if (sessionRunner.active) {
                     sessionRunner.stop()
                 } else {
                     sessionRunner.start()
@@ -171,8 +189,104 @@ Kirigami.ScrollablePage {
         }
     }
 
+    FileDialog {
+        id: preSessionScriptDialog
+        objectName: "dialogPreSessionScript"
+        title: i18nc("@title:dialog", "Select Pre-session Script")
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            const path = root.selectedHostFile(selectedFile)
+            if (path && sessionManager) sessionManager.preSessionExecutable = path
+        }
+    }
+
+    FileDialog {
+        id: postSessionScriptDialog
+        objectName: "dialogPostSessionScript"
+        title: i18nc("@title:dialog", "Select Post-session Script")
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            const path = root.selectedHostFile(selectedFile)
+            if (path && sessionManager) sessionManager.postSessionExecutable = path
+        }
+    }
+
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
+
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+
+            Kirigami.Heading {
+                text: i18nc("@title", "Automation")
+                level: 2
+                Kirigami.FormData.label: i18nc("@title", "Automation")
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPreSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Pre-session script")
+                    readOnly: true
+                    text: sessionManager?.preSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePreSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: preSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPreSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPostSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Post-session script")
+                    readOnly: true
+                    text: sessionManager?.postSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePostSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: postSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPostSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
+                }
+            }
+        }
 
         Kirigami.InlineMessage {
             Layout.fillWidth: true
@@ -342,6 +456,7 @@ Kirigami.ScrollablePage {
                 property var cardSessionManager: root.sessionManager
                 
                 property int cardRevision: root?.instancesRevision ?? 0
+                property int cardPresetRevision: root?.presetsRevision ?? 0
                 
                 property string currentPresetId: {
                     void(cardRevision)
@@ -357,13 +472,6 @@ Kirigami.ScrollablePage {
                     return config?.outputMode === "streaming"
                 }
                 
-                property var overridePatternsModel: {
-                    void(cardRevision)
-                    if (!cardSessionManager) return []
-                    let config = cardSessionManager.getInstanceConfig(instanceCard.index)
-                    let patterns = config?.overridePatterns
-                    return patterns ? patterns : []
-                }
                 
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
                 readonly property string labelUser: i18nc("@label", "User:")
@@ -378,20 +486,17 @@ Kirigami.ScrollablePage {
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
+                readonly property string labelGame: i18nc("@label", "Game:")
                 readonly property string labelDevices: i18nc("@label", "Devices:")
+                readonly property string labelPlayerData: i18nc("@action:button", "Player data")
+                readonly property string tooltipPlayerData: i18nc("@info:tooltip", "Open a folder where you can place per-player files (e.g. configs). They are copied into this player's copy of the shared directories at session start.")
 
-                readonly property string labelOverlay: i18nc("@label", "Config Overrides:")
-                readonly property string tooltipOverlay: i18nc("@info:tooltip", "For games that store saves/config in their own folder (not in AppData/Documents). Each player gets their own copy of matching files.")
-                readonly property string labelPatterns: i18nc("@label", "File Patterns:")
-                readonly property string placeholderPattern: i18nc("@placeholder", "e.g., saves/*.sav or *.ini")
-                readonly property string buttonAdd: i18nc("@action:button", "Add")
-                readonly property string buttonRemove: i18nc("@action:button", "Remove")
 
-                readonly property string labelAdvanced: i18nc("@title", "Advanced")
+                readonly property string labelPrivateTemporaryDirectories: i18nc("@option:check", "Private temporary directories")
+                readonly property string tooltipPrivateTemporaryDirectories: i18nc("@info:tooltip", "Use private /tmp and /var/tmp directories for this instance. They are removed when the instance stops and are not part of the shared-data snapshot.")
 
                 readonly property string textNoneAssigned: i18nc("@info", "None assigned")
                 readonly property string textAssign: i18nc("@action:button", "Assign...")
-                readonly property string tooltipRemovePattern: i18nc("@info:tooltip", "Remove pattern")
 
                 header: RowLayout {
                     spacing: Kirigami.Units.smallSpacing
@@ -486,11 +591,50 @@ Kirigami.ScrollablePage {
                             onPresetSelected: function(presetId) {
                                 if (instanceCard.cardSessionManager) {
                                     instanceCard.cardSessionManager.setInstancePreset(instanceCard.index, presetId)
+                                }
+                            }
+                        }
+                        Kirigami.InlineMessage {
+                            objectName: "sandboxedLauncherWarning"
+                            Layout.fillWidth: true
+                            visible: {
+                                if (!instanceCard.cardPresetManager || instanceCard.currentPresetId === "") return false
+                                const preset = instanceCard.cardPresetManager.getPreset(instanceCard.currentPresetId)
+                                return preset && preset.id !== "" && preset.sandboxed
+                            }
 
-                                    if (instanceCard.cardPresetManager) {
-                                        let directories = instanceCard.cardPresetManager.getSharedDirectories(presetId) || []
-                                        instanceCard.cardSessionManager.setInstanceSharedDirectories(instanceCard.index, directories)
-                                    }
+                            text: i18nc("@info", "Flatpak sandboxing may block applications launched by this launcher. Use a native launcher for generic child-process support.")
+                            type: Kirigami.MessageType.Warning
+                        }
+
+
+                        Controls.Button {
+                            objectName: "btnPlayerDataFolder"
+                            visible: {
+                                void(instanceCard.cardRevision)
+                                void(instanceCard.cardPresetRevision)
+                                return instanceCard.cardSessionManager
+                                    ? instanceCard.cardSessionManager.hasPlayerDataStagingDirectories(instanceCard.index)
+                                    : false
+                            }
+                            icon.name: "folder-open"
+                            text: instanceCard.labelPlayerData
+                            display: Controls.AbstractButton.TextBesideIcon
+                            Layout.fillWidth: true
+                            Accessible.role: Accessible.Button
+                            Accessible.name: instanceCard.labelPlayerData
+                            Controls.ToolTip.text: instanceCard.tooltipPlayerData
+                            Controls.ToolTip.visible: hovered
+                            Controls.ToolTip.delay: 1000
+                            onClicked: {
+                                if (!instanceCard.cardSessionManager)
+                                    return
+                                if (!instanceCard.cardSessionManager.openPlayerDataFolder(instanceCard.index)) {
+                                    // If the desktop opener fails, retain the path as a manual fallback.
+                                    const path = instanceCard.cardSessionManager.playerDataFolderPath(instanceCard.index)
+                                    if (path)
+                                        applicationWindow().showPassiveNotification(
+                                            i18nc("@info:status", "Player data folder: %1", path), 10000)
                                 }
                             }
                         }
@@ -531,6 +675,14 @@ Kirigami.ScrollablePage {
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
+                        }
+                        Components.GameSelector {
+                            objectName: "comboGame"
+                            presetManager: instanceCard.cardPresetManager
+                            sessionManager: instanceCard.cardSessionManager
+                            instanceIndex: instanceCard.index
+                            steamConfigManager: root.steamConfigManager
+                            heroicConfigManager: root.heroicConfigManager
                         }
 
                         // Resolution is auto-calculated from monitor size and layout
@@ -719,216 +871,67 @@ Kirigami.ScrollablePage {
                                 onClicked: applicationWindow().pushDeviceAssignmentPage()
                             }
                         }
-                    }
-
-                    // Advanced section (outside FormLayout, contains its own FormLayout for label alignment)
-                    Components.CollapsibleSection {
-                        title: instanceCard.labelAdvanced
-                        expanded: false
-
-                        Kirigami.FormLayout {
-                            Layout.fillWidth: true
-                            wideMode: (root?.width ?? 0) > Kirigami.Units.gridUnit * 30
-
-
-                            RowLayout {
-                                Kirigami.FormData.label: instanceCard.labelOverlay
-                                visible: presetSelector.currentPresetId !== ""
-                                Layout.fillWidth: true
-
-                                Controls.TextField {
-                                    id: patternInput
-                                    objectName: "fieldPattern"
-                                    Accessible.role: Accessible.EditableText
-                                    Accessible.name: instanceCard.labelOverlay
-                                    placeholderText: instanceCard.placeholderPattern
-                                    Layout.fillWidth: true
-                                    onAccepted: {
-                                        if (text.trim() !== "" && instanceCard.cardSessionManager) {
-                                            let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                            let patterns = [...(config.overridePatterns || [])]
-                                            patterns.push(text.trim())
-                                            config.overridePatterns = patterns
-                                            instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
-                                            text = ""
-                                        }
-                                    }
-                                }
-                                Controls.Button {
-                                    objectName: "btnAddPattern"
-                                    Accessible.role: Accessible.Button
-                                    Accessible.name: instanceCard.buttonAdd
-                                    Accessible.onPressAction: clicked()
-                                    text: instanceCard.buttonAdd
-                                    flat: true
-                                    onClicked: {
-                                        if (patternInput.text.trim() !== "" && instanceCard.cardSessionManager) {
-                                            let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                            let patterns = [...(config.overridePatterns || [])]
-                                            patterns.push(patternInput.text.trim())
-                                            config.overridePatterns = patterns
-                                            instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
-                                            patternInput.text = ""
-                                        }
-                                    }
-                                }
-                                Controls.ToolButton {
-                                    icon.name: "help-hint"
-                                    flat: true
-
-                                    Controls.ToolTip.visible: hovered
-                                    Controls.ToolTip.text: instanceCard.tooltipOverlay
-                                    Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                        Controls.CheckBox {
+                            objectName: "checkPrivateTemporaryDirectories"
+                            Kirigami.FormData.label: instanceCard.labelPrivateTemporaryDirectories
+                            Accessible.role: Accessible.CheckBox
+                            Accessible.name: instanceCard.labelPrivateTemporaryDirectories
+                            checked: {
+                                void(instanceCard.cardRevision)
+                                return instanceCard.cardSessionManager
+                                    ? instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).privateTemporaryDirectories
+                                    : false
+                            }
+                            onClicked: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.privateTemporaryDirectories = checked
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
+                            Controls.ToolTip.text: instanceCard.tooltipPrivateTemporaryDirectories
+                            Controls.ToolTip.visible: hovered
+                            Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                        }
 
-                            Controls.SpinBox {
-                                id: refreshSpin
-                                objectName: "spinRefreshRate"
-                                Accessible.role: Accessible.SpinBox
-                                Accessible.name: instanceCard.labelRefreshRate
-                                Kirigami.FormData.label: instanceCard.labelRefreshRate
-                                from: 30
-                                to: 240
-                                value: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).refreshRate : 60
-                                textFromValue: function(value) { return value + " Hz" }
-                                valueFromText: function(text) { return parseInt(text) }
+                        Controls.SpinBox {
+                            id: refreshSpin
+                            objectName: "spinRefreshRate"
+                            Accessible.role: Accessible.SpinBox
+                            Accessible.name: instanceCard.labelRefreshRate
+                            Kirigami.FormData.label: instanceCard.labelRefreshRate
+                            from: 30
+                            to: 240
+                            value: root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).refreshRate : 60
+                            textFromValue: function(value) { return value + " Hz" }
+                            valueFromText: function(text) { return parseInt(text) }
 
-                                onValueModified: {
-                                    if (root.sessionManager) {
-                                        var config = root.sessionManager.getInstanceConfig(instanceCard.index)
-                                        config.refreshRate = value
-                                        root.sessionManager.setInstanceConfig(instanceCard.index, config)
-                                    }
+                            onValueModified: {
+                                if (root.sessionManager) {
+                                    var config = root.sessionManager.getInstanceConfig(instanceCard.index)
+                                    config.refreshRate = value
+                                    root.sessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
-                            }
-
-                            Controls.ComboBox {
-                                objectName: "comboScaling"
-                                Accessible.role: Accessible.ComboBox
-                                Accessible.name: instanceCard.labelScaling
-                                Kirigami.FormData.label: instanceCard.labelScaling
-                                model: ["fit", "stretch", "integer", "auto"]
-                                currentIndex: 0
-                                Layout.fillWidth: true
                             }
                         }
 
-                        Rectangle {
+                        Controls.ComboBox {
+                            objectName: "comboScaling"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelScaling
+                            Kirigami.FormData.label: instanceCard.labelScaling
+                            model: ["fit", "stretch", "integer", "auto"]
+                            currentIndex: 0
                             Layout.fillWidth: true
-                            Layout.topMargin: Kirigami.Units.smallSpacing
-                            implicitHeight: patternColumn.implicitHeight + Kirigami.Units.largeSpacing
-                            visible: presetSelector.currentPresetId !== "" && instanceCard.overridePatternsModel.length > 0
-                            color: Kirigami.Theme.backgroundColor
-                            radius: Kirigami.Units.cornerRadius
-                            border.color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
-                            border.width: 1
-
-                            ColumnLayout {
-                                id: patternColumn
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: Kirigami.Units.largeSpacing
-                                spacing: Kirigami.Units.smallSpacing
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: Kirigami.Units.smallSpacing
-
-                                    Kirigami.Icon {
-                                        source: "document-multiple"
-                                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                                    }
-                                    Controls.Label {
-                                        text: i18nc("@title", "Active File Patterns")
-                                        font.weight: Font.Medium
-                                    }
-                                    Controls.Label {
-                                        text: "(" + instanceCard.overridePatternsModel.length + ")"
-                                        opacity: 0.7
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    Controls.Button {
-                                        objectName: "btnOpenFolder"
-                                        Accessible.role: Accessible.Button
-                                        Accessible.name: i18nc("@action:button", "Open Folder")
-                                        Accessible.onPressAction: clicked()
-                                        text: i18nc("@action:button", "Open Folder")
-                                        icon.name: "folder-open"
-                                        flat: true
-                                        onClicked: {
-                                            if (root?.sessionRunner) {
-                                                let presetId = instanceCard.currentPresetId || "steam"
-                                                let overridePath = root.sessionRunner.getAndEnsureOverridesPath(presetId)
-                                                Qt.openUrlExternally("file://" + overridePath)
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Repeater {
-                                    model: instanceCard.overridePatternsModel
-                                    delegate: RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: Kirigami.Units.smallSpacing
-
-                                        Kirigami.Icon {
-                                            source: "text-plain"
-                                            Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                                            Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                                            opacity: 0.7
-                                        }
-                                        Controls.Label { 
-                                            text: modelData ?? ""
-                                            Layout.fillWidth: true
-                                            elide: Text.ElideMiddle
-                                            font.family: "monospace"
-                                        }
-                                        Controls.ToolButton {
-                                            objectName: "btnRemovePattern"
-                                            Accessible.role: Accessible.Button
-                                            Accessible.name: i18nc("@action:button", "Remove pattern")
-                                            Accessible.onPressAction: clicked()
-                                            icon.name: "list-remove"
-                                            onClicked: {
-                                                if (!instanceCard.cardSessionManager) return
-                                                let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                                let patterns = [...config.overridePatterns]
-                                                patterns.splice(index, 1)
-                                                config.overridePatterns = patterns
-                                                instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
-                                            }
-                                            
-                                        Controls.ToolTip.visible: hovered
-                                        Controls.ToolTip.text: instanceCard.tooltipRemovePattern
-                                        }
-                                    }
-                                }
-
-                                Controls.Label {
-                                    Layout.fillWidth: true
-                                    text: i18nc("@info", "For games that store saves or config in their own folder. Each player gets their own copy of matching files. Place overrides in the preset's override folder.")
-                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
-                                    opacity: 0.6
-                                    wrapMode: Text.WordWrap
-                                }
-                                Controls.Label {
-                                    Layout.fillWidth: true
-                                    text: i18nc("@info", "Place override files in the preset folder. The file path must match the pattern.")
-                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
-                                    opacity: 0.6
-                                    wrapMode: Text.WordWrap
-                                }
-                            }
                         }
+
                     }
+
 
                     // Streaming status indicator
                     Kirigami.InlineMessage {
                         Layout.fillWidth: true
-                        visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.running
+                        visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.active
                         type: Kirigami.MessageType.Information
                         text: i18nc("@info", "Sunshine streaming is active on port %1",
                                     root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).sunshinePort : 47989)

@@ -105,6 +105,18 @@ public:
      */
     static bool isValidFlatpakAppId(const QString &appID);
 
+    /**
+     * @brief Extract the Flatpak app ID from a "flatpak run ..." command line
+     *
+     * Exported desktop entries commonly insert options (--branch=…, --arch=…,
+     * --command …) between "run" and the app ID; the ID is the first token
+     * that is not an option and passes app-ID validation.
+     *
+     * @param command Full command line starting with "flatpak run"
+     * @return The app ID, or an empty string when none is found
+     */
+    static QString extractFlatpakAppId(const QString &command);
+
 private:
     /**
      * @brief Check if a directory is readable

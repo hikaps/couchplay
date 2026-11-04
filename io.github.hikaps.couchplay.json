@@ -12,9 +12,25 @@
         "--socket=pulseaudio",
         "--device=all",
         "--talk-name=org.kde.StatusNotifierWatcher",
+        "--talk-name=org.kde.KWin",
         "--talk-name=org.freedesktop.Flatpak",
+        "--own-name=com.github.CouchPlay",
+        "--talk-name=com.github.CouchPlay",
         "--system-talk-name=org.freedesktop.login1",
-        "--system-talk-name=io.github.hikaps.CouchPlayHelper"
+        "--system-talk-name=io.github.hikaps.CouchPlayHelper",
+        "--filesystem=~/.local/share/applications:rw",
+        "--filesystem=~/.local/share/Steam:ro",
+        "--filesystem=~/.local/share/Steam/userdata:rw",
+        "--filesystem=~/.steam:ro",
+        "--filesystem=~/.steam/steam:ro",
+        "--filesystem=~/.steam/steam/userdata:rw",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam/userdata:rw",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata:rw",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam:ro",
+        "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam/userdata:rw",
+        "--persist=.local/share/couchplay"
     ],
     "modules": [
         {
@@ -63,6 +79,18 @@
                 "/include",
                 "*.a",
                 "*.la"
+            ]
+        },
+        {
+            "name": "libacl",
+            "buildsystem": "autotools",
+            "config-opts": ["--disable-static"],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://download.savannah.nongnu.org/releases/acl/acl-2.3.2.tar.xz",
+                    "sha256": "97203a72cae99ab89a067fe2210c1cbf052bc492b479eca7d226d9830883b0bd"
+                }
             ]
         },
         {

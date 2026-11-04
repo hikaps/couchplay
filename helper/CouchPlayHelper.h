@@ -4,17 +4,25 @@
 #pragma once
 
 #include <QDBusContext>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusObjectPath>
+#include <QHash>
+#include <QList>
 #include <QMap>
 #include <QObject>
 #include <QProcess>
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QJsonObject>
 #include <QVariantMap>
 
 #include "SystemOps.h"
+#include "DirectoryPlan.h"
 
 class UnitMonitor;
+class UnitJobMonitor;
 class QSocketNotifier;
 class QTimer;
 class QFileSystemWatcher;
@@ -38,6 +46,7 @@ class CouchPlayHelper : public QObject, protected QDBusContext
     Q_CLASSINFO("D-Bus Interface", "io.github.hikaps.CouchPlayHelper")
 
     friend class UnitMonitor;
+    friend class UnitJobMonitor;
 
 public:
     explicit CouchPlayHelper(SystemOps *ops = nullptr, QObject *parent = nullptr);
@@ -88,6 +97,18 @@ public Q_SLOTS:
      */
     QVariantMap GetUserInfo(const QString &username);
 
+    // Read-only host home paths; no Polkit authorization.
+    QVariantMap GetUserHomeInfoByUid(uint uid);
+
+    /**
+     * Resolve a target user's existing Steam root on the host.
+     *
+     * The returned path uses the user's home spelling but has symlinked
+     * components below that home removed, so secure helper writes can walk it
+     * with O_NOFOLLOW.
+     */
+    QString GetUserSteamRoot(const QString &username);
+
     /**
      * Enable systemd linger for a user
      * Required for systemd-run to work properly
@@ -123,7 +144,7 @@ public Q_SLOTS:
      * @param compositorUid UID of the compositor user
      * @return true if successful
      */
-    bool SetupRuntimeAccess(uint compositorUid);
+    bool SetupRuntimeAccess();
 
     /**
      * Remove runtime directory access for the couchplay group
@@ -134,7 +155,7 @@ public Q_SLOTS:
      * @param compositorUid UID of the compositor user
      * @return true if successful
      */
-    bool RemoveRuntimeAccess(uint compositorUid);
+    bool RemoveRuntimeAccess();
 
     /**
      * Change ownership of a device to a specific user
@@ -183,27 +204,41 @@ public Q_SLOTS:
     int ResetAllDevices();
 
     /**
-     * Launch a gamescope instance as a specified user via systemd-run
+     * Launch a Gamescope instance in an owned transient systemd unit.
      *
-     * This method handles all the complexity of running gamescope as any user:
-     * - Sets up runtime access for couchplay group (once per compositor)
-     * - Spawns the process via systemd-run transient unit
-     * - Returns the MainPID for tracking
+     * The helper writes a protected launch manifest, then starts the installed
+     * native helper in a namespace-preserving bootstrap. The returned PID is
+     * preparing; instanceReady signals completion of directory preparation.
      *
      * @param username User to run as
-     * @param compositorUid UID of compositor user (for runtime access setup)
+     * @param displayContext Owned compositor/display context
      * @param gamescopeArgs Gamescope command-line arguments
-     * @param gameCommand Command to run inside gamescope (e.g., "steam -tenfoot")
+     * @param gameCommand Structured child command: executable followed by arguments
+     * @param workingDirectory Optional absolute working directory
+     * @param sharedRoots Explicit source roots admitted for the working directory
      * @param environment Additional environment variables (VAR=value format)
-     * @param bindPaths Paths to bind-mount into the unit via --property=BindPaths=
-     * @return MainPID of launched process, or 0 on failure
+     * @param privateTemporaryDirectories Whether to isolate the instance's /tmp and /var/tmp
+     * @param directoryPreparations Validated per-instance source/mode/target records
+     * @return Preparing MainPID, or 0 on failure
      */
     qint64 LaunchInstance(const QString &username,
-                          uint compositorUid,
-                          const QStringList &gamescopeArgs,
-                          const QString &gameCommand,
-                          const QStringList &environment,
-                          const QStringList &bindPaths);
+                           const QString &displayContext,
+                           const QStringList &gamescopeArgs,
+                           const QStringList &gameCommand,
+                           const QString &workingDirectory,
+                           const QStringList &sharedRoots,
+                           const QStringList &environment,
+                           bool privateTemporaryDirectories,
+                           const QVariantList &directoryPreparations);
+
+    qint64 LaunchAuxiliaryInstance(const QString &username,
+                                   const QString &displayContext,
+                                   const QStringList &gamescopeArgs,
+                                   const QStringList &gameCommand,
+                                   const QString &workingDirectory,
+                                   const QStringList &sharedRoots,
+                                   const QStringList &environment,
+                                   bool privateTemporaryDirectories);
 
     /**
      * Stop a launched instance
@@ -221,36 +256,6 @@ public Q_SLOTS:
      */
     bool KillInstance(qint64 pid);
 
-    /**
-     * Mount shared directories for a user
-     *
-     * Bind-mounts the specified directories into the user's home directory.
-     * For paths inside the compositor's home, they're mounted at the same
-     * relative path. For paths outside, they're mounted at the specified alias
-     * or under ~/.couchplay/mounts/ if no alias is provided.
-     *
-     * @param username Target user (must exist)
-     * @param compositorUid UID of the compositor user (for determining home-relative paths)
-     * @param directories List of "source|alias" strings (alias empty for home-relative)
-     * @return Number of successful mounts
-     */
-    int MountSharedDirectories(const QString &username, uint compositorUid, const QStringList &directories);
-
-    /**
-     * Unmount all shared directories for a user
-     *
-     * @param username Target user
-     * @return Number of successful unmounts
-     */
-    int UnmountSharedDirectories(const QString &username);
-
-    /**
-     * Unmount all shared directories for all users
-     * Called on session stop or app exit
-     *
-     * @return Total number of unmounts performed
-     */
-    int UnmountAllSharedDirectories();
 
     /**
      * Copy a file to a user's directory with proper ownership
@@ -266,6 +271,40 @@ public Q_SLOTS:
     bool CopyFileToUser(const QString &sourcePath, const QString &targetPath, const QString &username);
 
     /**
+     * Copy a directory to a user's home with proper ownership
+     *
+     * Copies a source directory into the user's home at the specified relative path.
+     * Uses cp -a to preserve ownership, permissions, and symlinks.
+     * The targetRelativePath must be relative (no leading /) and must not
+     * contain ".." components to prevent escaping the user's home.
+     *
+     * @param username Target user
+     * @param sourceDir Source directory path (must exist and be a directory)
+     * @param targetRelativePath Relative path under user's home (e.g., ".local/share/steam")
+     * @return true if successful
+     */
+    bool CopyDirectoryToUser(const QString &username,
+                             const QString &sourceDir,
+                             const QString &targetRelativePath);
+
+    /**
+     * Merge-copy staged files into an existing directory in a user's home
+     *
+     * Copies the *contents* of sourceDir into the existing target directory
+     * (no removal, no nesting — unlike CopyDirectoryToUser's replace
+     * semantics). Used to seed per-player staged data (e.g. configs) through
+     * an overlay/bind mount so files land in the player's private layer.
+     *
+     * @param username Target user
+     * @param sourceDir Staging directory whose contents are merged
+     * @param targetRelativePath Existing relative directory under the user's home
+     * @return true if successful
+     */
+    bool MirrorDirectoryContents(const QString &username,
+                                 const QString &sourceDir,
+                                 const QString &targetRelativePath);
+
+    /**
      * Create a directory with proper ownership
      *
      * Creates the directory and all parent directories, setting ownership
@@ -276,19 +315,6 @@ public Q_SLOTS:
      * @return true if successful
      */
     bool CreateUserDirectory(const QString &path, const QString &username);
-
-    /**
-     * Set ACL on a directory to grant a user read+execute access
-     *
-     * Uses setfacl to grant the specified user access to the directory.
-     * When recursive is true, applies ACLs to all files and subdirectories.
-     *
-     * @param path Directory path to set ACL on
-     * @param username User to grant access to
-     * @param recursive Apply recursively to all contents
-     * @return true if successful
-     */
-    bool SetDirectoryAcl(const QString &path, const QString &username, bool recursive);
 
     /**
      * Set ACLs on a path and all parent directories needed for traversal
@@ -385,13 +411,16 @@ public Q_SLOTS:
 
 Q_SIGNALS:
     /**
-     * Emitted when a transient unit stops unexpectedly (crash, failure)
+     * Emitted when an owned transient unit exits unexpectedly.
+     * Preparation failures include bootstrap status text and errno when available.
      *
      * @param username User whose instance stopped
      * @param pid PID of the stopped process
-     * @param reason "crashed", "failed", or "exited" based on unit Result
+     * @param reason Failure detail or normal-exit classification
      */
     void instanceStopped(const QString &username, qint64 pid, const QString &reason);
+    /** Emitted after the matching instance PID completes bootstrap preparation. */
+    void instanceReady(const QString &username, qint64 pid);
 
     /**
      * Emitted when a gamepad exit chord (Guide/Steam/PS + Start + Select)
@@ -419,35 +448,74 @@ private:
     void restartUserPipeWirePulse(uint compositorUid);
 
     // Internal helpers (not exposed via D-Bus)
+    struct PendingLaunch;
     bool userExists(const QString &username);
     uint getUserUid(const QString &username);
     QString getUserHome(const QString &username);
     QString getUserHomeByUid(uint uid);
+    int resetAllDevicesInternal();
     QString generateServiceName(const QString &username);
-    qint64 startTransientUnit(const QString &username,
-                              uint compositorUid,
-                              const QStringList &gamescopeArgs,
-                              const QString &gameCommand,
-                              const QStringList &environment,
-                              const QStringList &bindPaths);
-    void stopServiceInstance(const QString &serviceName);
-    void monitorUnitState(const QString &serviceName, const QString &username, qint64 mainPid);
-    QString computeMountTarget(const QString &source,
-                               const QString &alias,
-                               const QString &userHome,
-                               const QString &compositorHome);
+    QString generateStreamServiceName(const QString &username);
+    QString usernameForUnit(const QString &serviceName) const;
+    enum class UnitRole { Main, Stream };
+    uint callerUid() const;
+    void startTransientUnit(const QString &username,
+                            const QString &displayContext,
+                            const QStringList &gamescopeArgs,
+                            const QStringList &gameCommand,
+                            const QString &workingDirectory,
+                            const QStringList &sharedRoots,
+                            const QStringList &environment,
+                            bool privateTemporaryDirectories,
+                            const QVariantList &directoryPreparations,
+                            UnitRole role,
+                            const QDBusMessage &request,
+                            const QDBusConnection &replyConnection);
+    bool stopServiceInstance(const QString &serviceName);
+    bool confirmUnitInactive(const QString &serviceName, QString *error = nullptr) const;
+    void queryUnitActiveState(const QString &serviceName, quint64 generation,
+                              const QDBusObjectPath &unitPath, const QString &reason,
+                              bool resolveMissingUnit);
+    void monitorUnitState(const QString &serviceName, const QString &username,
+                          const QDBusObjectPath &unitPath, bool initialStateIsAuthoritative = false);
+    void resolveUnitAfterPropertyError(const QString &serviceName, quint64 generation, const QString &reason);
+    void pollUnitMainPid(const QString &serviceName);
+    void onUnitReady(const QString &serviceName);
+    void onUnitStopped(const QString &serviceName, const QString &reason);
+    void noteInitialInactiveUnitState(const QString &serviceName);
+    void queryTerminalUnitProperties(const QString &serviceName, quint64 generation);
+    void completePendingLaunch(const QString &serviceName, qint64 pid);
+    void finalizeStoppedUnit(const QString &serviceName, const QString &reason, bool deferNotification = false);
+    void queueStoppedNotification(const QString &username, qint64 pid, const QString &reason);
+    void failPendingLaunch(const QString &serviceName, const QString &reason);
+    void publishUnitReady(const QString &serviceName);
+    void releaseOwnedUnit(const QString &serviceName, bool unlinkManifest);
+    bool acquireOverlayLeases(const QString &username, const QList<DirectoryPreparation> &plans,
+                              QList<int> *leases, QStringList *leasePaths, QString *error);
+    bool reacquireOverlayLeases(const QString &username, const QStringList &leasePaths,
+                               QList<int> *leases, QString *error);
     bool
     validateUserPath(const QString &path, const QString &username, const QString &callerName, QStringList &dirsToChown);
     QString findGamescopePath();
     bool unloadNullSinkModule(const QString &username, const QString &sinkName);
+    bool isPathWithinAllowedPrefix(const QString &path) const;
+    bool pathHasSymlinkComponents(const QString &path, const QString &root);
+    bool secureCreateUserDir(const QString &username, const QString &absolutePath);
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;
 
     struct VirtualDisplayInfo {
-        qint64 pid;
+        qint64 pid = 0;
+        QString displayContext;
+        uint ownerUid = 0;
+        uint runtimeUid = 0;
+        QString targetUsername;
         QString waylandSocket;
         QString serviceName;
+
+
+
     };
     QMap<QString, VirtualDisplayInfo> m_virtualDisplays;
 
@@ -457,24 +525,40 @@ private:
     };
     QMap<QString, QList<NullSinkInfo>> m_nullSinks;
 
-    // Track active mounts per user for cleanup
-    struct MountInfo {
-        QString source;
-        QString target;
-    };
-    QMap<QString, QList<MountInfo>> m_activeMounts; // username -> list of mounts
 
     // Track launched transient units
-    QMap<QString, QString> m_usernameToUnitName; // username -> service name
+    QMap<QString, QString> m_usernameToUnitName; // username -> main service name
+    QMap<QString, QString> m_auxiliaryUnitNameForUsername; // username -> auxiliary service name
+    QMap<QString, QString> m_unitUsernameByName; // service name -> username
+    QMap<QString, UnitRole> m_unitRoleByName;
+    QMap<QString, quint64> m_unitGenerationByName;
+    quint64 m_nextUnitGeneration = 0;
     QMap<qint64, QString> m_pidToUsername; // PID -> username (reverse lookup for Stop/Kill)
+    QMap<qint64, QString> m_pidToUnitName;
+    QMap<QString, quint64> m_pidPollGenerationByUnit;
+    QHash<qint64, uint> m_pidOwnerUid;
+    QHash<QString, uint> m_unitOwnerUid;
+    struct StoppedInstanceNotification { QString username; qint64 pid = 0; QString reason; };
+    QList<StoppedInstanceNotification> m_deferredStoppedNotifications;
+    struct TargetIdentity { uid_t uid = 0; gid_t gid = 0; QString declaredHome; QString canonicalHome; };
+    QMap<QString, TargetIdentity> m_targetIdentityByUnit;
     QHash<QString, uint> m_compositorUidForUsername; // username -> compositor UID
-
+    QMap<QString, QString> m_launchTokenByUnitName;
+    QMap<QString, QDBusObjectPath> m_unitPathForUnit;
+    QSet<QString> m_readyUnitNames;
+    QMap<QString, QList<int>> m_overlayLeaseFdsByUnit;
+    QMap<QString, QStringList> m_overlayLeasePathsByUnit;
+    QMap<QString, PendingLaunch *> m_pendingLaunches;
+    QSet<QString> m_announcedReadyUnitNames;
+    QSet<QString> m_terminalStateQueries;
+    QSet<QString> m_initialInactiveUnitNames;
     // Units being explicitly stopped (suppresses crash detection)
     QSet<QString> m_stoppingUnits;
 
     // Per-unit D-Bus monitors for crash detection
     QMap<QString, UnitMonitor *> m_monitors;
-
+    QMap<QString, UnitJobMonitor *> m_jobMonitors;
+    QHash<QString, QString> m_failedJobResults;
     // Track which compositor UIDs have runtime access set up
     QSet<uint> m_runtimeAccessSetForUid;
 
@@ -482,8 +566,21 @@ private:
     SystemOps *m_ops;
 
     QString m_stateFilePath;
-    void saveState();
+    bool m_reconcilingState = false;
+    bool m_stateRecoveryPending = false;
+    bool m_recoverySaveRequested = false;
+    QSet<QString> m_deferredReleaseUnits;
+    QJsonObject m_legacyActiveMounts;
+    QSet<QString> m_cleanedLaunchManifestTokens;
+    bool saveState();
+    bool subscribeSystemdManager(QString *error = nullptr) const;
     void loadAndReconcileState();
+    bool reconcileLegacyMounts(const QSet<QString> &activeSystemdUnits,
+                               const QSet<QString> &stoppedUnitNames,
+                               bool systemdStateKnown);
+    bool cleanupCopyScratchForUnit(const QString &serviceName, const QString &token) const;
+    bool readLaunchManifestForUnit(const QString &serviceName, const QString &token,
+                                   LaunchManifest *manifest, QString *error = nullptr) const;
     void removeRuntimeAcls(const QString &runtimeDir);
     void cleanupTcpListenerIfLast(const QString &username);
     void setupUinputAccess();

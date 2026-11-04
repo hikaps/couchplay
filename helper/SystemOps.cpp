@@ -3,15 +3,21 @@
 
 #include "SystemOps.h"
 #include "PolkitActions.h"
+#include "SecureFs.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QDBusConnection>
+#include <QDBusInterface>
+#include <QDBusReply>
 
 #ifdef HAVE_POLKITQT
 #include <PolkitQt1/Authority>
 #include <PolkitQt1/Subject>
 #endif
+#include <fcntl.h>
+static constexpr off_t MAX_SECURE_COPY_BYTES = 64 * 1024 * 1024;
 
 #include <cerrno>
 #include <cstring>
@@ -36,6 +42,69 @@ struct group *RealSystemOps::getgrnam(const char *name)
 {
     return ::getgrnam(name);
 }
+uid_t RealSystemOps::connectionUnixUser(const QString &busName)
+{
+    QDBusInterface bus(QStringLiteral("org.freedesktop.DBus"),
+                       QStringLiteral("/org/freedesktop/DBus"),
+                       QStringLiteral("org.freedesktop.DBus"),
+                       QDBusConnection::systemBus());
+    const QDBusReply<uint> reply = bus.call(QStringLiteral("GetConnectionUnixUser"), busName);
+    return reply.isValid() ? static_cast<uid_t>(reply.value()) : static_cast<uid_t>(-1);
+}
+QDBusObjectPath RealSystemOps::startTransientService(const QString &name,
+                                                    const QList<SystemdProperty> &properties,
+                                                    QString *error)
+{
+    DirectoryPlan::registerSystemdTypes();
+    QDBusInterface manager(QStringLiteral("org.freedesktop.systemd1"),
+                           QStringLiteral("/org/freedesktop/systemd1"),
+                           QStringLiteral("org.freedesktop.systemd1.Manager"),
+                           systemBusConnection());
+    const QList<SystemdAuxiliaryUnit> auxiliaryUnits;
+    const QDBusMessage startReply = manager.callWithArgumentList(
+        QDBus::Block,
+        QStringLiteral("StartTransientUnit"),
+        {name, QStringLiteral("fail"), QVariant::fromValue(properties), QVariant::fromValue(auxiliaryUnits)});
+    if (startReply.type() == QDBusMessage::ErrorMessage) {
+        if (error) {
+            *error = startReply.errorMessage();
+        }
+        return {};
+    }
+    if (startReply.arguments().size() != 1 || !startReply.arguments().constFirst().canConvert<QDBusObjectPath>()) {
+        if (error) {
+            *error = QStringLiteral("StartTransientUnit returned an invalid job path");
+        }
+        return {};
+    }
+    const QDBusObjectPath jobPath = startReply.arguments().constFirst().value<QDBusObjectPath>();
+    if (!jobPath.path().startsWith(QStringLiteral("/org/freedesktop/systemd1/job/"))) {
+        if (error) {
+            *error = QStringLiteral("StartTransientUnit returned a non-job object path");
+        }
+        return {};
+    }
+
+    return jobPath;
+}
+QDBusConnection RealSystemOps::systemBusConnection() const
+{
+    return QDBusConnection::systemBus();
+}
+bool RealSystemOps::writeLaunchManifest(const LaunchManifest &manifest, QString *token, QString *error)
+{
+    return DirectoryPlan::writeLaunchManifest(manifest, token, error);
+}
+
+bool RealSystemOps::readLaunchManifest(const QString &token, LaunchManifest *manifest, QString *error)
+{
+    return DirectoryPlan::readLaunchManifest(token, manifest, error);
+}
+
+bool RealSystemOps::unlinkLaunchManifest(const QString &token, QString *error)
+{
+    return DirectoryPlan::unlinkLaunchManifest(token, error);
+}
 
 bool RealSystemOps::fileExists(const QString &path)
 {
@@ -45,6 +114,17 @@ bool RealSystemOps::fileExists(const QString &path)
 bool RealSystemOps::isDirectory(const QString &path)
 {
     return QFileInfo(path).isDir();
+}
+
+bool RealSystemOps::isSymLink(const QString &path)
+{
+    struct stat st;
+    return lstat(path.toLocal8Bit().constData(), &st) == 0 && S_ISLNK(st.st_mode);
+}
+
+QString RealSystemOps::canonicalFilePath(const QString &path)
+{
+    return QFileInfo(path).canonicalFilePath();
 }
 
 bool RealSystemOps::mkpath(const QString &path)
@@ -60,6 +140,74 @@ bool RealSystemOps::removeFile(const QString &path)
 bool RealSystemOps::copyFile(const QString &source, const QString &dest)
 {
     return QFile::copy(source, dest);
+}
+bool RealSystemOps::copyFileSecure(const QString &source,
+                                   const QString &dest,
+                                   uid_t sourceOwner,
+                                   uid_t destOwner,
+                                   gid_t destGroup)
+{
+    const QFileInfo sourceInfo(source);
+    const int sourceParentFd = SecureFs::openExistingDirNoFollow(sourceInfo.absolutePath());
+    if (sourceParentFd < 0) {
+        return false;
+    }
+    const QByteArray sourceName = sourceInfo.fileName().toLocal8Bit();
+    const int sourceFd = ::openat(sourceParentFd, sourceName.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    ::close(sourceParentFd);
+    if (sourceFd < 0) {
+        return false;
+    }
+    struct stat sourceStat {};
+    if (::fstat(sourceFd, &sourceStat) != 0 || !S_ISREG(sourceStat.st_mode) || sourceStat.st_uid != sourceOwner
+        || !(sourceStat.st_mode & S_IRUSR)) {
+        ::close(sourceFd);
+        return false;
+    }
+    if (sourceStat.st_size > MAX_SECURE_COPY_BYTES) {
+        ::close(sourceFd);
+        return false;
+    }
+    off_t copiedBytes = 0;
+    QByteArray content;
+    char buffer[8192];
+    ssize_t readCount = 0;
+    while ((readCount = ::read(sourceFd, buffer, sizeof(buffer))) > 0) {
+        if (copiedBytes > MAX_SECURE_COPY_BYTES - readCount) {
+            ::close(sourceFd);
+            return false;
+        }
+        content.append(buffer, static_cast<qsizetype>(readCount));
+        copiedBytes += readCount;
+    }
+    ::close(sourceFd);
+    if (readCount < 0) {
+        return false;
+    }
+
+    const QFileInfo targetInfo(dest);
+    const int targetParentFd = SecureFs::openExistingDirNoFollow(targetInfo.absolutePath());
+    if (targetParentFd < 0) {
+        return false;
+    }
+    const int result = SecureFs::writeFileAt(targetParentFd, targetInfo.fileName(), content, destOwner, destGroup, 0644);
+    ::close(targetParentFd);
+    return result == 0;
+}
+bool RealSystemOps::createDirectorySecure(const QString &path, uid_t owner, gid_t group)
+{
+    const int rootFd = SecureFs::openBaseDir(QStringLiteral("/"));
+    if (rootFd < 0) {
+        return false;
+    }
+    const QStringList parts = QDir::cleanPath(path).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    const int directoryFd = SecureFs::openDirBelow(rootFd, parts, true, owner, group);
+    ::close(rootFd);
+    if (directoryFd < 0) {
+        return false;
+    }
+    ::close(directoryFd);
+    return true;
 }
 
 bool RealSystemOps::writeFile(const QString &path, const QByteArray &content)
@@ -136,14 +284,14 @@ bool RealSystemOps::killProcess(pid_t pid, int signal)
 
 bool RealSystemOps::checkAuthorization(const QString &action, const QString &callerBusName)
 {
-    // Only user account lifecycle actions require Polkit authentication.
-    // Other privileged operations (device ownership, instance launch, mount
-    // management) rely on D-Bus system bus ACL restricted to wheel/games groups.
-    // Rationale: user accounts persist beyond the session; other operations are
-    // transient and scoped to the local machine where physical access is assumed.
-    if (action != PolkitActions::ACTION_CREATE_USER && action != PolkitActions::ACTION_DELETE_USER) {
-        return true;
-    }
+
+
+
+
+
+
+
+
 
     if (callerBusName.isEmpty()) {
         qWarning() << "checkAuthorization: caller bus name is empty";

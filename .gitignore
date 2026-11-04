@@ -31,10 +31,3 @@ qrc_*.cpp
 compile_commands.json
 .cache/
 
-# E2E test-run artifacts (selenium-webdriver-at-spi)
-appium_artifact_*.log
-appium_artifact_*.webm*
-appiumtests/screenshots/
-appiumtests/__pycache__/
-appiumtests/helpers/__pycache__/
-.pytest_cache/

@@ -4,6 +4,9 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDBusConnection>
+#include <QDBusObjectPath>
+#include "DirectoryPlan.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QIODevice>
@@ -34,11 +37,26 @@ public:
     virtual struct passwd *getpwnam(const char *name) = 0;
     virtual struct passwd *getpwuid(uid_t uid) = 0;
     virtual struct group *getgrnam(const char *name) = 0;
+    virtual uid_t connectionUnixUser(const QString &busName) = 0;
 
-    // Filesystem operations
+    virtual QDBusObjectPath startTransientService(const QString &name,
+                                                 const QList<SystemdProperty> &properties,
+                                                 QString *error) = 0;
+    virtual QDBusConnection systemBusConnection() const = 0;
+    virtual bool writeLaunchManifest(const LaunchManifest &manifest, QString *token, QString *error) = 0;
+    virtual bool readLaunchManifest(const QString &token, LaunchManifest *manifest, QString *error) = 0;
+    virtual bool unlinkLaunchManifest(const QString &token, QString *error) = 0;
     virtual bool fileExists(const QString &path) = 0;
     virtual bool isDirectory(const QString &path) = 0;
+    virtual bool isSymLink(const QString &path) = 0;
+    virtual QString canonicalFilePath(const QString &path) = 0;
     virtual bool mkpath(const QString &path) = 0;
+    virtual bool copyFileSecure(const QString &source,
+                                 const QString &dest,
+                                 uid_t sourceOwner,
+                                 uid_t destOwner,
+                                 gid_t destGroup) = 0;
+    virtual bool createDirectorySecure(const QString &path, uid_t owner, gid_t group) = 0;
     virtual bool removeFile(const QString &path) = 0;
     virtual bool copyFile(const QString &source, const QString &dest) = 0;
     virtual bool writeFile(const QString &path, const QByteArray &content) = 0;
@@ -82,12 +100,28 @@ public:
     struct passwd *getpwnam(const char *name) override;
     struct passwd *getpwuid(uid_t uid) override;
     struct group *getgrnam(const char *name) override;
+    uid_t connectionUnixUser(const QString &busName) override;
+    QDBusObjectPath startTransientService(const QString &name,
+                                         const QList<SystemdProperty> &properties,
+                                         QString *error) override;
+    QDBusConnection systemBusConnection() const override;
+    bool writeLaunchManifest(const LaunchManifest &manifest, QString *token, QString *error) override;
+    bool readLaunchManifest(const QString &token, LaunchManifest *manifest, QString *error) override;
+    bool unlinkLaunchManifest(const QString &token, QString *error) override;
 
     bool fileExists(const QString &path) override;
     bool isDirectory(const QString &path) override;
+    bool isSymLink(const QString &path) override;
+    QString canonicalFilePath(const QString &path) override;
     bool mkpath(const QString &path) override;
     bool removeFile(const QString &path) override;
     bool copyFile(const QString &source, const QString &dest) override;
+    bool copyFileSecure(const QString &source,
+                        const QString &dest,
+                        uid_t sourceOwner,
+                        uid_t destOwner,
+                        gid_t destGroup) override;
+    bool createDirectorySecure(const QString &path, uid_t owner, gid_t group) override;
     bool writeFile(const QString &path, const QByteArray &content) override;
 
     bool statPath(const QString &path, struct stat *buf) override;

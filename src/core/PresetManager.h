@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QString>
+#include "LaunchTypes.h"
 #include <QList>
 #include <QStringList>
 #include <QVariantList>
@@ -13,26 +14,60 @@
 #include "HeroicConfigManager.h"
 #include "SteamConfigManager.h"
 
+struct DataDirectory {
+    Q_GADGET
+    Q_PROPERTY(QString path MEMBER path)
+    Q_PROPERTY(QString mode MEMBER mode) // "copy", "overlay", "acl", "bind"
+
+public:
+    QString path;
+    QString mode = QStringLiteral("acl");
+
+    bool operator==(const DataDirectory &other) const {
+        return path == other.path && mode == other.mode;
+    }
+
+    /**
+     * Build a DataDirectory from a QVariant coming from QML or C++.
+     * Accepts both a QVariantMap with "path"/"mode" keys (how JS objects
+     * arrive from QML) and an encapsulated DataDirectory gadget.
+     * Empty or unrecognized modes fall back to "acl".
+     */
+    static DataDirectory fromVariant(const QVariant &var);
+};
+
+Q_DECLARE_METATYPE(DataDirectory)
+
+/**
+ * @brief Reversible persistence encoding for data-directory lists
+ *
+ * JSON (compact array of {path, mode} objects), so paths containing '|' or
+ * newlines — legal on Linux and selectable in the folder picker — round-trip
+ * intact. decodeDataDirectories() falls back to the legacy newline-separated
+ * "path|mode" format written by earlier versions.
+ */
+QString encodeDataDirectories(const QList<DataDirectory> &directories);
+QList<DataDirectory> decodeDataDirectories(const QString &payload);
+
+/**
+ * Return existing, deduplicated native application-install/cwd directories
+ * inferred only from the structured program and working directory. Flatpak,
+ * system, broad, and sensitive paths are omitted; expose results read-only.
+ */
+QStringList applicationAccessDirectories(const LaunchCommand &command, const QString &compositorHome);
+
 struct LauncherInfo {
     Q_GADGET
     Q_PROPERTY(QString configPath MEMBER configPath)
     Q_PROPERTY(QString dataPath MEMBER dataPath)
-    Q_PROPERTY(QStringList gameDirectories MEMBER gameDirectories)
-    Q_PROPERTY(bool requiresAcls MEMBER requiresAcls)
-    Q_PROPERTY(bool hasShortcutSync MEMBER hasShortcutSync)
 
 public:
     QString configPath;
     QString dataPath;
-    QStringList gameDirectories;  // Paths needing ACLs (computed at runtime)
-    bool requiresAcls = false;
-    bool hasShortcutSync = false;
-    
+
     bool operator==(const LauncherInfo &other) const {
-        return configPath == other.configPath && 
-               dataPath == other.dataPath &&
-               requiresAcls == other.requiresAcls &&
-               hasShortcutSync == other.hasShortcutSync;
+        return configPath == other.configPath &&
+               dataPath == other.dataPath;
     }
 };
 
@@ -47,11 +82,12 @@ struct LaunchPreset {
     Q_PROPERTY(QString iconName MEMBER iconName)
     Q_PROPERTY(QString desktopFilePath MEMBER desktopFilePath)
     Q_PROPERTY(bool isBuiltin MEMBER isBuiltin)
-    Q_PROPERTY(bool steamIntegration MEMBER steamIntegration)
 
     Q_PROPERTY(QString launcherId MEMBER launcherId)
+    Q_PROPERTY(QStringList requiredIntegrations MEMBER requiredIntegrations)
+    Q_PROPERTY(bool sandboxed MEMBER sandboxed)
     Q_PROPERTY(LauncherInfo launcherInfo MEMBER launcherInfo)
-    Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
+    Q_PROPERTY(QList<DataDirectory> dataDirectories MEMBER dataDirectories)
     Q_PROPERTY(QString flatpakAppId MEMBER flatpakAppId)
     Q_PROPERTY(QString flatpakArgs MEMBER flatpakArgs)
 
@@ -63,13 +99,14 @@ public:
     QString iconName;
     QString desktopFilePath;        // Source .desktop file (if applicable)
     bool isBuiltin = false;         // true for Steam/Heroic/Lutris
-    bool steamIntegration = false;  // Enable gamescope -e flag
-    
+
     QString launcherId;             // "steam", "heroic", "lutris", "custom" (empty for non-launcher presets)
+    QStringList requiredIntegrations; // Explicit integration resources needed by this preset
+    bool sandboxed = false;            // True when the top-level command is a Flatpak launcher
     LauncherInfo launcherInfo;      // Populated by detection for launcher presets
-    QStringList sharedDirectories;  // Per-preset shared directories for ACL/mount setup
+    QList<DataDirectory> dataDirectories; // Per-preset data directories with mode (copy/overlay/acl)
     QString flatpakAppId;           // e.g., "com.valvesoftware.Steam" (empty = no Flatpak alternative)
-    QString flatpakArgs;            // Extra args for Flatpak launch (e.g., "-tenfoot -steamdeck")
+    QString flatpakArgs;            // Extra args for Flatpak launch (e.g., "-bigpicture")
 
     bool operator==(const LaunchPreset &other) const { return id == other.id; }
 };
@@ -78,7 +115,7 @@ Q_DECLARE_METATYPE(LaunchPreset)
 
 /**
  * @brief Manages launch presets for game/application launching
- * 
+ *
  * Provides builtin presets (Steam, Lutris), discovery of installed
  * applications via .desktop files, and custom preset management.
  * Custom presets are persisted to ~/.config/couchplayrc as KConfig groups.
@@ -111,17 +148,38 @@ public:
 
     Q_INVOKABLE LaunchPreset getPreset(const QString &id) const;
     Q_INVOKABLE QString getCommand(const QString &id) const;
+    static QString defaultSteamCommand();
     Q_INVOKABLE QString getWorkingDirectory(const QString &id) const;
-    Q_INVOKABLE bool getSteamIntegration(const QString &id) const;
     Q_INVOKABLE QString getLauncherId(const QString &id) const;
+    Q_INVOKABLE QStringList getRequiredIntegrations(const QString &id) const;
+    Q_INVOKABLE bool setRequiredIntegrations(const QString &id, const QStringList &integrations);
+    Q_INVOKABLE QVariantList availableIntegrations() const;
+    Q_INVOKABLE QVariantList gamesForPreset(const QString &id) const;
+    LaunchCommand buildLaunchCommand(const QString &id, const GameSelection &selection) const;
+    LaunchCommand buildLaunchCommand(const LaunchPreset &preset, const GameSelection &selection) const;
 
     /**
-     * @brief Get game directories for a launcher preset (for ACL setup)
+     * @brief Get data directories for a preset
+     * @param id Preset ID
+     * @return QVariantList of DataDirectory gadgets
      */
-    Q_INVOKABLE QStringList getGameDirectories(const QString &id) const;
+    Q_INVOKABLE QVariantList getDataDirectories(const QString &id) const;
+    /**
+     * @brief Resolve a Flatpak document-portal directory to its host path
+     *
+     * Native paths are returned unchanged. Flatpak folder dialogs may return
+     * document-portal paths that the privileged host helper cannot resolve;
+     * this maps those paths through the Documents portal before persistence.
+     */
+    Q_INVOKABLE QString resolveHostPath(const QString &path) const;
 
-    Q_INVOKABLE QStringList getSharedDirectories(const QString &id) const;
-    Q_INVOKABLE bool setSharedDirectories(const QString &id, const QStringList &directories);
+    /**
+     * @brief Set data directories for a preset and persist
+     * @param id Preset ID
+     * @param directories QVariantList of DataDirectory gadgets
+     * @return true if set successfully
+     */
+    Q_INVOKABLE bool setDataDirectories(const QString &id, const QVariantList &directories);
 
     /**
      * @brief Add a custom preset
@@ -129,14 +187,12 @@ public:
      * @param command Launch command
      * @param workingDirectory Optional working directory
      * @param iconName Optional icon name
-     * @param steamIntegration Enable Steam integration (-e flag)
      * @return The ID of the created preset
      */
     Q_INVOKABLE QString addCustomPreset(const QString &name,
                                          const QString &command,
                                          const QString &workingDirectory = QString(),
-                                         const QString &iconName = QString(),
-                                         bool steamIntegration = false);
+                                         const QString &iconName = QString());
 
     /**
      * @brief Add a preset from a .desktop file
@@ -152,15 +208,13 @@ public:
      * @param command New launch command
      * @param workingDirectory New working directory
      * @param iconName New icon name
-     * @param steamIntegration New Steam integration setting
      * @return true if updated successfully
      */
     Q_INVOKABLE bool updateCustomPreset(const QString &id,
                                          const QString &name,
                                          const QString &command,
                                          const QString &workingDirectory,
-                                         const QString &iconName,
-                                         bool steamIntegration);
+                                         const QString &iconName);
 
     /**
      * @brief Remove a custom preset
@@ -193,16 +247,25 @@ public:
      */
     static QString cleanExecCommand(const QString &exec);
 
+    /**
+     * @brief Detect launcher type from a command string
+     * @param command The launch command (already cleaned of field codes)
+     * @return Launcher ID ("steam", "heroic", "lutris") or empty string
+     */
+    QString detectLauncherId(const QString &command) const;
+
 private:
     void initBuiltinPresets();
     void loadCustomPresets();
     void saveCustomPresets();
+    void saveBuiltinDataDirectoryOverride(const QString &id);
+    void applyBuiltinDataDirectoryOverrides();
     void loadFlatpakCache();
     void saveFlatpakCache();
     QString resolveLaunchCommand(const QString &nativeCommand,
                                   const QString &flatpakAppId,
                                   const QString &flatpakArgs) const;
-    
+
     /**
      * @brief Parse a .desktop file and extract preset information
      * @param filePath Path to the .desktop file
@@ -212,12 +275,14 @@ private:
 
     static QString generateCustomId();
 
+    void populateLauncherInfo(LaunchPreset &preset) const;
+
     /**
-     * @brief Get default shared directories for a built-in preset
+     * @brief Get default data directories for a built-in preset
      * @param id Preset ID ("steam", "heroic", "lutris")
-     * @return List of auto-detected directories for this preset
+     * @return List of auto-detected data directories with modes
      */
-    QStringList getDefaultSharedDirectories(const QString &id) const;
+    QList<DataDirectory> getDefaultDataDirectories(const QString &id) const;
 
     HeroicConfigManager *m_heroicConfigManager = nullptr;
     SteamConfigManager *m_steamConfigManager = nullptr;

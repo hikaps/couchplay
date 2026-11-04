@@ -5,11 +5,16 @@
 
 #include <QList>
 #include <QMap>
+#include <QProcess>
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QRect>
+#include <QSet>
 #include <QString>
 #include <QVariantMap>
+#include <QVariantList>
+#include "LaunchTypes.h"
+#include "SessionManager.h"
 
 #include "../dbus/CouchPlayHelperClient.h"
 #include "HeroicConfigManager.h"
@@ -40,6 +45,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(bool running READ isRunning NOTIFY runningChanged)
     Q_PROPERTY(int runningInstanceCount READ runningInstanceCount NOTIFY runningInstanceCountChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(bool active READ isActive NOTIFY activeChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
 
     // Dependencies
@@ -79,6 +85,10 @@ public:
      * @brief Check if any instance is running
      */
     bool isRunning() const;
+    bool isActive() const
+    {
+        return m_active;
+    }
 
     /**
      * @brief Get the number of currently running instances
@@ -155,18 +165,6 @@ public:
                                         const QRect &screenGeometry,
                                         const QString &gridSubLayout = QString());
 
-    static QString getOverridesRootPath(const QString &presetId, const QString &gameKeyHash);
-
-    static QStringList expandPatternsToFiles(const QString &gamePath, const QStringList &patterns);
-
-    // Returns override path for a preset (~/.local/share/hikaps/CouchPlay/overrides/<presetId>/), creating it if needed
-    Q_INVOKABLE static QString getAndEnsureOverridesPath(const QString &presetId);
-
-    void loadOverrideFiles(const QString &overridesRoot,
-                           const QStringList &matchedFiles,
-                           const QString &username,
-                           const QString &gameId);
-
 Q_SIGNALS:
     void runningChanged();
     void runningInstanceCountChanged();
@@ -180,6 +178,8 @@ Q_SIGNALS:
     void heroicConfigManagerChanged();
     void settingsManagerChanged();
     void errorOccurred(const QString &message);
+    void activeChanged();
+    void sessionStartFailed(const QString &message);
     void sessionStarted();
     void sessionStopped();
     void instanceStarted(int index);
@@ -193,41 +193,59 @@ private Q_SLOTS:
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
     void startNextInstance();
+    void onHookFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onHookError(QProcess::ProcessError error);
 
 private:
     void setStatus(const QString &status);
     void cleanupInstances();
+    void continueStart();
+    void runHook(const QString &path, bool postHook);
+    void beginFinalization(bool startupFailure, const QString &message = QString());
+    void finishFinalization();
+    void setActive(bool active);
+    const SessionProfile &activeProfile() const;
     bool setupDeviceOwnership();
     void restoreDeviceOwnership();
-    bool setupSharedDirectories();
-    void teardownSharedDirectories();
-    bool buildBindPaths();
-    bool setupLauncherAccess();
+    bool setupSessionResources();
+    void teardownSharingState();
     QRect getScreenGeometry() const;
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
-    void cleanupOverrideDirs(const QStringList &overridePaths);
     void inhibitScreenSaver();
     void uninhibitScreenSaver();
     bool setupStreamingInstance(int instanceIndex, const QVariantMap &config);
     void teardownStreamingInstances();
     void cleanupStreamingInstance(int index);
+    void continueFinalizationAfterStopping();
+    bool hasOwnedPids() const;
+
+    struct SessionRuntimeSnapshot {
+        SessionProfile profile;
+        QList<LaunchPreset> presets;
+        QList<LaunchCommand> launchCommands;
+        bool syncSteamShortcuts = false;
+        bool shareSteamLibraries = false;
+        bool syncHeroicShortcuts = false;
+    };
 
     struct StreamingInstanceInfo {
         QString username;
-        QString waylandSocket;
+        QString displayContext;
         QString sinkName;
         bool virtualDisplayCreated = false;
         bool nullSinkCreated = false;
     };
 
-    QMap<int, QStringList> m_instanceBindPaths;
+    QMap<int, QVariantList> m_instanceDirectoryPreparations;
     uint m_screenSaverCookie = 0;
 
 
     QList<qint64> getGamescopePids() const;
 
     SessionManager *m_sessionManager = nullptr;
+    SessionRuntimeSnapshot m_startingSnapshot;
+    bool m_hasStartingProfile = false;
     DeviceManager *m_deviceManager = nullptr;
     CouchPlayHelperClient *m_helperClient = nullptr;
     PresetManager *m_presetManager = nullptr;
@@ -239,6 +257,20 @@ private:
     QList<GamescopeInstance *> m_instances;
     QAction *m_stopAction = nullptr;
     QString m_status;
+    bool m_active = false;
+    bool m_sessionStartupComplete = false;
+    bool m_finalizing = false;
+    bool m_startupFailure = false;
+    bool m_finalizationCleanupStarted = false;
+    bool m_stoppingInstances = false;
+    bool m_launchErrorReported = false;
+    bool m_streamStartupErrorReported = false;
+    bool m_preHookCompleted = false;
+    bool m_postHookArmed = false;
+    bool m_hookIsPost = false;
+    bool m_postHookStarted = false;
+    QString m_finalizationMessage;
+    QProcess *m_hookProcess = nullptr;
     QStringList m_ownedDevicePaths; // Devices we've taken ownership of
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
 
@@ -247,4 +279,9 @@ private:
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
+
+    // Privileged sharing state (mounts, Steam library sharing) is active from
+    // setup until teardown — natural instance exit must release it too
+    bool m_sharedStateActive = false;
+    QSet<QString> m_steamSharedUsers;
 };

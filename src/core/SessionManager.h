@@ -7,10 +7,16 @@
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QString>
+#include <QVariantList>
 #include <QVariantMap>
 
 #include <KConfig>
 #include <KConfigGroup>
+
+#include "PresetManager.h"
+#include "LaunchTypes.h"
+
+class CouchPlayHelperClient;
 
 class SessionManager;
 
@@ -31,13 +37,9 @@ struct InstanceConfig {
     Q_PROPERTY(QList<int> devices MEMBER devices)
     Q_PROPERTY(QStringList deviceStableIds MEMBER deviceStableIds)
     Q_PROPERTY(QStringList deviceStableIdNames MEMBER deviceStableIdNames)
-    Q_PROPERTY(QString gameCommand MEMBER gameCommand)
-    Q_PROPERTY(QString steamAppId MEMBER steamAppId)
+    Q_PROPERTY(QVariantMap gameSelection READ gameSelectionAsVariant WRITE setGameSelectionFromVariant)
     Q_PROPERTY(QString presetId MEMBER presetId)
-    Q_PROPERTY(QStringList sharedDirectories MEMBER sharedDirectories)
-    Q_PROPERTY(QString overrideGamePath MEMBER overrideGamePath)
-    Q_PROPERTY(QStringList overrideFiles MEMBER overrideFiles)
-    Q_PROPERTY(QStringList overridePatterns MEMBER overridePatterns)
+    Q_PROPERTY(bool privateTemporaryDirectories MEMBER privateTemporaryDirectories)
     Q_PROPERTY(QString outputMode MEMBER outputMode)
     Q_PROPERTY(QString streamResolution MEMBER streamResolution)
     Q_PROPERTY(int streamFps MEMBER streamFps)
@@ -58,13 +60,11 @@ public:
     QList<int> devices; // Runtime: current event numbers
     QStringList deviceStableIds; // Persistent: stable IDs for profile save/load
     QStringList deviceStableIdNames; // Persistent: friendly names (parallel to stableIds)
-    QString gameCommand;
-    QString steamAppId; // Steam App ID for Steam launch mode
+    GameSelection gameSelection;
     QString presetId = QStringLiteral("steam"); // ID of the launch preset to use
-    QStringList sharedDirectories; // Per-instance shared directories (from preset)
-    QString overrideGamePath;
-    QStringList overrideFiles;
-    QStringList overridePatterns; // Glob patterns for per-user overrides
+    bool privateTemporaryDirectories = false;
+    QVariantMap gameSelectionAsVariant() const { return gameSelection.toVariant(); }
+    void setGameSelectionFromVariant(const QVariantMap &selection) { gameSelection = GameSelection::fromVariant(selection); }
     QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
     QString streamResolution = QStringLiteral("1920x1080");
     int streamFps = 60;
@@ -84,11 +84,15 @@ struct SessionProfile {
     Q_PROPERTY(QString layout MEMBER layout)
     Q_PROPERTY(QString gridSubLayout MEMBER gridSubLayout)
     Q_PROPERTY(QString filePath MEMBER filePath)
+    Q_PROPERTY(QString preSessionExecutable MEMBER preSessionExecutable)
+    Q_PROPERTY(QString postSessionExecutable MEMBER postSessionExecutable)
 
 public:
     QString name;
     QString layout = QStringLiteral("horizontal"); // horizontal, vertical, multi-monitor, grid
     QString gridSubLayout; // "horizontal" (3×1) or "grid-2x2" (2×2 with gap) — only used when layout is "grid"
+    QString preSessionExecutable;
+    QString postSessionExecutable;
     QString filePath;
     QList<InstanceConfig> instances;
 };
@@ -109,15 +113,32 @@ class SessionManager : public QObject
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
+    Q_PROPERTY(QString preSessionExecutable READ preSessionExecutable WRITE setPreSessionExecutable NOTIFY preSessionExecutableChanged)
+    Q_PROPERTY(QString postSessionExecutable READ postSessionExecutable WRITE setPostSessionExecutable NOTIFY postSessionExecutableChanged)
+    Q_PROPERTY(PresetManager *presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
+    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
 
 public:
     explicit SessionManager(QObject *parent = nullptr);
     ~SessionManager() override;
 
+    PresetManager *presetManager() const
+    {
+        return m_presetManager;
+    }
+    void setPresetManager(PresetManager *manager);
+
+    CouchPlayHelperClient *helperClient() const
+    {
+        return m_helperClient;
+    }
+    void setHelperClient(CouchPlayHelperClient *client);
+
     // Profile management
     Q_INVOKABLE bool saveProfile(const QString &name);
     Q_INVOKABLE bool loadProfile(const QString &name);
     Q_INVOKABLE bool deleteProfile(const QString &name);
+    Q_INVOKABLE QString duplicateProfile(const QString &sourceName);
     Q_INVOKABLE void refreshProfiles();
 
     // Current session
@@ -140,9 +161,40 @@ public:
      * @param names List of device friendly names (parallel to stableIds)
      */
     Q_INVOKABLE void setInstanceDeviceStableIds(int index, const QStringList &stableIds, const QStringList &names);
-    Q_INVOKABLE void setInstanceGame(int index, const QString &gameCommand);
+    Q_INVOKABLE void setInstanceGame(int index, const QVariantMap &selection);
     Q_INVOKABLE void setInstancePreset(int index, const QString &presetId);
-    Q_INVOKABLE void setInstanceSharedDirectories(int index, const QStringList &directories);
+    QString preSessionExecutable() const { return m_currentProfile.preSessionExecutable; }
+    void setPreSessionExecutable(const QString &path);
+    QString postSessionExecutable() const { return m_currentProfile.postSessionExecutable; }
+    void setPostSessionExecutable(const QString &path);
+
+    static bool isValidProfileName(const QString &name);
+
+    /**
+     * @brief Per-player staging folder path for hand-seeded data (configs etc.)
+     *
+     * Creates the folder (and one subfolder per writable shared directory)
+     * if needed and returns the path. Files dropped here are merged into the
+     * player's view of the corresponding shared directory at session start.
+     * Returns an empty string for invalid indices or instances without a
+     * user/preset.
+     */
+    Q_INVOKABLE QString playerDataFolderPath(int index);
+
+    /**
+     * @brief Whether this player has a private shared directory for staged data
+     * Checks the current application directories without creating the staging folder.
+     */
+    Q_INVOKABLE bool hasPlayerDataStagingDirectories(int index) const;
+
+    /**
+     * @brief Open the per-player staging folder in the file manager
+     *
+     * Uses the desktop URL opener (including the desktop portal under Flatpak).
+     *
+     * @return true if an opener was launched
+     */
+    Q_INVOKABLE bool openPlayerDataFolder(int index);
 
     Q_INVOKABLE void recalculateOutputResolutions(int screenWidth, int screenHeight);
     Q_INVOKABLE QStringList getAssignedUsers(int excludeIndex) const;
@@ -186,7 +238,11 @@ Q_SIGNALS:
     void currentGridSubLayoutChanged();
     void instanceCountChanged();
     void savedProfilesChanged();
+    void preSessionExecutableChanged();
+    void postSessionExecutableChanged();
     void instancesChanged();
+    void presetManagerChanged();
+    void helperClientChanged();
     void errorOccurred(const QString &message);
     /**
      * @brief Emitted after a profile is successfully loaded
@@ -200,8 +256,17 @@ Q_SIGNALS:
 
 private:
     QString profilesDir() const;
+    bool migrateProfileDirectorySnapshots(const QString &path);
     QString profilePath(const QString &name) const;
-
     SessionProfile m_currentProfile;
     QList<SessionProfile> m_savedProfiles;
+    PresetManager *m_presetManager = nullptr;
+    CouchPlayHelperClient *m_helperClient = nullptr;
 };
+
+/**
+ * Per-player staging root for hand-seeded data (one subfolder per writable
+ * shared directory, named by DirectoryPlan::dataDirectoryStagingSlug()):
+ *   <CouchPlay app data location>/player-data/<presetId>/<username>/
+ */
+QString playerDataStagingRoot(const QString &presetId, const QString &username);

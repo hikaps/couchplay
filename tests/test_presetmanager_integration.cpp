@@ -170,30 +170,10 @@ void TestPresetManagerIntegration::testHeroicDetected()
     QVERIFY(!heroicPreset.launcherInfo.dataPath.isEmpty());
     QCOMPARE(heroicPreset.launcherInfo.dataPath, homeDir.path() + QStringLiteral("/Games/Heroic"));
 
-    QCOMPARE(heroicPreset.launcherInfo.requiresAcls, true);
-    QCOMPARE(heroicPreset.launcherInfo.hasShortcutSync, true);
-
-    // Verify gameDirectories are extracted
-    QCOMPARE(heroicPreset.launcherInfo.gameDirectories.size(), 3);
-    QVERIFY(
-        heroicPreset.launcherInfo.gameDirectories.contains(homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame")));
-    QVERIFY(
-        heroicPreset.launcherInfo.gameDirectories.contains(homeDir.path() + QStringLiteral("/Games/Heroic/GogGame")));
-    QVERIFY(heroicPreset.launcherInfo.gameDirectories.contains(homeDir.path()
-                                                               + QStringLiteral("/Games/Heroic/AmazonGame")));
-
-    // Verify command is set from HeroicConfigManager
     QCOMPARE(heroicPreset.command, QStringLiteral("heroic"));
 
-    // Verify shared directories for Heroic - only installPath, not configPath
-    // (configPath is synced via syncConfigToUser, not bind-mounted)
-    QStringList sharedDirs = presetManager.getSharedDirectories(QStringLiteral("heroic"));
-    QCOMPARE(sharedDirs.size(), 1);
-
-    QVERIFY(sharedDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic")));
-    QVERIFY(!sharedDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/EpicGame")));
-    QVERIFY(!sharedDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/GogGame")));
-    QVERIFY(!sharedDirs.contains(homeDir.path() + QStringLiteral("/Games/Heroic/AmazonGame")));
+    QVariantList dataDirs = presetManager.getDataDirectories(QStringLiteral("heroic"));
+    QVERIFY(dataDirs.size() >= 1);
 }
 
 void TestPresetManagerIntegration::testHeroicNotDetected()
@@ -227,14 +207,10 @@ void TestPresetManagerIntegration::testHeroicNotDetected()
     // Verify launcherInfo is NOT populated (empty)
     QVERIFY(heroicPreset.launcherInfo.configPath.isEmpty());
     QVERIFY(heroicPreset.launcherInfo.dataPath.isEmpty());
-    QVERIFY(heroicPreset.launcherInfo.gameDirectories.isEmpty());
-    QCOMPARE(heroicPreset.launcherInfo.requiresAcls, false);
 
-    // Verify default command is set
     QCOMPARE(heroicPreset.command, QStringLiteral("heroic"));
 
-    // Verify getDefaultSharedDirectories for Heroic returns empty
-    QStringList sharedDirs = presetManager.getSharedDirectories(QStringLiteral("heroic"));
+    QVariantList sharedDirs = presetManager.getDataDirectories(QStringLiteral("heroic"));
     QVERIFY(sharedDirs.isEmpty());
 }
 

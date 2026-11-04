@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import "../components/dialogs" as Dialogs
 
 Kirigami.ScrollablePage {
     id: root
@@ -12,10 +13,38 @@ Kirigami.ScrollablePage {
 
     required property var sessionManager
     required property var sessionRunner
+    required property var steamShortcutManager
+    property string profileToAdd: ""
 
     Component.onCompleted: {
         if (sessionManager) {
             sessionManager.refreshProfiles()
+        }
+    }
+
+    Dialogs.AddToSteamDialog {
+        id: addToSteamDialog
+        manager: root.steamShortcutManager
+        profileName: root.profileToAdd
+    }
+
+    Connections {
+        target: root.steamShortcutManager
+        function onPrepared() {
+            addToSteamDialog.open()
+        }
+        function onRegistrationFinished(profileName, updated) {
+            if (profileName !== root.profileToAdd) return
+            addToSteamDialog.close()
+            applicationWindow().showPassiveNotification(
+                updated
+                    ? i18nc("@info", "Steam shortcut saved: %1", profileName)
+                    : i18nc("@info", "Steam shortcut already present: %1", profileName))
+        }
+        function onErrorOccurred(message) {
+            if (!addToSteamDialog.visible) {
+                applicationWindow().showPassiveNotification(message, "long")
+            }
         }
     }
 
@@ -62,11 +91,14 @@ Kirigami.ScrollablePage {
     }
 
     ColumnLayout {
+        Layout.minimumWidth: 0
         spacing: Kirigami.Units.largeSpacing
         visible: (sessionManager?.savedProfiles?.length ?? 0) > 0
 
         GridLayout {
+            id: profileGrid
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             columns: Math.max(1, Math.floor(root.width / (Kirigami.Units.gridUnit * 20)))
             rowSpacing: Kirigami.Units.largeSpacing
             columnSpacing: Kirigami.Units.largeSpacing
@@ -77,6 +109,9 @@ Kirigami.ScrollablePage {
                 delegate: ProfileCard {
                     id: profileDelegate
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.preferredWidth: 1
+                    Layout.alignment: Qt.AlignTop
 
                     required property var modelData
                     required property int index
@@ -93,6 +128,11 @@ Kirigami.ScrollablePage {
                     }
 
                     onLaunchProfile: {
+                        if (sessionRunner?.active) {
+                            applicationWindow().showPassiveNotification(
+                                i18nc("@info", "Stop the active session before launching another profile"))
+                            return
+                        }
                         if (modelData && sessionManager?.loadProfile(modelData.name)) {
                             if (sessionRunner?.start()) {
                                 applicationWindow().showPassiveNotification(
@@ -101,10 +141,26 @@ Kirigami.ScrollablePage {
                         }
                     }
 
+                    onDuplicateProfile: {
+                        if (modelData && sessionManager) {
+                            const copyName = sessionManager.duplicateProfile(modelData.name)
+                            if (copyName) {
+                                applicationWindow().showPassiveNotification(
+                                    i18nc("@info", "Duplicated profile: %1", copyName))
+                            }
+                        }
+                    }
+
                     onDeleteProfile: {
                         if (modelData) {
                             deleteDialog.profileName = modelData.name
                             deleteDialog.open()
+                        }
+                    }
+                    onAddToSteam: {
+                        if (modelData && steamShortcutManager) {
+                            root.profileToAdd = modelData.name
+                            steamShortcutManager.prepare(modelData.name)
                         }
                     }
                 }
@@ -136,13 +192,16 @@ Kirigami.ScrollablePage {
 
     component ProfileCard: Kirigami.AbstractCard {
         id: profileCard
+        objectName: "profileCard_" + (profile?.name ?? "")
 
         required property var profile
         property bool isCurrentProfile: false
 
         signal loadProfile()
+        signal duplicateProfile()
         signal launchProfile()
         signal deleteProfile()
+        signal addToSteam()
 
         background: Rectangle {
             color: profileCard.isCurrentProfile 
@@ -235,8 +294,9 @@ Kirigami.ScrollablePage {
                 }
             }
 
-            RowLayout {
+            Flow {
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 spacing: Kirigami.Units.smallSpacing
 
                 Controls.Button {
@@ -251,6 +311,28 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnAddProfileToSteam"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Add to Steam")
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Add to Steam")
+                    icon.name: "application-x-executable"
+                    flat: true
+                    onClicked: profileCard.addToSteam()
+                }
+
+
+                Controls.Button {
+                    objectName: "btnDuplicateProfile"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Duplicate")
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Duplicate")
+                    icon.name: "edit-copy"
+                    flat: true
+                    onClicked: profileCard.duplicateProfile()
+                }
+                Controls.Button {
                     objectName: "btnEditProfile"
                     Accessible.role: Accessible.Button
                     Accessible.name: i18nc("@action:button", "Edit")
@@ -261,7 +343,6 @@ Kirigami.ScrollablePage {
                     onClicked: profileCard.loadProfile()
                 }
 
-                Item { Layout.fillWidth: true }
 
                 Controls.Button {
                     objectName: "btnDeleteProfile"

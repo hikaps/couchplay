@@ -24,6 +24,9 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SessionManager.h
     ../src/core/SessionRunner.cpp
     ../src/core/SessionRunner.h
+    ../src/core/LaunchTypes.h
+    ../src/core/CommandLineOptions.cpp
+    ../src/core/CommandLineOptions.h
     ../src/core/GamescopeInstance.cpp
     ../src/core/GamescopeInstance.h
     ../src/core/UserManager.cpp
@@ -36,10 +39,18 @@ set(TEST_MANAGER_SOURCES
     ../src/core/WindowManager.h
     ../src/core/PresetManager.cpp
     ../src/core/PresetManager.h
-     ../src/core/HeroicConfigManager.cpp
-     ../src/core/HeroicConfigManager.h
-     ../src/core/SteamConfigManager.cpp
-     ../src/core/SteamConfigManager.h
+    ../helper/DirectoryPlan.cpp
+    ../helper/DirectoryPlan.h
+    ../src/core/HeroicConfigManager.cpp
+    ../src/core/HeroicConfigManager.h
+    ../src/core/SteamConfigManager.cpp
+    ../src/core/SteamConfigManager.h
+    ../src/core/SteamShortcutManager.cpp
+    ../src/core/SteamShortcutManager.h
+    ../src/core/SteamAccountDiscovery.cpp
+    ../src/core/SteamAccountDiscovery.h
+    ../src/core/SteamShortcutsVdf.cpp
+    ../src/core/SteamShortcutsVdf.h
     ../src/core/SettingsManager.cpp
     ../src/core/SettingsManager.h
     ../src/core/Logging.cpp
@@ -59,6 +70,12 @@ set(TEST_MANAGER_SOURCES
 set(HELPER_TEST_SOURCES
     ../helper/CouchPlayHelper.cpp
     ../helper/CouchPlayHelper.h
+    ../helper/DirectoryPlan.h
+    ../helper/DirectoryPlan.cpp
+    ../helper/InstanceBootstrap.cpp
+    ../helper/InstanceBootstrap.h
+    ../helper/SecureFs.cpp
+    ../helper/SecureFs.h
     ../helper/SystemOps.cpp
     ../helper/SystemOps.h
 )
@@ -83,6 +100,7 @@ function(add_couchplay_test TEST_NAME)
         KF6::CoreAddons
         KF6::ConfigCore
         KF6::ConfigGui
+        KF6::DBusAddons
         KF6::IconThemes
         KF6::GlobalAccel
     )
@@ -110,6 +128,7 @@ function(add_helper_test TEST_NAME)
         Qt6::Core
         Qt6::DBus
         Qt6::Test
+        ${LIBACL_LIBRARY}
     )
 
     if(PolkitQt6-1_FOUND)
@@ -120,6 +139,7 @@ function(add_helper_test TEST_NAME)
     target_include_directories(${TEST_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../helper
+        ${LIBACL_INCLUDE_DIR}
     )
 
     # Enable automoc for QtTest
@@ -132,22 +152,12 @@ function(add_helper_test TEST_NAME)
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endfunction()
 
-# Sunshine config generator for the e2e integration test (not a unit test).
-# Built into the e2e image so the test can feed REAL SunshineConfig output to
-# real sunshine -- catches any drift between SunshineConfig and what Sunshine
-# accepts. Lives here (not src/) because it is a test-only helper.
-add_executable(sunshine_config_generator
-    sunshine_config_generator.cpp
-    ../src/core/SunshineConfig.cpp
-    ../src/core/SunshineConfig.h
-)
-target_link_libraries(sunshine_config_generator PRIVATE Qt6::Core Qt6::Qml)
-target_include_directories(sunshine_config_generator PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
-)
-set_target_properties(sunshine_config_generator PROPERTIES AUTOMOC ON)
 
+add_couchplay_test(test_commandlineoptions)
 # Add test executables
+add_couchplay_test(test_steamshortcutmanager)
+add_couchplay_test(test_steamregistration)
+add_couchplay_test(test_steamconfigmanager)
 add_couchplay_test(test_audiomanager)
 add_couchplay_test(test_commandverifier)
 add_couchplay_test(test_devicemanager)
@@ -155,10 +165,14 @@ add_couchplay_test(test_gamescopeinstance)
 add_couchplay_test(test_heroicconfigmanager)
 add_couchplay_test(test_monitormanager)
 add_couchplay_test(test_presetmanager)
+add_couchplay_test(test_windowmanager)
 add_couchplay_test(test_presetmanager_integration)
 add_couchplay_test(test_scanapplications)
 add_couchplay_test(test_sessionmanager)
 add_couchplay_test(test_sessionrunner)
+target_sources(test_sessionrunner PRIVATE ../helper/SecureFs.cpp)
+target_include_directories(test_sessionrunner PRIVATE ${LIBACL_INCLUDE_DIR})
+target_link_libraries(test_sessionrunner PRIVATE ${LIBACL_LIBRARY})
 add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
 add_couchplay_test(test_streammanager)
@@ -167,3 +181,15 @@ add_couchplay_test(test_usermanager)
 
 # Add helper tests
 add_helper_test(test_couchplayhelper)
+option(COUCHPLAY_PRIVILEGED_TESTS "Build tests requiring a disposable privileged systemd host" OFF)
+if(COUCHPLAY_PRIVILEGED_TESTS)
+    add_helper_test(test_instance_bootstrap_integration)
+    add_executable(namespace_gamescope_probe namespace_gamescope_probe.cpp)
+    target_link_libraries(namespace_gamescope_probe PRIVATE Qt6::Core)
+    add_dependencies(test_instance_bootstrap_integration namespace_gamescope_probe)
+    set_tests_properties(test_instance_bootstrap_integration PROPERTIES
+        LABELS "privileged"
+        RUN_SERIAL TRUE
+        TIMEOUT 900
+    )
+endif()

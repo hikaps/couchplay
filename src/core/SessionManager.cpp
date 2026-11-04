@@ -4,10 +4,61 @@
 #include "SessionManager.h"
 #include "Logging.h"
 #include "SessionRunner.h"
+#include "UserLookup.h"
+#include "../../helper/DirectoryPlan.h"
 
+#include <QDesktopServices>
 #include <QDebug>
 #include <QDir>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <QStandardPaths>
+#include <QTemporaryFile>
+#include <QUrl>
+#include <QRegularExpression>
+
+#include <fcntl.h>
+#include <limits>
+#include <unistd.h>
+
+
+namespace {
+QString gameSelectionToJson(const GameSelection &selection)
+{
+    return QString::fromUtf8(QJsonDocument::fromVariant(selection.toVariant()).toJson(QJsonDocument::Compact));
+}
+
+GameSelection gameSelectionFromJson(const QString &value)
+{
+    const QJsonDocument document = QJsonDocument::fromJson(value.toUtf8());
+    if (!document.isObject()) {
+        return {};
+    }
+    return GameSelection::fromVariant(document.object().toVariantMap());
+}
+
+
+QString steamRootOverlayMarkerPath(const PresetManager *presetManager, const QString &presetId)
+{
+    if (!presetManager
+        || !presetManager->getPreset(presetId).requiredIntegrations.contains(QStringLiteral("steam"))) {
+        return QString();
+    }
+    return presetManager->getPreset(QStringLiteral("steam")).launcherInfo.configPath;
+}
+
+bool isPlayerDataStagingDirectory(const DataDirectory &directory, const QString &steamMarkerPath)
+{
+    if (directory.mode != QStringLiteral("copy") && directory.mode != QStringLiteral("overlay")) {
+        return false;
+    }
+    return steamMarkerPath.isEmpty() || directory.mode != QStringLiteral("overlay")
+        || directory.path != steamMarkerPath;
+}
+
+}
 
 SessionManager::SessionManager(QObject *parent)
     : QObject(parent)
@@ -16,6 +67,23 @@ SessionManager::SessionManager(QObject *parent)
     newSession();
     refreshProfiles();
 }
+
+void SessionManager::setPresetManager(PresetManager *manager)
+{
+    if (m_presetManager != manager) {
+        m_presetManager = manager;
+        Q_EMIT presetManagerChanged();
+    }
+}
+
+void SessionManager::setHelperClient(CouchPlayHelperClient *client)
+{
+    if (m_helperClient != client) {
+        m_helperClient = client;
+        Q_EMIT helperClientChanged();
+    }
+}
+
 
 QString SessionManager::profilesDir() const
 {
@@ -28,6 +96,22 @@ QString SessionManager::profilePath(const QString &name) const
 {
     return profilesDir() + QStringLiteral("/") + name + QStringLiteral(".conf");
 }
+
+bool SessionManager::isValidProfileName(const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty() || trimmed != name || trimmed == QStringLiteral(".") || trimmed == QStringLiteral("..")) {
+        return false;
+    }
+    for (const QChar character : trimmed) {
+        if (character == QLatin1Char('/') || character == QLatin1Char('\\')
+            || character.unicode() < 0x20 || character.unicode() == 0x7f) {
+            return false;
+        }
+    }
+    return true;
+}
+
 
 void SessionManager::newSession()
 {
@@ -43,6 +127,8 @@ void SessionManager::newSession()
     }
 
     Q_EMIT currentProfileChanged();
+    Q_EMIT preSessionExecutableChanged();
+    Q_EMIT postSessionExecutableChanged();
     Q_EMIT currentLayoutChanged();
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
@@ -59,6 +145,9 @@ void SessionManager::refreshProfiles()
     for (const QString &fileName : dir.entryList(filters, QDir::Files)) {
         QString name = fileName;
         name.chop(5); // Remove ".conf"
+        if (!isValidProfileName(name)) {
+            continue;
+        }
 
         SessionProfile profile;
         profile.name = name;
@@ -77,19 +166,24 @@ void SessionManager::refreshProfiles()
 
 bool SessionManager::saveProfile(const QString &name)
 {
-    if (name.isEmpty()) {
-        Q_EMIT errorOccurred(QStringLiteral("Profile name cannot be empty"));
+    const QString profileName = name.trimmed();
+    if (!isValidProfileName(profileName)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
         return false;
     }
 
-    QString path = profilePath(name);
+    const QString path = profilePath(profileName);
+    if ((QFileInfo(path).exists() || QFileInfo(path).isSymLink()) && !migrateProfileDirectorySnapshots(path)) {
+        return false;
+    }
     KConfig config(path);
 
-    // General section
     KConfigGroup general = config.group(QStringLiteral("General"));
-    general.writeEntry("name", name);
+    general.writeEntry("name", profileName);
     general.writeEntry("layout", m_currentProfile.layout);
     general.writeEntry("gridSubLayout", m_currentProfile.gridSubLayout);
+    general.writeEntry("preSessionExecutable", m_currentProfile.preSessionExecutable);
+    general.writeEntry("postSessionExecutable", m_currentProfile.postSessionExecutable);
     general.writeEntry("instanceCount", m_currentProfile.instances.size());
 
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
@@ -105,13 +199,20 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("refreshRate", inst.refreshRate);
         instGroup.writeEntry("scalingMode", inst.scalingMode);
         instGroup.writeEntry("filterMode", inst.filterMode);
-        instGroup.writeEntry("gameCommand", inst.gameCommand);
-        instGroup.writeEntry("steamAppId", inst.steamAppId);
+        if (inst.gameSelection.isEmpty()) {
+            instGroup.deleteEntry("gameSelection");
+        } else {
+            instGroup.writeEntry("gameSelection", gameSelectionToJson(inst.gameSelection));
+        }
         instGroup.writeEntry("presetId", inst.presetId);
-        instGroup.writeEntry("sharedDirectories", inst.sharedDirectories);
-        instGroup.writeEntry("overrideGamePath", inst.overrideGamePath);
-        instGroup.writeEntry("overrideFiles", inst.overrideFiles);
-        instGroup.writeEntry("overridePatterns", inst.overridePatterns);
+        instGroup.writeEntry("privateTemporaryDirectories", inst.privateTemporaryDirectories);
+        instGroup.deleteEntry("gameCommand");
+        instGroup.deleteEntry("steamAppId");
+        instGroup.deleteEntry("overrideGamePath");
+        instGroup.deleteEntry("overrideFiles");
+        instGroup.deleteEntry("overridePatterns");
+        instGroup.deleteEntry("overlayGamePath");
+        instGroup.deleteEntry("overlayPatterns");
         instGroup.writeEntry("outputMode", inst.outputMode);
         instGroup.writeEntry("streamResolution", inst.streamResolution);
         instGroup.writeEntry("streamFps", inst.streamFps);
@@ -119,7 +220,6 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("streamCodec", inst.streamCodec);
         instGroup.writeEntry("sunshinePort", inst.sunshinePort);
 
-        // Convert devices to string list for backwards compatibility
         QStringList deviceStrings;
         for (int dev : inst.devices) {
             deviceStrings << QString::number(dev);
@@ -131,31 +231,187 @@ bool SessionManager::saveProfile(const QString &name)
 
     config.sync();
 
-    m_currentProfile.name = name;
+    m_currentProfile.name = profileName;
     m_currentProfile.filePath = path;
 
     Q_EMIT currentProfileChanged();
     refreshProfiles();
-
     return true;
 }
 
+bool SessionManager::migrateProfileDirectorySnapshots(const QString &path)
+{
+    const QFileInfo sourceInfo(path);
+    if (!sourceInfo.isFile()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: unsafe profile file"));
+        return false;
+    }
+
+    QFile source(path);
+    if (!source.open(QIODevice::ReadOnly)) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: %1").arg(source.errorString()));
+        return false;
+    }
+    const QByteArray original = source.readAll();
+    if (source.error() != QFileDevice::NoError) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: %1").arg(source.errorString()));
+        return false;
+    }
+    source.close();
+
+    KConfig config(path, KConfig::SimpleConfig);
+    QStringList legacyGroups;
+    static const QRegularExpression instanceGroup(QStringLiteral("^Instance[0-9]+$"));
+    for (const QString &name : config.groupList()) {
+        if (!instanceGroup.match(name).hasMatch()) {
+            continue;
+        }
+        const KConfigGroup group = config.group(name);
+        if (group.hasKey(QStringLiteral("dataDirectories")) || group.hasKey(QStringLiteral("sharedDirectories"))) {
+            legacyGroups.append(name);
+        }
+    }
+    if (legacyGroups.isEmpty()) {
+        return true;
+    }
+    // Only a rewrite replaces the file; a symlinked profile must not be replaced by a regular file.
+    if (sourceInfo.isSymLink()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: unsafe profile file"));
+        return false;
+    }
+
+    QTemporaryFile temporary(QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".profile-migration-XXXXXX")));
+    if (!temporary.open() || temporary.write(original) != original.size() || !temporary.flush()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not stage profile rewrite"));
+        return false;
+    }
+    temporary.close();
+    KConfig rewrittenConfig(temporary.fileName(), KConfig::SimpleConfig);
+    for (const QString &name : legacyGroups) {
+        KConfigGroup group = rewrittenConfig.group(name);
+        group.deleteEntry(QStringLiteral("dataDirectories"));
+        group.deleteEntry(QStringLiteral("sharedDirectories"));
+    }
+    if (!rewrittenConfig.sync()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not sync profile rewrite"));
+        return false;
+    }
+
+    QFile rewritten(temporary.fileName());
+    if (!rewritten.open(QIODevice::ReadOnly)) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not read rewritten profile"));
+        return false;
+    }
+    const QByteArray migrated = rewritten.readAll();
+    if (rewritten.error() != QFileDevice::NoError) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not read rewritten profile"));
+        return false;
+    }
+    rewritten.close();
+
+    bool backupReady = false;
+    const QString backupBase = path + QStringLiteral(".pre-directory-snapshot.bak");
+    for (int suffix = 1; suffix < std::numeric_limits<int>::max(); ++suffix) {
+        const QString backupPath = suffix == 1 ? backupBase : backupBase + QStringLiteral(".%1").arg(suffix);
+        const QFileInfo backupInfo(backupPath);
+        if (backupInfo.exists() || backupInfo.isSymLink()) {
+            if (backupInfo.isSymLink() || !backupInfo.isFile()) {
+                Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: unsafe backup path"));
+                return false;
+            }
+            QFile existingBackup(backupPath);
+            if (!existingBackup.open(QIODevice::ReadOnly)) {
+                Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not inspect backup"));
+                return false;
+            }
+            const bool identical = existingBackup.readAll() == original
+                && existingBackup.error() == QFileDevice::NoError;
+            existingBackup.close();
+            if (identical) {
+                backupReady = true;
+                break;
+            }
+            continue;
+        }
+
+        QFile backup(backupPath);
+        if (!backup.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            if (QFileInfo(backupPath).exists() || QFileInfo(backupPath).isSymLink()) {
+                continue;
+            }
+            Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not create backup"));
+            return false;
+        }
+        const bool permissionsSet = backup.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        const bool written = permissionsSet && backup.write(original) == original.size() && backup.flush()
+            && ::fsync(backup.handle()) == 0;
+        backup.close();
+        if (!written || !permissionsSet) {
+            QFile::remove(backupPath);
+            Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not persist backup"));
+            return false;
+        }
+        backupReady = true;
+        break;
+    }
+    if (!backupReady) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: no backup name available"));
+        return false;
+    }
+
+    const QByteArray directoryPath = QFile::encodeName(QFileInfo(path).absolutePath());
+    const int directoryFd = ::open(directoryPath.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    const bool directorySynced = directoryFd >= 0 && ::fsync(directoryFd) == 0;
+    if (directoryFd >= 0) {
+        ::close(directoryFd);
+    }
+    if (!directorySynced) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: could not persist backup directory"));
+        return false;
+    }
+
+    QFile current(path);
+    if (!current.open(QIODevice::ReadOnly) || current.readAll() != original
+        || current.error() != QFileDevice::NoError || QFileInfo(path).isSymLink()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: source changed during migration"));
+        return false;
+    }
+    current.close();
+
+    QSaveFile destination(path);
+    if (!destination.open(QIODevice::WriteOnly) || destination.write(migrated) != migrated.size()
+        || !destination.commit()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to migrate profile: atomic replacement failed"));
+        return false;
+    }
+    return true;
+}
 bool SessionManager::loadProfile(const QString &name)
 {
-    QString path = profilePath(name);
+    const QString profileName = name.trimmed();
+    if (!isValidProfileName(profileName)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
+        return false;
+    }
+    QString path = profilePath(profileName);
 
     if (!QFile::exists(path)) {
         Q_EMIT errorOccurred(QStringLiteral("Profile not found: %1").arg(name));
+        return false;
+    }
+    if (!migrateProfileDirectorySnapshots(path)) {
         return false;
     }
 
     KConfig config(path);
 
     KConfigGroup general = config.group(QStringLiteral("General"));
-    m_currentProfile.name = name;
+    m_currentProfile.name = profileName;
     m_currentProfile.filePath = path;
     m_currentProfile.layout = general.readEntry("layout", QStringLiteral("horizontal"));
     m_currentProfile.gridSubLayout = general.readEntry("gridSubLayout", QString());
+    m_currentProfile.preSessionExecutable = general.readEntry("preSessionExecutable", QString());
+    m_currentProfile.postSessionExecutable = general.readEntry("postSessionExecutable", QString());
     int instanceCount = general.readEntry("instanceCount", 2);
 
     m_currentProfile.instances.clear();
@@ -172,21 +428,17 @@ bool SessionManager::loadProfile(const QString &name)
         inst.refreshRate = instGroup.readEntry("refreshRate", 60);
         inst.scalingMode = instGroup.readEntry("scalingMode", QStringLiteral("fit"));
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
-        inst.gameCommand = instGroup.readEntry("gameCommand", QString());
-        inst.steamAppId = instGroup.readEntry("steamAppId", QString());
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
-        inst.sharedDirectories = instGroup.readEntry("sharedDirectories", QStringList());
-        inst.overrideGamePath =
-            instGroup.readEntry("overrideGamePath", instGroup.readEntry("overlayGamePath", QString()));
-        inst.overrideFiles = instGroup.readEntry("overrideFiles", QStringList());
-
-        inst.overridePatterns =
-            instGroup.readEntry("overridePatterns", instGroup.readEntry("overlayPatterns", QStringList()));
-
-        // Migration: copy legacy overrideFiles to overridePatterns if overridePatterns is empty
-        if (inst.overridePatterns.isEmpty() && !inst.overrideFiles.isEmpty()) {
-            inst.overridePatterns = inst.overrideFiles;
-            qDebug() << "Migrated overrideFiles to overridePatterns for instance" << i;
+        inst.privateTemporaryDirectories = instGroup.readEntry("privateTemporaryDirectories", false);
+        if (instGroup.hasKey("gameSelection")) {
+            inst.gameSelection = gameSelectionFromJson(instGroup.readEntry("gameSelection", QString()));
+        } else {
+            const QString legacySteamAppId = instGroup.readEntry("steamAppId", QString());
+            if (inst.presetId == QStringLiteral("steam") && !legacySteamAppId.isEmpty()) {
+                inst.gameSelection.launcherId = QStringLiteral("steam");
+                inst.gameSelection.backend = QStringLiteral("native");
+                inst.gameSelection.gameId = legacySteamAppId;
+            }
         }
 
         inst.outputMode = instGroup.readEntry("outputMode", QStringLiteral("physical"));
@@ -208,6 +460,8 @@ bool SessionManager::loadProfile(const QString &name)
     }
 
     Q_EMIT currentProfileChanged();
+    Q_EMIT preSessionExecutableChanged();
+    Q_EMIT postSessionExecutableChanged();
     Q_EMIT currentLayoutChanged();
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
@@ -232,7 +486,12 @@ bool SessionManager::loadProfile(const QString &name)
 
 bool SessionManager::deleteProfile(const QString &name)
 {
-    QString path = profilePath(name);
+    const QString profileName = name.trimmed();
+    if (!isValidProfileName(profileName)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
+        return false;
+    }
+    QString path = profilePath(profileName);
 
     if (!QFile::exists(path)) {
         Q_EMIT errorOccurred(QStringLiteral("Profile not found: %1").arg(name));
@@ -244,7 +503,7 @@ bool SessionManager::deleteProfile(const QString &name)
         return false;
     }
 
-    if (m_currentProfile.name == name) {
+    if (m_currentProfile.name == profileName) {
         m_currentProfile.name = QString();
         m_currentProfile.filePath = QString();
         Q_EMIT currentProfileChanged();
@@ -254,6 +513,95 @@ bool SessionManager::deleteProfile(const QString &name)
     return true;
 }
 
+QString SessionManager::duplicateProfile(const QString &sourceName)
+{
+    const QString sourceNameTrimmed = sourceName.trimmed();
+    if (!isValidProfileName(sourceNameTrimmed)) {
+        Q_EMIT errorOccurred(QStringLiteral("Invalid profile name"));
+        return {};
+    }
+
+    const QString sourcePath = profilePath(sourceNameTrimmed);
+    const QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.isFile()) {
+        Q_EMIT errorOccurred(QStringLiteral("Profile not found: %1").arg(sourceNameTrimmed));
+        return {};
+    }
+    if (!migrateProfileDirectorySnapshots(sourcePath)) {
+        return {};
+    }
+
+    QString destinationName = sourceNameTrimmed + QStringLiteral(" Copy");
+    int copyNumber = 2;
+    while (QFile::exists(profilePath(destinationName))) {
+        destinationName = sourceNameTrimmed + QStringLiteral(" Copy %1").arg(copyNumber++);
+    }
+
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly)) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to read profile: %1").arg(sourceNameTrimmed));
+        return {};
+    }
+    const QByteArray contents = source.readAll();
+    source.close();
+
+    QTemporaryFile temporary(QDir(profilesDir()).filePath(QStringLiteral(".profile-copy-XXXXXX")));
+    temporary.setAutoRemove(true);
+    if (!temporary.open() || temporary.write(contents) != contents.size()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to prepare profile copy"));
+        return {};
+    }
+    temporary.close();
+
+    KConfig copiedConfig(temporary.fileName(), KConfig::SimpleConfig);
+    copiedConfig.group(QStringLiteral("General")).writeEntry("name", destinationName);
+    copiedConfig.sync();
+
+    QFile rewritten(temporary.fileName());
+    if (!rewritten.open(QIODevice::ReadOnly)) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to finalize profile copy"));
+        return {};
+    }
+    const QByteArray rewrittenContents = rewritten.readAll();
+    rewritten.close();
+
+    QSaveFile destination(profilePath(destinationName));
+    if (!destination.open(QIODevice::WriteOnly) || destination.write(rewrittenContents) != rewrittenContents.size()
+        || !destination.commit()) {
+        Q_EMIT errorOccurred(QStringLiteral("Failed to write profile copy: %1").arg(destinationName));
+        return {};
+    }
+
+    refreshProfiles();
+    return destinationName;
+}
+
+
+void SessionManager::setPreSessionExecutable(const QString &path)
+{
+    const QString normalized = path;
+    if (m_currentProfile.preSessionExecutable == normalized) {
+        return;
+    }
+    m_currentProfile.preSessionExecutable = normalized;
+    Q_EMIT preSessionExecutableChanged();
+    if (!m_currentProfile.name.isEmpty()) {
+        saveProfile(m_currentProfile.name);
+    }
+}
+
+void SessionManager::setPostSessionExecutable(const QString &path)
+{
+    const QString normalized = path;
+    if (m_currentProfile.postSessionExecutable == normalized) {
+        return;
+    }
+    m_currentProfile.postSessionExecutable = normalized;
+    Q_EMIT postSessionExecutableChanged();
+    if (!m_currentProfile.name.isEmpty()) {
+        saveProfile(m_currentProfile.name);
+    }
+}
 void SessionManager::setCurrentLayout(const QString &layout)
 {
     if (m_currentProfile.layout != layout) {
@@ -317,11 +665,9 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("refreshRate")] = inst.refreshRate;
     map[QStringLiteral("scalingMode")] = inst.scalingMode;
     map[QStringLiteral("filterMode")] = inst.filterMode;
-    map[QStringLiteral("gameCommand")] = inst.gameCommand;
-    map[QStringLiteral("steamAppId")] = inst.steamAppId;
+    map[QStringLiteral("gameSelection")] = inst.gameSelectionAsVariant();
     map[QStringLiteral("presetId")] = inst.presetId;
-    map[QStringLiteral("overridePatterns")] = inst.overridePatterns;
-    map[QStringLiteral("sharedDirectories")] = inst.sharedDirectories;
+    map[QStringLiteral("privateTemporaryDirectories")] = inst.privateTemporaryDirectories;
     map[QStringLiteral("outputMode")] = inst.outputMode;
     map[QStringLiteral("streamResolution")] = inst.streamResolution;
     map[QStringLiteral("streamFps")] = inst.streamFps;
@@ -376,16 +722,13 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.scalingMode = config[QStringLiteral("scalingMode")].toString();
     if (config.contains(QStringLiteral("filterMode")))
         inst.filterMode = config[QStringLiteral("filterMode")].toString();
-    if (config.contains(QStringLiteral("gameCommand")))
-        inst.gameCommand = config[QStringLiteral("gameCommand")].toString();
-    if (config.contains(QStringLiteral("steamAppId")))
-        inst.steamAppId = config[QStringLiteral("steamAppId")].toString();
+    if (config.contains(QStringLiteral("gameSelection"))) {
+        inst.gameSelection = GameSelection::fromVariant(config.value(QStringLiteral("gameSelection")).toMap());
+    }
     if (config.contains(QStringLiteral("presetId")))
         inst.presetId = config[QStringLiteral("presetId")].toString();
-    if (config.contains(QStringLiteral("overridePatterns")))
-        inst.overridePatterns = config[QStringLiteral("overridePatterns")].toStringList();
-    if (config.contains(QStringLiteral("overrideGamePath")))
-        inst.overrideGamePath = config[QStringLiteral("overrideGamePath")].toString();
+    if (config.contains(QStringLiteral("privateTemporaryDirectories")))
+        inst.privateTemporaryDirectories = config[QStringLiteral("privateTemporaryDirectories")].toBool();
     if (config.contains(QStringLiteral("outputMode")))
         inst.outputMode = config[QStringLiteral("outputMode")].toString();
     if (config.contains(QStringLiteral("streamResolution")))
@@ -468,10 +811,10 @@ void SessionManager::setInstanceDeviceStableIds(int index, const QStringList &st
     }
 }
 
-void SessionManager::setInstanceGame(int index, const QString &gameCommand)
+void SessionManager::setInstanceGame(int index, const QVariantMap &selection)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].gameCommand = gameCommand;
+        m_currentProfile.instances[index].gameSelection = GameSelection::fromVariant(selection);
         Q_EMIT instancesChanged();
 
         if (!m_currentProfile.name.isEmpty()) {
@@ -483,7 +826,12 @@ void SessionManager::setInstanceGame(int index, const QString &gameCommand)
 void SessionManager::setInstancePreset(int index, const QString &presetId)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].presetId = presetId;
+        const QString normalizedPresetId = presetId.isEmpty() ? QStringLiteral("steam") : presetId;
+        m_currentProfile.instances[index].presetId = normalizedPresetId;
+        if (!m_currentProfile.instances[index].gameSelection.isEmpty() && m_presetManager
+            && m_currentProfile.instances[index].gameSelection.launcherId != m_presetManager->getLauncherId(normalizedPresetId)) {
+            m_currentProfile.instances[index].gameSelection = {};
+        }
         Q_EMIT instancesChanged();
 
         if (!m_currentProfile.name.isEmpty()) {
@@ -492,16 +840,88 @@ void SessionManager::setInstancePreset(int index, const QString &presetId)
     }
 }
 
-void SessionManager::setInstanceSharedDirectories(int index, const QStringList &directories)
-{
-    if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].sharedDirectories = directories;
-        Q_EMIT instancesChanged();
 
-        if (!m_currentProfile.name.isEmpty()) {
-            saveProfile(m_currentProfile.name);
+QString playerDataStagingRoot(const QString &presetId, const QString &username)
+{
+    // Native installs use the conventional CouchPlay data directory. Flatpak
+    // exports XDG_DATA_HOME to its host-visible per-app data directory, so
+    // using AppDataLocation here gives the GUI and the root helper the same
+    // absolute path and inode.
+    QString dataRoot;
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        dataRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    } else {
+        dataRoot = QDir::homePath() + QStringLiteral("/.local/share/couchplay");
+    }
+    return dataRoot + QStringLiteral("/player-data/") + presetId + QLatin1Char('/') + username;
+}
+
+bool SessionManager::hasPlayerDataStagingDirectories(int index) const
+{
+    if (index < 0 || index >= m_currentProfile.instances.size()) {
+        return false;
+    }
+
+    const InstanceConfig &inst = m_currentProfile.instances[index];
+    if (inst.username.isEmpty()) {
+        return false;
+    }
+    const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
+    const LaunchPreset preset = m_presetManager ? m_presetManager->getPreset(presetId) : LaunchPreset{};
+    const QString steamMarkerPath = steamRootOverlayMarkerPath(m_presetManager, presetId);
+    for (const DataDirectory &dir : preset.dataDirectories) {
+        if (isPlayerDataStagingDirectory(dir, steamMarkerPath)) {
+            return true;
         }
     }
+    return false;
+}
+
+QString SessionManager::playerDataFolderPath(int index)
+{
+    if (index < 0 || index >= m_currentProfile.instances.size()) {
+        return QString();
+    }
+
+    const InstanceConfig &inst = m_currentProfile.instances[index];
+    if (inst.username.isEmpty()) {
+        return QString();
+    }
+    const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
+
+    const QString root = playerDataStagingRoot(presetId, inst.username);
+    if (!QDir().mkpath(root)) {
+        qWarning() << "SessionManager: Failed to create player data folder:" << root;
+        Q_EMIT errorOccurred(QStringLiteral("Could not create player data folder"));
+        return QString();
+    }
+
+    // One subfolder per private (copy/overlay) shared directory. Bind mounts
+    // are shared with everyone, so seeding them per-player would mutate the
+    // shared source.
+    const LaunchPreset preset = m_presetManager ? m_presetManager->getPreset(presetId) : LaunchPreset{};
+    const QString steamMarkerPath = steamRootOverlayMarkerPath(m_presetManager, presetId);
+
+    // Helper-first so the slug matches SessionRunner's target mapping under
+    // Flatpak, where the sandbox resolves the compositor's home differently
+    const QString compositorHome = resolveCompositorHome(m_helperClient);
+    for (const DataDirectory &dir : preset.dataDirectories) {
+        if (!isPlayerDataStagingDirectory(dir, steamMarkerPath)) {
+            continue;
+        }
+        QDir().mkpath(root + QLatin1Char('/') + DirectoryPlan::dataDirectoryStagingSlug(dir.path, compositorHome));
+    }
+
+    return root;
+}
+
+bool SessionManager::openPlayerDataFolder(int index)
+{
+    const QString path = playerDataFolderPath(index);
+    if (path.isEmpty()) {
+        return false;
+    }
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 QVariantList SessionManager::savedProfilesAsVariant() const

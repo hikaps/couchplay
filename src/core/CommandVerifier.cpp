@@ -12,7 +12,29 @@
 
 #include <pwd.h>
 #include <unistd.h>
+static bool runCommand(const QString &program, const QStringList &arguments, QByteArray *standardOutput = nullptr)
+{
+    QProcess process;
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        QStringList hostArguments{QStringLiteral("--host"), program};
+        hostArguments.append(arguments);
+        process.setProgram(QStringLiteral("flatpak-spawn"));
+        process.setArguments(hostArguments);
+    } else {
+        process.setProgram(program);
+        process.setArguments(arguments);
+    }
+    process.start();
 
+    if (!process.waitForFinished(2000) || process.exitCode() != 0) {
+        return false;
+    }
+
+    if (standardOutput) {
+        *standardOutput = process.readAllStandardOutput();
+    }
+    return true;
+}
 CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
 {
     CommandVerificationResult result;
@@ -47,27 +69,22 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
             return result;
         }
 
-        // Extract app ID from "flatpak run <app-id>"
-        QStringList parts = command.split(QStringLiteral(" "));
-        if (parts.size() >= 3 && parts[0] == QStringLiteral("flatpak") && parts[1] == QStringLiteral("run")) {
-            QString appID = parts[2];
-
-            if (!isValidFlatpakAppId(appID)) {
-                result.isValid = false;
-                result.errorMessage = QStringLiteral("Invalid Flatpak app ID format");
-                return result;
-            }
-
-            result.isValid = isFlatpakAppInstalled(appID);
-            if (!result.isValid) {
-                result.errorMessage =
-                    QString(QStringLiteral("Flatpak app '%1' not installed or not accessible to all users")).arg(appID);
-            }
-            result.isAccessibleToOtherUsers = result.isValid; // Flatpak apps are generally accessible
-        } else {
+        // Extract the app ID from "flatpak run [--options] <app-id> [args]":
+        // exported desktop entries commonly insert options between "run" and
+        // the app ID, so a fixed token position misses every exported launcher
+        const QString appID = extractFlatpakAppId(command);
+        if (appID.isEmpty() || !isValidFlatpakAppId(appID)) {
             result.isValid = false;
             result.errorMessage = QStringLiteral("Invalid Flatpak command format");
+            return result;
         }
+
+        result.isValid = isFlatpakAppInstalled(appID);
+        if (!result.isValid) {
+            result.errorMessage =
+                QString(QStringLiteral("Flatpak app '%1' not installed or not accessible to all users")).arg(appID);
+        }
+        result.isAccessibleToOtherUsers = result.isValid; // Flatpak apps are generally accessible
     } else if (result.commandType == QStringLiteral("absolute")) {
         result.isFlatpak = false;
         result.isAbsolutePath = true;
@@ -89,10 +106,13 @@ CommandVerificationResult CommandVerifier::verifyCommand(const QString &command)
             result.isValid = false;
             result.errorMessage = QString(QStringLiteral("Command not found in PATH: %1")).arg(command);
         } else {
-            QFileInfo fileInfo(resolvedPath);
             result.resolvedPath = resolvedPath;
             result.isAccessibleToOtherUsers = isAccessibleToOtherUsersPath(resolvedPath);
-            result.isValid = fileInfo.exists() && fileInfo.isExecutable();
+            // Flatpak PATH discovery runs on the host, so the resolved path may
+            // not be visible to QFileInfo inside the sandbox. A successful host
+            // `which` has already verified the executable.
+            result.isValid = qEnvironmentVariableIsSet("FLATPAK_ID")
+                || QFileInfo(resolvedPath).isExecutable();
             if (!result.isValid) {
                 result.errorMessage = QString(QStringLiteral("Command is not executable: %1")).arg(command);
             }
@@ -108,7 +128,10 @@ QString CommandVerifier::detectCommandType(const QString &command)
         return QStringLiteral("invalid");
     }
 
-    if (command.startsWith(QStringLiteral("flatpak run "))) {
+    const QStringList flatpakTokens = command.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (flatpakTokens.size() >= 2 && QFileInfo(flatpakTokens.at(0)).fileName() == QStringLiteral("flatpak")
+        && flatpakTokens.at(1) == QStringLiteral("run")) {
+        // Exported desktop files often carry the absolute executable
         return QStringLiteral("flatpak");
     }
 
@@ -147,18 +170,8 @@ bool CommandVerifier::isAbsolutePath(const QString &command)
 
 bool CommandVerifier::commandExistsInPath(const QString &commandName)
 {
-    QProcess process;
-    process.setProgram(QStringLiteral("which"));
-    process.setArguments({commandName});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        return process.exitCode() == 0;
-    }
-
-    return false;
+    return runCommand(QStringLiteral("which"), {commandName});
 }
-
 bool CommandVerifier::isCommandExecutable(const QString &path)
 {
     QFileInfo fileInfo(path);
@@ -192,16 +205,7 @@ bool CommandVerifier::isUserLocalCommand(const QString &command)
 
 bool CommandVerifier::isFlatpakAvailable()
 {
-    QProcess process;
-    process.setProgram(QStringLiteral("flatpak"));
-    process.setArguments({QStringLiteral("--version")});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        return process.exitCode() == 0;
-    }
-
-    return false;
+    return runCommand(QStringLiteral("flatpak"), {QStringLiteral("--version")});
 }
 
 bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
@@ -210,17 +214,12 @@ bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
         return false;
     }
 
-    QProcess process;
-    process.setProgram(QStringLiteral("flatpak"));
-    process.setArguments({QStringLiteral("list"), QStringLiteral("--app"), QStringLiteral("--columns=application")});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        if (process.exitCode() == 0) {
-            QByteArray output = process.readAllStandardOutput();
-            QStringList installedApps = QString::fromUtf8(output).split(QStringLiteral("\n"));
-            return installedApps.contains(appID);
-        }
+    QByteArray output;
+    if (runCommand(QStringLiteral("flatpak"),
+                   {QStringLiteral("list"), QStringLiteral("--app"), QStringLiteral("--columns=application")},
+                   &output)) {
+        QStringList installedApps = QString::fromUtf8(output).split(QStringLiteral("\n"));
+        return installedApps.contains(appID);
     }
 
     return false;
@@ -228,20 +227,16 @@ bool CommandVerifier::isFlatpakAppInstalled(const QString &appID)
 
 QString CommandVerifier::resolveCommandPath(const QString &commandName)
 {
-    QProcess process;
-    process.setProgram(QStringLiteral("which"));
-    process.setArguments({commandName});
-    process.start();
-
-    if (process.waitForFinished(2000)) {
-        if (process.exitCode() == 0) {
-            QByteArray output = process.readAllStandardOutput();
-            QString path = QString::fromUtf8(output).trimmed();
-            if (!path.isEmpty()) {
-                QFileInfo fileInfo(path);
-                if (fileInfo.exists() && fileInfo.isExecutable()) {
-                    return path;
-                }
+    QByteArray output;
+    if (runCommand(QStringLiteral("which"), {commandName}, &output)) {
+        QString path = QString::fromUtf8(output).trimmed();
+        if (!path.isEmpty()) {
+            if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+                return path;
+            }
+            QFileInfo fileInfo(path);
+            if (fileInfo.exists() && fileInfo.isExecutable()) {
+                return path;
             }
         }
     }
@@ -307,6 +302,109 @@ bool CommandVerifier::isAccessibleToOtherUsersPath(const QString &path)
     bool hasOtherAccess = permissions.testFlag(QFileDevice::ReadOther) && permissions.testFlag(QFileDevice::ExeOther);
 
     return hasGroupAccess || hasOtherAccess;
+}
+
+QString CommandVerifier::extractFlatpakAppId(const QString &command)
+{
+    // "flatpak run [--opt value | --opt=value]… [--] <app-id> [args…]":
+    // exported desktop entries commonly insert options between "run" and the
+    // ID. Skip value-taking options in both forms (a bare scan for the first
+    // dotted non-flag token mistook e.g. "--runtime org.freedesktop.Platform"
+    // for the app), honor the "--" terminator, then take the first positional
+    // as the application reference.
+    static const QStringList valueTakingOptions = {
+        QStringLiteral("arch"),
+        QStringLiteral("branch"),
+        QStringLiteral("command"),
+        QStringLiteral("cwd"),
+        QStringLiteral("runtime"),
+        QStringLiteral("runtime-version"),
+        QStringLiteral("extra-arguments"),
+        QStringLiteral("env"),
+        QStringLiteral("set-env"),
+        QStringLiteral("unset-env"),
+        QStringLiteral("env-fd"),
+        QStringLiteral("instance-id"),
+        QStringLiteral("instance-id-fd"),
+        QStringLiteral("usb"),
+        QStringLiteral("nousb"),
+        QStringLiteral("allow"),
+        QStringLiteral("disallow"),
+        QStringLiteral("allow-if"),
+        QStringLiteral("commit"),
+        QStringLiteral("runtime-commit"),
+        QStringLiteral("parent-pid"),
+        QStringLiteral("parent-window"),
+        QStringLiteral("own-name"),
+        QStringLiteral("talk-name"),
+        QStringLiteral("no-talk-name"),
+        QStringLiteral("system-own-name"),
+        QStringLiteral("system-talk-name"),
+        QStringLiteral("system-no-talk-name"),
+        QStringLiteral("a11y-own-name"),
+        QStringLiteral("system-call"),
+        QStringLiteral("call"),
+        QStringLiteral("share"),
+        QStringLiteral("unshare"),
+        QStringLiteral("share-if"),
+        QStringLiteral("socket"),
+        QStringLiteral("nosocket"),
+        QStringLiteral("socket-if"),
+        QStringLiteral("device"),
+        QStringLiteral("nodevice"),
+        QStringLiteral("device-if"),
+        QStringLiteral("filesystem"),
+        QStringLiteral("nofilesystem"),
+        QStringLiteral("add-policy"),
+        QStringLiteral("remove-policy"),
+        QStringLiteral("persist"),
+        QStringLiteral("subpath"),
+        QStringLiteral("bind"),
+        QStringLiteral("bind-mount"),
+        QStringLiteral("ro-bind"),
+        QStringLiteral("installation"),
+        QStringLiteral("app-path"),
+        QStringLiteral("usr-path"),
+    };
+
+    const QStringList tokens = command.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (tokens.size() < 3 || QFileInfo(tokens.at(0)).fileName() != QStringLiteral("flatpak")
+        || tokens.at(1) != QStringLiteral("run")) {
+        return QString();
+    }
+    // The application reference is the first positional actually shaped like
+    // an app ID: a value of an option we do not know (e.g. "--unset-env
+    // DISPLAY" on an older list) is skipped rather than taken for the app.
+    // Known value-taking options additionally consume their value outright.
+    // Tokens after the application reference are its arguments; they can
+    // never displace this choice because the first valid ID wins.
+    for (int i = 2; i < tokens.size(); ++i) {
+        const QString &token = tokens.at(i);
+        if (token == QStringLiteral("--")) {
+            // Positional section begins: the application reference is next
+            if (i + 1 < tokens.size() && isValidFlatpakAppId(tokens.at(i + 1))) {
+                return tokens.at(i + 1);
+            }
+            return QString();
+        }
+        if (!token.startsWith(QLatin1Char('-'))) {
+            if (isValidFlatpakAppId(token)) {
+                return token;
+            }
+            continue;
+        }
+        if (token.contains(QLatin1Char('='))) {
+            continue; // self-contained --opt=value
+        }
+        QString option = token;
+        while (option.startsWith(QLatin1Char('-'))) {
+            option.remove(0, 1);
+        }
+        if (valueTakingOptions.contains(option)) {
+            ++i; // consume the option's space-separated value
+        }
+    }
+    return QString();
 }
 
 bool CommandVerifier::isValidFlatpakAppId(const QString &appID)

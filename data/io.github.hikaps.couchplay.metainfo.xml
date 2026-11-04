@@ -64,6 +64,22 @@
   </screenshots>
   
   <releases>
+    <release version="0.5.0" date="2026-11-03">
+      <description>
+        <p>Feature release: profile automation, Steam shortcuts, and session launch fixes</p>
+        <ul>
+          <li>Launch saved profiles from the command line (--profile, --start, --exit-after-session)</li>
+          <li>Add CouchPlay profiles to Steam as Game Mode shortcuts, with Steam source account selection</li>
+          <li>Unified data-directory model for launcher and game data access; generic application descendants</li>
+          <li>Fix Steam Big Picture launch (-bigpicture instead of -tenfoot -steamdeck)</li>
+          <li>Fix Bazzite sessions and simplify player settings</li>
+          <li>Match session windows by Gamescope process ID</li>
+          <li>Fix shared-directory selection and host home mapping</li>
+          <li>Fix per-player directory preparation and profile inheritance</li>
+          <li>Harden privileged helper path validation and symlink handling</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-08-18">
       <description>
         <p>Feature release: SteamOS support, Flatpak-first install, and cross-distro hardening</p>

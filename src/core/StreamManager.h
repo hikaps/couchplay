@@ -10,6 +10,7 @@
 #include <QMap>
 #include <QTimer>
 #include <QPointer>
+#include <QSet>
 #include <qqmlintegration.h>
 #include <sys/types.h>
 
@@ -58,7 +59,9 @@ public:
 
     StreamState streamState(int instanceIndex) const;
     bool isStreaming(int instanceIndex) const;
-    void setHelperClient(CouchPlayHelperClient *helper) { m_helperClient = helper; }
+    void setHelperClient(CouchPlayHelperClient *helper);
+    bool hasOwnedPids() const;
+    bool hasOwnedPid(int instanceIndex) const;
 
 Q_SIGNALS:
     void streamStarted(int instanceIndex);
@@ -69,6 +72,7 @@ Q_SIGNALS:
     void startupTimeoutChanged();
 
 private Q_SLOTS:
+    void onHelperInstanceReady(const QString &username, qint64 pid);
     void onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason);
     void onStartupTimeout();
 
@@ -76,7 +80,8 @@ private:
     void setStreamState(int instanceIndex, StreamState state);
     void cleanupConfigDir(int instanceIndex);
     void attemptRestart(int instanceIndex);
-    uid_t resolveCompositorUid(const QString &username) const;
+    void startStartupTimer(int instanceIndex);
+
 
     CouchPlayHelperClient *m_helperClient = nullptr;
 
@@ -84,9 +89,13 @@ private:
         StreamState state = NotStarted;
         qint64 pid = 0;
         QString configDir;
+        QString displayContext;
         QString username;
         int instanceIndex = -1;
         QVariantMap lastConfig;
+        bool ready = false;
+        bool launching = false;
+        qint64 pendingReadyPid = 0;
         int restartAttempts = 0;
         static constexpr int MAX_RESTART_ATTEMPTS = 3;
     };
@@ -94,6 +103,7 @@ private:
     QMap<int, StreamEntry> m_streams;
     QMap<int, QTimer *> m_startupTimers;
     QMap<int, QPointer<QTimer>> m_restartTimers;
+    QSet<int> m_stoppingStreams;
     bool m_autoRestart = true;
     int m_startupTimeout = 15000;
 };
