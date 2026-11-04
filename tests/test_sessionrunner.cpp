@@ -36,6 +36,7 @@
 #undef private
 #include "DeviceManager.h"
 #include "StreamManager.h"
+#include "SunshineConfig.h"
 #include "UserLookup.h"
 
 class TestEnvironmentGuard
@@ -357,6 +358,7 @@ private Q_SLOTS:
     void testStoppedInstanceCancelsItsPositionListener();
     void testSynchronousLaunchFailureRunsPostHookOnce();
     void testStreamingStartupWaitsForAuxiliaryReadiness();
+    void testStreamingInstancesGetDistinctSunshinePorts();
     void testStreamingLaunchFailureAbortsStartup();
     void testStreamingResourcesSurviveIncompleteStop_data();
     void testStreamingResourcesSurviveIncompleteStop();
@@ -1823,6 +1825,27 @@ void TestSessionRunner::testSynchronousLaunchFailureRunsPostHookOnce()
     QFile marker(markerPath);
     QVERIFY(marker.open(QIODevice::ReadOnly | QIODevice::Text));
     QCOMPARE(marker.readAll(), QByteArray("post"));
+}
+
+void TestSessionRunner::testStreamingInstancesGetDistinctSunshinePorts()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Streaming ports"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+        m_sessionManager->setInstanceConfig(i, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
+    }
+    m_helperClient->autoReady = false;
+
+    QVERIFY(m_runner->start());
+    QCOMPARE(m_runner->m_pendingInstanceConfigs.size(), 2);
+    const int port0 = m_runner->m_pendingInstanceConfigs.value(0).value(QStringLiteral("sunshinePort")).toInt();
+    const int port1 = m_runner->m_pendingInstanceConfigs.value(1).value(QStringLiteral("sunshinePort")).toInt();
+    QCOMPARE(port0, SunshineConfig::calculatePort(0));
+    QCOMPARE(port1, SunshineConfig::calculatePort(1));
+
+    m_runner->stop();
 }
 
 void TestSessionRunner::testStreamingStartupWaitsForAuxiliaryReadiness()

@@ -4,6 +4,7 @@
 #include "SessionManager.h"
 #include "Logging.h"
 #include "SessionRunner.h"
+#include "SunshineConfig.h"
 #include "UserLookup.h"
 #include "../../helper/DirectoryPlan.h"
 
@@ -645,6 +646,14 @@ void SessionManager::setInstanceCount(int count)
 
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
+}
+
+int SessionManager::effectiveSunshinePort(int index) const
+{
+    if (index < 0 || index >= m_currentProfile.instances.size()) {
+        return SunshineConfig::calculatePort(0);
+    }
+    return SunshineConfig::calculatePort(index, m_currentProfile.instances[index].sunshinePort);
 }
 
 QVariantMap SessionManager::getInstanceConfig(int index) const

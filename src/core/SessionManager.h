@@ -144,6 +144,7 @@ public:
     // Current session
     Q_INVOKABLE void newSession();
     Q_INVOKABLE QVariantMap getInstanceConfig(int index) const;
+    Q_INVOKABLE int effectiveSunshinePort(int index) const;
     Q_INVOKABLE void setInstanceConfig(int index, const QVariantMap &config);
     Q_INVOKABLE void setInstanceUser(int index, const QString &username);
     Q_INVOKABLE void setInstanceMonitor(int index, int monitor);
