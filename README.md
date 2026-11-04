@@ -13,7 +13,7 @@
   <a href="https://github.com/hikaps/couchplay/actions/workflows/ci.yml"><img src="https://github.com/hikaps/couchplay/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI"/></a>
   <a href="https://github.com/hikaps/couchplay/actions/workflows/flatpak.yml"><img src="https://github.com/hikaps/couchplay/actions/workflows/flatpak.yml/badge.svg?branch=develop" alt="Flatpak Build"/></a>
   <a href="https://github.com/hikaps/couchplay/releases/latest"><img src="https://img.shields.io/github/v/release/hikaps/couchplay?label=release" alt="Latest release"/></a>
-  <img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"/>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"/></a>
 </p>
 
 ## Screenshots
