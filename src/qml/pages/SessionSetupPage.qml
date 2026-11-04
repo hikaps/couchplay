@@ -934,7 +934,7 @@ Kirigami.ScrollablePage {
                         visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.active
                         type: Kirigami.MessageType.Information
                         text: i18nc("@info", "Sunshine streaming is active on port %1",
-                                    root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).sunshinePort : 47989)
+                                    root.sessionManager ? root.sessionManager.effectiveSunshinePort(instanceCard.index) : 47989)
                     }
 
                     // Warning for missing devices

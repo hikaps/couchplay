@@ -31,8 +31,7 @@ private Q_SLOTS:
     void testAllPhysicalProfile();
     void testMixedProfileSaveLoad();
     void testStreamingConfigToSunshineConfig();
-    void testMultipleStreamingInstancesDistinctPorts();
-    void testDefaultPortsAreSame();
+    void testEffectiveSunshinePortsAreDistinct();
     void testStreamConfigValuesPreserved();
 
 private:
@@ -206,37 +205,20 @@ void TestStreamingSession::testStreamingConfigToSunshineConfig()
     QVERIFY(content.contains(QStringLiteral("sunshine_name = CouchPlay Player 1")));
 }
 
-void TestStreamingSession::testMultipleStreamingInstancesDistinctPorts()
+void TestStreamingSession::testEffectiveSunshinePortsAreDistinct()
 {
     m_sessionManager->setInstanceCount(3);
-
-    for (int i = 0; i < 3; ++i) {
-        QVariantMap config;
-        config.insert(KEY("outputMode"), QStringLiteral("streaming"));
-        config.insert(KEY("username"), QStringLiteral("player%1").arg(i));
-        config.insert(KEY("sunshinePort"), SunshineConfig::calculatePort(i));
-        m_sessionManager->setInstanceConfig(i, config);
-    }
 
     QSet<int> ports;
     for (int i = 0; i < 3; ++i) {
-        QVariantMap config = m_sessionManager->getInstanceConfig(i);
-        int port = config.value(KEY("sunshinePort")).toInt();
-        QCOMPARE(port, SunshineConfig::calculatePort(i));
-        ports.insert(port);
+        ports.insert(m_sessionManager->effectiveSunshinePort(i));
     }
-
     QCOMPARE(ports.size(), 3);
-}
 
-void TestStreamingSession::testDefaultPortsAreSame()
-{
-    m_sessionManager->setInstanceCount(3);
-
-    for (int i = 0; i < 3; ++i) {
-        QVariantMap config = m_sessionManager->getInstanceConfig(i);
-        QCOMPARE(config.value(KEY("sunshinePort")).toInt(), 47989);
-    }
+    QVariantMap config = m_sessionManager->getInstanceConfig(1);
+    config.insert(KEY("sunshinePort"), 50000);
+    m_sessionManager->setInstanceConfig(1, config);
+    QCOMPARE(m_sessionManager->effectiveSunshinePort(1), SunshineConfig::calculatePort(1, 50000));
 }
 
 void TestStreamingSession::testStreamConfigValuesPreserved()

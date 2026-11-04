@@ -13,6 +13,7 @@
 #include "SettingsManager.h"
 #include "SteamConfigManager.h"
 #include "StreamManager.h"
+#include "SunshineConfig.h"
 #include "UserLookup.h"
 #include "WindowManager.h"
 
@@ -531,7 +532,7 @@ void SessionRunner::continueStart()
             config[QStringLiteral("streamFps")] = instConfig.streamFps;
             config[QStringLiteral("streamBitrate")] = instConfig.streamBitrate;
             config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
-            config[QStringLiteral("sunshinePort")] = instConfig.sunshinePort;
+            config[QStringLiteral("sunshinePort")] = SunshineConfig::calculatePort(i, instConfig.sunshinePort);
             if (m_streamingInstances.contains(i)) {
                 config[QStringLiteral("displayContext")] = m_streamingInstances[i].displayContext;
                 if (!m_streamingInstances[i].sinkName.isEmpty()) {
