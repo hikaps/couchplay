@@ -30,6 +30,10 @@
         "--filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata:rw",
         "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam:ro",
         "--filesystem=~/.var/app/com.valvesoftware.Steam/.steam/steam/userdata:rw",
+        "--filesystem=~/.var/app/com.heroicgameslauncher.hgl/config/heroic:ro",
+        "--filesystem=~/.config/heroic:ro",
+        "--filesystem=~/.config/legendary:ro",
+        "--filesystem=~/Games/Heroic:ro",
         "--persist=.local/share/couchplay"
     ],
     "modules": [
