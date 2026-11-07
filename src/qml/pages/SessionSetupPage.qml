@@ -678,6 +678,7 @@ Kirigami.ScrollablePage {
                         }
                         Components.GameSelector {
                             objectName: "comboGame"
+                            Kirigami.FormData.label: instanceCard.labelGame
                             presetManager: instanceCard.cardPresetManager
                             sessionManager: instanceCard.cardSessionManager
                             instanceIndex: instanceCard.index
