@@ -74,8 +74,6 @@ Kirigami.ScrollablePage {
     Kirigami.PromptDialog {
         id: deleteDialog
         objectName: "dialogDeleteProfile"
-        Accessible.role: Accessible.Dialog
-        Accessible.name: i18nc("@title:dialog", "Delete Profile")
         title: i18nc("@title:dialog", "Delete Profile")
         subtitle: i18nc("@info", "Are you sure you want to delete the profile '%1'?", deleteDialog.profileName)
         standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.No
