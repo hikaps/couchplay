@@ -14,6 +14,8 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QTimer>
 #include <unistd.h>
 
@@ -366,6 +368,12 @@ private Q_SLOTS:
     void testStreamingStartupWaitsForAuxiliaryReadiness();
     void testStreamingInstancesGetDistinctSunshinePorts();
     void testStreamingLaunchFailureAbortsStartup();
+    void testValidateDisplaysMonitorNotConnected();
+    void testValidateDisplaysSharedMonitor();
+    void testValidateDisplaysMonitorIsMainScreen();
+    void testValidateDisplaysStreamWithMain();
+    void testValidateDisplaysValidProfile();
+    void testStartRejectsInvalidDisplay();
     void testStreamingResourcesSurviveIncompleteStop_data();
     void testStreamingResourcesSurviveIncompleteStop();
     void testDeviceReconnectIgnoredDuringPostHook();
@@ -1877,7 +1885,7 @@ void TestSessionRunner::testStreamingInstancesGetDistinctSunshinePorts()
     for (int i = 0; i < 2; ++i) {
         m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
         m_sessionManager->setInstancePreset(i, presetId);
-        m_sessionManager->setInstanceConfig(i, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
+        m_sessionManager->setInstanceConfig(i, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     }
     m_helperClient->autoReady = false;
 
@@ -1897,7 +1905,7 @@ void TestSessionRunner::testStreamingStartupWaitsForAuxiliaryReadiness()
     m_sessionManager->setInstanceCount(2);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     m_sessionManager->setInstancePreset(0, presetId);
-    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstancePreset(1, presetId);
     m_helperClient->autoReady = false;
@@ -1954,7 +1962,7 @@ void TestSessionRunner::testStreamingResourcesSurviveIncompleteStop()
     m_sessionManager->setInstanceCount(2);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     m_sessionManager->setInstancePreset(0, presetId);
-    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstancePreset(1, presetId);
     m_helperClient->autoReady = false;
@@ -2000,7 +2008,7 @@ void TestSessionRunner::testStreamingLaunchFailureAbortsStartup()
     m_sessionManager->setInstanceCount(2);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     m_sessionManager->setInstancePreset(0, presetId);
-    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstancePreset(1, presetId);
     m_helperClient->auxiliaryLaunchFails = true;
@@ -2016,6 +2024,91 @@ void TestSessionRunner::testStreamingLaunchFailureAbortsStartup()
     QVERIFY(errorSpy.first().constFirst().toString().contains(QStringLiteral("Failed to launch Sunshine")));
     QVERIFY(m_helperClient->stopPids.contains(1000));
     QVERIFY(!m_runner->isActive());
+}
+
+static SessionProfile displayProfile(const QStringList &displays, const QString &mainScreen = QString())
+{
+    SessionProfile profile;
+    profile.mainScreen = mainScreen;
+    for (const QString &display : displays) {
+        InstanceConfig instance;
+        instance.display = display;
+        instance.streamToMoonlight = display == InstanceConfig::DisplayVirtual;
+        profile.instances.append(instance);
+    }
+    return profile;
+}
+
+void TestSessionRunner::testValidateDisplaysMonitorNotConnected()
+{
+    const SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:DP-99")});
+    QCOMPARE(SessionRunner::validateDisplays(profile), QStringLiteral("Player 2: monitor DP-99 is not connected"));
+}
+
+void TestSessionRunner::testValidateDisplaysSharedMonitor()
+{
+    const QStringList screens{QStringLiteral("DP-1"), QStringLiteral("HDMI-A-1")};
+    const SessionProfile profile = displayProfile({QStringLiteral("monitor:DP-1"), QStringLiteral("monitor:DP-1")});
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, QStringLiteral("HDMI-A-1")),
+             QStringLiteral("Players 1 and 2 cannot share monitor DP-1"));
+}
+
+void TestSessionRunner::testValidateDisplaysMonitorIsMainScreen()
+{
+    const QStringList screens{QStringLiteral("DP-1"), QStringLiteral("HDMI-A-1")};
+    const QString primary = QStringLiteral("HDMI-A-1");
+    const QString expected =
+        QStringLiteral("Monitor HDMI-A-1 is the main screen; choose another main screen or move the players");
+
+    // Empty mainScreen means the primary screen
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:HDMI-A-1")});
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, primary), expected);
+
+    // Explicit main screen naming the same connector
+    profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:HDMI-A-1")}, QStringLiteral("HDMI-A-1"));
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, QStringLiteral("DP-1")), expected);
+
+    // Choosing the other screen as main frees the monitor
+    profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:HDMI-A-1")}, QStringLiteral("DP-1"));
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, primary), QString());
+
+    // Without any main-screen player the monitor is free to use
+    profile = displayProfile({QStringLiteral("monitor:HDMI-A-1"), QStringLiteral("virtual")});
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, primary), QString());
+}
+
+void TestSessionRunner::testValidateDisplaysStreamWithMain()
+{
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("main")});
+    profile.instances[1].streamToMoonlight = true;
+    QCOMPARE(SessionRunner::validateDisplays(profile),
+             QStringLiteral("Player 2: streaming needs a dedicated monitor or a virtual display"));
+}
+
+void TestSessionRunner::testValidateDisplaysValidProfile()
+{
+    QCOMPARE(SessionRunner::validateDisplays(displayProfile({QStringLiteral("main"), QStringLiteral("main")})),
+             QString());
+    QCOMPARE(SessionRunner::validateDisplays(displayProfile({QStringLiteral("main"), QStringLiteral("virtual")})),
+             QString());
+    // A main screen that is not connected falls back to the primary screen
+    QCOMPARE(SessionRunner::validateDisplays(displayProfile({QStringLiteral("main"), QStringLiteral("virtual")},
+                                                            QStringLiteral("DP-99"))),
+             QString());
+}
+
+void TestSessionRunner::testStartRejectsInvalidDisplay()
+{
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("monitor:DP-99")}});
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+
+    QVERIFY(!m_runner->start());
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(errorSpy.first().constFirst().toString(), QStringLiteral("Player 2: monitor DP-99 is not connected"));
+    QCOMPARE(m_runner->status(), QStringLiteral("Error"));
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(m_helperClient->launchCommands.isEmpty());
 }
 
 void TestSessionRunner::testDeviceReconnectIgnoredDuringPostHook()
