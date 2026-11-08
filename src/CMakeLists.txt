@@ -81,6 +81,8 @@ target_sources(couchplay PRIVATE
     core/CommandLineOptions.cpp
     core/CommandLineOptions.h
     core/CommandLineBridge.h
+    core/SignalBridge.cpp
+    core/SignalBridge.h
     core/SessionManager.h
     core/LaunchTypes.h
     core/SessionRunner.cpp

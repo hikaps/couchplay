@@ -22,6 +22,7 @@ Kirigami.ApplicationWindow {
     property bool initialRequestPending: false
     property bool exitOnStartupFailure: false
     property bool exitAfterActiveSession: false
+    property bool shuttingDown: false
     signal startupFailed(int exitCode)
 
     function handleLaunchRequest(profileName, start, exitAfterSession) {
@@ -45,6 +46,31 @@ Kirigami.ApplicationWindow {
             return false
         }
         return true
+    }
+
+    // Stop any running session before quitting so gamescope/Steam instances are not left behind.
+    // A second request (or the timeout) quits immediately.
+    function requestShutdown() {
+        if (shuttingDown || !sessionRunner.active) {
+            Qt.quit()
+            return
+        }
+        shuttingDown = true
+        shutdownTimeout.start()
+        sessionRunner.stop()
+    }
+
+    onClosing: (close) => {
+        if (sessionRunner.active && !shuttingDown) {
+            close.accepted = false
+            requestShutdown()
+        }
+    }
+
+    Timer {
+        id: shutdownTimeout
+        interval: 30000
+        onTriggered: Qt.quit()
     }
 
     Component.onCompleted: {
@@ -143,11 +169,17 @@ Kirigami.ApplicationWindow {
                 root.exitAfterActiveSession = false
                 Qt.callLater(function() { Qt.quit() })
             }
+            if (root.shuttingDown) {
+                Qt.callLater(function() { Qt.quit() })
+            }
         }
         onSessionStartFailed: function(message) {
             if (root.exitOnStartupFailure) {
                 root.exitOnStartupFailure = false
                 root.startupFailed(1)
+            }
+            if (root.shuttingDown) {
+                Qt.callLater(function() { Qt.quit() })
             }
         }
     }

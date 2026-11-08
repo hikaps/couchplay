@@ -26,6 +26,7 @@
 #include "dbus/CouchPlayHelperClient.h"
 #include "core/CommandLineBridge.h"
 #include "core/CommandLineOptions.h"
+#include "core/SignalBridge.h"
 
 #include <QFile>
 #include <QTextStream>
@@ -125,6 +126,11 @@ int main(int argc, char *argv[])
     }
 
     QObject *root = engine.rootObjects().constFirst();
+    SignalBridge signalBridge;
+    QObject::connect(&signalBridge, &SignalBridge::terminationRequested, root, [root](int signalNumber) {
+        qInfo() << "Received signal" << signalNumber << "- stopping session and quitting";
+        QMetaObject::invokeMethod(root, "requestShutdown");
+    });
     QObject::connect(root, SIGNAL(startupFailed(int)), &app, SLOT(exit(int)));
     QObject::connect(&service,
                      &KDBusService::activateRequested,
