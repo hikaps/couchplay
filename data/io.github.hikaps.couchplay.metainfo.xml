@@ -64,6 +64,20 @@
   </screenshots>
   
   <releases>
+    <release version="0.5.1" date="2026-11-07">
+      <description>
+        <p>Bug fix release with per-player render resolution and audio output</p>
+        <ul>
+          <li>Choose a render resolution per player (Window Size is now shown separately)</li>
+          <li>Choose an audio output device per player</li>
+          <li>Stop the running session cleanly on SIGTERM, SIGINT, SIGHUP or window close, so no player instances are left behind</li>
+          <li>Don't abort launch when the optional Steam shortcut sync can't run for a player who hasn't started Steam</li>
+          <li>Fix the game selector error in the session setup page, and a first-run window timeout</li>
+          <li>Grant Flatpak read access to Heroic config and the default game directory</li>
+          <li>Fix Sunshine port collisions between streaming players</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-11-03">
       <description>
         <p>Feature release: profile automation, Steam shortcuts, and session launch fixes</p>
