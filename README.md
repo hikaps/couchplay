@@ -231,7 +231,7 @@ Recursive ACL preparation runs in cancellable instance startup, not a blocking G
 or helper D-Bus call. Native FD-based ACL updates preserve unrelated effective access
 and directory inheritance. ACL mode grants read/traverse access at the original path;
 it neither grants new write access nor projects files into the player home.
-Streaming outputs and audio sinks remain available until both the game and stream processes stop.
+Streaming runs outside the helper: `couchplay-vdisplay` holds each KWin virtual output and Sunshine runs as the desktop user capturing that output with `capture = kwin`. Both are stopped when the session ends.
 
 Existing per-player Overlay data survives upgrades: correctly owned upper/work
 directories from older helpers are tightened to `0700` without discarding private edits.
@@ -240,9 +240,7 @@ a replacement launch. Launch manifests remain available until terminal cleanup s
 recovery state is committed before manifest removal. Interrupted copy scratch directories
 under SGID destination parents can be recovered without accepting unsafe ownership or access.
 Helper recovery restores the complete device/runtime snapshot before persisting unit cleanup.
-Main services use `couchplay-<player>.service`; stream services use
-`couchplay-stream@<player>.service`, so player names cannot collide across roles.
-Owned stream units using the old naming scheme are stopped during upgrade recovery.
+Instance units use `couchplay-<player>.service`.
 ACL shares on read-only filesystems are accepted only when the player already has read/execute access to every
 object; otherwise preparation fails. The game inherits the host locale (`LANG`, `LANGUAGE`, `LC_*`).
 Instance units keep a 60 second start timeout. While directory preparation makes progress (entries or copy chunks
