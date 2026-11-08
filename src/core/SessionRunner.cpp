@@ -979,8 +979,19 @@ bool SessionRunner::setupSessionResources()
             qCWarning(couchplaySteam) << "Required integration is unavailable: steam";
             allSucceeded = false;
         }
+        // The optional "sync all shortcuts" setting cannot apply to a player whose Steam has never run: Steam creates
+        // the userdata tree on its first start, and the next session syncs normally. Only an explicitly selected
+        // Steam shortcut game needs the sync, so only that case still fails the launch.
+        const bool skipUnbootstrappedSync = requiresSteam && !selectedSteamShortcut && m_steamConfigManager
+            && m_steamConfigManager->isSteamDetected() && m_startingSnapshot.syncSteamShortcuts
+            && (!m_helperClient->isSteamBootstrapped(username)
+                || m_steamConfigManager->getTargetSteamUserId(username).isEmpty());
+        if (skipUnbootstrappedSync) {
+            qCInfo(couchplaySteam) << "Skipping Steam shortcut sync for" << username
+                                   << "- Steam has not been run for this user yet";
+        }
         if (requiresSteam && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
-            && (m_startingSnapshot.syncSteamShortcuts || selectedSteamShortcut)) {
+            && !skipUnbootstrappedSync && (m_startingSnapshot.syncSteamShortcuts || selectedSteamShortcut)) {
             if (!m_steamConfigManager->sourceAccountAvailable()) {
                 Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
                 return false;
