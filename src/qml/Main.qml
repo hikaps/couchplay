@@ -346,7 +346,8 @@ Kirigami.ApplicationWindow {
             userManager: userManager,
             steamConfigManager: steamConfigManager,
             heroicConfigManager: heroicConfigManager,
-            presetManager: presetManager
+            presetManager: presetManager,
+            audioManager: audioManager
         })
     }
 

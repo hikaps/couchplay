@@ -225,6 +225,11 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.writeEntry("streamBitrate", inst.streamBitrate);
         instGroup.writeEntry("streamCodec", inst.streamCodec);
         instGroup.writeEntry("sunshinePort", inst.sunshinePort);
+        if (inst.audioDevice.isEmpty()) {
+            instGroup.deleteEntry("audioDevice");
+        } else {
+            instGroup.writeEntry("audioDevice", inst.audioDevice);
+        }
 
         QStringList deviceStrings;
         for (int dev : inst.devices) {
@@ -454,6 +459,7 @@ bool SessionManager::loadProfile(const QString &name)
         inst.streamBitrate = instGroup.readEntry("streamBitrate", 20000);
         inst.streamCodec = instGroup.readEntry("streamCodec", QStringLiteral("h264"));
         inst.sunshinePort = instGroup.readEntry("sunshinePort", 47989);
+        inst.audioDevice = instGroup.readEntry("audioDevice", QString());
 
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
         inst.deviceStableIdNames = instGroup.readEntry("deviceStableIdNames", QStringList());
@@ -690,6 +696,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("streamBitrate")] = inst.streamBitrate;
     map[QStringLiteral("streamCodec")] = inst.streamCodec;
     map[QStringLiteral("sunshinePort")] = inst.sunshinePort;
+    map[QStringLiteral("audioDevice")] = inst.audioDevice;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -759,6 +766,8 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.streamCodec = config[QStringLiteral("streamCodec")].toString();
     if (config.contains(QStringLiteral("sunshinePort")))
         inst.sunshinePort = config[QStringLiteral("sunshinePort")].toInt();
+    if (config.contains(QStringLiteral("audioDevice")))
+        inst.audioDevice = config[QStringLiteral("audioDevice")].toString();
 
     Q_EMIT instancesChanged();
 
