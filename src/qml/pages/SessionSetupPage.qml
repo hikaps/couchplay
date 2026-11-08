@@ -75,11 +75,38 @@ Kirigami.ScrollablePage {
         return [{ username: "" }].concat(filtered)
     }
 
-    function getPrimaryMonitorSize() {
+    // Connector of the effective main screen: the saved one if connected, else the primary monitor.
+    property string mainScreenConnector: {
+        const monitors = monitorManager ? monitorManager.monitors : []
+        const saved = sessionManager ? sessionManager.currentMainScreen : ""
+        if (saved !== "") {
+            for (let i = 0; i < monitors.length; i++) {
+                if (monitors[i].connector === saved) return saved
+            }
+        }
+        for (let i = 0; i < monitors.length; i++) {
+            if (monitors[i].primary) return monitors[i].connector
+        }
+        return monitors.length > 0 ? monitors[0].connector : saved
+    }
+
+    // Number of players placed on the main screen (display === "main")
+    property int mainPlayerCount: {
+        void(instancesRevision)
+        if (!sessionManager) return instanceCount
+        let n = 0
+        for (let i = 0; i < instanceCount; i++) {
+            const display = sessionManager.getInstanceConfig(i)?.display || "main"
+            if (display === "main") n++
+        }
+        return n
+    }
+
+    function getMainScreenSize() {
         if (!monitorManager) return { width: 1920, height: 1080 }
         let monitors = monitorManager.monitors
         for (let i = 0; i < monitors.length; i++) {
-            if (monitors[i].primary) {
+            if (monitors[i].connector === mainScreenConnector) {
                 return { width: monitors[i].width, height: monitors[i].height }
             }
         }
@@ -89,27 +116,40 @@ Kirigami.ScrollablePage {
         return { width: 1920, height: 1080 }
     }
 
+    function recalculateResolutions() {
+        if (!sessionManager) return
+        let screenSize = getMainScreenSize()
+        sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+    }
+
+    Connections {
+        target: root.sessionManager
+        function onCurrentMainScreenChanged() { root.recalculateResolutions() }
+    }
+
+    Connections {
+        target: root.monitorManager
+        function onMonitorsChanged() { root.recalculateResolutions() }
+    }
+
     onLayoutModeChanged: {
         if (sessionManager) {
             sessionManager.currentLayout = layoutMode
-            let screenSize = getPrimaryMonitorSize()
-            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+            recalculateResolutions()
         }
     }
 
     onGridSubLayoutChanged: {
         if (sessionManager && sessionManager.currentLayout === "grid") {
             sessionManager.currentGridSubLayout = gridSubLayout
-            let screenSize = getPrimaryMonitorSize()
-            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+            recalculateResolutions()
         }
     }
 
     onInstanceCountChanged: {
         if (sessionManager && sessionManager.instanceCount !== instanceCount) {
             sessionManager.instanceCount = instanceCount
-            let screenSize = getPrimaryMonitorSize()
-            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+            recalculateResolutions()
         }
     }
 
@@ -340,9 +380,58 @@ Kirigami.ScrollablePage {
         }
 
         RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.Label {
+                text: i18nc("@label", "Main screen:")
+            }
+
+            Controls.ComboBox {
+                id: mainScreenCombo
+                objectName: "comboMainScreen"
+                Accessible.role: Accessible.ComboBox
+                Accessible.name: i18nc("@label", "Main screen")
+                Layout.fillWidth: true
+                textRole: "displayString"
+                valueRole: "connector"
+                model: root.monitorManager ? root.monitorManager.monitors : []
+
+                function updateIndex() {
+                    const idx = indexOfValue(root.mainScreenConnector)
+                    currentIndex = idx >= 0 ? idx : 0
+                }
+
+                onModelChanged: updateIndex()
+                Component.onCompleted: updateIndex()
+
+                Connections {
+                    target: root
+                    function onMainScreenConnectorChanged() { mainScreenCombo.updateIndex() }
+                }
+
+                onActivated: {
+                    if (root.sessionManager && currentValue) {
+                        root.sessionManager.currentMainScreen = currentValue
+                    }
+                }
+            }
+        }
+
+        Controls.Label {
+            objectName: "labelMainScreenArrangement"
+            text: i18nc("@info", "Arrangement for the %1 players on the main screen", root.mainPlayerCount)
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            opacity: 0.7
+        }
+
+        RowLayout {
             spacing: Kirigami.Units.largeSpacing
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.smallSpacing
+            visible: root.mainPlayerCount > 1
 
             LayoutCard {
                 objectName: "cardLayoutHorizontal"
@@ -351,7 +440,7 @@ Kirigami.ScrollablePage {
                 selected: layoutMode === "horizontal"
                 title: i18nc("@option", "Side by Side")
                 description: i18nc("@info", "Split screen horizontally")
-                instanceCount: root.instanceCount
+                instanceCount: root.mainPlayerCount
                 onClicked: layoutMode = "horizontal"
             }
 
@@ -362,7 +451,7 @@ Kirigami.ScrollablePage {
                 selected: layoutMode === "vertical"
                 title: i18nc("@option", "Top and Bottom")
                 description: i18nc("@info", "Split screen vertically")
-                instanceCount: root.instanceCount
+                instanceCount: root.mainPlayerCount
                 onClicked: layoutMode = "vertical"
             }
             LayoutCard {
@@ -371,27 +460,16 @@ Kirigami.ScrollablePage {
                 layoutType: "grid"
                 selected: layoutMode === "grid"
                 title: i18nc("@option", "Grid")
-                description: root.instanceCount === 3
+                description: root.mainPlayerCount === 3
                     ? (root.gridSubLayout === "grid-2x2"
                         ? i18nc("@info", "2×2 grid with one empty cell")
                         : root.gridSubLayout === "left-right"
                             ? i18nc("@info", "Player 1 left, players 2–3 right")
                             : i18nc("@info", "3×1 horizontal layout"))
                     : i18nc("@info", "2×2 grid layout")
-                instanceCount: root.instanceCount
-                visible: root.instanceCount > 2
+                instanceCount: root.mainPlayerCount
+                visible: root.mainPlayerCount > 2
                 onClicked: layoutMode = "grid"
-            }
-
-            LayoutCard {
-                objectName: "cardLayoutMultiMonitor"
-                Layout.fillWidth: true
-                layoutType: "multi-monitor"
-                selected: layoutMode === "multi-monitor"
-                title: i18nc("@option", "Multi-Monitor")
-                description: i18nc("@info", "One instance per monitor")
-                instanceCount: root.instanceCount
-                onClicked: layoutMode = "multi-monitor"
             }
         }
 
@@ -399,7 +477,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.smallSpacing
             Layout.leftMargin: Kirigami.Units.largeSpacing
-            visible: layoutMode === "grid" && root.instanceCount === 3
+            visible: root.mainPlayerCount > 1 && layoutMode === "grid" && root.mainPlayerCount === 3
             spacing: Kirigami.Units.mediumSpacing
 
             Controls.Label {
@@ -464,22 +542,24 @@ Kirigami.ScrollablePage {
                     return config?.presetId || "steam"
                 }
                 
-                property bool isStreaming: {
+                property string displayValue: {
                     void(cardRevision)
-                    if (!cardSessionManager) return false
+                    if (!cardSessionManager) return "main"
                     let config = cardSessionManager.getInstanceConfig(instanceCard.index)
-                    return config?.outputMode === "streaming"
+                    return config?.display || "main"
                 }
+
+                property bool isStreaming: displayValue === "virtual"
                 
                 
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
                 readonly property string labelUser: i18nc("@label", "User:")
                 readonly property string labelLauncher: i18nc("@label", "Launcher:")
-                readonly property string labelOutputMode: i18nc("@label", "Output Mode:")
-                readonly property string optionPhysical: i18nc("@option", "Physical Display")
-                readonly property string optionStreaming: i18nc("@option", "Moonlight Stream")
-                readonly property string labelStreamResolution: i18nc("@label", "Stream Resolution:")
-                readonly property string labelFrameRate: i18nc("@label", "Frame Rate:")
+                readonly property string labelDisplay: i18nc("@label", "Display:")
+                readonly property string optionMainScreen: i18nc("@item:inlistbox", "Main screen")
+                readonly property string optionVirtualDisplay: i18nc("@item:inlistbox", "Virtual display (Moonlight only)")
+                readonly property string labelVirtualResolution: i18nc("@label", "Virtual Resolution:")
+                readonly property string optionCodecAuto: i18nc("@item:inlistbox", "Automatic")
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
                 readonly property string labelResolution: i18nc("@label", "Window Size:")
@@ -644,39 +724,54 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.ComboBox {
-                            id: outputModeCombo
-                            objectName: "comboOutputMode"
+                            id: displayCombo
+                            objectName: "comboDisplay"
                             Accessible.role: Accessible.ComboBox
-                            Accessible.name: instanceCard.labelOutputMode
-                            Kirigami.FormData.label: instanceCard.labelOutputMode
+                            Accessible.name: instanceCard.labelDisplay
+                            Kirigami.FormData.label: instanceCard.labelDisplay
                             Layout.fillWidth: true
-                            
-                            model: ListModel {
-                                ListElement { text: "Physical Display"; value: "physical" }
-                                ListElement { text: "Moonlight Stream"; value: "streaming" }
-                            }
-                            
                             textRole: "text"
                             valueRole: "value"
-                            
-                            Component.onCompleted: {
-                                model.setProperty(0, "text", instanceCard.optionPhysical)
-                                model.setProperty(1, "text", instanceCard.optionStreaming)
-                                currentIndex = instanceCard.isStreaming ? 1 : 0
+
+                            function buildModel() {
+                                void(instanceCard.cardRevision)
+                                const mainConnector = root.mainScreenConnector
+                                const saved = instanceCard.displayValue
+                                let entries = [{ text: instanceCard.optionMainScreen, value: "main" }]
+                                let known = false
+                                const monitors = root.monitorManager ? root.monitorManager.monitors : []
+                                for (let i = 0; i < monitors.length; ++i) {
+                                    if (monitors[i].connector === mainConnector) continue
+                                    const value = "monitor:" + monitors[i].connector
+                                    entries.push({ text: monitors[i].displayString, value: value })
+                                    if (value === saved) known = true
+                                }
+                                // Keep a saved monitor that is disconnected (or now the main screen) visible so the validation message stays explainable.
+                                if (saved.startsWith("monitor:") && !known) entries.push({ text: saved.substring(8), value: saved })
+                                entries.push({ text: instanceCard.optionVirtualDisplay, value: "virtual" })
+                                return entries
                             }
-                            
+
+                            function updateIndex() {
+                                const idx = indexOfValue(instanceCard.displayValue)
+                                currentIndex = idx >= 0 ? idx : 0
+                            }
+
+                            model: buildModel()
+                            onModelChanged: updateIndex()
+                            Component.onCompleted: updateIndex()
+
                             Connections {
                                 target: instanceCard
-                                function onIsStreamingChanged() {
-                                    outputModeCombo.currentIndex = instanceCard.isStreaming ? 1 : 0
-                                }
+                                function onDisplayValueChanged() { displayCombo.updateIndex() }
                             }
-                            
+
                             onActivated: {
                                 if (instanceCard.cardSessionManager) {
                                     let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    config.outputMode = currentValue
+                                    config.display = currentValue
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                    root.recalculateResolutions()
                                 }
                             }
                         }
@@ -801,74 +896,38 @@ Kirigami.ScrollablePage {
                             }
                         }
                         Controls.ComboBox {
-                            id: streamResolutionCombo
-                            objectName: "comboStreamResolution"
+                            id: virtualResolutionCombo
+                            objectName: "comboVirtualResolution"
                             Accessible.role: Accessible.ComboBox
-                            Accessible.name: instanceCard.labelStreamResolution
-                            Kirigami.FormData.label: instanceCard.labelStreamResolution
+                            Accessible.name: instanceCard.labelVirtualResolution
+                            Kirigami.FormData.label: instanceCard.labelVirtualResolution
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
                             model: ["1280x720", "1920x1080", "2560x1440", "3840x2160"]
-                            
+
                             function updateIndex() {
                                 if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
-                                let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamResolution || "1920x1080"
+                                let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).virtualResolution || "1920x1080"
                                 let idx = model.indexOf(res)
                                 currentIndex = idx >= 0 ? idx : 1
                             }
-                            
+
                             Component.onCompleted: { updateIndex() }
-                            
+
                             Connections {
                                 target: instanceCard
-                                function onCardRevisionChanged() { streamResolutionCombo.updateIndex() }
+                                function onCardRevisionChanged() { virtualResolutionCombo.updateIndex() }
                             }
-                            
+
                             onActivated: {
                                 if (instanceCard.cardSessionManager) {
                                     let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    config.streamResolution = currentText
+                                    config.virtualResolution = currentText
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
                         }
-                        
-                        Controls.ComboBox {
-                            id: frameRateCombo
-                            objectName: "comboFrameRate"
-                            Accessible.role: Accessible.ComboBox
-                            Accessible.name: instanceCard.labelFrameRate
-                            Kirigami.FormData.label: instanceCard.labelFrameRate
-                            visible: instanceCard.isStreaming
-                            Layout.fillWidth: true
-                            model: [30, 60, 120]
-                            textRole: "" // Just use the integer values directly
-                            
-                            displayText: i18nc("@unit", "%1 FPS", currentText)
-                            
-                            function updateIndex() {
-                                if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
-                                let fps = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamFps || 60
-                                let idx = model.indexOf(fps)
-                                currentIndex = idx >= 0 ? idx : 1
-                            }
-                            
-                            Component.onCompleted: { updateIndex() }
-                            
-                            Connections {
-                                target: instanceCard
-                                function onCardRevisionChanged() { frameRateCombo.updateIndex() }
-                            }
-                            
-                            onActivated: {
-                                if (instanceCard.cardSessionManager) {
-                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    config.streamFps = currentValue
-                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
-                                }
-                            }
-                        }
-                        
+
                         RowLayout {
                             Kirigami.FormData.label: instanceCard.labelBitrate
                             visible: instanceCard.isStreaming
@@ -922,30 +981,33 @@ Kirigami.ScrollablePage {
                             Kirigami.FormData.label: instanceCard.labelCodec
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
-                            model: ["H.264", "H.265", "AV1"]
-                            
+                            textRole: "text"
+                            valueRole: "value"
+                            model: [
+                                { text: instanceCard.optionCodecAuto, value: "auto" },
+                                { text: "H.264", value: "h264" },
+                                { text: "HEVC", value: "hevc" },
+                                { text: "AV1", value: "av1" }
+                            ]
+
                             function updateIndex() {
                                 if (!instanceCard.cardSessionManager) { currentIndex = 0; return }
-                                let codec = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamCodec || "h264"
-                                if (codec === "h265" || codec === "hevc") currentIndex = 1
-                                else if (codec === "av1") currentIndex = 2
-                                else currentIndex = 0
+                                let codec = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamCodec || "auto"
+                                let idx = indexOfValue(codec)
+                                currentIndex = idx >= 0 ? idx : 0
                             }
-                            
+
                             Component.onCompleted: { updateIndex() }
-                            
+
                             Connections {
                                 target: instanceCard
                                 function onCardRevisionChanged() { codecCombo.updateIndex() }
                             }
-                            
+
                             onActivated: {
                                 if (instanceCard.cardSessionManager) {
                                     let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    let codecStr = "h264"
-                                    if (currentIndex === 1) codecStr = "h265"
-                                    if (currentIndex === 2) codecStr = "av1"
-                                    config.streamCodec = codecStr
+                                    config.streamCodec = currentValue
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
@@ -1190,7 +1252,6 @@ Kirigami.ScrollablePage {
                             case "horizontal": return horizontalLayout
                             case "vertical": return verticalLayout
                             case "grid": return gridLayout
-                            case "multi-monitor": return multiMonitorLayout
                             default: return horizontalLayout
                         }
                     }
@@ -1340,36 +1401,6 @@ Kirigami.ScrollablePage {
                                 text: (index + 2).toString()
                                 font.bold: true
                             }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: multiMonitorLayout
-        RowLayout {
-            spacing: Kirigami.Units.smallSpacing
-            Repeater {
-                model: root.instanceCount
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: "transparent"
-                    border.color: Kirigami.Theme.textColor
-                    border.width: 1
-                    radius: 4
-                    Rectangle {
-                        anchors.fill: parent
-                        anchors.margins: 2
-                        color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
-                        opacity: 0.5
-                        radius: 2
-                        Controls.Label {
-                            anchors.centerIn: parent
-                            text: (index + 1).toString()
-                            font.bold: true
                         }
                     }
                 }

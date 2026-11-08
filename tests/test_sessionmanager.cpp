@@ -63,6 +63,11 @@ private Q_SLOTS:
     void testSetInstanceResolution();
     void testRecalculateOutputResolutionsHorizontal();
     void testRecalculateOutputResolutionsVertical();
+    void testRecalculateOutputResolutionsOnlyMainPlayers();
+    void testDisplayNormalization();
+    void testDisplayRoundtrip();
+    void testLegacyStreamingProfileMigration();
+    void testLegacyMultiMonitorLayoutMigration();
     void testSetInstanceUser();
 
     // Profile management tests
@@ -175,8 +180,8 @@ void TestSessionManager::testCurrentLayout()
     m_sessionManager->setCurrentLayout(QStringLiteral("grid"));
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("grid"));
 
-    m_sessionManager->setCurrentLayout(QStringLiteral("multi-monitor"));
-    QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("multi-monitor"));
+    m_sessionManager->setCurrentLayout(QStringLiteral("horizontal"));
+    QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("horizontal"));
 }
 
 void TestSessionManager::testGetInstanceConfig()
@@ -256,14 +261,14 @@ void TestSessionManager::testInstanceConfigDoesNotOwnApplicationDirectories()
     QVariantMap config = m_sessionManager->getInstanceConfig(0);
     QVERIFY(!config.contains(KEY("dataDirectories")));
     QVERIFY(!config.contains(KEY("dataDirectoriesSnapshotted")));
-    config[KEY("streamCodec")] = QStringLiteral("h265");
+    config[KEY("streamCodec")] = QStringLiteral("hevc");
     m_sessionManager->setInstanceConfig(0, config);
     QCOMPARE(presetManager.getDataDirectories(presetId).size(), 1);
 
     QVERIFY(presetManager.setDataDirectories(presetId, {}));
     QCOMPARE(presetManager.getDataDirectories(presetId).size(), 0);
     config = m_sessionManager->getInstanceConfig(0);
-    QCOMPARE(config.value(KEY("streamCodec")).toString(), QStringLiteral("h265"));
+    QCOMPARE(config.value(KEY("streamCodec")).toString(), QStringLiteral("hevc"));
     QVERIFY(!config.contains(KEY("dataDirectories")));
 }
 
@@ -307,6 +312,159 @@ void TestSessionManager::testRecalculateOutputResolutionsVertical()
     QCOMPARE(config0.value(KEY("outputHeight")).toInt(), 540);
     QCOMPARE(config0.value(KEY("internalWidth")).toInt(), 1920);
     QCOMPARE(config0.value(KEY("internalHeight")).toInt(), 540);
+}
+
+void TestSessionManager::testRecalculateOutputResolutionsOnlyMainPlayers()
+{
+    m_sessionManager->setInstanceCount(3);
+    m_sessionManager->setCurrentLayout(QStringLiteral("horizontal"));
+    m_sessionManager->setInstanceResolution(1, 800, 600, 800, 600);
+    QVariantMap middle = m_sessionManager->getInstanceConfig(1);
+    middle[KEY("display")] = QStringLiteral("monitor:DP-2");
+    m_sessionManager->setInstanceConfig(1, middle);
+
+    m_sessionManager->recalculateOutputResolutions(1920, 1080);
+
+    // Two main players split the screen; the monitor player keeps its size
+    for (int i : {0, 2}) {
+        const QVariantMap config = m_sessionManager->getInstanceConfig(i);
+        QCOMPARE(config.value(KEY("outputWidth")).toInt(), 960);
+        QCOMPARE(config.value(KEY("outputHeight")).toInt(), 1080);
+        QCOMPARE(config.value(KEY("internalWidth")).toInt(), 960);
+    }
+    const QVariantMap monitorConfig = m_sessionManager->getInstanceConfig(1);
+    QCOMPARE(monitorConfig.value(KEY("outputWidth")).toInt(), 800);
+    QCOMPARE(monitorConfig.value(KEY("outputHeight")).toInt(), 600);
+    QCOMPARE(monitorConfig.value(KEY("internalWidth")).toInt(), 800);
+}
+
+void TestSessionManager::testDisplayNormalization()
+{
+    QVariantMap config = m_sessionManager->getInstanceConfig(0);
+    config[KEY("display")] = QStringLiteral("main");
+    config[KEY("streamToMoonlight")] = true;
+    m_sessionManager->setInstanceConfig(0, config);
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("streamToMoonlight")).toBool(), false);
+
+    config[KEY("display")] = QStringLiteral("virtual");
+    config[KEY("streamToMoonlight")] = false;
+    m_sessionManager->setInstanceConfig(0, config);
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("display")).toString(), QStringLiteral("virtual"));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("streamToMoonlight")).toBool(), true);
+
+    config[KEY("display")] = QStringLiteral("bogus");
+    m_sessionManager->setInstanceConfig(0, config);
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("display")).toString(), QStringLiteral("main"));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("streamToMoonlight")).toBool(), false);
+
+    config[KEY("display")] = QStringLiteral("monitor:HDMI-A-1");
+    config[KEY("streamToMoonlight")] = true;
+    m_sessionManager->setInstanceConfig(0, config);
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("display")).toString(),
+             QStringLiteral("monitor:HDMI-A-1"));
+}
+
+void TestSessionManager::testDisplayRoundtrip()
+{
+    m_sessionManager->setInstanceCount(3);
+    m_sessionManager->setCurrentMainScreen(QStringLiteral("DP-1"));
+
+    QVariantMap monitorPlayer = m_sessionManager->getInstanceConfig(1);
+    monitorPlayer[KEY("display")] = QStringLiteral("monitor:HDMI-A-1");
+    m_sessionManager->setInstanceConfig(1, monitorPlayer);
+
+    QVariantMap virtualPlayer = m_sessionManager->getInstanceConfig(2);
+    virtualPlayer[KEY("display")] = QStringLiteral("virtual");
+    virtualPlayer[KEY("virtualResolution")] = QStringLiteral("1280x720");
+    m_sessionManager->setInstanceConfig(2, virtualPlayer);
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("DisplayRoundtripProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->currentMainScreen().isEmpty());
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("DisplayRoundtripProfile")));
+
+    QCOMPARE(m_sessionManager->currentMainScreen(), QStringLiteral("DP-1"));
+    const QVariantMap restoredMain = m_sessionManager->getInstanceConfig(0);
+    QCOMPARE(restoredMain.value(KEY("display")).toString(), QStringLiteral("main"));
+    QCOMPARE(restoredMain.value(KEY("streamToMoonlight")).toBool(), false);
+    const QVariantMap restoredMonitor = m_sessionManager->getInstanceConfig(1);
+    QCOMPARE(restoredMonitor.value(KEY("display")).toString(), QStringLiteral("monitor:HDMI-A-1"));
+    const QVariantMap restoredVirtual = m_sessionManager->getInstanceConfig(2);
+    QCOMPARE(restoredVirtual.value(KEY("display")).toString(), QStringLiteral("virtual"));
+    QCOMPARE(restoredVirtual.value(KEY("streamToMoonlight")).toBool(), true);
+    QCOMPARE(restoredVirtual.value(KEY("virtualResolution")).toString(), QStringLiteral("1280x720"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("DisplayRoundtripProfile"));
+}
+
+void TestSessionManager::testLegacyStreamingProfileMigration()
+{
+    const QString profilesDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles");
+    QVERIFY(QDir().mkpath(profilesDir));
+    const QString path = profilesDir + QStringLiteral("/LegacyStreamingProfile.conf");
+    {
+        KConfig config(path, KConfig::SimpleConfig);
+        config.group(QStringLiteral("General")).writeEntry("instanceCount", 2);
+        KConfigGroup player1 = config.group(QStringLiteral("Instance0"));
+        player1.writeEntry("username", QStringLiteral("player1"));
+        player1.writeEntry("outputMode", QStringLiteral("physical"));
+        KConfigGroup player2 = config.group(QStringLiteral("Instance1"));
+        player2.writeEntry("username", QStringLiteral("player2"));
+        player2.writeEntry("outputMode", QStringLiteral("streaming"));
+        player2.writeEntry("streamResolution", QStringLiteral("1280x720"));
+        player2.writeEntry("streamFps", 30);
+        player2.writeEntry("streamCodec", QStringLiteral("h265"));
+        QVERIFY(config.sync());
+    }
+
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("LegacyStreamingProfile")));
+
+    const QVariantMap local = m_sessionManager->getInstanceConfig(0);
+    QCOMPARE(local.value(KEY("display")).toString(), QStringLiteral("main"));
+    QCOMPARE(local.value(KEY("streamToMoonlight")).toBool(), false);
+
+    const QVariantMap streaming = m_sessionManager->getInstanceConfig(1);
+    QCOMPARE(streaming.value(KEY("display")).toString(), QStringLiteral("virtual"));
+    QCOMPARE(streaming.value(KEY("streamToMoonlight")).toBool(), true);
+    QCOMPARE(streaming.value(KEY("virtualResolution")).toString(), QStringLiteral("1280x720"));
+    QCOMPARE(streaming.value(KEY("streamCodec")).toString(), QStringLiteral("hevc"));
+
+    // Saving drops the removed keys
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("LegacyStreamingProfile")));
+    KConfig saved(path, KConfig::SimpleConfig);
+    const KConfigGroup savedPlayer = saved.group(QStringLiteral("Instance1"));
+    QVERIFY(!savedPlayer.hasKey("outputMode"));
+    QVERIFY(!savedPlayer.hasKey("streamResolution"));
+    QVERIFY(!savedPlayer.hasKey("streamFps"));
+    QCOMPARE(savedPlayer.readEntry("display", QString()), QStringLiteral("virtual"));
+    QCOMPARE(savedPlayer.readEntry("virtualResolution", QString()), QStringLiteral("1280x720"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("LegacyStreamingProfile"));
+}
+
+void TestSessionManager::testLegacyMultiMonitorLayoutMigration()
+{
+    const QString profilesDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles");
+    QVERIFY(QDir().mkpath(profilesDir));
+    const QString path = profilesDir + QStringLiteral("/LegacyMultiMonitorProfile.conf");
+    {
+        KConfig config(path, KConfig::SimpleConfig);
+        KConfigGroup general = config.group(QStringLiteral("General"));
+        general.writeEntry("instanceCount", 2);
+        general.writeEntry("layout", QStringLiteral("multi-monitor"));
+        config.group(QStringLiteral("Instance0")).writeEntry("username", QStringLiteral("player1"));
+        config.group(QStringLiteral("Instance1")).writeEntry("username", QStringLiteral("player2"));
+        QVERIFY(config.sync());
+    }
+
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("LegacyMultiMonitorProfile")));
+    QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("horizontal"));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("display")).toString(), QStringLiteral("main"));
+    QCOMPARE(m_sessionManager->getInstanceConfig(1).value(KEY("display")).toString(), QStringLiteral("main"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("LegacyMultiMonitorProfile"));
 }
 
 void TestSessionManager::testSetInstanceUser()
@@ -366,7 +524,7 @@ void TestSessionManager::testPrivateTemporaryDirectoriesRoundtrip()
     m_sessionManager->setInstanceConfig(1, playerTwo);
     playerTwo = m_sessionManager->getInstanceConfig(1);
     playerTwo[KEY("privateTemporaryDirectories")] = false;
-    playerTwo[KEY("streamCodec")] = QStringLiteral("h265");
+    playerTwo[KEY("streamCodec")] = QStringLiteral("hevc");
     m_sessionManager->setInstanceConfig(1, playerTwo);
 
     playerOne = m_sessionManager->getInstanceConfig(0);
@@ -385,7 +543,7 @@ void TestSessionManager::testPrivateTemporaryDirectoriesRoundtrip()
     QCOMPARE(restoredPlayerOne.value(KEY("privateTemporaryDirectories")).toBool(), true);
     QCOMPARE(restoredPlayerTwo.value(KEY("privateTemporaryDirectories")).toBool(), false);
     QCOMPARE(restoredPlayerOne.value(KEY("refreshRate")).toInt(), 144);
-    QCOMPARE(restoredPlayerTwo.value(KEY("streamCodec")).toString(), QStringLiteral("h265"));
+    QCOMPARE(restoredPlayerTwo.value(KEY("streamCodec")).toString(), QStringLiteral("hevc"));
 
     m_sessionManager->deleteProfile(QStringLiteral("PrivateTemporaryDirectoriesProfile"));
 }

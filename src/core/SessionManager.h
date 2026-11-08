@@ -26,7 +26,7 @@ class SessionManager;
 struct InstanceConfig {
     Q_GADGET
     Q_PROPERTY(QString username MEMBER username)
-    Q_PROPERTY(int monitor MEMBER monitor)
+    Q_PROPERTY(QString display MEMBER display)
     Q_PROPERTY(int internalWidth MEMBER internalWidth)
     Q_PROPERTY(int internalHeight MEMBER internalHeight)
     Q_PROPERTY(int outputWidth MEMBER outputWidth)
@@ -40,10 +40,9 @@ struct InstanceConfig {
     Q_PROPERTY(QVariantMap gameSelection READ gameSelectionAsVariant WRITE setGameSelectionFromVariant)
     Q_PROPERTY(QString presetId MEMBER presetId)
     Q_PROPERTY(bool privateTemporaryDirectories MEMBER privateTemporaryDirectories)
-    Q_PROPERTY(QString outputMode MEMBER outputMode)
-    Q_PROPERTY(QString streamResolution MEMBER streamResolution)
+    Q_PROPERTY(bool streamToMoonlight MEMBER streamToMoonlight)
+    Q_PROPERTY(QString virtualResolution MEMBER virtualResolution)
     Q_PROPERTY(QString renderResolution MEMBER renderResolution)
-    Q_PROPERTY(int streamFps MEMBER streamFps)
     Q_PROPERTY(int streamBitrate MEMBER streamBitrate)
     Q_PROPERTY(QString streamCodec MEMBER streamCodec)
     Q_PROPERTY(int sunshinePort MEMBER sunshinePort)
@@ -51,7 +50,7 @@ struct InstanceConfig {
 
 public:
     QString username;
-    int monitor = 0;
+    QString display = QStringLiteral("main"); // "main", "monitor:<connector>" or "virtual"
     int internalWidth = 1920;
     int internalHeight = 1080;
     int outputWidth = 960;
@@ -67,14 +66,23 @@ public:
     bool privateTemporaryDirectories = false;
     QVariantMap gameSelectionAsVariant() const { return gameSelection.toVariant(); }
     void setGameSelectionFromVariant(const QVariantMap &selection) { gameSelection = GameSelection::fromVariant(selection); }
-    QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
-    QString streamResolution = QStringLiteral("1920x1080");
+    bool streamToMoonlight = false;                   // Stream this player's display through Sunshine/Moonlight
+    QString virtualResolution = QStringLiteral("1920x1080"); // "WxH" size of the virtual display
     QString renderResolution;                         // "WxH" game render size for physical output; empty = match window
-    int streamFps = 60;
     int streamBitrate = 20000;                        // Kbps (20000 = 20 Mbps)
-    QString streamCodec = QStringLiteral("h264");     // "h264", "h265", "av1"
+    QString streamCodec = QStringLiteral("auto");     // "auto", "h264", "hevc", "av1"
     int sunshinePort = 47989;                         // Base port for Sunshine instance
     QString audioDevice;                              // PulseAudio/PipeWire sink name for physical output; empty = default
+
+    static inline const QString DisplayMain = QStringLiteral("main");
+    static inline const QString DisplayVirtual = QStringLiteral("virtual");
+    static inline const QString DisplayMonitorPrefix = QStringLiteral("monitor:");
+
+    /// Connector name for a "monitor:<connector>" display value; empty otherwise.
+    static QString monitorConnector(const QString &display)
+    {
+        return display.startsWith(DisplayMonitorPrefix) ? display.mid(DisplayMonitorPrefix.size()) : QString();
+    }
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)
@@ -86,6 +94,7 @@ struct SessionProfile {
     Q_GADGET
     Q_PROPERTY(QString name MEMBER name)
     Q_PROPERTY(QString layout MEMBER layout)
+    Q_PROPERTY(QString mainScreen MEMBER mainScreen)
     Q_PROPERTY(QString gridSubLayout MEMBER gridSubLayout)
     Q_PROPERTY(QString filePath MEMBER filePath)
     Q_PROPERTY(QString preSessionExecutable MEMBER preSessionExecutable)
@@ -93,7 +102,8 @@ struct SessionProfile {
 
 public:
     QString name;
-    QString layout = QStringLiteral("horizontal"); // horizontal, vertical, multi-monitor, grid
+    QString layout = QStringLiteral("horizontal"); // horizontal, vertical, grid
+    QString mainScreen; // Connector name of the screen holding "main" players; empty = primary screen
     QString gridSubLayout; // "horizontal" (3×1) or "grid-2x2" (2×2 with gap) — only used when layout is "grid"
     QString preSessionExecutable;
     QString postSessionExecutable;
@@ -114,6 +124,7 @@ class SessionManager : public QObject
     Q_PROPERTY(QString currentLayout READ currentLayout WRITE setCurrentLayout NOTIFY currentLayoutChanged)
     Q_PROPERTY(QString currentGridSubLayout READ currentGridSubLayout WRITE setCurrentGridSubLayout NOTIFY
                    currentGridSubLayoutChanged)
+    Q_PROPERTY(QString currentMainScreen READ currentMainScreen WRITE setCurrentMainScreen NOTIFY currentMainScreenChanged)
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList savedProfiles READ savedProfilesAsVariant NOTIFY savedProfilesChanged)
     Q_PROPERTY(QVariantList instances READ instancesAsVariant NOTIFY instancesChanged)
@@ -151,7 +162,6 @@ public:
     Q_INVOKABLE int effectiveSunshinePort(int index) const;
     Q_INVOKABLE void setInstanceConfig(int index, const QVariantMap &config);
     Q_INVOKABLE void setInstanceUser(int index, const QString &username);
-    Q_INVOKABLE void setInstanceMonitor(int index, int monitor);
     Q_INVOKABLE void setInstanceResolution(int index, int internalW, int internalH, int outputW, int outputH);
     Q_INVOKABLE void setInstanceDevices(int index, const QList<int> &devices);
     /**
@@ -214,6 +224,11 @@ public:
         return m_currentProfile.layout;
     }
     void setCurrentLayout(const QString &layout);
+    QString currentMainScreen() const
+    {
+        return m_currentProfile.mainScreen;
+    }
+    void setCurrentMainScreen(const QString &connector);
     QString currentGridSubLayout() const
     {
         return m_currentProfile.gridSubLayout;
@@ -240,6 +255,7 @@ public:
 Q_SIGNALS:
     void currentProfileChanged();
     void currentLayoutChanged();
+    void currentMainScreenChanged();
     void currentGridSubLayoutChanged();
     void instanceCountChanged();
     void savedProfilesChanged();

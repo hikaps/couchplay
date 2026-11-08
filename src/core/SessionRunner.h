@@ -21,6 +21,7 @@
 #include "SteamConfigManager.h"
 
 class QAction;
+class QScreen;
 
 class GamescopeInstance;
 class DeviceManager;
@@ -153,7 +154,7 @@ public:
 
     /**
      * @brief Calculate window geometries for a given layout
-     * @param layout Layout type: "horizontal", "vertical", "multi-monitor", "grid"
+     * @param layout Layout type: "horizontal", "vertical", "grid"
      * @param instanceCount Number of instances
      * @param screenGeometry Available screen geometry
      * @param gridSubLayout For "grid" layout with 3 players: "horizontal" (3×1), "grid-2x2" (2×2 with gap), or empty
@@ -170,6 +171,20 @@ public:
      * @return the size, or an invalid QSize if empty, malformed, or outside 320x200..7680x4320
      */
     static QSize parseRenderResolution(const QString &text);
+
+    /** The connected screen whose QScreen::name() equals the connector, or nullptr. */
+    static QScreen *screenByConnector(const QString &connector);
+
+    /**
+     * Check the per-player display choices of a profile against the connected screens.
+     * @return an empty string when valid, otherwise the user-facing error
+     */
+    static QString validateDisplays(const SessionProfile &profile);
+
+    /** Same check against an explicit set of connected connectors (testable without a real display). */
+    static QString validateDisplays(const SessionProfile &profile,
+                                    const QStringList &connectors,
+                                    const QString &primaryConnector);
 
 Q_SIGNALS:
     void runningChanged();
@@ -215,7 +230,7 @@ private:
     void restoreDeviceOwnership();
     bool setupSessionResources();
     void teardownSharingState();
-    QRect getScreenGeometry() const;
+    static QRect mainScreenGeometry(const SessionProfile &profile);
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
     void inhibitScreenSaver();

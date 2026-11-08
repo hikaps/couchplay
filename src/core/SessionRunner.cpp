@@ -336,6 +336,12 @@ bool SessionRunner::start()
         setStatus(QStringLiteral("Error"));
         return false;
     }
+    const QString displayError = validateDisplays(profile);
+    if (!displayError.isEmpty()) {
+        Q_EMIT errorOccurred(displayError);
+        setStatus(QStringLiteral("Error"));
+        return false;
+    }
     m_startingSnapshot.profile = profile;
     m_startingSnapshot.syncSteamShortcuts = m_steamConfigManager && m_steamConfigManager->syncShortcutsEnabled();
     m_startingSnapshot.shareSteamLibraries = m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled();
@@ -463,13 +469,13 @@ void SessionRunner::continueStart()
     m_postHookArmed = true;
     inhibitScreenSaver();
 
-    QList<int> physicalIndices;
+    QList<int> mainIndices;
     QList<int> streamingIndices;
     for (int i = 0; i < instanceCount; ++i) {
-        if (profile.instances[i].outputMode == QStringLiteral("streaming")) {
+        if (profile.instances[i].display == InstanceConfig::DisplayVirtual) {
             streamingIndices.append(i);
-        } else {
-            physicalIndices.append(i);
+        } else if (profile.instances[i].display == InstanceConfig::DisplayMain) {
+            mainIndices.append(i);
         }
     }
 
@@ -478,7 +484,7 @@ void SessionRunner::continueStart()
         const InstanceConfig &instConfig = profile.instances[idx];
         QVariantMap streamConfig;
         streamConfig[QStringLiteral("username")] = instConfig.username;
-        streamConfig[QStringLiteral("streamResolution")] = instConfig.streamResolution;
+        streamConfig[QStringLiteral("streamResolution")] = instConfig.virtualResolution;
         streamConfig[QStringLiteral("refreshRate")] = instConfig.refreshRate;
         if (!setupStreamingInstance(idx, streamConfig)) {
             beginFinalization(true, QStringLiteral("Failed to set up streaming instance %1").arg(idx + 1));
@@ -486,18 +492,20 @@ void SessionRunner::continueStart()
         }
     }
 
-    const QRect screenGeometry = getScreenGeometry();
-    const int physicalCount = physicalIndices.size();
-    QMap<int, int> instanceToLayoutIndex;
-    int layoutIdx = 0;
+    // Players on the main screen split it; dedicated-monitor players fill their screen.
+    m_layouts = QList<QRect>(instanceCount);
+    const QList<QRect> mainLayouts = calculateLayout(profile.layout,
+                                                     mainIndices.size(),
+                                                     mainScreenGeometry(profile),
+                                                     profile.gridSubLayout);
+    for (int n = 0; n < mainIndices.size(); ++n) {
+        m_layouts[mainIndices[n]] = mainLayouts.value(n);
+    }
     for (int i = 0; i < instanceCount; ++i) {
-        if (!streamingIndices.contains(i)) {
-            instanceToLayoutIndex[i] = layoutIdx++;
+        if (QScreen *screen = screenByConnector(InstanceConfig::monitorConnector(profile.instances[i].display))) {
+            m_layouts[i] = screen->geometry();
         }
     }
-    m_layouts = physicalCount > 0
-        ? calculateLayout(profile.layout, physicalCount, screenGeometry, profile.gridSubLayout)
-        : QList<QRect>();
 
     if (!setupDeviceOwnership()) {
         beginFinalization(true, QStringLiteral("Failed to set up device ownership"));
@@ -516,9 +524,8 @@ void SessionRunner::continueStart()
         QVariantMap config;
         config[QStringLiteral("username")] = instConfig.username;
         config[QStringLiteral("privateTemporaryDirectories")] = instConfig.privateTemporaryDirectories;
-        config[QStringLiteral("monitor")] = instConfig.monitor;
         if (isStreaming) {
-            const QStringList resolution = instConfig.streamResolution.split(QLatin1Char('x'));
+            const QStringList resolution = instConfig.virtualResolution.split(QLatin1Char('x'));
             const int width = resolution.value(0, QStringLiteral("1920")).toInt();
             const int height = resolution.value(1, QStringLiteral("1080")).toInt();
             config[QStringLiteral("internalWidth")] = width;
@@ -528,8 +535,7 @@ void SessionRunner::continueStart()
             config[QStringLiteral("positionX")] = 0;
             config[QStringLiteral("positionY")] = 0;
             config[QStringLiteral("outputMode")] = QStringLiteral("streaming");
-            config[QStringLiteral("streamResolution")] = instConfig.streamResolution;
-            config[QStringLiteral("streamFps")] = instConfig.streamFps;
+            config[QStringLiteral("streamResolution")] = instConfig.virtualResolution;
             config[QStringLiteral("streamBitrate")] = instConfig.streamBitrate;
             config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
             config[QStringLiteral("sunshinePort")] = SunshineConfig::calculatePort(i, instConfig.sunshinePort);
@@ -540,16 +546,20 @@ void SessionRunner::continueStart()
                 }
             }
         } else {
-            const int layoutIndex = instanceToLayoutIndex.value(i, 0);
+            const QRect &rect = m_layouts[i];
             // Gamescope renders internally at -w/-h and scales to the window (-W/-H); an override lets a player
             // render below the window size, e.g. 720p in a 1080p region.
             const QSize render = parseRenderResolution(instConfig.renderResolution);
-            config[QStringLiteral("internalWidth")] = render.isValid() ? render.width() : m_layouts[layoutIndex].width();
-            config[QStringLiteral("internalHeight")] = render.isValid() ? render.height() : m_layouts[layoutIndex].height();
-            config[QStringLiteral("outputWidth")] = m_layouts[layoutIndex].width();
-            config[QStringLiteral("outputHeight")] = m_layouts[layoutIndex].height();
-            config[QStringLiteral("positionX")] = m_layouts[layoutIndex].x();
-            config[QStringLiteral("positionY")] = m_layouts[layoutIndex].y();
+            config[QStringLiteral("internalWidth")] = render.isValid() ? render.width() : rect.width();
+            config[QStringLiteral("internalHeight")] = render.isValid() ? render.height() : rect.height();
+            config[QStringLiteral("outputWidth")] = rect.width();
+            config[QStringLiteral("outputHeight")] = rect.height();
+            config[QStringLiteral("positionX")] = rect.x();
+            config[QStringLiteral("positionY")] = rect.y();
+            const QString connector = InstanceConfig::monitorConnector(instConfig.display);
+            if (!connector.isEmpty()) {
+                config[QStringLiteral("monitorName")] = connector;
+            }
             if (!instConfig.audioDevice.isEmpty()) {
                 // Players reach the host's PipeWire-Pulse over TCP, so a host sink name is valid for them.
                 config[QStringLiteral("sink")] = instConfig.audioDevice;
@@ -1279,14 +1289,82 @@ void SessionRunner::teardownSharingState()
     }
 }
 
-QRect SessionRunner::getScreenGeometry() const
+QScreen *SessionRunner::screenByConnector(const QString &connector)
 {
-    QScreen *screen = QGuiApplication::primaryScreen();
+    if (connector.isEmpty()) {
+        return nullptr;
+    }
+    const auto screens = QGuiApplication::screens();
+    for (QScreen *screen : screens) {
+        if (screen->name() == connector) {
+            return screen;
+        }
+    }
+    return nullptr;
+}
+
+QRect SessionRunner::mainScreenGeometry(const SessionProfile &profile)
+{
+    QScreen *screen = screenByConnector(profile.mainScreen);
+    if (!screen) {
+        screen = QGuiApplication::primaryScreen();
+    }
     if (screen) {
         return screen->geometry();
     }
 
     return QRect(0, 0, 1920, 1080);
+}
+
+QString SessionRunner::validateDisplays(const SessionProfile &profile)
+{
+    QStringList connectors;
+    for (QScreen *screen : QGuiApplication::screens()) {
+        connectors.append(screen->name());
+    }
+    QScreen *primary = QGuiApplication::primaryScreen();
+    return validateDisplays(profile, connectors, primary ? primary->name() : QString());
+}
+
+QString SessionRunner::validateDisplays(const SessionProfile &profile,
+                                        const QStringList &connectors,
+                                        const QString &primaryConnector)
+{
+    const QString mainName = connectors.contains(profile.mainScreen) && !profile.mainScreen.isEmpty()
+        ? profile.mainScreen
+        : primaryConnector;
+
+    bool anyMainPlayer = false;
+    QMap<QString, int> monitorOwner;
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        const InstanceConfig &instance = profile.instances[i];
+        if (instance.display == InstanceConfig::DisplayMain) {
+            anyMainPlayer = true;
+            if (instance.streamToMoonlight) {
+                return QStringLiteral("Player %1: streaming needs a dedicated monitor or a virtual display").arg(i + 1);
+            }
+            continue;
+        }
+        const QString connector = InstanceConfig::monitorConnector(instance.display);
+        if (connector.isEmpty()) {
+            continue; // virtual display
+        }
+        if (!connectors.contains(connector)) {
+            return QStringLiteral("Player %1: monitor %2 is not connected").arg(i + 1).arg(connector);
+        }
+        if (monitorOwner.contains(connector)) {
+            return QStringLiteral("Players %1 and %2 cannot share monitor %3")
+                .arg(monitorOwner.value(connector) + 1)
+                .arg(i + 1)
+                .arg(connector);
+        }
+        monitorOwner.insert(connector, i);
+    }
+    if (anyMainPlayer && monitorOwner.contains(mainName)) {
+        return QStringLiteral("Monitor %1 is the main screen; choose another main screen or move the players")
+            .arg(mainName);
+    }
+    return {};
 }
 
 QSize SessionRunner::parseRenderResolution(const QString &text)
@@ -1372,10 +1450,6 @@ QList<QRect> SessionRunner::calculateLayout(const QString &layout,
                 int row = i / cols;
                 result.append(QRect(x + col * cellWidth, y + row * cellHeight, cellWidth, cellHeight));
             }
-        }
-    } else if (layout == QStringLiteral("multi-monitor")) {
-        for (int i = 0; i < instanceCount; ++i) {
-            result.append(screenGeometry);
         }
     } else {
         int instanceWidth = w / instanceCount;
