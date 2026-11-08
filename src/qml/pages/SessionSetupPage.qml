@@ -23,6 +23,7 @@ Kirigami.ScrollablePage {
     required property var steamConfigManager
     required property var heroicConfigManager
     required property var audioManager
+    required property var pairingSession
 
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
@@ -562,6 +563,21 @@ Kirigami.ScrollablePage {
                 property bool streamsToMoonlight: displayValue === "virtual" || (displayValue !== "main" && streamToMoonlightValue)
 
                 readonly property var streamManager: root.sessionRunner ? root.sessionRunner.streamManager : null
+                readonly property string cardUsername: {
+                    void(cardRevision)
+                    if (!cardSessionManager) return ""
+                    return cardSessionManager.getInstanceConfig(instanceCard.index)?.username ?? ""
+                }
+
+                // Paired Moonlight clients of this player's gaming user; refreshed on username change and pairedChanged
+                property int pairedCount: 0
+                onCardUsernameChanged: refreshPairedCount()
+
+                function refreshPairedCount() {
+                    pairedCount = root.pairingSession ? root.pairingSession.pairedClientCount(cardUsername) : 0
+                }
+
+
 
                 // Entry of streamManager.streams for this player; only exists while a session runs
                 readonly property var streamEntry: {
@@ -595,6 +611,10 @@ Kirigami.ScrollablePage {
                 readonly property string textStreamToMoonlight: i18nc("@option:check", "Stream to Moonlight")
                 readonly property string textStreamMonitorHint: i18nc("@info", "Streaming a real monitor also shows the game on that monitor.")
                 readonly property string labelStreamStatus: i18nc("@label", "Stream:")
+                readonly property string labelPairing: i18nc("@label", "Pairing:")
+                readonly property string textPairClient: i18nc("@action:button", "Pair Moonlight client…")
+                readonly property string textNotPaired: i18nc("@info:status", "Moonlight: not paired yet")
+                readonly property string textStartingPairing: i18nc("@info:status", "Starting pairing…")
                 readonly property string textPairMoonlight: i18nc("@action:button", "Pair Moonlight…")
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
@@ -1117,6 +1137,99 @@ Kirigami.ScrollablePage {
                             id: pairingSheet
                             streamManager: instanceCard.streamManager
                             instanceIndex: instanceCard.index
+                        }
+
+                        ColumnLayout {
+                            id: pairingColumn
+                            objectName: "pairingBeforeSession"
+                            Kirigami.FormData.label: instanceCard.labelPairing
+                            visible: instanceCard.streamsToMoonlight && !(root.sessionRunner && root.sessionRunner.active)
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+
+                            // This player's pairing session, if one is running or failed.
+                            // PairingSession.State: 0 = Idle, 1 = Starting, 2 = Ready, 3 = Failed
+                            readonly property bool mine: root.pairingSession.instanceIndex === instanceCard.index
+
+                            Component.onCompleted: instanceCard.refreshPairedCount()
+
+                            Connections {
+                                target: root.pairingSession
+
+                                function onPairedChanged(username) {
+                                    if (username === instanceCard.cardUsername) {
+                                        instanceCard.refreshPairedCount()
+                                    }
+                                }
+
+                                function onStateChanged() {
+                                    if (pairingColumn.mine && root.pairingSession.state === 2) {
+                                        pairingSessionSheet.open()
+                                    } else if (pairingSessionSheet.sheetOpen) {
+                                        pairingSessionSheet.close()
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Controls.Label {
+                                    objectName: "labelPairedStatus"
+                                    text: instanceCard.pairedCount > 0
+                                        ? i18ncp("@info:status", "Moonlight: %1 paired", "Moonlight: %1 paired", instanceCard.pairedCount)
+                                        : instanceCard.textNotPaired
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+
+                                Controls.Button {
+                                    objectName: "buttonPairClient"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textPairClient
+                                    text: instanceCard.textPairClient
+                                    icon.name: "network-connect"
+                                    enabled: instanceCard.cardUsername !== "" && !root.pairingSession.busy
+                                    onClicked: root.pairingSession.start(instanceCard.index, instanceCard.cardUsername)
+                                }
+                            }
+
+                            RowLayout {
+                                objectName: "rowPairingStarting"
+                                visible: pairingColumn.mine && root.pairingSession.state === 1
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Controls.BusyIndicator {
+                                    running: parent.visible
+                                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                                }
+
+                                Controls.Label {
+                                    text: instanceCard.textStartingPairing
+                                }
+                            }
+
+                            Kirigami.InlineMessage {
+                                objectName: "messagePairingSessionError"
+                                Layout.fillWidth: true
+                                visible: pairingColumn.mine && root.pairingSession.state === 3
+                                type: Kirigami.MessageType.Error
+                                text: root.pairingSession.error
+                            }
+                        }
+
+                        Components.MoonlightPairingSheet {
+                            id: pairingSessionSheet
+                            objectName: "pairingSessionSheet"
+                            streamManager: root.pairingSession.streamManager
+                            instanceIndex: instanceCard.index
+                            onClosed: {
+                                if (pairingColumn.mine) {
+                                    root.pairingSession.stop()
+                                }
+                            }
                         }
 
                         RowLayout {

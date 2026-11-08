@@ -124,6 +124,8 @@ target_sources(couchplay PRIVATE
     core/HostProcess.h
     core/VirtualDisplayManager.cpp
     core/VirtualDisplayManager.h
+    core/PairingSession.cpp
+    core/PairingSession.h
     core/StreamAudio.cpp
     core/StreamAudio.h
     dbus/CouchPlayHelperClient.cpp

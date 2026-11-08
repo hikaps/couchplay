@@ -19,13 +19,14 @@ Kirigami.ApplicationWindow {
     property string startupProfileName: ""
     property bool startupStart: false
     property bool startupExitAfterSession: false
+    property bool startupSkipPairingCheck: false
     property bool initialRequestPending: false
     property bool exitOnStartupFailure: false
     property bool exitAfterActiveSession: false
     property bool shuttingDown: false
     signal startupFailed(int exitCode)
 
-    function handleLaunchRequest(profileName, start, exitAfterSession) {
+    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck) {
         if (!profileName || profileName === "" || sessionRunner.active) {
             return false
         }
@@ -39,6 +40,7 @@ Kirigami.ApplicationWindow {
         }
         exitOnStartupFailure = initialRequestPending
         exitAfterActiveSession = exitAfterSession
+        sessionRunner.skipPairingCheck = skipPairingCheck
         if (!sessionRunner.start()) {
             exitOnStartupFailure = false
             exitAfterActiveSession = false
@@ -77,7 +79,7 @@ Kirigami.ApplicationWindow {
         if (startupProfileName !== "") {
             initialRequestPending = true
             Qt.callLater(function() {
-                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession)
+                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck)
                 initialRequestPending = false
             })
         }
@@ -88,8 +90,8 @@ Kirigami.ApplicationWindow {
     }
     Connections {
         target: commandLineBridge
-        function onLaunchRequested(profileName, start, exitAfterSession) {
-            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession))
+        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck) {
+            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck))
         }
     }
 
@@ -182,6 +184,13 @@ Kirigami.ApplicationWindow {
                 Qt.callLater(function() { Qt.quit() })
             }
         }
+    }
+
+    PairingSession {
+        id: pairingSession
+        sessionManager: sessionManager
+        sessionRunner: sessionRunner
+        settingsManager: settingsManager
     }
 
     UserManager {
@@ -347,7 +356,8 @@ Kirigami.ApplicationWindow {
             steamConfigManager: steamConfigManager,
             heroicConfigManager: heroicConfigManager,
             presetManager: presetManager,
-            audioManager: audioManager
+            audioManager: audioManager,
+            pairingSession: pairingSession
         })
     }
 

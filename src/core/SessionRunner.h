@@ -4,6 +4,7 @@
 #pragma once
 
 #include <QList>
+#include <functional>
 #include <QElapsedTimer>
 #include <QMap>
 #include <QProcess>
@@ -65,6 +66,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(
         SettingsManager *settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
     Q_PROPERTY(StreamManager *streamManager READ streamManager CONSTANT)
+    Q_PROPERTY(bool skipPairingCheck READ skipPairingCheck WRITE setSkipPairingCheck NOTIFY skipPairingCheckChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -161,6 +163,13 @@ public:
     }
     void setSettingsManager(SettingsManager *manager);
 
+    /** When true, start() does not require a paired Moonlight client for streaming players (--skip-pairing-check). */
+    bool skipPairingCheck() const
+    {
+        return m_skipPairingCheck;
+    }
+    void setSkipPairingCheck(bool skip);
+
     /**
      * @brief Calculate window geometries for a given layout
      * @param layout Layout type: "horizontal", "vertical", "grid"
@@ -195,6 +204,16 @@ public:
                                     const QStringList &connectors,
                                     const QString &primaryConnector);
 
+    /**
+     * Every streaming player with a gaming user needs at least one paired Moonlight client.
+     * @return an empty string when satisfied, otherwise the user-facing error
+     */
+    static QString validatePairing(const SessionProfile &profile);
+
+    /** Same check with an explicit paired-client count lookup (testable without disk state). */
+    static QString validatePairing(const SessionProfile &profile,
+                                   const std::function<int(const QString &username)> &pairedCount);
+
 Q_SIGNALS:
     void runningChanged();
     void runningInstanceCountChanged();
@@ -207,6 +226,7 @@ Q_SIGNALS:
     void steamConfigManagerChanged();
     void heroicConfigManagerChanged();
     void settingsManagerChanged();
+    void skipPairingCheckChanged();
     void errorOccurred(const QString &message);
     void activeChanged();
     void sessionStartFailed(const QString &message);
@@ -289,6 +309,7 @@ private:
     WindowManager *m_windowManager = nullptr;
     StreamManager *m_streamManager = nullptr;
     VirtualDisplayManager *m_virtualDisplays = nullptr;
+    bool m_skipPairingCheck = false;
     StreamAudio m_streamAudio;
     QSet<int> m_pendingDisplays;
     QHash<int, QString> m_virtualOutputNames;

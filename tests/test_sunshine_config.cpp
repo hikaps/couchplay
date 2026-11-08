@@ -73,11 +73,51 @@ private Q_SLOTS:
     void testCredentialArguments();
     void testAllocatePortSkipsBusyPort();
     void testAllocatePortExhausted();
+    void testPairedClients();
+    void testPairedClientsMissingOrMalformed();
 };
 
 void TestSunshineConfig::initTestCase()
 {
     QStandardPaths::setTestModeEnabled(true);
+}
+
+void TestSunshineConfig::testPairedClients()
+{
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("paired-test"));
+    QFile file(dir + QStringLiteral("/sunshine_state.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(R"({"root":{"uniqueid":"abc","named_devices":[)"
+               R"({"name":"Phone","uuid":"u1"},{"name":"No uuid","uuid":""},{"name":"Deck","uuid":"u2"}]}})");
+    file.close();
+
+    const QVariantList clients = SunshineConfig::pairedClients(QStringLiteral("paired-test"));
+    QCOMPARE(clients.size(), 2);
+    QCOMPARE(clients.at(0).toMap().value(QStringLiteral("name")).toString(), QStringLiteral("Phone"));
+    QCOMPARE(clients.at(1).toMap().value(QStringLiteral("uuid")).toString(), QStringLiteral("u2"));
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-test")), 2);
+}
+
+void TestSunshineConfig::testPairedClientsMissingOrMalformed()
+{
+    // Unknown user: no file, and the state directory must not be created
+    const QString missing = SunshineConfig::stateDirectory(QStringLiteral("paired-never-created"));
+    QDir(missing).removeRecursively();
+    QVERIFY(SunshineConfig::pairedClients(QStringLiteral("paired-never-created")).isEmpty());
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-never-created")), 0);
+    QVERIFY(!QFileInfo::exists(missing));
+
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("paired-malformed"));
+    QFile file(dir + QStringLiteral("/sunshine_state.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("{not json");
+    file.close();
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-malformed")), 0);
+
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(R"({"root":{"uniqueid":"x"}})");
+    file.close();
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-malformed")), 0);
 }
 
 void TestSunshineConfig::testPortCalculation()

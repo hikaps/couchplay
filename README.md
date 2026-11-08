@@ -234,6 +234,8 @@ it neither grants new write access nor projects files into the player home.
 Streaming runs outside the helper: `couchplay-vdisplay` holds each KWin virtual output and Sunshine runs as the desktop user capturing that output with `capture = kwin`. Both are stopped when the session ends.
 Moonlight clients pair from the player card: once a streaming player's Sunshine is ready, "Pair Moonlight…" shows the host address to add in Moonlight and takes the PIN Moonlight displays. The pairing is stored per gaming user, so the client reconnects to that player's stream in later sessions. CouchPlay talks to Sunshine's local web API and trusts only the certificate stored in the player's Sunshine state directory.
 
+You can also pair before any session runs: a streaming player's card shows how many Moonlight clients its gaming user has paired, and "Pair Moonlight client…" starts a temporary Sunshine on a short-lived virtual display so you can enter the PIN. Closing the pairing sheet stops it again. As a soft gate, starting a session fails when a streaming player's gaming user has no paired client yet, so you don't launch a stream nobody can connect to; pass `--skip-pairing-check` together with `--profile NAME --start` to start anyway.
+
 Existing per-player Overlay data survives upgrades: correctly owned upper/work
 directories from older helpers are tightened to `0700` without discarding private edits.
 Session cleanup waits for stop calls to return, and stale cleanup retries cannot stop
