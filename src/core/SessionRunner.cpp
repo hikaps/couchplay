@@ -134,6 +134,13 @@ SessionRunner::SessionRunner(QObject *parent)
             }
         }, Qt::QueuedConnection);
     });
+    connect(m_streamManager, &StreamManager::gamepadAnnounced, this, [this](int instanceIndex) {
+        if (!m_active || m_finalizing || !m_streamingInstances.contains(instanceIndex)) {
+            return;
+        }
+        m_gamepadClaims.append({instanceIndex, nowMs()});
+    });
+    m_clock.start();
 }
 SessionRunner::~SessionRunner()
 {
@@ -265,12 +272,14 @@ void SessionRunner::setDeviceManager(DeviceManager *manager)
     if (m_deviceManager != manager) {
         if (m_deviceManager) {
             disconnect(m_deviceManager, &DeviceManager::deviceReconnected, this, &SessionRunner::onDeviceReconnected);
+            disconnect(m_deviceManager, &DeviceManager::deviceAdded, this, &SessionRunner::onDeviceAdded);
         }
 
         m_deviceManager = manager;
 
         if (m_deviceManager) {
             connect(m_deviceManager, &DeviceManager::deviceReconnected, this, &SessionRunner::onDeviceReconnected);
+            connect(m_deviceManager, &DeviceManager::deviceAdded, this, &SessionRunner::onDeviceAdded);
         }
 
         Q_EMIT deviceManagerChanged();
@@ -335,6 +344,7 @@ bool SessionRunner::start()
     }
 
     cleanupInstances();
+    resetGamepadAttribution();
     m_sessionStartupComplete = false;
     m_finalizing = false;
     m_startupFailure = false;
@@ -779,6 +789,7 @@ void SessionRunner::finishFinalization()
     m_finalizationMessage.clear();
     m_hasStartingProfile = false;
     m_startingSnapshot = {};
+    resetGamepadAttribution();
 }
 
 void SessionRunner::stop()
@@ -1734,50 +1745,83 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
         return;
     }
 
+    qDebug() << "SessionRunner: Device reconnected, restoring ownership (stableId:" << stableId << ")";
+    grantDeviceToInstance(eventNumber, instanceIndex);
+}
+
+qint64 SessionRunner::nowMs() const
+{
+    return m_clockOverrideMs >= 0 ? m_clockOverrideMs : m_clock.elapsed();
+}
+
+void SessionRunner::resetGamepadAttribution()
+{
+    m_gamepadClaims.clear();
+    m_sunshineAttributions.clear();
+}
+
+bool SessionRunner::grantDeviceToInstance(int eventNumber, int instanceIndex)
+{
+    if (!m_helperClient || !m_sessionManager || !m_hasStartingProfile) {
+        return false;
+    }
+    if (!m_helperClient->isAvailable()) {
+        qWarning() << "SessionRunner: Helper not available, cannot set device ownership";
+        return false;
+    }
+
+    const auto &profile = activeProfile();
+    if (instanceIndex < 0 || instanceIndex >= profile.instances.size()) {
+        qWarning() << "SessionRunner: Invalid instance index" << instanceIndex << "for device" << eventNumber;
+        return false;
+    }
+
     const QString &username = profile.instances[instanceIndex].username;
     QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
 
     if (username.isEmpty()) {
-        qDebug() << "SessionRunner: Device reconnected in host session, watching:" << devicePath << "(stableId:" << stableId << ")";
+        qDebug() << "SessionRunner: Device in host session, watching:" << devicePath;
         if (m_helperClient->watchDevice(devicePath)) {
             if (!m_ownedDevicePaths.contains(devicePath)) {
                 m_ownedDevicePaths.append(devicePath);
             }
+            return true;
         }
-        return;
+        return false;
     }
 
     const UserIdentity id = resolveUserIdentity(username, m_helperClient);
     if (!id.valid) {
         qWarning() << "SessionRunner: User" << username << "not found";
-        return;
+        return false;
     }
     int uid = static_cast<int>(id.uid);
 
+    bool granted = false;
     // Prevent infinite loop: if the device node is already owned by the target user, udev has already
     // applied the custom rule and we do not need to trigger another unbind/rebind.
     QFileInfo fileInfo(devicePath);
     if (fileInfo.exists() && fileInfo.ownerId() == id.uid) {
-        qDebug() << "SessionRunner: Reconnected device" << devicePath << "is already owned by" << username << "(UID:" << uid << "), skipping ownership update";
+        qDebug() << "SessionRunner: Device" << devicePath << "is already owned by" << username << "(UID:" << uid << "), skipping ownership update";
         if (devicePath.startsWith(QLatin1String("/dev/input/event"))) {
             m_helperClient->watchDevice(devicePath);
         }
-        return;
+        return true;
     }
 
-    qDebug() << "SessionRunner: Device reconnected, restoring ownership:" << devicePath << "(stableId:" << stableId
-             << ") to user" << username;
+    qDebug() << "SessionRunner: Setting ownership of" << devicePath << "to user" << username;
     if (m_helperClient->setDeviceOwner(devicePath, uid)) {
+        granted = true;
         if (!m_ownedDevicePaths.contains(devicePath)) {
             m_ownedDevicePaths.append(devicePath);
         }
-        qDebug() << "SessionRunner: Successfully restored ownership of" << devicePath;
+        qDebug() << "SessionRunner: Successfully set ownership of" << devicePath;
     } else {
-        qWarning() << "SessionRunner: Failed to restore ownership of" << devicePath;
+        qWarning() << "SessionRunner: Failed to set ownership of" << devicePath;
         Q_EMIT errorOccurred(QStringLiteral("Failed to restore device ownership for %1").arg(devicePath));
     }
 
-    QString hidrawPath = m_deviceManager->findHidrawForEvent(eventNumber);
+    QString hidrawPath = m_deviceManager ? m_deviceManager->findHidrawForEvent(eventNumber) : QString();
     if (!hidrawPath.isEmpty()) {
         QFileInfo hidrawInfo(hidrawPath);
         if (hidrawInfo.exists() && hidrawInfo.ownerId() != id.uid) {
@@ -1785,11 +1829,66 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
                 if (!m_ownedDevicePaths.contains(hidrawPath)) {
                     m_ownedDevicePaths.append(hidrawPath);
                 }
-                qDebug() << "SessionRunner: Restored hidraw ownership on reconnection:" << hidrawPath;
+                qDebug() << "SessionRunner: Set hidraw ownership:" << hidrawPath;
             }
         } else {
-            qDebug() << "SessionRunner: Reconnected hidraw" << hidrawPath << "is already owned by" << username << ", skipping ownership update";
+            qDebug() << "SessionRunner: Hidraw" << hidrawPath << "is already owned by" << username << ", skipping ownership update";
         }
+    }
+    return granted;
+}
+
+void SessionRunner::onDeviceAdded(int eventNumber, const QString &name)
+{
+    if (!m_active || !m_hasStartingProfile || m_finalizing || !m_preHookCompleted) {
+        return;
+    }
+    if (!m_deviceManager || !name.startsWith(QLatin1String("Sunshine "))) {
+        return;
+    }
+
+    const QVariantMap device = m_deviceManager->getDevice(eventNumber);
+    if (device.isEmpty()) {
+        return;
+    }
+    // Remote keyboard/mouse act on the desktop seat and are left to KWin.
+    const QString type = device.value(QStringLiteral("type")).toString();
+    if (type == QLatin1String("keyboard") || type == QLatin1String("mouse")) {
+        return;
+    }
+
+    const QString uniq = device.value(QStringLiteral("uniq")).toString();
+    const qint64 now = nowMs();
+    m_sunshineAttributions.removeIf([&](const SunshineAttribution &a) {
+        return now - a.atMs > m_uniqWindowMs;
+    });
+    m_gamepadClaims.removeIf([&](const GamepadClaim &c) {
+        return now - c.atMs > m_claimTtlMs;
+    });
+
+    int target = -1;
+    if (!uniq.isEmpty()) {
+        for (const SunshineAttribution &a : std::as_const(m_sunshineAttributions)) {
+            if (a.uniq == uniq) {
+                target = a.instanceIndex;
+                break;
+            }
+        }
+    }
+    if (target < 0 && !m_gamepadClaims.isEmpty()) {
+        target = m_gamepadClaims.takeFirst().instanceIndex;
+    }
+    if (target < 0 && m_streamingInstances.size() == 1) {
+        target = m_streamingInstances.firstKey();
+    }
+    if (target < 0) {
+        qCWarning(couchplayCore) << "Cannot attribute Moonlight gamepad" << name << "(event" << eventNumber
+                                 << ") to a streaming player; leaving it unowned";
+        return;
+    }
+
+    if (grantDeviceToInstance(eventNumber, target) && !uniq.isEmpty()) {
+        m_sunshineAttributions.append({uniq, target, now});
     }
 }
 

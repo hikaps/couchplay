@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QList>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -19,6 +20,9 @@
 #include <QTimer>
 #include <unistd.h>
 
+#define private public
+#include "DeviceManager.h"
+#undef private
 #define private public
 #include "WindowManager.h"
 #include "SessionRunner.h"
@@ -322,6 +326,12 @@ private Q_SLOTS:
     void testStartRejectsInvalidDisplay();
     void testDeviceReconnectIgnoredDuringPostHook();
     void testDeviceReconnectIgnoredDuringPreHook();
+    void testSunshineGamepadClaimsAreFifo();
+    void testSunshineGamepadUniqGroupsDevices();
+    void testSunshineGamepadSingleStreamerFallback();
+    void testSunshineGamepadClaimExpires();
+    void testSunshineKeyboardMouseNotChowned();
+    void testSunshineGamepadUnownedWithoutClaim();
     void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
 
@@ -2145,6 +2155,175 @@ void TestSessionRunner::testDeviceReconnectIgnoredDuringPreHook()
     // Positive control: once started, the same reconnect is handled.
     m_runner->onDeviceReconnected(QStringLiteral("test-device"), 99, 0);
     QVERIFY(m_helperClient->deviceOwnerCalls.size() > ownerCalls);
+}
+
+static InputDevice makeInputDevice(int eventNumber, const QString &name, const QString &type, const QString &uniq = QString())
+{
+    InputDevice device;
+    device.eventNumber = eventNumber;
+    device.name = name;
+    device.type = type;
+    device.uniq = uniq;
+    return device;
+}
+
+// Starts a two-player session on the mock helper, then marks the given players as streaming and
+// replaces the device list; everything stays synchronous so no timer can refresh the devices.
+static bool startSessionWithDevices(SessionRunner *runner,
+                                    SessionManager *sessionManager,
+                                    PresetManager *presetManager,
+                                    const QList<int> &streaming,
+                                    const QList<InputDevice> &devices)
+{
+    const QString presetId = presetManager->addCustomPreset(QStringLiteral("Gamepad attribution"), QStringLiteral("/usr/bin/true"));
+    sessionManager->setInstanceCount(2);
+    sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    sessionManager->setInstancePreset(0, presetId);
+    sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    sessionManager->setInstancePreset(1, presetId);
+    auto *deviceManager = new DeviceManager(runner);
+    runner->setDeviceManager(deviceManager);
+    if (!runner->start() || !runner->m_sessionStartupComplete) {
+        return false;
+    }
+    for (int index : streaming) {
+        runner->m_streamingInstances[index] = SessionRunner::StreamingInstanceInfo{};
+    }
+    deviceManager->m_devices = devices;
+    return true;
+}
+
+static int ownerUidOf(const MockCouchPlayHelperClient *helper, int eventNumber)
+{
+    const QString path = QStringLiteral("/dev/input/event%1").arg(eventNumber);
+    for (const auto &call : helper->deviceOwnerCalls) {
+        if (call.path == path) {
+            return call.uid;
+        }
+    }
+    return -1;
+}
+
+void TestSessionRunner::testSunshineGamepadClaimsAreFifo()
+{
+    const QString pad = QStringLiteral("Sunshine PS5 (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller")),
+                                     makeInputDevice(902, pad, QStringLiteral("controller"))}));
+
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(0);
+    QCOMPARE(m_runner->m_gamepadClaims.size(), 2);
+
+    m_runner->onDeviceAdded(901, pad);
+    m_runner->onDeviceAdded(902, pad);
+
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1002);
+    QCOMPARE(ownerUidOf(m_helperClient, 902), 1001);
+    QVERIFY(m_runner->m_gamepadClaims.isEmpty());
+    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event901")));
+    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event902")));
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadUniqGroupsDevices()
+{
+    const QString pad = QStringLiteral("Sunshine PS5 (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller"), QStringLiteral("sunshine-pad-1")),
+                                     makeInputDevice(902, pad + QStringLiteral(" motion"), QStringLiteral("other"),
+                                                     QStringLiteral("sunshine-pad-1"))}));
+    m_runner->m_clockOverrideMs = 10000;
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+
+    m_runner->onDeviceAdded(901, pad);
+    // Within 3 s the motion node shares the uniq and follows the first node without a claim.
+    m_runner->m_clockOverrideMs = 12999;
+    m_runner->onDeviceAdded(902, pad + QStringLiteral(" motion"));
+
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1002);
+    QCOMPARE(ownerUidOf(m_helperClient, 902), 1002);
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadSingleStreamerFallback()
+{
+    const QString pad = QStringLiteral("Sunshine X-Box One (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller"))}));
+    QVERIFY(m_runner->m_gamepadClaims.isEmpty());
+
+    m_runner->onDeviceAdded(901, pad);
+
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1002);
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadClaimExpires()
+{
+    const QString pad = QStringLiteral("Sunshine X-Box One (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller")),
+                                     makeInputDevice(902, pad, QStringLiteral("controller"))}));
+
+    m_runner->m_clockOverrideMs = 1000;
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(0);
+    m_runner->m_clockOverrideMs = 1000 + m_runner->m_claimTtlMs - 1;
+    m_runner->onDeviceAdded(901, pad);
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1001);
+
+    m_runner->m_clockOverrideMs = 20000;
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+    m_runner->m_clockOverrideMs = 20000 + m_runner->m_claimTtlMs + 1;
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("Cannot attribute Moonlight gamepad")));
+    m_runner->onDeviceAdded(902, pad);
+    QCOMPARE(ownerUidOf(m_helperClient, 902), -1);
+    QVERIFY(m_runner->m_gamepadClaims.isEmpty());
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineKeyboardMouseNotChowned()
+{
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {1},
+                                    {makeInputDevice(901, QStringLiteral("Sunshine Keyboard"), QStringLiteral("keyboard")),
+                                     makeInputDevice(902, QStringLiteral("Sunshine Mouse"), QStringLiteral("mouse")),
+                                     makeInputDevice(903, QStringLiteral("Logitech Gamepad"), QStringLiteral("controller"))}));
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+    const qsizetype ownerCalls = m_helperClient->deviceOwnerCalls.size();
+
+    m_runner->onDeviceAdded(901, QStringLiteral("Sunshine Keyboard"));
+    m_runner->onDeviceAdded(902, QStringLiteral("Sunshine Mouse"));
+    m_runner->onDeviceAdded(903, QStringLiteral("Logitech Gamepad"));
+
+    QCOMPARE(m_helperClient->deviceOwnerCalls.size(), ownerCalls);
+    QCOMPARE(m_runner->m_gamepadClaims.size(), 1); // claim not consumed
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadUnownedWithoutClaim()
+{
+    const QString pad = QStringLiteral("Sunshine PS5 (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller"))}));
+    const qsizetype ownerCalls = m_helperClient->deviceOwnerCalls.size();
+
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("Cannot attribute Moonlight gamepad")));
+    m_runner->onDeviceAdded(901, pad);
+
+    QCOMPARE(m_helperClient->deviceOwnerCalls.size(), ownerCalls);
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
 }
 
 void TestSessionRunner::testInvalidPostSessionReportsError()

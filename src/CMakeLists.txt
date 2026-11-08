@@ -64,6 +64,7 @@ ecm_add_qml_module(couchplay
         qml/components/PresetSelector.qml
         qml/components/SelectableCard.qml
         qml/components/InfoCard.qml
+        qml/components/MoonlightPairingSheet.qml
         qml/components/ActionCard.qml
         qml/components/dialogs/ResetSettingsDialog.qml
         qml/components/dialogs/InstallHelperDialog.qml
@@ -117,6 +118,8 @@ target_sources(couchplay PRIVATE
     core/SunshineConfig.h
     core/StreamManager.cpp
     core/StreamManager.h
+    core/SunshineApiClient.cpp
+    core/SunshineApiClient.h
     core/HostProcess.cpp
     core/HostProcess.h
     core/VirtualDisplayManager.cpp

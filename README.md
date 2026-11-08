@@ -232,6 +232,7 @@ or helper D-Bus call. Native FD-based ACL updates preserve unrelated effective a
 and directory inheritance. ACL mode grants read/traverse access at the original path;
 it neither grants new write access nor projects files into the player home.
 Streaming runs outside the helper: `couchplay-vdisplay` holds each KWin virtual output and Sunshine runs as the desktop user capturing that output with `capture = kwin`. Both are stopped when the session ends.
+Moonlight clients pair from the player card: once a streaming player's Sunshine is ready, "Pair Moonlight…" shows the host address to add in Moonlight and takes the PIN Moonlight displays. The pairing is stored per gaming user, so the client reconnects to that player's stream in later sessions. CouchPlay talks to Sunshine's local web API and trusts only the certificate stored in the player's Sunshine state directory.
 
 Existing per-player Overlay data survives upgrades: correctly owned upper/work
 directories from older helpers are tightened to `0700` without discarding private edits.

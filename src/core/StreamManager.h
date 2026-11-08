@@ -15,6 +15,8 @@
 #include <QVariantList>
 #include <qqmlintegration.h>
 
+class SunshineApiClient;
+
 /**
  * @brief Runs one Sunshine process per streaming player, as the desktop user on the host
  *
@@ -30,6 +32,7 @@ class StreamManager : public QObject
     Q_OBJECT
     QML_ELEMENT
     Q_PROPERTY(QVariantList streams READ streams NOTIFY streamsChanged)
+    Q_PROPERTY(QString hostAddress READ hostAddress CONSTANT)
     Q_PROPERTY(bool autoRestart READ autoRestart WRITE setAutoRestart NOTIFY autoRestartChanged)
     Q_PROPERTY(int startupTimeout READ startupTimeout WRITE setStartupTimeout NOTIFY startupTimeoutChanged)
 
@@ -50,8 +53,15 @@ public:
     static constexpr int STOP_KILL_DELAY_MS = 5000;
     static constexpr int CREDENTIALS_TIMEOUT_MS = 15000;
 
-    /** Entries: {instanceIndex, state, port, sunshineName, outputName, error}. */
+    /**
+     * Entries: {instanceIndex, state, port, sunshineName, outputName, error, pendingPairings, clients, legacyPairing}.
+     * The last three are filled by refreshPairing(): pendingPairings = [{id, name, address}],
+     * clients = [{name, uuid}].
+     */
     QVariantList streams() const;
+
+    /** First non-loopback IPv4 address of this machine; empty when there is none. */
+    QString hostAddress() const;
 
     bool autoRestart() const;
     void setAutoRestart(bool enabled);
@@ -78,6 +88,14 @@ public:
     Q_INVOKABLE bool stopStream(int instanceIndex);
     Q_INVOKABLE void stopAll();
 
+    /** Fetch pending pairings and paired clients from the stream's Sunshine (only while Streaming). */
+    Q_INVOKABLE void refreshPairing(int instanceIndex);
+    /** Submit the PIN shown by a Moonlight client; the outcome arrives as pinResult(). */
+    Q_INVOKABLE void submitPin(int instanceIndex, const QString &pairingId, const QString &pin, const QString &clientName);
+    Q_INVOKABLE void unpairClient(int instanceIndex, const QString &uuid);
+    /** While active, refreshPairing() runs every 2 s for this stream (until it stops). */
+    Q_INVOKABLE void setPairingActive(int instanceIndex, bool active);
+
     StreamState streamState(int instanceIndex) const;
     bool isStreaming(int instanceIndex) const;
     bool hasOwnedPids() const;
@@ -91,6 +109,7 @@ Q_SIGNALS:
     void streamError(int instanceIndex, const QString &error);
     /** Sunshine is about to create a virtual gamepad for the stream (log line "Gamepad N will be ..."). */
     void gamepadAnnounced(int instanceIndex);
+    void pinResult(int instanceIndex, bool ok, const QString &message);
     void streamsChanged();
     void autoRestartChanged();
     void startupTimeoutChanged();
@@ -109,6 +128,13 @@ private:
         QTimer *startupTimer = nullptr;
         QTimer *killTimer = nullptr;
         QTimer *restartTimer = nullptr;
+        QTimer *pairingTimer = nullptr;
+        SunshineApiClient *api = nullptr;
+        QVariantList pendingPairings;
+        QVariantList clients;
+        bool legacyPairing = false;
+        bool refreshing = false; ///< a pairing refresh request is in flight
+        bool pinPending = false; ///< a PIN submission is in flight
         qint64 logOffset = 0;
         QByteArray logBuffer;
         QStringList recentLines;
@@ -131,6 +157,10 @@ private:
     void processLine(int instanceIndex, const QString &line);
     void removeStream(int instanceIndex);
     void updateLogTimer();
+    SunshineApiClient *apiClient(int instanceIndex);
+    void onPairingsFetched(int instanceIndex, const QVariantList &pairings, bool legacy);
+    void onClientsFetched(int instanceIndex, const QVariantList &clients);
+    void onApiFailed(int instanceIndex, const QString &message);
     QString recentLogSummary(const Stream &stream) const;
 
     QMap<int, Stream *> m_streams;

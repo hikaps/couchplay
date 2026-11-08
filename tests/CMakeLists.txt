@@ -64,6 +64,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SunshineConfig.h
     ../src/core/StreamManager.cpp
     ../src/core/StreamManager.h
+    ../src/core/SunshineApiClient.cpp
+    ../src/core/SunshineApiClient.h
     ../src/core/HostProcess.cpp
     ../src/core/HostProcess.h
     ../src/core/VirtualDisplayManager.cpp
@@ -187,6 +189,8 @@ add_couchplay_test(test_streamaudio)
 add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
 add_couchplay_test(test_streammanager)
+add_couchplay_test(test_sunshine_api)
+target_compile_definitions(test_sunshine_api PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
 add_couchplay_test(test_virtualdisplaymanager)
