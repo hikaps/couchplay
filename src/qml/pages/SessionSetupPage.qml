@@ -823,7 +823,7 @@ Kirigami.ScrollablePage {
                                 Accessible.role: Accessible.CheckBox
                                 Accessible.name: instanceCard.textStreamToMoonlight
                                 text: instanceCard.textStreamToMoonlight
-                                enabled: instanceCard.displayValue !== "virtual"
+                                visible: instanceCard.displayValue !== "virtual"
                                 checked: instanceCard.streamsToMoonlight
                                 onToggled: {
                                     if (instanceCard.cardSessionManager) {
@@ -832,6 +832,15 @@ Kirigami.ScrollablePage {
                                         instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                     }
                                 }
+                            }
+
+                            Controls.Label {
+                                objectName: "labelStreamAlwaysOn"
+                                visible: instanceCard.displayValue === "virtual"
+                                text: i18nc("@info", "Virtual displays are always streamed to Moonlight.")
+                                wrapMode: Text.WordWrap
+                                opacity: 0.7
+                                Layout.fillWidth: true
                             }
 
                             Controls.Label {

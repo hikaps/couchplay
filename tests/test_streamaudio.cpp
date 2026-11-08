@@ -32,6 +32,9 @@ load-module)
     ;;
 unload-module)
     ;;
+list)
+    [ -f "$FAKE_PACTL_LOG.sinks" ] && cat "$FAKE_PACTL_LOG.sinks"
+    ;;
 esac
 exit 0
 )";
@@ -72,6 +75,8 @@ private Q_SLOTS:
     void testTeardownUnloadsAndRestoresDefault();
     void testTeardownIdempotent();
     void testSinkMovedDefaultRestored();
+    void testEnsureSinksReloadsMissing();
+    void testEnsureSinksNoopWhenPresent();
     void testLoadFailureRollsBack();
     void testUnpreparedIndexHasNoSink();
 
@@ -222,6 +227,63 @@ void TestStreamAudio::testLoadFailureRollsBack()
     QVERIFY(all.contains(QStringLiteral("unload-module 101")));
     QVERIFY(all.contains(QStringLiteral("unload-module 102")));
     QVERIFY(all.indexOf(QStringLiteral("unload-module 101")) < all.indexOf(QStringLiteral("unload-module 102")));
+}
+
+void TestStreamAudio::testEnsureSinksReloadsMissing()
+{
+    resetLog();
+    ScopedEnv log("FAKE_PACTL_LOG", m_log.toUtf8());
+    ScopedEnv def("FAKE_PACTL_DEFAULT", "alsa_output.speakers");
+    ScopedEnv fail("FAKE_PACTL_FAIL_ON", "none");
+
+    StreamAudio audio;
+    audio.setProgramOverride(m_script);
+    QVERIFY(audio.prepare({1, 2}));
+
+    // pipewire-pulse restarted: only player 3's sink survived
+    QFile sinks(m_log + QStringLiteral(".sinks"));
+    QVERIFY(sinks.open(QIODevice::WriteOnly));
+    sinks.write("7\talsa_output.speakers\tPipeWire\n8\tcouchplay-stream-p3\tPipeWire\n");
+    sinks.close();
+
+    audio.ensureSinks();
+
+    const QStringList all = calls().mid(3);
+    QCOMPARE(all,
+             (QStringList{QStringLiteral("list short sinks"),
+                          QStringLiteral("load-module module-null-sink sink_name=couchplay-stream-p2 "
+                                         "sink_properties=device.description=CouchPlay_Player_2_stream")}));
+    QFile::remove(m_log + QStringLiteral(".sinks"));
+    audio.teardown();
+}
+
+void TestStreamAudio::testEnsureSinksNoopWhenPresent()
+{
+    resetLog();
+    ScopedEnv log("FAKE_PACTL_LOG", m_log.toUtf8());
+    ScopedEnv def("FAKE_PACTL_DEFAULT", "alsa_output.speakers");
+    ScopedEnv fail("FAKE_PACTL_FAIL_ON", "none");
+
+    StreamAudio audio;
+    audio.setProgramOverride(m_script);
+    QVERIFY(audio.prepare({1}));
+
+    QFile sinks(m_log + QStringLiteral(".sinks"));
+    QVERIFY(sinks.open(QIODevice::WriteOnly));
+    sinks.write("8\tcouchplay-stream-p2\tPipeWire\n");
+    sinks.close();
+
+    audio.ensureSinks();
+    QCOMPARE(calls().mid(2), (QStringList{QStringLiteral("list short sinks")}));
+    QFile::remove(m_log + QStringLiteral(".sinks"));
+    audio.teardown();
+
+    // Inactive: nothing is run at all
+    resetLog();
+    StreamAudio idle;
+    idle.setProgramOverride(m_script);
+    idle.ensureSinks();
+    QVERIFY(calls().isEmpty());
 }
 
 void TestStreamAudio::testUnpreparedIndexHasNoSink()
