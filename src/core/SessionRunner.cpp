@@ -1541,6 +1541,9 @@ void SessionRunner::onInstanceStarted()
         return;
     }
 
+    // The helper's first launch restarts pipewire-pulse, which unloads the stream sinks
+    m_streamAudio.ensureSinks();
+
     Q_EMIT instanceStarted(idx);
     Q_EMIT instancesChanged();
     Q_EMIT runningInstanceCountChanged();

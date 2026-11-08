@@ -55,26 +55,16 @@ bool StreamAudio::prepare(const QList<int> &streamingIndices, QString *error)
 
     for (const int index : streamingIndices) {
         const int player = index + 1;
-        const QString sinkName = QStringLiteral("couchplay-stream-p%1").arg(player);
-        QString output;
-        bool ok = runPactl({QStringLiteral("load-module"),
-                            QStringLiteral("module-null-sink"),
-                            QStringLiteral("sink_name=%1").arg(sinkName),
-                            QStringLiteral("sink_properties=device.description=CouchPlay_Player_%1_stream").arg(player)},
-                           &output);
+        m_sinks.insert(index, QStringLiteral("couchplay-stream-p%1").arg(player));
         uint moduleIndex = 0;
-        if (ok) {
-            moduleIndex = output.toUInt(&ok);
-        }
-        if (!ok) {
+        if (!loadSink(index, &moduleIndex)) {
             if (error) {
                 *error = QStringLiteral("Player %1: could not create stream audio sink").arg(player);
             }
             teardown();
             return false;
         }
-        m_modules.append(moduleIndex);
-        m_sinks.insert(index, sinkName);
+        m_modules.insert(index, moduleIndex);
     }
 
     m_active = true;
@@ -107,6 +97,53 @@ void StreamAudio::teardown()
     m_modules.clear();
     m_sinks.clear();
     m_active = false;
+}
+
+void StreamAudio::ensureSinks()
+{
+    if (!m_active || m_sinks.isEmpty()) {
+        return;
+    }
+
+    // The helper restarts pipewire-pulse while it opens cross-user audio access, which drops
+    // every module loaded before the first instance launched.
+    QString listing;
+    if (!runPactl({QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("sinks")}, &listing)) {
+        return;
+    }
+    QStringList present;
+    for (const QString &line : listing.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        const QStringList columns = line.split(QLatin1Char('\t'));
+        if (columns.size() > 1) {
+            present.append(columns.at(1));
+        }
+    }
+
+    for (auto it = m_sinks.constBegin(); it != m_sinks.constEnd(); ++it) {
+        if (present.contains(it.value())) {
+            continue;
+        }
+        qWarning() << "StreamAudio: sink" << it.value() << "disappeared; reloading it";
+        uint moduleIndex = 0;
+        if (loadSink(it.key(), &moduleIndex)) {
+            m_modules.insert(it.key(), moduleIndex);
+        }
+    }
+}
+
+bool StreamAudio::loadSink(int index, uint *moduleIndex)
+{
+    const int player = index + 1;
+    QString output;
+    bool ok = runPactl({QStringLiteral("load-module"),
+                        QStringLiteral("module-null-sink"),
+                        QStringLiteral("sink_name=%1").arg(m_sinks.value(index)),
+                        QStringLiteral("sink_properties=device.description=CouchPlay_Player_%1_stream").arg(player)},
+                       &output);
+    if (ok) {
+        *moduleIndex = output.toUInt(&ok);
+    }
+    return ok;
 }
 
 bool StreamAudio::isActive() const
