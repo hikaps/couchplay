@@ -436,48 +436,52 @@ QStringList SteamConfigManager::extractShortcutDirectories() const
 {
     QSet<QString> dirs;
 
+    // Only directories that can need a per-user ACL are returned. Relative paths resolve against the
+    // process working directory (not the shortcut's), and system trees are world-readable; the helper
+    // rejects both, so passing them on only produces warnings.
+    static const QStringList systemRoots = {QStringLiteral("/usr"),  QStringLiteral("/bin"),
+                                            QStringLiteral("/sbin"), QStringLiteral("/lib"),
+                                            QStringLiteral("/lib64"), QStringLiteral("/etc"),
+                                            QStringLiteral("/boot"), QStringLiteral("/proc"),
+                                            QStringLiteral("/sys"),  QStringLiteral("/dev")};
+    const auto addDirectory = [&dirs](const QString &dir) {
+        if (dir.isEmpty() || !QDir::isAbsolutePath(dir)) {
+            return;
+        }
+        const QString cleaned = QDir::cleanPath(dir);
+        if (cleaned == QLatin1String("/")) {
+            return;
+        }
+        for (const QString &root : systemRoots) {
+            if (cleaned == root || cleaned.startsWith(root + QLatin1Char('/'))) {
+                return;
+            }
+        }
+        if (QDir(cleaned).exists()) {
+            dirs.insert(cleaned);
+        }
+    };
+    const auto unquoted = [](QString path) {
+        if (path.startsWith(QLatin1Char('"')) && path.endsWith(QLatin1Char('"')) && path.length() >= 2) {
+            path = path.mid(1, path.length() - 2);
+        }
+        return path;
+    };
+
     for (const SteamShortcut &sc : m_shortcuts) {
-        // Extract exe directory
-        if (!sc.exe.isEmpty()) {
-            QString exePath = sc.exe;
-            // Remove quotes if present
-            if (exePath.startsWith(QLatin1Char('"')) && exePath.endsWith(QLatin1Char('"'))) {
-                exePath = exePath.mid(1, exePath.length() - 2);
-            }
-            QString exeDir = QFileInfo(exePath).absolutePath();
-            if (!exeDir.isEmpty() && QDir(exeDir).exists()) {
-                dirs.insert(exeDir);
-            }
+        // A parent directory is only meaningful for an absolute file path.
+        const QString exePath = unquoted(sc.exe);
+        if (QDir::isAbsolutePath(exePath)) {
+            addDirectory(QFileInfo(exePath).absolutePath());
         }
 
-        // Extract startDir
-        if (!sc.startDir.isEmpty()) {
-            QString startDir = sc.startDir;
-            // Remove quotes if present
-            if (startDir.startsWith(QLatin1Char('"')) && startDir.endsWith(QLatin1Char('"'))) {
-                startDir = startDir.mid(1, startDir.length() - 2);
-            }
-            if (QDir(startDir).exists()) {
-                dirs.insert(startDir);
-            }
-        }
+        addDirectory(unquoted(sc.startDir));
 
-        // Extract icon directory
-        if (!sc.icon.isEmpty()) {
-            QString iconPath = sc.icon;
-            // Remove quotes if present
-            if (iconPath.startsWith(QLatin1Char('"')) && iconPath.endsWith(QLatin1Char('"'))) {
-                iconPath = iconPath.mid(1, iconPath.length() - 2);
-            }
-            QString iconDir = QFileInfo(iconPath).absolutePath();
-            if (!iconDir.isEmpty() && QDir(iconDir).exists()) {
-                dirs.insert(iconDir);
-            }
+        const QString iconPath = unquoted(sc.icon);
+        if (QDir::isAbsolutePath(iconPath)) {
+            addDirectory(QFileInfo(iconPath).absolutePath());
         }
     }
-
-    // Remove empty strings
-    dirs.remove(QString());
 
     return dirs.values();
 }

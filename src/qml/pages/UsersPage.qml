@@ -289,8 +289,6 @@ Kirigami.ScrollablePage {
     Kirigami.Dialog {
         id: addUserDialog
         objectName: "dialogAddUser"
-        Accessible.role: Accessible.Dialog
-        Accessible.name: title
         title: i18nc("@title:dialog", "Create Gaming User")
         standardButtons: Kirigami.Dialog.NoButton
         preferredWidth: Kirigami.Units.gridUnit * 20
@@ -364,8 +362,6 @@ Kirigami.ScrollablePage {
     Kirigami.Dialog {
         id: deleteUserDialog
         objectName: "dialogDeleteUser"
-        Accessible.role: Accessible.Dialog
-        Accessible.name: title
         title: i18nc("@title:dialog", "Delete User")
         standardButtons: Kirigami.Dialog.NoButton
         preferredWidth: Kirigami.Units.gridUnit * 22

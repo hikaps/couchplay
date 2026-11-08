@@ -1471,8 +1471,11 @@ void SessionRunner::positionInstanceWindow(GamescopeInstance *instance)
 
     const bool borderless = m_settingsManager && m_settingsManager->borderlessWindows();
 
+    // The gamescope window only appears once the game client draws. A gaming user's first Steam launch
+    // downloads and applies a client update first, which routinely takes longer than a minute.
+    constexpr int windowAppearTimeoutMs = 5 * 60 * 1000;
     m_windowManager->queuePositionRequest(instanceIndex, instance->gamescopePid(), targetGeometry,
-                                         m_positionedWindowIds, borderless, 60000);
+                                         m_positionedWindowIds, borderless, windowAppearTimeoutMs);
 }
 
 void SessionRunner::onWindowPositioned(int requestId, const QString &windowId)

@@ -4,7 +4,6 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 
 Controls.ComboBox {
     id: root
@@ -35,7 +34,6 @@ Controls.ComboBox {
     objectName: "comboGame"
     Accessible.role: Accessible.ComboBox
     Accessible.name: i18nc("@label", "Game:")
-    Kirigami.FormData.label: i18nc("@label", "Game:")
     textRole: "title"
     valueRole: "gameId"
     Layout.fillWidth: true

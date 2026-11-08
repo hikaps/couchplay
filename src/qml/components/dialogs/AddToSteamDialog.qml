@@ -9,8 +9,6 @@ import org.kde.kirigami as Kirigami
 Kirigami.Dialog {
     id: root
     objectName: "dialogAddToSteam"
-    Accessible.role: Accessible.Dialog
-    Accessible.name: title
     title: i18nc("@title:dialog", "Add Profile to Steam")
     preferredWidth: Kirigami.Units.gridUnit * 32
     standardButtons: Kirigami.Dialog.Cancel

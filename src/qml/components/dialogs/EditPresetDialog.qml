@@ -10,8 +10,6 @@ import org.kde.kirigami as Kirigami
 Kirigami.Dialog {
     id: root
     objectName: "dialogEditPreset"
-    Accessible.role: Accessible.Dialog
-    Accessible.name: title
     standardButtons: Kirigami.Dialog.Close
     preferredWidth: Kirigami.Units.gridUnit * 30
     title: i18nc("@title:dialog", "Edit Preset: %1", presetName)

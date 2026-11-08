@@ -157,8 +157,6 @@ Kirigami.ScrollablePage {
     Kirigami.PromptDialog {
         id: saveProfileDialog
         objectName: "dialogSaveProfile"
-        Accessible.role: Accessible.Dialog
-        Accessible.name: i18nc("@title:dialog", "Save Profile")
         title: i18nc("@title:dialog", "Save Profile")
         subtitle: sessionManager?.currentProfileName 
             ? i18nc("@info", "Save changes to '%1' or enter a new name", sessionManager.currentProfileName)
@@ -678,6 +676,7 @@ Kirigami.ScrollablePage {
                         }
                         Components.GameSelector {
                             objectName: "comboGame"
+                            Kirigami.FormData.label: instanceCard.labelGame
                             presetManager: instanceCard.cardPresetManager
                             sessionManager: instanceCard.cardSessionManager
                             instanceIndex: instanceCard.index
