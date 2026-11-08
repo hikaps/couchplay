@@ -331,6 +331,7 @@ private Q_SLOTS:
     void testHeroicPresetAclDirectoriesBecomeBootstrapPreparationsWithoutInstanceSnapshot();
     void testAutomaticHeroicGameRootsCreateAclPreparation();
     void testSetupDataDirectoriesFollowCurrentPreset();
+    void testParseRenderResolution();
     void testNativeApplicationAccessDoesNotMutateApplicationSettings();
     void testNativeApplicationAclUsesConfiguredRootCoverage();
     void testSetupDataDirectoriesCreatesBindPlan();
@@ -2164,6 +2165,22 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     const QByteArray vdfContent = vdf.readAll();
     QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
     QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
+}
+
+void TestSessionRunner::testParseRenderResolution()
+{
+    QCOMPARE(SessionRunner::parseRenderResolution(QStringLiteral("1280x720")), QSize(1280, 720));
+    QCOMPARE(SessionRunner::parseRenderResolution(QStringLiteral(" 2560x1440 ")), QSize(2560, 1440));
+    // Empty means "match the window".
+    QVERIFY(!SessionRunner::parseRenderResolution(QString()).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("1280")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("1280x")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("axb")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("1280x720x60")).isValid());
+    // Out-of-range values must not reach gamescope.
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("0x0")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("-1280x720")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("99999x720")).isValid());
 }
 
 QTEST_MAIN(TestSessionRunner)
