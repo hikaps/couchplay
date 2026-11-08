@@ -46,6 +46,7 @@ jobs:
           # Copy binaries
           cp build/bin/couchplay release-appdir/bin/
           cp build/bin/couchplay-helper release-appdir/bin/
+          cp build/bin/couchplay-vdisplay release-appdir/bin/
 
           # Bundle the helper's runtime libs + assert the bundle landed (#28/#37).
           ./scripts/package-helper.sh release-appdir/bin/couchplay-helper

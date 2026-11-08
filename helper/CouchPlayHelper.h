@@ -211,7 +211,6 @@ public Q_SLOTS:
      * preparing; instanceReady signals completion of directory preparation.
      *
      * @param username User to run as
-     * @param displayContext Owned compositor/display context
      * @param gamescopeArgs Gamescope command-line arguments
      * @param gameCommand Structured child command: executable followed by arguments
      * @param workingDirectory Optional absolute working directory
@@ -222,7 +221,6 @@ public Q_SLOTS:
      * @return Preparing MainPID, or 0 on failure
      */
     qint64 LaunchInstance(const QString &username,
-                           const QString &displayContext,
                            const QStringList &gamescopeArgs,
                            const QStringList &gameCommand,
                            const QString &workingDirectory,
@@ -230,15 +228,6 @@ public Q_SLOTS:
                            const QStringList &environment,
                            bool privateTemporaryDirectories,
                            const QVariantList &directoryPreparations);
-
-    qint64 LaunchAuxiliaryInstance(const QString &username,
-                                   const QString &displayContext,
-                                   const QStringList &gamescopeArgs,
-                                   const QStringList &gameCommand,
-                                   const QString &workingDirectory,
-                                   const QStringList &sharedRoots,
-                                   const QStringList &environment,
-                                   bool privateTemporaryDirectories);
 
     /**
      * Stop a launched instance
@@ -365,50 +354,6 @@ public Q_SLOTS:
      */
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
-    /**
-     * Create a virtual Wayland output for streaming capture
-     *
-     * Launches Gamescope in headless mode as the specified user,
-     * creating a capturable virtual display for Sunshine to capture.
-     *
-     * @param username User to run the virtual display as
-     * @param width Output width in pixels
-     * @param height Output height in pixels
-     * @param refreshRate Refresh rate in Hz
-     * @return Wayland socket name (e.g., "wayland-5"), or empty on failure
-     */
-    QString CreateVirtualOutput(const QString &username, int width, int height, int refreshRate);
-
-    /**
-     * Destroy a virtual Wayland output created by CreateVirtualOutput
-     *
-     * @param username User who owns the virtual display
-     * @param waylandSocketName Wayland socket name returned by CreateVirtualOutput
-     * @return true if successful
-     */
-    bool DestroyVirtualOutput(const QString &username, const QString &waylandSocketName);
-
-    /**
-     * Create a PipeWire null-sink for audio isolation
-     *
-     * Creates an isolated audio sink that Sunshine can capture from,
-     * preventing audio from mixing between streaming instances.
-     *
-     * @param username User whose PipeWire instance to create the sink in
-     * @param sinkName Name for the null-sink (alphanumeric, hyphens, underscores)
-     * @return The sink name, or empty on failure
-     */
-    QString CreateNullSink(const QString &username, const QString &sinkName);
-
-    /**
-     * Destroy a PipeWire null-sink created by CreateNullSink
-     *
-     * @param username User whose PipeWire instance has the sink
-     * @param sinkName Name of the null-sink to remove
-     * @return true if successful
-     */
-    bool DestroyNullSink(const QString &username, const QString &sinkName);
-
 Q_SIGNALS:
     /**
      * Emitted when an owned transient unit exits unexpectedly.
@@ -460,7 +405,6 @@ private:
     enum class UnitRole { Main, Stream };
     uint callerUid() const;
     void startTransientUnit(const QString &username,
-                            const QString &displayContext,
                             const QStringList &gamescopeArgs,
                             const QStringList &gameCommand,
                             const QString &workingDirectory,
@@ -497,33 +441,12 @@ private:
     bool
     validateUserPath(const QString &path, const QString &username, const QString &callerName, QStringList &dirsToChown);
     QString findGamescopePath();
-    bool unloadNullSinkModule(const QString &username, const QString &sinkName);
     bool isPathWithinAllowedPrefix(const QString &path) const;
     bool pathHasSymlinkComponents(const QString &path, const QString &root);
     bool secureCreateUserDir(const QString &username, const QString &absolutePath);
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;
-
-    struct VirtualDisplayInfo {
-        qint64 pid = 0;
-        QString displayContext;
-        uint ownerUid = 0;
-        uint runtimeUid = 0;
-        QString targetUsername;
-        QString waylandSocket;
-        QString serviceName;
-
-
-
-    };
-    QMap<QString, VirtualDisplayInfo> m_virtualDisplays;
-
-    struct NullSinkInfo {
-        int moduleIndex;
-        QString sinkName;
-    };
-    QMap<QString, QList<NullSinkInfo>> m_nullSinks;
 
 
     // Track launched transient units

@@ -64,6 +64,12 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SunshineConfig.h
     ../src/core/StreamManager.cpp
     ../src/core/StreamManager.h
+    ../src/core/HostProcess.cpp
+    ../src/core/HostProcess.h
+    ../src/core/VirtualDisplayManager.cpp
+    ../src/core/VirtualDisplayManager.h
+    ../src/core/StreamAudio.cpp
+    ../src/core/StreamAudio.h
     ../src/dbus/CouchPlayHelperClient.cpp
     ../src/dbus/CouchPlayHelperClient.h
 )
@@ -97,6 +103,7 @@ function(add_couchplay_test TEST_NAME)
         Qt6::QuickControls2
         Qt6::Widgets
         Qt6::DBus
+        Qt6::Network
         Qt6::Test
         KF6::I18n
         KF6::CoreAddons
@@ -176,11 +183,13 @@ add_couchplay_test(test_sessionrunner)
 target_sources(test_sessionrunner PRIVATE ../helper/SecureFs.cpp)
 target_include_directories(test_sessionrunner PRIVATE ${LIBACL_INCLUDE_DIR})
 target_link_libraries(test_sessionrunner PRIVATE ${LIBACL_LIBRARY})
+add_couchplay_test(test_streamaudio)
 add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
 add_couchplay_test(test_streammanager)
 add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
+add_couchplay_test(test_virtualdisplaymanager)
 
 # Add helper tests
 add_helper_test(test_couchplayhelper)

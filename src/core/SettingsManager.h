@@ -32,6 +32,9 @@ class SettingsManager : public QObject
     // Device settings
     Q_PROPERTY(QStringList ignoredDevices READ ignoredDevices WRITE setIgnoredDevices NOTIFY ignoredDevicesChanged)
 
+    // Streaming settings
+    Q_PROPERTY(QString sunshinePath READ sunshinePath WRITE setSunshinePath NOTIFY sunshinePathChanged)
+
 public:
     explicit SettingsManager(QObject *parent = nullptr);
     ~SettingsManager() override = default;
@@ -80,6 +83,19 @@ public:
         return m_ignoredDevices;
     }
     void setIgnoredDevices(const QStringList &value);
+
+    // Streaming settings
+    QString sunshinePath() const
+    {
+        return m_sunshinePath;
+    }
+    void setSunshinePath(const QString &value);
+
+    /**
+     * Sunshine executable to launch on the host: the configured path, or the first
+     * host-executable well-known location. Empty when none is found.
+     */
+    Q_INVOKABLE QString resolvedSunshinePath() const;
     Q_INVOKABLE void addIgnoredDevice(const QString &stableId);
     Q_INVOKABLE void removeIgnoredDevice(const QString &stableId);
 
@@ -96,6 +112,7 @@ Q_SIGNALS:
     void filterModeChanged();
     void borderlessWindowsChanged();
     void ignoredDevicesChanged();
+    void sunshinePathChanged();
 
 private:
     void loadSettings();
@@ -113,4 +130,7 @@ private:
 
     // Device settings
     QStringList m_ignoredDevices;
+
+    // Streaming settings
+    QString m_sunshinePath;
 };

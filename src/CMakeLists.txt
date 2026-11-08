@@ -20,6 +20,7 @@ target_link_libraries(couchplay_core PUBLIC
     Qt6::QuickControls2
     Qt6::Widgets
     Qt6::DBus
+    Qt6::Network
     KF6::I18n
     KF6::CoreAddons
     KF6::ConfigCore
@@ -116,6 +117,12 @@ target_sources(couchplay PRIVATE
     core/SunshineConfig.h
     core/StreamManager.cpp
     core/StreamManager.h
+    core/HostProcess.cpp
+    core/HostProcess.h
+    core/VirtualDisplayManager.cpp
+    core/VirtualDisplayManager.h
+    core/StreamAudio.cpp
+    core/StreamAudio.h
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )

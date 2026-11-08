@@ -125,6 +125,7 @@
             ],
             "post-install": [
                 "install -Dm755 ${FLATPAK_DEST}/lib/libexec/couchplay-helper ${FLATPAK_DEST}/libexec/couchplay-helper",
+                "install -Dm755 ${FLATPAK_DEST}/lib/libexec/couchplay-vdisplay ${FLATPAK_DEST}/libexec/couchplay-vdisplay",
                 "install -Dm755 scripts/install-helper.sh ${FLATPAK_DEST}/share/couchplay/install-helper.sh",
                 "install -Dm644 data/dbus/io.github.hikaps.CouchPlayHelper.conf ${FLATPAK_DEST}/share/couchplay/data/dbus/io.github.hikaps.CouchPlayHelper.conf",
                 "install -Dm644 data/dbus/io.github.hikaps.CouchPlayHelper.service ${FLATPAK_DEST}/share/couchplay/data/dbus/io.github.hikaps.CouchPlayHelper.service",

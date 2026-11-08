@@ -113,6 +113,13 @@ main() {
         print_error "Please run CMake build first: cmake --build build"
         exit 1
     fi
+
+    local build_vdisplay="build/bin/couchplay-vdisplay"
+    if [[ ! -f "$build_vdisplay" ]]; then
+        print_error "Local built virtual display binary not found at ${build_vdisplay}."
+        print_error "Please run CMake build first: cmake --build build"
+        exit 1
+    fi
     
     # 2. Build & Install Flatpak application locally from directory
     print_info "Ensuring KDE SDK and Platform 6.10 are installed..."
