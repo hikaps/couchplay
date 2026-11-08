@@ -71,6 +71,7 @@ private Q_SLOTS:
     void testPrivateTemporaryDirectoriesRoundtrip();
     void testLoadProfileLegacySharedDirectories();
     void testAudioDeviceRoundtrip();
+    void testRenderResolutionRoundtrip();
     void testMigrationPreservesExistingBackup();
     void testMigrationUnsafeBackupLeavesStateUnchanged();
     void testSymlinkedProfileWithoutLegacyKeysStillWorks();
@@ -406,6 +407,25 @@ void TestSessionManager::testAudioDeviceRoundtrip()
              QStringLiteral("alsa_output.usb-soundbar.analog-stereo"));
 
     m_sessionManager->deleteProfile(QStringLiteral("AudioDeviceProfile"));
+}
+
+void TestSessionManager::testRenderResolutionRoundtrip()
+{
+    m_sessionManager->setInstanceCount(2);
+    QVERIFY(m_sessionManager->getInstanceConfig(0).value(KEY("renderResolution")).toString().isEmpty());
+
+    QVariantMap playerOne = m_sessionManager->getInstanceConfig(0);
+    playerOne[KEY("renderResolution")] = QStringLiteral("1280x720");
+    m_sessionManager->setInstanceConfig(0, playerOne);
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("RenderResolutionProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("RenderResolutionProfile")));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("renderResolution")).toString(),
+             QStringLiteral("1280x720"));
+    QVERIFY(m_sessionManager->getInstanceConfig(1).value(KEY("renderResolution")).toString().isEmpty());
+
+    m_sessionManager->deleteProfile(QStringLiteral("RenderResolutionProfile"));
 }
 
 void TestSessionManager::testLoadProfileLegacySharedDirectories()

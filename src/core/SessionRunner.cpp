@@ -541,8 +541,11 @@ void SessionRunner::continueStart()
             }
         } else {
             const int layoutIndex = instanceToLayoutIndex.value(i, 0);
-            config[QStringLiteral("internalWidth")] = m_layouts[layoutIndex].width();
-            config[QStringLiteral("internalHeight")] = m_layouts[layoutIndex].height();
+            // Gamescope renders internally at -w/-h and scales to the window (-W/-H); an override lets a player
+            // render below the window size, e.g. 720p in a 1080p region.
+            const QSize render = parseRenderResolution(instConfig.renderResolution);
+            config[QStringLiteral("internalWidth")] = render.isValid() ? render.width() : m_layouts[layoutIndex].width();
+            config[QStringLiteral("internalHeight")] = render.isValid() ? render.height() : m_layouts[layoutIndex].height();
             config[QStringLiteral("outputWidth")] = m_layouts[layoutIndex].width();
             config[QStringLiteral("outputHeight")] = m_layouts[layoutIndex].height();
             config[QStringLiteral("positionX")] = m_layouts[layoutIndex].x();
@@ -983,8 +986,19 @@ bool SessionRunner::setupSessionResources()
             qCWarning(couchplaySteam) << "Required integration is unavailable: steam";
             allSucceeded = false;
         }
+        // The optional "sync all shortcuts" setting cannot apply to a player whose Steam has never run: Steam creates
+        // the userdata tree on its first start, and the next session syncs normally. Only an explicitly selected
+        // Steam shortcut game needs the sync, so only that case still fails the launch.
+        const bool skipUnbootstrappedSync = requiresSteam && !selectedSteamShortcut && m_steamConfigManager
+            && m_steamConfigManager->isSteamDetected() && m_startingSnapshot.syncSteamShortcuts
+            && (!m_helperClient->isSteamBootstrapped(username)
+                || m_steamConfigManager->getTargetSteamUserId(username).isEmpty());
+        if (skipUnbootstrappedSync) {
+            qCInfo(couchplaySteam) << "Skipping Steam shortcut sync for" << username
+                                   << "- Steam has not been run for this user yet";
+        }
         if (requiresSteam && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
-            && (m_startingSnapshot.syncSteamShortcuts || selectedSteamShortcut)) {
+            && !skipUnbootstrappedSync && (m_startingSnapshot.syncSteamShortcuts || selectedSteamShortcut)) {
             if (!m_steamConfigManager->sourceAccountAvailable()) {
                 Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
                 return false;
@@ -1273,6 +1287,22 @@ QRect SessionRunner::getScreenGeometry() const
     }
 
     return QRect(0, 0, 1920, 1080);
+}
+
+QSize SessionRunner::parseRenderResolution(const QString &text)
+{
+    const QStringList parts = text.trimmed().split(QLatin1Char('x'));
+    if (parts.size() != 2) {
+        return {};
+    }
+    bool widthOk = false;
+    bool heightOk = false;
+    const int width = parts.at(0).toInt(&widthOk);
+    const int height = parts.at(1).toInt(&heightOk);
+    if (!widthOk || !heightOk || width < 320 || width > 7680 || height < 200 || height > 4320) {
+        return {};
+    }
+    return {width, height};
 }
 
 QList<QRect> SessionRunner::calculateLayout(const QString &layout,

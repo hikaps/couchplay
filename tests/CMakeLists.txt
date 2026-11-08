@@ -27,6 +27,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/LaunchTypes.h
     ../src/core/CommandLineOptions.cpp
     ../src/core/CommandLineOptions.h
+    ../src/core/SignalBridge.cpp
+    ../src/core/SignalBridge.h
     ../src/core/GamescopeInstance.cpp
     ../src/core/GamescopeInstance.h
     ../src/core/UserManager.cpp
@@ -154,6 +156,7 @@ endfunction()
 
 
 add_couchplay_test(test_commandlineoptions)
+add_couchplay_test(test_signalbridge)
 # Add test executables
 add_couchplay_test(test_steamshortcutmanager)
 add_couchplay_test(test_steamregistration)

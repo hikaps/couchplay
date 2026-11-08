@@ -165,6 +165,12 @@ public:
                                         const QRect &screenGeometry,
                                         const QString &gridSubLayout = QString());
 
+    /**
+     * Parse a per-instance render resolution such as "1280x720".
+     * @return the size, or an invalid QSize if empty, malformed, or outside 320x200..7680x4320
+     */
+    static QSize parseRenderResolution(const QString &text);
+
 Q_SIGNALS:
     void runningChanged();
     void runningInstanceCountChanged();

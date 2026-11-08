@@ -42,6 +42,7 @@ struct InstanceConfig {
     Q_PROPERTY(bool privateTemporaryDirectories MEMBER privateTemporaryDirectories)
     Q_PROPERTY(QString outputMode MEMBER outputMode)
     Q_PROPERTY(QString streamResolution MEMBER streamResolution)
+    Q_PROPERTY(QString renderResolution MEMBER renderResolution)
     Q_PROPERTY(int streamFps MEMBER streamFps)
     Q_PROPERTY(int streamBitrate MEMBER streamBitrate)
     Q_PROPERTY(QString streamCodec MEMBER streamCodec)
@@ -68,6 +69,7 @@ public:
     void setGameSelectionFromVariant(const QVariantMap &selection) { gameSelection = GameSelection::fromVariant(selection); }
     QString outputMode = QStringLiteral("physical");  // "physical" or "streaming"
     QString streamResolution = QStringLiteral("1920x1080");
+    QString renderResolution;                         // "WxH" game render size for physical output; empty = match window
     int streamFps = 60;
     int streamBitrate = 20000;                        // Kbps (20000 = 20 Mbps)
     QString streamCodec = QStringLiteral("h264");     // "h264", "h265", "av1"
