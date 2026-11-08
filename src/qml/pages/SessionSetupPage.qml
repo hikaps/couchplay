@@ -550,6 +550,37 @@ Kirigami.ScrollablePage {
                 }
 
                 property bool isStreaming: displayValue === "virtual"
+
+                property bool streamToMoonlightValue: {
+                    void(cardRevision)
+                    if (!cardSessionManager) return false
+                    let config = cardSessionManager.getInstanceConfig(instanceCard.index)
+                    return config?.streamToMoonlight ?? false
+                }
+
+                // Virtual displays always stream; real monitors stream only when the toggle is on
+                property bool streamsToMoonlight: displayValue === "virtual" || (displayValue !== "main" && streamToMoonlightValue)
+
+                readonly property var streamManager: root.sessionRunner ? root.sessionRunner.streamManager : null
+
+                // Entry of streamManager.streams for this player; only exists while a session runs
+                readonly property var streamEntry: {
+                    const list = streamManager ? streamManager.streams : []
+                    for (let i = 0; i < list.length; ++i) {
+                        if (list[i].instanceIndex === instanceCard.index) return list[i]
+                    }
+                    return null
+                }
+
+                // StreamManager.StreamState: 1 = Waiting, 2 = Streaming, 3 = Error
+                readonly property bool streamReady: streamEntry !== null && streamEntry.state === 2
+
+                function streamStatusText() {
+                    if (streamEntry === null) return ""
+                    if (streamEntry.state === 2) return i18nc("@info:status", "Ready on port %1", streamEntry.port)
+                    if (streamEntry.state === 3) return i18nc("@info:status", "Failed: %1", streamEntry.error)
+                    return i18nc("@info:status", "Starting")
+                }
                 
                 
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
@@ -560,6 +591,11 @@ Kirigami.ScrollablePage {
                 readonly property string optionVirtualDisplay: i18nc("@item:inlistbox", "Virtual display (Moonlight only)")
                 readonly property string labelVirtualResolution: i18nc("@label", "Virtual Resolution:")
                 readonly property string optionCodecAuto: i18nc("@item:inlistbox", "Automatic")
+                readonly property string labelStreamToMoonlight: i18nc("@label", "Moonlight:")
+                readonly property string textStreamToMoonlight: i18nc("@option:check", "Stream to Moonlight")
+                readonly property string textStreamMonitorHint: i18nc("@info", "Streaming a real monitor also shows the game on that monitor.")
+                readonly property string labelStreamStatus: i18nc("@label", "Stream:")
+                readonly property string textPairMoonlight: i18nc("@action:button", "Pair Moonlight…")
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
                 readonly property string labelResolution: i18nc("@label", "Window Size:")
@@ -592,7 +628,7 @@ Kirigami.ScrollablePage {
                     }
 
                     Kirigami.Icon {
-                        visible: instanceCard.isStreaming
+                        visible: instanceCard.streamsToMoonlight
                         source: "network-wireless"
                         Layout.preferredWidth: Kirigami.Units.iconSizes.small
                         Layout.preferredHeight: Kirigami.Units.iconSizes.small
@@ -775,6 +811,37 @@ Kirigami.ScrollablePage {
                                 }
                             }
                         }
+
+                        ColumnLayout {
+                            Kirigami.FormData.label: instanceCard.labelStreamToMoonlight
+                            visible: instanceCard.displayValue !== "main"
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Controls.Switch {
+                                objectName: "switchStreamToMoonlight"
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: instanceCard.textStreamToMoonlight
+                                text: instanceCard.textStreamToMoonlight
+                                enabled: instanceCard.displayValue !== "virtual"
+                                checked: instanceCard.streamsToMoonlight
+                                onToggled: {
+                                    if (instanceCard.cardSessionManager) {
+                                        let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                        config.streamToMoonlight = checked
+                                        instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                    }
+                                }
+                            }
+
+                            Controls.Label {
+                                visible: instanceCard.displayValue !== "virtual"
+                                text: instanceCard.textStreamMonitorHint
+                                wrapMode: Text.WordWrap
+                                opacity: 0.7
+                                Layout.fillWidth: true
+                            }
+                        }
                         Components.GameSelector {
                             objectName: "comboGame"
                             Kirigami.FormData.label: instanceCard.labelGame
@@ -839,7 +906,7 @@ Kirigami.ScrollablePage {
                             Accessible.role: Accessible.ComboBox
                             Accessible.name: instanceCard.labelAudioOutput
                             Kirigami.FormData.label: instanceCard.labelAudioOutput
-                            visible: !instanceCard.isStreaming
+                            visible: !instanceCard.streamsToMoonlight
                             Layout.fillWidth: true
                             textRole: "text"
                             valueRole: "value"
@@ -930,7 +997,7 @@ Kirigami.ScrollablePage {
 
                         RowLayout {
                             Kirigami.FormData.label: instanceCard.labelBitrate
-                            visible: instanceCard.isStreaming
+                            visible: instanceCard.streamsToMoonlight
                             Layout.fillWidth: true
                             spacing: Kirigami.Units.smallSpacing
                             
@@ -979,7 +1046,7 @@ Kirigami.ScrollablePage {
                             Accessible.role: Accessible.ComboBox
                             Accessible.name: instanceCard.labelCodec
                             Kirigami.FormData.label: instanceCard.labelCodec
-                            visible: instanceCard.isStreaming
+                            visible: instanceCard.streamsToMoonlight
                             Layout.fillWidth: true
                             textRole: "text"
                             valueRole: "value"
@@ -1011,6 +1078,36 @@ Kirigami.ScrollablePage {
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
+                        }
+
+                        RowLayout {
+                            Kirigami.FormData.label: instanceCard.labelStreamStatus
+                            visible: instanceCard.streamsToMoonlight && instanceCard.streamEntry !== null
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Controls.Label {
+                                objectName: "labelStreamStatus"
+                                text: instanceCard.streamStatusText()
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+
+                            Controls.Button {
+                                objectName: "buttonPairMoonlight"
+                                Accessible.role: Accessible.Button
+                                Accessible.name: instanceCard.textPairMoonlight
+                                text: instanceCard.textPairMoonlight
+                                icon.name: "network-connect"
+                                enabled: instanceCard.streamReady
+                                onClicked: pairingSheet.open()
+                            }
+                        }
+
+                        Components.MoonlightPairingSheet {
+                            id: pairingSheet
+                            streamManager: instanceCard.streamManager
+                            instanceIndex: instanceCard.index
                         }
 
                         RowLayout {

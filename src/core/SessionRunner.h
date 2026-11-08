@@ -4,6 +4,7 @@
 #pragma once
 
 #include <QList>
+#include <QElapsedTimer>
 #include <QMap>
 #include <QProcess>
 #include <QObject>
@@ -19,6 +20,7 @@
 #include "../dbus/CouchPlayHelperClient.h"
 #include "HeroicConfigManager.h"
 #include "SteamConfigManager.h"
+#include "StreamManager.h"
 #include "StreamAudio.h"
 
 class QAction;
@@ -62,6 +64,7 @@ class SessionRunner : public QObject
                    heroicConfigManagerChanged)
     Q_PROPERTY(
         SettingsManager *settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
+    Q_PROPERTY(StreamManager *streamManager READ streamManager CONSTANT)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -121,6 +124,10 @@ public:
     DeviceManager *deviceManager() const
     {
         return m_deviceManager;
+    }
+    StreamManager *streamManager() const
+    {
+        return m_streamManager;
     }
     void setDeviceManager(DeviceManager *manager);
 
@@ -215,6 +222,7 @@ private Q_SLOTS:
     void onWindowPositioned(int requestId, const QString &windowId);
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
+    void onDeviceAdded(int eventNumber, const QString &name);
     void startNextInstance();
     void onHookFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onHookError(QProcess::ProcessError error);
@@ -240,6 +248,9 @@ private:
     void teardownStreamingInstances();
     void cleanupStreamingInstance(int index);
     void continueFinalizationAfterStopping();
+    bool grantDeviceToInstance(int eventNumber, int instanceIndex);
+    qint64 nowMs() const;
+    void resetGamepadAttribution();
     bool hasOwnedPids() const;
 
     struct SessionRuntimeSnapshot {
@@ -307,6 +318,23 @@ private:
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
+
+    // Moonlight gamepad attribution (Sunshine uhid devices -> streaming player)
+    struct GamepadClaim {
+        int instanceIndex = -1;
+        qint64 atMs = 0;
+    };
+    struct SunshineAttribution {
+        QString uniq;
+        int instanceIndex = -1;
+        qint64 atMs = 0;
+    };
+    QList<GamepadClaim> m_gamepadClaims;
+    QList<SunshineAttribution> m_sunshineAttributions;
+    qint64 m_claimTtlMs = 5000;
+    qint64 m_uniqWindowMs = 3000;
+    qint64 m_clockOverrideMs = -1; // test seam: >= 0 replaces the monotonic clock
+    QElapsedTimer m_clock;
 
     // Privileged sharing state (mounts, Steam library sharing) is active from
     // setup until teardown — natural instance exit must release it too

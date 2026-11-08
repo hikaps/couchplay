@@ -4,17 +4,21 @@
 #include "StreamManager.h"
 
 #include "HostProcess.h"
+#include "SunshineApiClient.h"
 
 #include <QDateTime>
 #include <QDebug>
 #include <QFile>
 #include <QRegularExpression>
+#include <QHostAddress>
+#include <QNetworkInterface>
 
 namespace
 {
 constexpr int kLogPollIntervalMs = 250;
 constexpr int kMaxRecentLines = 3;
 constexpr int kTerminateWaitMs = 2000;
+constexpr int kPairingPollIntervalMs = 2000;
 
 const QString kReadyMarker = QStringLiteral("Configuration UI available at [https://");
 const QString kNoEncoderMarker = QStringLiteral("Unable to find display or encoder during startup.");
@@ -93,9 +97,23 @@ QVariantList StreamManager::streams() const
         entry[QStringLiteral("sunshineName")] = SunshineConfig::displayName(stream.spec);
         entry[QStringLiteral("outputName")] = stream.spec.outputName;
         entry[QStringLiteral("error")] = stream.error;
+        entry[QStringLiteral("pendingPairings")] = stream.pendingPairings;
+        entry[QStringLiteral("clients")] = stream.clients;
+        entry[QStringLiteral("legacyPairing")] = stream.legacyPairing;
         result.append(entry);
     }
     return result;
+}
+
+QString StreamManager::hostAddress() const
+{
+    const QList<QHostAddress> addresses = QNetworkInterface::allAddresses();
+    for (const QHostAddress &address : addresses) {
+        if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback() && !address.isLinkLocal()) {
+            return address.toString();
+        }
+    }
+    return {};
 }
 
 bool StreamManager::autoRestart() const
@@ -167,6 +185,12 @@ StreamManager::Stream *StreamManager::createStream(int instanceIndex, const Stre
         launch(instanceIndex);
     });
 
+    stream->pairingTimer = new QTimer(this);
+    stream->pairingTimer->setInterval(kPairingPollIntervalMs);
+    connect(stream->pairingTimer, &QTimer::timeout, this, [this, instanceIndex]() {
+        refreshPairing(instanceIndex);
+    });
+
     m_streams.insert(instanceIndex, stream);
     return stream;
 }
@@ -177,9 +201,13 @@ void StreamManager::removeStream(int instanceIndex)
     if (!stream) {
         return;
     }
-    for (QTimer *timer : {stream->startupTimer, stream->killTimer, stream->restartTimer}) {
+    for (QTimer *timer : {stream->startupTimer, stream->killTimer, stream->restartTimer, stream->pairingTimer}) {
         timer->stop();
         timer->deleteLater();
+    }
+    if (stream->api) {
+        // Handlers ignore signals from a client that is no longer the stream's current one
+        stream->api->deleteLater();
     }
     delete stream;
 }
@@ -605,4 +633,153 @@ bool StreamManager::hasOwnedPid(int instanceIndex) const
 {
     const Stream *stream = m_streams.value(instanceIndex, nullptr);
     return stream && stream->process;
+}
+
+SunshineApiClient *StreamManager::apiClient(int instanceIndex)
+{
+    Stream *stream = m_streams.value(instanceIndex, nullptr);
+    if (!stream || stream->state != Streaming || stream->stateDir.isEmpty()) {
+        return nullptr;
+    }
+    if (stream->api) {
+        return stream->api;
+    }
+
+    const QString secret = SunshineConfig::secret(stream->stateDir);
+    if (secret.isEmpty()) {
+        qWarning() << "StreamManager: no Sunshine API secret for stream" << instanceIndex;
+        return nullptr;
+    }
+
+    auto *api = new SunshineApiClient(stream->spec.port, secret, stream->stateDir + QStringLiteral("/cert.pem"), this);
+    stream->api = api;
+
+    // Late signals of a client that was replaced or whose stream was removed are dropped
+    const auto current = [this, instanceIndex, api]() {
+        const Stream *s = m_streams.value(instanceIndex, nullptr);
+        return s && s->api == api;
+    };
+
+    connect(api, &SunshineApiClient::pairingsFetched, this, [this, instanceIndex, current](const QVariantList &pairings, bool legacy) {
+        if (current()) {
+            onPairingsFetched(instanceIndex, pairings, legacy);
+        }
+    });
+    connect(api, &SunshineApiClient::clientsFetched, this, [this, instanceIndex, current](const QVariantList &clients) {
+        if (current()) {
+            onClientsFetched(instanceIndex, clients);
+        }
+    });
+    connect(api, &SunshineApiClient::requestFailed, this, [this, instanceIndex, current](const QString &message) {
+        if (current()) {
+            onApiFailed(instanceIndex, message);
+        }
+    });
+    connect(api, &SunshineApiClient::pinResult, this, [this, instanceIndex, current](bool ok, const QString &message) {
+        if (!current()) {
+            return;
+        }
+        m_streams.value(instanceIndex)->pinPending = false;
+        Q_EMIT pinResult(instanceIndex, ok, message);
+        // A request that was already in flight may predate the pairing
+        m_streams.value(instanceIndex)->refreshing = false;
+        refreshPairing(instanceIndex);
+    });
+    connect(api, &SunshineApiClient::unpairResult, this, [this, instanceIndex, current](bool) {
+        if (!current()) {
+            return;
+        }
+        m_streams.value(instanceIndex)->refreshing = false;
+        refreshPairing(instanceIndex);
+    });
+    return api;
+}
+
+void StreamManager::refreshPairing(int instanceIndex)
+{
+    SunshineApiClient *api = apiClient(instanceIndex);
+    if (!api) {
+        return;
+    }
+    Stream *stream = m_streams.value(instanceIndex);
+    if (stream->refreshing) {
+        return;
+    }
+    stream->refreshing = true;
+    api->fetchPendingPairings();
+}
+
+void StreamManager::onPairingsFetched(int instanceIndex, const QVariantList &pairings, bool legacy)
+{
+    Stream *stream = m_streams.value(instanceIndex, nullptr);
+    if (!stream || !stream->api) {
+        return;
+    }
+    if (stream->pendingPairings != pairings || stream->legacyPairing != legacy) {
+        stream->pendingPairings = pairings;
+        stream->legacyPairing = legacy;
+        Q_EMIT streamsChanged();
+    }
+    // Second half of a refresh
+    stream->api->fetchClients();
+}
+
+void StreamManager::onClientsFetched(int instanceIndex, const QVariantList &clients)
+{
+    Stream *stream = m_streams.value(instanceIndex, nullptr);
+    if (!stream) {
+        return;
+    }
+    stream->refreshing = false;
+    if (stream->clients != clients) {
+        stream->clients = clients;
+        Q_EMIT streamsChanged();
+    }
+}
+
+void StreamManager::onApiFailed(int instanceIndex, const QString &message)
+{
+    Stream *stream = m_streams.value(instanceIndex, nullptr);
+    if (!stream) {
+        return;
+    }
+    stream->refreshing = false;
+    if (stream->pinPending) {
+        stream->pinPending = false;
+        Q_EMIT pinResult(instanceIndex, false, message);
+    } else {
+        qDebug() << "StreamManager: Sunshine API request for stream" << instanceIndex << "failed:" << message;
+    }
+}
+
+void StreamManager::submitPin(int instanceIndex, const QString &pairingId, const QString &pin, const QString &clientName)
+{
+    SunshineApiClient *api = apiClient(instanceIndex);
+    if (!api) {
+        Q_EMIT pinResult(instanceIndex, false, QStringLiteral("Sunshine is not ready"));
+        return;
+    }
+    m_streams.value(instanceIndex)->pinPending = true;
+    api->submitPin(pairingId, pin, clientName);
+}
+
+void StreamManager::unpairClient(int instanceIndex, const QString &uuid)
+{
+    if (SunshineApiClient *api = apiClient(instanceIndex)) {
+        api->unpair(uuid);
+    }
+}
+
+void StreamManager::setPairingActive(int instanceIndex, bool active)
+{
+    Stream *stream = m_streams.value(instanceIndex, nullptr);
+    if (!stream) {
+        return;
+    }
+    if (!active) {
+        stream->pairingTimer->stop();
+        return;
+    }
+    stream->pairingTimer->start();
+    refreshPairing(instanceIndex);
 }

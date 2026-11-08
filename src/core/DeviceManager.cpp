@@ -839,6 +839,7 @@ QVariantMap DeviceManager::deviceToVariantMap(const InputDevice &device) const
     map[QStringLiteral("productId")] = device.productId;
     map[QStringLiteral("physPath")] = device.physPath;
     map[QStringLiteral("stableId")] = device.stableId;
+    map[QStringLiteral("uniq")] = device.uniq;
     map[QStringLiteral("assigned")] = device.assigned;
     map[QStringLiteral("assignedInstance")] = device.assignedInstance;
     map[QStringLiteral("isVirtual")] = device.isVirtual;
