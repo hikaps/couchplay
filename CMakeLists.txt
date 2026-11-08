@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-project(couchplay VERSION 0.5.1 LANGUAGES CXX)
+project(couchplay VERSION 0.5.1 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,6 +36,7 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS
     QuickControls2
     Widgets
     DBus
+    Network
 )
 
 # Find KDE Frameworks 6

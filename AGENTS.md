@@ -15,7 +15,7 @@ Kirigami QML → C++ managers → CouchPlayHelperClient → system D-Bus → Cou
 - `SessionManager` owns editable `SessionProfile`/`InstanceConfig` values. Profiles are KConfig `.conf` files below `QStandardPaths::AppDataLocation/profiles`, not JSON. Persist stable device IDs; runtime input-event numbers are separate.
 - `PresetManager` resolves launcher/game selections into `LaunchCommand` (`program`, argv, working directory). Steam/Heroic config managers handle launcher-specific discovery and data; generic applications come from desktop entries/custom presets.
 - `SessionRunner` validates and snapshots the starting profile, runs an optional pre-hook, prepares users/devices/data mounts, and launches instances sequentially. Physical instances use `GamescopeInstance` plus KWin window positioning through `WindowManager`.
-- Streaming instances prepare a virtual output and audio sink; after Gamescope starts, `StreamManager` generates Sunshine configuration through `SunshineConfig` and launches Sunshine through the helper. Startup timers and bounded restart handling belong to `StreamManager`.
+- Streaming instances get a per-player null audio sink (`StreamAudio`); `StreamManager` generates Sunshine configuration through `SunshineConfig` (persistent per-user state dir) and launches Sunshine as the desktop user on the host via `HostProcess` with KWin capture, never through the helper. Startup timers and bounded restart handling belong to `StreamManager`.
 - Stop/startup-failure paths restore device ownership and tear down instances, streams, mounts, outputs, and audio before completing the post-hook/final state transition. Preserve this centralized cleanup when changing launch flow.
 - `SteamShortcutManager` registers saved profiles as native/Flatpak Game Mode shortcuts. `SteamShortcutsVdf` preserves unrelated binary VDF entries; registration checks paths/concurrent changes, creates a backup, and writes atomically.
 - Privileged calls go through `src/dbus/CouchPlayHelperClient.*` and matching helper slots. D-Bus service/object: `io.github.hikaps.CouchPlayHelper`, `/io/github/hikaps/CouchPlayHelper`. Keep client, helper, bus policy, and Polkit actions consistent.
@@ -92,7 +92,7 @@ Run the full suite with a private session bus and isolated runtime directory. Au
 | `src/core/SessionManager.h`, `src/core/LaunchTypes.h` | Profile/instance schema and structured launch values |
 | `src/core/SessionRunner.cpp` | Startup, hooks, resource staging, failure handling, teardown |
 | `src/core/GamescopeInstance.cpp`, `src/core/WindowManager.cpp` | Gamescope launch arguments and KWin placement |
-| `src/core/StreamManager.cpp`, `src/core/SunshineConfig.cpp` | Sunshine lifecycle and generated configuration |
+| `src/core/StreamManager.cpp`, `src/core/SunshineConfig.cpp`, `src/core/StreamAudio.cpp` | Sunshine lifecycle, generated configuration, per-player stream sinks |
 | `src/core/PresetManager.cpp` | Launcher/custom-preset discovery and command construction |
 | `src/core/SteamShortcutManager.cpp`, `src/core/SteamShortcutsVdf.cpp` | Safe saved-profile registration in Steam |
 | `helper/CouchPlayHelper.cpp`, `helper/SystemOps.h`, `helper/SecureFs.h` | Privileged service, test seam, filesystem invariants |

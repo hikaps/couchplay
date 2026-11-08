@@ -7,6 +7,7 @@
 #include "../dbus/CouchPlayHelperClient.h"
 #include "DeviceManager.h"
 #include "GamescopeInstance.h"
+#include "HostProcess.h"
 #include "Logging.h"
 #include "PresetManager.h"
 #include "SessionManager.h"
@@ -16,6 +17,7 @@
 #include "SunshineConfig.h"
 #include "UserLookup.h"
 #include "WindowManager.h"
+#include "VirtualDisplayManager.h"
 
 #include <QAction>
 #include <QDBusConnection>
@@ -73,8 +75,34 @@ SessionRunner::SessionRunner(QObject *parent)
     connect(m_windowManager, &WindowManager::gamescopeWindowPositioned, this, &SessionRunner::onWindowPositioned);
     connect(m_windowManager, &WindowManager::positioningTimedOut, this, &SessionRunner::onWindowPositioningTimeout);
 
+    m_virtualDisplays = new VirtualDisplayManager(this);
+    connect(m_virtualDisplays,
+            &VirtualDisplayManager::ready,
+            this,
+            [this](int index, const QString &outputName, const QRect &geometry) {
+                if (!m_pendingDisplays.remove(index) || m_finalizing) {
+                    return;
+                }
+                m_virtualOutputNames[index] = outputName;
+                m_virtualRects[index] = geometry;
+                if (m_pendingDisplays.isEmpty()) {
+                    continueStartAfterDisplays();
+                }
+            });
+    connect(m_virtualDisplays, &VirtualDisplayManager::failed, this, [this](int index, const QString &message) {
+        if (m_finalizing || !m_pendingDisplays.contains(index)) {
+            return;
+        }
+        m_pendingDisplays.clear();
+        beginFinalization(true,
+                          message.startsWith(QStringLiteral("couchplay-vdisplay is not installed"))
+                              ? message
+                              : QStringLiteral("Player %1: could not create virtual display: %2")
+                                    .arg(index + 1)
+                                    .arg(message));
+    });
+
     m_streamManager = new StreamManager(this);
-    m_streamManager->setHelperClient(m_helperClient);
     connect(m_streamManager, &StreamManager::streamError,
             this, [this](int instanceIndex, const QString &error) {
         const QString message = QStringLiteral("Stream %1: %2").arg(instanceIndex).arg(error);
@@ -91,8 +119,12 @@ SessionRunner::SessionRunner(QObject *parent)
             || !m_streamingInstances.contains(instanceIndex)) {
             return;
         }
-        ++m_nextInstanceToStart;
-        startNextInstance();
+        for (GamescopeInstance *instance : std::as_const(m_instances)) {
+            if (instance->index() == instanceIndex) {
+                proceedAfterInstanceStarted(instance);
+                break;
+            }
+        }
     });
     connect(m_streamManager, &StreamManager::streamStopped, this, [this](int instanceIndex) {
         cleanupStreamingInstance(instanceIndex);
@@ -134,7 +166,7 @@ const SessionProfile &SessionRunner::activeProfile() const
 void SessionRunner::runHook(const QString &path, bool postHook)
 {
     m_hookIsPost = postHook;
-    const bool isFlatpak = qEnvironmentVariableIsSet("FLATPAK_ID");
+    const bool isFlatpak = HostProcess::runningInFlatpak();
     if (path.isEmpty()) {
         if (postHook) {
             finishFinalization();
@@ -161,13 +193,7 @@ void SessionRunner::runHook(const QString &path, bool postHook)
     connect(m_hookProcess, &QProcess::finished, this, &SessionRunner::onHookFinished);
     connect(m_hookProcess, &QProcess::errorOccurred, this, &SessionRunner::onHookError);
 
-    if (isFlatpak) {
-        m_hookProcess->setProgram(QStringLiteral("/usr/bin/flatpak-spawn"));
-        m_hookProcess->setArguments({QStringLiteral("--host"), QStringLiteral("--watch-bus"), path});
-    } else {
-        m_hookProcess->setProgram(path);
-        m_hookProcess->setArguments({});
-    }
+    HostProcess::configure(*m_hookProcess, path, {});
     m_hookProcess->start();
 }
 
@@ -260,9 +286,6 @@ void SessionRunner::setHelperClient(CouchPlayHelperClient *client)
         m_helperClient = client;
         if (m_helperClient) {
             connect(m_helperClient, &CouchPlayHelperClient::exitChordTriggered, this, &SessionRunner::stop);
-        }
-        if (m_streamManager) {
-            m_streamManager->setHelperClient(client);
         }
         Q_EMIT helperClientChanged();
     }
@@ -464,31 +487,75 @@ void SessionRunner::continueStart()
         return;
     }
 
-    const SessionProfile &profile = activeProfile();
-    const int instanceCount = profile.instances.size();
     m_postHookArmed = true;
     inhibitScreenSaver();
+
+    m_virtualOutputNames.clear();
+    m_virtualRects.clear();
+    startVirtualDisplays();
+}
+
+void SessionRunner::startVirtualDisplays()
+{
+    const SessionProfile &profile = activeProfile();
+    QList<int> virtualIndices;
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        if (profile.instances[i].display == InstanceConfig::DisplayVirtual) {
+            virtualIndices.append(i);
+        }
+    }
+    if (virtualIndices.isEmpty()) {
+        continueStartAfterDisplays();
+        return;
+    }
+
+    setStatus(QStringLiteral("Creating virtual displays..."));
+    for (int idx : virtualIndices) {
+        m_pendingDisplays.insert(idx);
+    }
+    for (int idx : virtualIndices) {
+        if (m_finalizing) {
+            return;
+        }
+        const QSize size = parseRenderResolution(profile.instances[idx].virtualResolution);
+        m_virtualDisplays->create(idx, size.isValid() ? size : QSize(1920, 1080));
+    }
+}
+
+void SessionRunner::continueStartAfterDisplays()
+{
+    if (!m_active || m_finalizing) {
+        return;
+    }
+    setStatus(QStringLiteral("Starting session..."));
+
+    const SessionProfile &profile = activeProfile();
+    const int instanceCount = profile.instances.size();
 
     QList<int> mainIndices;
     QList<int> streamingIndices;
     for (int i = 0; i < instanceCount; ++i) {
-        if (profile.instances[i].display == InstanceConfig::DisplayVirtual) {
-            streamingIndices.append(i);
-        } else if (profile.instances[i].display == InstanceConfig::DisplayMain) {
+        const InstanceConfig &instConfig = profile.instances[i];
+        if (instConfig.display == InstanceConfig::DisplayMain) {
             mainIndices.append(i);
+        } else if (instConfig.display == InstanceConfig::DisplayVirtual || instConfig.streamToMoonlight) {
+            streamingIndices.append(i);
         }
     }
 
     m_streamingInstances.clear();
-    for (int idx : streamingIndices) {
-        const InstanceConfig &instConfig = profile.instances[idx];
-        QVariantMap streamConfig;
-        streamConfig[QStringLiteral("username")] = instConfig.username;
-        streamConfig[QStringLiteral("streamResolution")] = instConfig.virtualResolution;
-        streamConfig[QStringLiteral("refreshRate")] = instConfig.refreshRate;
-        if (!setupStreamingInstance(idx, streamConfig)) {
-            beginFinalization(true, QStringLiteral("Failed to set up streaming instance %1").arg(idx + 1));
+    if (!streamingIndices.isEmpty()) {
+        QString audioError;
+        if (!m_streamAudio.prepare(streamingIndices, &audioError)) {
+            beginFinalization(true, audioError);
             return;
+        }
+        for (int idx : streamingIndices) {
+            StreamingInstanceInfo info;
+            info.outputName = m_virtualOutputNames.value(idx,
+                                                         InstanceConfig::monitorConnector(profile.instances[idx].display));
+            info.sinkName = m_streamAudio.streamSink(idx);
+            m_streamingInstances[idx] = info;
         }
     }
 
@@ -502,7 +569,9 @@ void SessionRunner::continueStart()
         m_layouts[mainIndices[n]] = mainLayouts.value(n);
     }
     for (int i = 0; i < instanceCount; ++i) {
-        if (QScreen *screen = screenByConnector(InstanceConfig::monitorConnector(profile.instances[i].display))) {
+        if (m_virtualRects.contains(i)) {
+            m_layouts[i] = m_virtualRects.value(i);
+        } else if (QScreen *screen = screenByConnector(InstanceConfig::monitorConnector(profile.instances[i].display))) {
             m_layouts[i] = screen->geometry();
         }
     }
@@ -520,32 +589,11 @@ void SessionRunner::continueStart()
     m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
         const InstanceConfig &instConfig = profile.instances[i];
-        const bool isStreaming = streamingIndices.contains(i);
+        const bool isStreaming = m_streamingInstances.contains(i);
         QVariantMap config;
         config[QStringLiteral("username")] = instConfig.username;
         config[QStringLiteral("privateTemporaryDirectories")] = instConfig.privateTemporaryDirectories;
-        if (isStreaming) {
-            const QStringList resolution = instConfig.virtualResolution.split(QLatin1Char('x'));
-            const int width = resolution.value(0, QStringLiteral("1920")).toInt();
-            const int height = resolution.value(1, QStringLiteral("1080")).toInt();
-            config[QStringLiteral("internalWidth")] = width;
-            config[QStringLiteral("internalHeight")] = height;
-            config[QStringLiteral("outputWidth")] = width;
-            config[QStringLiteral("outputHeight")] = height;
-            config[QStringLiteral("positionX")] = 0;
-            config[QStringLiteral("positionY")] = 0;
-            config[QStringLiteral("outputMode")] = QStringLiteral("streaming");
-            config[QStringLiteral("streamResolution")] = instConfig.virtualResolution;
-            config[QStringLiteral("streamBitrate")] = instConfig.streamBitrate;
-            config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
-            config[QStringLiteral("sunshinePort")] = SunshineConfig::calculatePort(i, instConfig.sunshinePort);
-            if (m_streamingInstances.contains(i)) {
-                config[QStringLiteral("displayContext")] = m_streamingInstances[i].displayContext;
-                if (!m_streamingInstances[i].sinkName.isEmpty()) {
-                    config[QStringLiteral("sink")] = m_streamingInstances[i].sinkName;
-                }
-            }
-        } else {
+        {
             const QRect &rect = m_layouts[i];
             // Gamescope renders internally at -w/-h and scales to the window (-W/-H); an override lets a player
             // render below the window size, e.g. 720p in a 1080p region.
@@ -556,13 +604,22 @@ void SessionRunner::continueStart()
             config[QStringLiteral("outputHeight")] = rect.height();
             config[QStringLiteral("positionX")] = rect.x();
             config[QStringLiteral("positionY")] = rect.y();
-            const QString connector = InstanceConfig::monitorConnector(instConfig.display);
-            if (!connector.isEmpty()) {
-                config[QStringLiteral("monitorName")] = connector;
+            const QString output = m_virtualOutputNames.value(
+                i, InstanceConfig::monitorConnector(instConfig.display));
+            if (!output.isEmpty()) {
+                config[QStringLiteral("monitorName")] = output;
             }
-            if (!instConfig.audioDevice.isEmpty()) {
+            if (isStreaming) {
+                config[QStringLiteral("sink")] = m_streamingInstances[i].sinkName;
+                config[QStringLiteral("streamBitrate")] = instConfig.streamBitrate;
+                config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
+                config[QStringLiteral("sunshinePort")] = SunshineConfig::calculatePort(i, instConfig.sunshinePort);
+            } else if (!instConfig.audioDevice.isEmpty()) {
                 // Players reach the host's PipeWire-Pulse over TCP, so a host sink name is valid for them.
                 config[QStringLiteral("sink")] = instConfig.audioDevice;
+            } else if (m_streamAudio.isActive() && !m_streamAudio.defaultSink().isEmpty()) {
+                // Sunshine switches the host default sink while streaming; keep local players on the original.
+                config[QStringLiteral("sink")] = m_streamAudio.defaultSink();
             }
         }
         config[QStringLiteral("refreshRate")] = instConfig.refreshRate;
@@ -1479,14 +1536,36 @@ void SessionRunner::onInstanceStarted()
 
     if (m_streamingInstances.contains(idx)) {
         m_streamStartupErrorReported = false;
-        if (!m_streamManager || idx >= m_pendingInstanceConfigs.size()
-            || !m_streamManager->startStream(idx, m_pendingInstanceConfigs[idx])) {
-            if (!m_finalizing && !m_streamStartupErrorReported) {
-                beginFinalization(true, QStringLiteral("Failed to start streaming instance %1").arg(idx + 1));
-            }
+        const InstanceConfig &instConfig = activeProfile().instances.value(idx);
+        const QVariantMap &config = m_pendingInstanceConfigs.value(idx);
+        StreamSpec spec;
+        spec.instanceIndex = idx;
+        spec.identityKey = instConfig.username;
+        spec.outputName = m_streamingInstances[idx].outputName;
+        spec.sinkName = m_streamingInstances[idx].sinkName;
+        spec.port = SunshineConfig::allocatePort(config.value(QStringLiteral("sunshinePort"),
+                                                              SunshineConfig::BASE_PORT).toInt());
+        spec.bitrate = instConfig.streamBitrate;
+        spec.codec = instConfig.streamCodec;
+        spec.displayName = QStringLiteral("CouchPlay – Player %1 (%2)").arg(idx + 1).arg(instConfig.username);
+        if (spec.port < 0 || !m_streamManager) {
+            beginFinalization(true, QStringLiteral("Player %1: no free Sunshine ports").arg(idx + 1));
+            return;
+        }
+        if (m_settingsManager) {
+            m_streamManager->setSunshinePath(m_settingsManager->resolvedSunshinePath());
+        }
+        // Continue launching once Sunshine reports ready (see StreamManager::streamStarted).
+        if (!m_streamManager->startStream(idx, spec) && !m_finalizing && !m_streamStartupErrorReported) {
+            beginFinalization(true, QStringLiteral("Failed to start streaming instance %1").arg(idx + 1));
         }
         return;
     }
+    proceedAfterInstanceStarted(instance);
+}
+
+void SessionRunner::proceedAfterInstanceStarted(GamescopeInstance *instance)
+{
     if (m_windowManager && m_windowManager->isAvailable()) {
         positionInstanceWindow(instance);
     } else {
@@ -1773,54 +1852,13 @@ void SessionRunner::uninhibitScreenSaver()
     m_screenSaverCookie = 0;
 }
 
-bool SessionRunner::setupStreamingInstance(int instanceIndex, const QVariantMap &config)
-{
-    if (!m_helperClient || !m_helperClient->isAvailable()) {
-        Q_EMIT errorOccurred(QStringLiteral("Helper service required for streaming instance %1").arg(instanceIndex));
-        return false;
-    }
-
-    const QString username = config.value(QStringLiteral("username")).toString();
-    if (username.isEmpty()) {
-        Q_EMIT errorOccurred(QStringLiteral("Streaming instance %1 requires a username").arg(instanceIndex));
-        return false;
-    }
-
-    const QString streamResolution = config.value(QStringLiteral("streamResolution")).toString();
-    const QStringList resolution = streamResolution.split(QLatin1Char('x'));
-    int width = resolution.size() >= 1 ? resolution[0].toInt() : 1920;
-    int height = resolution.size() >= 2 ? resolution[1].toInt() : 1080;
-    int refreshRate = config.value(QStringLiteral("refreshRate")).toInt();
-
-    QString displayContext = m_helperClient->createVirtualOutput(username, width, height, refreshRate);
-    if (displayContext.isEmpty()) {
-        Q_EMIT errorOccurred(QStringLiteral("Failed to create virtual output for streaming instance %1").arg(instanceIndex));
-        return false;
-    }
-
-    QString sinkName = QStringLiteral("couchplay-sunshine-%1").arg(instanceIndex);
-    QString createdSinkName = m_helperClient->createNullSink(username, sinkName);
-    if (createdSinkName.isEmpty()) {
-        qWarning() << "SessionRunner: Failed to create null sink for streaming instance" << instanceIndex;
-    }
-
-    StreamingInstanceInfo info;
-    info.username = username;
-    info.displayContext = displayContext;
-
-    info.sinkName = createdSinkName;
-    info.virtualDisplayCreated = true;
-    info.nullSinkCreated = !createdSinkName.isEmpty();
-    m_streamingInstances[instanceIndex] = info;
-
-    return true;
-}
-
 void SessionRunner::teardownStreamingInstances()
 {
-    const QList<int> indices = m_streamingInstances.keys();
-    for (int idx : indices) {
-        cleanupStreamingInstance(idx);
+    m_streamingInstances.clear();
+    m_streamAudio.teardown();
+    m_pendingDisplays.clear();
+    if (m_virtualDisplays) {
+        m_virtualDisplays->destroyAll();
     }
 }
 
@@ -1833,21 +1871,6 @@ void SessionRunner::cleanupStreamingInstance(int index)
     for (const auto *instance : m_instances) {
         if (instance->index() == index && instance->pid() > 0) {
             return;
-        }
-    }
-
-    const StreamingInstanceInfo &info = m_streamingInstances[index];
-
-    if (m_helperClient && m_helperClient->isAvailable()) {
-        if (info.nullSinkCreated && !info.sinkName.isEmpty()) {
-            if (!m_helperClient->destroyNullSink(info.username, info.sinkName)) {
-                qWarning() << "SessionRunner: Failed to destroy null sink" << info.sinkName;
-            }
-        }
-        if (info.virtualDisplayCreated && !info.displayContext.isEmpty()) {
-            if (!m_helperClient->destroyVirtualOutput(info.username, info.displayContext)) {
-                qWarning() << "SessionRunner: Failed to destroy virtual output" << info.displayContext;
-            }
         }
     }
 

@@ -36,3 +36,5 @@ target_include_directories(couchplay-helper PRIVATE
 install(TARGETS couchplay-helper
     DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}
 )
+
+add_subdirectory(vdisplay)

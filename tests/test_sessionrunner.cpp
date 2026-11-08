@@ -39,6 +39,7 @@
 #include "DeviceManager.h"
 #include "StreamManager.h"
 #include "SunshineConfig.h"
+#include "VirtualDisplayManager.h"
 #include "UserLookup.h"
 
 class TestEnvironmentGuard
@@ -100,19 +101,13 @@ public:
     QList<qint64> stopPids;
     QList<qint64> killPids;
     QStringList copiedFileUsers;
-    QList<QStringList> auxiliaryCommands;
-    QStringList auxiliaryUsernames;
-    QList<qint64> auxiliaryPids;
     bool autoReady = true;
-    bool autoAuxiliaryReady = true;
     bool launchFails = false;
-    bool auxiliaryLaunchFails = false;
     bool stopSucceeds = true;
     bool killSucceeds = true;
     std::function<void(qint64)> onStopInstance;
     qint64 nextPid = 1000;
     qint64 launchInstance(const QString &username,
-                          const QString &displayContext,
                           const QStringList &gamescopeArgs,
                           const QStringList &gameCommand,
                           const QString &workingDirectory,
@@ -121,7 +116,6 @@ public:
                           bool privateTemporaryDirectories,
                           const QVariantList &directoryPreparations) override
     {
-        Q_UNUSED(displayContext)
         Q_UNUSED(gamescopeArgs)
         Q_UNUSED(workingDirectory)
         Q_UNUSED(sharedRoots)
@@ -138,33 +132,6 @@ public:
         if (autoReady) Q_EMIT instanceReady(username, pid);
         return pid;
     }
-    qint64 launchAuxiliaryInstance(const QString &username,
-                                   const QString &displayContext,
-                                   const QStringList &gamescopeArgs,
-                                   const QStringList &gameCommand,
-                                   const QString &workingDirectory,
-                                   const QStringList &sharedRoots,
-                                   const QStringList &environment,
-                                   bool privateTemporaryDirectories) override
-    {
-        Q_UNUSED(displayContext)
-        Q_UNUSED(gamescopeArgs)
-        Q_UNUSED(workingDirectory)
-        Q_UNUSED(sharedRoots)
-        Q_UNUSED(environment)
-        Q_UNUSED(privateTemporaryDirectories)
-        auxiliaryCommands.append(gameCommand);
-        auxiliaryUsernames.append(username);
-        if (auxiliaryLaunchFails) {
-            Q_EMIT errorOccurred(QStringLiteral("simulated auxiliary launch failure"));
-            return 0;
-        }
-        const qint64 pid = nextPid++;
-        auxiliaryPids.append(pid);
-        if (autoAuxiliaryReady) Q_EMIT instanceReady(username, pid);
-        return pid;
-    }
-
 
     bool stopInstance(qint64 pid) override
     {
@@ -177,28 +144,6 @@ public:
     {
         killPids.append(pid);
         return killSucceeds;
-    }
-
-    QSet<QString> liveVirtualOutputs;
-    QSet<QString> liveNullSinks;
-    QString createVirtualOutput(const QString &username, int, int, int) override
-    {
-        const QString context = QStringLiteral("display-%1").arg(username);
-        liveVirtualOutputs.insert(context);
-        return context;
-    }
-    bool destroyVirtualOutput(const QString &, const QString &context) override
-    {
-        return liveVirtualOutputs.remove(context);
-    }
-    QString createNullSink(const QString &, const QString &sinkName) override
-    {
-        liveNullSinks.insert(sinkName);
-        return sinkName;
-    }
-    bool destroyNullSink(const QString &, const QString &sinkName) override
-    {
-        return liveNullSinks.remove(sinkName);
     }
 
     bool setPathAclWithParents(const QString &path, const QString &username) override
@@ -365,7 +310,8 @@ private Q_SLOTS:
     void testStopDefersCleanupUntilStopReturns();
     void testStoppedInstanceCancelsItsPositionListener();
     void testSynchronousLaunchFailureRunsPostHookOnce();
-    void testStreamingStartupWaitsForAuxiliaryReadiness();
+    void testVirtualDisplayFailureAbortsStartup();
+    void testStreamingStartupWaitsForSunshineReady();
     void testStreamingInstancesGetDistinctSunshinePorts();
     void testStreamingLaunchFailureAbortsStartup();
     void testValidateDisplaysMonitorNotConnected();
@@ -374,8 +320,6 @@ private Q_SLOTS:
     void testValidateDisplaysStreamWithMain();
     void testValidateDisplaysValidProfile();
     void testStartRejectsInvalidDisplay();
-    void testStreamingResourcesSurviveIncompleteStop_data();
-    void testStreamingResourcesSurviveIncompleteStop();
     void testDeviceReconnectIgnoredDuringPostHook();
     void testDeviceReconnectIgnoredDuringPreHook();
     void testInvalidPostSessionReportsError();
@@ -1878,6 +1822,94 @@ void TestSessionRunner::testSynchronousLaunchFailureRunsPostHookOnce()
     QCOMPARE(marker.readAll(), QByteArray("post"));
 }
 
+namespace
+{
+bool writeExecutable(const QString &path, const QByteArray &body)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    file.write("#!/bin/sh\n" + body + "\n");
+    file.close();
+    return QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+}
+
+// Fake couchplay-vdisplay, pactl and sunshine so streaming sessions run without a compositor.
+class StreamingFakes
+{
+public:
+    explicit StreamingFakes(SessionRunner *runner, bool vdisplayWorks = true, bool sunshineExists = true)
+        : m_oldDataHome(qgetenv("XDG_DATA_HOME"))
+        , m_hadDataHome(qEnvironmentVariableIsSet("XDG_DATA_HOME"))
+    {
+        qputenv("XDG_DATA_HOME", m_dir.filePath(QStringLiteral("data")).toUtf8());
+        const QString vdisplay = m_dir.filePath(QStringLiteral("vdisplay"));
+        writeExecutable(vdisplay,
+                        vdisplayWorks ? QByteArray("echo 'READY 1'\nexec sleep 30")
+                                      : QByteArray("echo 'protocol missing' >&2\nexit 2"));
+        const QString pactl = m_dir.filePath(QStringLiteral("pactl"));
+        writeExecutable(pactl,
+                        "case \"$1\" in\nget-default-sink) echo alsa_default;;\nload-module) echo 7;;\nesac\nexit 0");
+        const QString sunshine = m_dir.filePath(QStringLiteral("sunshine"));
+        writeExecutable(sunshine,
+                        "conf=\"$1\"\ndir=$(dirname \"$conf\")\n"
+                        "if [ \"$2\" = \"--creds\" ]; then echo '{}' > \"$dir/credentials.json\"; exit 0; fi\n"
+                        "log=$(sed -n 's/^log_path = //p' \"$conf\")\n"
+                        "echo 'Info: Configuration UI available at [https://localhost:48020]' >> \"$log\"\n"
+                        "exec sleep 30");
+
+        runner->m_virtualDisplays->setProgramOverride(vdisplay);
+        runner->m_virtualDisplays->setScreenLookup(
+            [](const QString &name, const QSize &size, const QSet<QString> &, QString *outName, QRect *geometry) {
+                *outName = name;
+                *geometry = QRect(QPoint(5000, 0), size);
+                return true;
+            });
+        runner->m_streamAudio.setProgramOverride(pactl);
+        runner->m_streamManager->setProgramOverride(sunshineExists ? sunshine
+                                                                   : QStringLiteral("/nonexistent/sunshine"));
+    }
+
+    ~StreamingFakes()
+    {
+        if (m_hadDataHome) {
+            qputenv("XDG_DATA_HOME", m_oldDataHome);
+        } else {
+            qunsetenv("XDG_DATA_HOME");
+        }
+    }
+
+private:
+    QTemporaryDir m_dir;
+    QByteArray m_oldDataHome;
+    bool m_hadDataHome;
+};
+}
+
+void TestSessionRunner::testVirtualDisplayFailureAbortsStartup()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Vdisplay failure"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    StreamingFakes fakes(m_runner, /*vdisplayWorks=*/false);
+
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 3000);
+    QVERIFY(failedSpy.first().constFirst().toString().contains(
+        QStringLiteral("Player 2: could not create virtual display")));
+    QCOMPARE(startedSpy.count(), 0);
+    QCOMPARE(m_helperClient->launchCommands.size(), 0);
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+}
+
 void TestSessionRunner::testStreamingInstancesGetDistinctSunshinePorts()
 {
     const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Streaming ports"), QStringLiteral("/usr/bin/true"));
@@ -1887,19 +1919,24 @@ void TestSessionRunner::testStreamingInstancesGetDistinctSunshinePorts()
         m_sessionManager->setInstancePreset(i, presetId);
         m_sessionManager->setInstanceConfig(i, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     }
+    StreamingFakes fakes(m_runner);
     m_helperClient->autoReady = false;
 
     QVERIFY(m_runner->start());
-    QCOMPARE(m_runner->m_pendingInstanceConfigs.size(), 2);
-    const int port0 = m_runner->m_pendingInstanceConfigs.value(0).value(QStringLiteral("sunshinePort")).toInt();
-    const int port1 = m_runner->m_pendingInstanceConfigs.value(1).value(QStringLiteral("sunshinePort")).toInt();
-    QCOMPARE(port0, SunshineConfig::calculatePort(0));
-    QCOMPARE(port1, SunshineConfig::calculatePort(1));
+    QTRY_COMPARE_WITH_TIMEOUT(m_runner->m_pendingInstanceConfigs.size(), 2, 3000);
+    for (int i = 0; i < 2; ++i) {
+        const QVariantMap config = m_runner->m_pendingInstanceConfigs.value(i);
+        QCOMPARE(config.value(QStringLiteral("sunshinePort")).toInt(), SunshineConfig::calculatePort(i));
+        QCOMPARE(config.value(QStringLiteral("monitorName")).toString(),
+                 QStringLiteral("Virtual-couchplay-p%1").arg(i + 1));
+        QCOMPARE(config.value(QStringLiteral("sink")).toString(), QStringLiteral("couchplay-stream-p%1").arg(i + 1));
+        QCOMPARE(config.value(QStringLiteral("positionX")).toInt(), 5000);
+    }
 
     m_runner->stop();
 }
 
-void TestSessionRunner::testStreamingStartupWaitsForAuxiliaryReadiness()
+void TestSessionRunner::testStreamingStartupWaitsForSunshineReady()
 {
     const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Streaming startup"), QStringLiteral("/usr/bin/true"));
     m_sessionManager->setInstanceCount(2);
@@ -1908,98 +1945,31 @@ void TestSessionRunner::testStreamingStartupWaitsForAuxiliaryReadiness()
     m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstancePreset(1, presetId);
+    StreamingFakes fakes(m_runner);
     m_helperClient->autoReady = false;
-    m_helperClient->autoAuxiliaryReady = false;
-    m_runner->m_streamManager->setStartupTimeout(30);
 
     QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
     QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
     QSignalSpy streamStartedSpy(m_runner->m_streamManager, &StreamManager::streamStarted);
     QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
     QVERIFY(m_runner->start());
-    const qint64 firstPid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), firstPid);
-    QCOMPARE(m_helperClient->launchCommands.size(), 1);
-    QCOMPARE(m_helperClient->auxiliaryCommands.size(), 1);
-    const qint64 streamPid = m_helperClient->auxiliaryPids.constFirst();
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 1, 3000);
+    QCOMPARE(m_runner->m_streamManager->streamState(0), StreamManager::NotStarted);
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), m_helperClient->nextPid - 1);
 
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), streamPid);
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), streamPid + 50);
-    QTest::qWait(80);
-    QCOMPARE(streamStartedSpy.count(), 0);
-    QCOMPARE(m_helperClient->launchCommands.size(), 1);
-    QCOMPARE(m_runner->m_streamManager->streamState(0), StreamManager::Waiting);
-
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), streamPid);
-    QTRY_COMPARE_WITH_TIMEOUT(streamStartedSpy.count(), 1, 1000);
-    QCOMPARE(m_helperClient->launchCommands.size(), 2);
+    // The next player waits until Sunshine for this one reports ready.
+    QTRY_COMPARE_WITH_TIMEOUT(streamStartedSpy.count(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 2, 3000);
     QCOMPARE(startedSpy.count(), 0);
-    const qint64 secondPid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), secondPid);
-    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 1000);
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), m_helperClient->nextPid - 1);
+    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 3000);
     QCOMPARE(failedSpy.count(), 0);
 
     m_runner->stop();
-    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 1000);
-}
-
-void TestSessionRunner::testStreamingResourcesSurviveIncompleteStop_data()
-{
-    QTest::addColumn<bool>("streamStopsFirst");
-    QTest::addColumn<bool>("stopSingleInstance");
-    QTest::newRow("stream-first-session-stop") << true << false;
-    QTest::newRow("game-first-session-stop") << false << false;
-    QTest::newRow("stream-first-instance-stop") << true << true;
-    QTest::newRow("game-first-instance-stop") << false << true;
-}
-
-void TestSessionRunner::testStreamingResourcesSurviveIncompleteStop()
-{
-    QFETCH(bool, streamStopsFirst);
-    QFETCH(bool, stopSingleInstance);
-    const QString presetId = m_presetManager->addCustomPreset(
-        QStringLiteral("Streaming stop"), QStringLiteral("/usr/bin/true"));
-    m_sessionManager->setInstanceCount(2);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    m_sessionManager->setInstancePreset(0, presetId);
-    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
-    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
-    m_sessionManager->setInstancePreset(1, presetId);
-    m_helperClient->autoReady = false;
-    m_helperClient->autoAuxiliaryReady = false;
-    m_runner->m_streamManager->setStartupTimeout(10);
-    QVERIFY(m_runner->start());
-    const qint64 gamePid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), gamePid);
-    QTRY_VERIFY_WITH_TIMEOUT(!m_helperClient->auxiliaryPids.isEmpty(), 1000);
-    const qint64 streamPid = m_helperClient->auxiliaryPids.constFirst();
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), streamPid);
-    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 2, 1000);
-    const qint64 secondPid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), secondPid);
-    QTRY_VERIFY_WITH_TIMEOUT(m_runner->m_sessionStartupComplete, 1000);
-    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player2"), secondPid, QStringLiteral("stopped"));
-    QCOMPARE(m_helperClient->liveVirtualOutputs.size(), 1);
-    QCOMPARE(m_helperClient->liveNullSinks.size(), 1);
-
-    m_helperClient->stopSucceeds = false;
-    m_helperClient->killSucceeds = false;
-    if (stopSingleInstance) m_runner->stopInstance(0);
-    else m_runner->stop();
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(m_helperClient->liveVirtualOutputs.size(), 1);
-    QCOMPARE(m_helperClient->liveNullSinks.size(), 1);
-
-    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player1"),
-                                         streamStopsFirst ? streamPid : gamePid, QStringLiteral("stopped"));
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(m_helperClient->liveVirtualOutputs.size(), 1);
-    QCOMPARE(m_helperClient->liveNullSinks.size(), 1);
-    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player1"),
-                                         streamStopsFirst ? gamePid : streamPid, QStringLiteral("stopped"));
-    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 1000);
-    QVERIFY(m_helperClient->liveVirtualOutputs.isEmpty());
-    QVERIFY(m_helperClient->liveNullSinks.isEmpty());
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 10000);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+    QVERIFY(!m_runner->m_streamManager->hasOwnedPids());
 }
 
 void TestSessionRunner::testStreamingLaunchFailureAbortsStartup()
@@ -2011,19 +1981,18 @@ void TestSessionRunner::testStreamingLaunchFailureAbortsStartup()
     m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstancePreset(1, presetId);
-    m_helperClient->auxiliaryLaunchFails = true;
+    StreamingFakes fakes(m_runner, /*vdisplayWorks=*/true, /*sunshineExists=*/false);
 
     QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
     QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
-    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
     QVERIFY(m_runner->start());
-    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 1000);
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 5000);
     QCOMPARE(startedSpy.count(), 0);
     QCOMPARE(m_helperClient->launchCommands.size(), 1);
-    QCOMPARE(m_helperClient->auxiliaryCommands.size(), 1);
-    QVERIFY(errorSpy.first().constFirst().toString().contains(QStringLiteral("Failed to launch Sunshine")));
-    QVERIFY(m_helperClient->stopPids.contains(1000));
-    QVERIFY(!m_runner->isActive());
+    QVERIFY(failedSpy.first().constFirst().toString().contains(QStringLiteral("Sunshine")));
+    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 3000);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
 }
 
 static SessionProfile displayProfile(const QStringList &displays, const QString &mainScreen = QString())

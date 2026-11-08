@@ -19,6 +19,7 @@
 #include "../dbus/CouchPlayHelperClient.h"
 #include "HeroicConfigManager.h"
 #include "SteamConfigManager.h"
+#include "StreamAudio.h"
 
 class QAction;
 class QScreen;
@@ -28,6 +29,7 @@ class DeviceManager;
 class SessionManager;
 class SettingsManager;
 class StreamManager;
+class VirtualDisplayManager;
 class WindowManager;
 class PresetManager;
 
@@ -235,7 +237,6 @@ private:
     void setupGlobalShortcut();
     void inhibitScreenSaver();
     void uninhibitScreenSaver();
-    bool setupStreamingInstance(int instanceIndex, const QVariantMap &config);
     void teardownStreamingInstances();
     void cleanupStreamingInstance(int index);
     void continueFinalizationAfterStopping();
@@ -251,12 +252,13 @@ private:
     };
 
     struct StreamingInstanceInfo {
-        QString username;
-        QString displayContext;
-        QString sinkName;
-        bool virtualDisplayCreated = false;
-        bool nullSinkCreated = false;
+        QString outputName; // KWin output Sunshine captures
+        QString sinkName;   // Per-player stream sink
     };
+
+    void startVirtualDisplays();
+    void continueStartAfterDisplays();
+    void proceedAfterInstanceStarted(GamescopeInstance *instance);
 
     QMap<int, QVariantList> m_instanceDirectoryPreparations;
     uint m_screenSaverCookie = 0;
@@ -275,6 +277,11 @@ private:
     SettingsManager *m_settingsManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     StreamManager *m_streamManager = nullptr;
+    VirtualDisplayManager *m_virtualDisplays = nullptr;
+    StreamAudio m_streamAudio;
+    QSet<int> m_pendingDisplays;
+    QHash<int, QString> m_virtualOutputNames;
+    QHash<int, QRect> m_virtualRects;
     QList<GamescopeInstance *> m_instances;
     QAction *m_stopAction = nullptr;
     QString m_status;

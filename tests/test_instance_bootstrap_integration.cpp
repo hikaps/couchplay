@@ -2917,7 +2917,7 @@ int runFixtureCallerLaunch(int argc, char **argv)
         }
         const QStringList environment{QStringLiteral("XDG_CURRENT_DESKTOP=KDE"),
                                       QStringLiteral("PULSE_SINK=couchplay-fixture-sink")};
-        arguments << targetUsername << QString() << QStringList{} << command
+        arguments << targetUsername << QStringList{} << command
                   << payload.value(QStringLiteral("workingDirectory")).toString()
                   << sharedRoots << environment << privateTmpValue.toBool();
         arguments.append(QVariant::fromValue(preparationValue.toArray().toVariantList()));

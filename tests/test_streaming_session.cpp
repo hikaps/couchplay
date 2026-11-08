@@ -177,14 +177,22 @@ void TestStreamingSession::testStreamingConfigToSunshineConfig()
     QVariantMap streamConfig;
     streamConfig.insert(KEY("display"), QStringLiteral("virtual"));
     streamConfig.insert(KEY("streamBitrate"), 25000);
+    streamConfig.insert(KEY("streamCodec"), QStringLiteral("hevc"));
     streamConfig.insert(KEY("sunshinePort"), 48019);
     streamConfig.insert(KEY("username"), QStringLiteral("streamer"));
     m_sessionManager->setInstanceConfig(1, streamConfig);
 
     QVariantMap retrieved = m_sessionManager->getInstanceConfig(1);
 
-    QString instanceDir = configDir.path() + QStringLiteral("/sunshine-1");
-    QString configPath = SunshineConfig::generateConfig(retrieved, 1, instanceDir);
+    StreamSpec spec;
+    spec.instanceIndex = 1;
+    spec.identityKey = retrieved.value(KEY("username")).toString();
+    spec.outputName = QStringLiteral("Virtual-couchplay-p2");
+    spec.port = SunshineConfig::calculatePort(0, retrieved.value(KEY("sunshinePort")).toInt());
+    spec.bitrate = retrieved.value(KEY("streamBitrate")).toInt();
+    spec.codec = retrieved.value(KEY("streamCodec")).toString();
+
+    QString configPath = SunshineConfig::generateConfig(spec, configDir.path());
     QVERIFY(!configPath.isEmpty());
 
     QFile file(configPath);
@@ -194,13 +202,10 @@ void TestStreamingSession::testStreamingConfigToSunshineConfig()
 
     QVERIFY(content.contains(QStringLiteral("port = 48019")));
     QVERIFY(content.contains(QStringLiteral("max_bitrate = 25000")));
-    // Username is now in credentials.json, not sunshine.conf
-    QFile credsFile(instanceDir + QStringLiteral("/credentials.json"));
-    QVERIFY(credsFile.open(QIODevice::ReadOnly));
-    QJsonObject creds = QJsonDocument::fromJson(credsFile.readAll()).object();
-    credsFile.close();
-    QCOMPARE(creds.value(QStringLiteral("username")).toString(), QStringLiteral("streamer"));
-    QVERIFY(content.contains(QStringLiteral("sunshine_name = CouchPlay Player 1")));
+    QVERIFY(content.contains(QStringLiteral("av1_mode = 1")));
+    QVERIFY(content.contains(QStringLiteral("output_name = Virtual-couchplay-p2")));
+    QVERIFY(content.contains(QStringLiteral("capture = kwin")));
+    QVERIFY(content.contains(QStringLiteral("sunshine_name = CouchPlay – Player 2 (streamer)")));
 }
 
 void TestStreamingSession::testEffectiveSunshinePortsAreDistinct()

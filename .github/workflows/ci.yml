@@ -66,6 +66,7 @@ jobs:
           mkdir -p pkg/bin pkg/data
           cp build/bin/couchplay pkg/bin/
           cp build/bin/couchplay-helper pkg/bin/
+          cp build/bin/couchplay-vdisplay pkg/bin/
           cp scripts/install-helper.sh pkg/
           chmod +x pkg/install-helper.sh
           cp -r data/* pkg/data/

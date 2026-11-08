@@ -5,6 +5,10 @@
 
 #include <QDebug>
 
+#include "HostProcess.h"
+
+#include <QDir>
+
 #include <KConfigGroup>
 #include <KSharedConfig>
 
@@ -31,6 +35,9 @@ void SettingsManager::loadSettings()
     m_filterMode = gamescope.readEntry(QStringLiteral("FilterMode"), QStringLiteral("linear"));
     m_borderlessWindows = gamescope.readEntry(QStringLiteral("BorderlessWindows"), true);
 
+    // Streaming settings
+    m_sunshinePath = config->group(QStringLiteral("Streaming")).readEntry(QStringLiteral("SunshinePath"), QString());
+
     qDebug() << "SettingsManager: Loaded settings from couchplayrc";
 }
 
@@ -50,6 +57,9 @@ void SettingsManager::saveAllSettings()
     gamescope.writeEntry(QStringLiteral("ScalingMode"), m_scalingMode);
     gamescope.writeEntry(QStringLiteral("FilterMode"), m_filterMode);
     gamescope.writeEntry(QStringLiteral("BorderlessWindows"), m_borderlessWindows);
+
+    // Streaming settings
+    config->group(QStringLiteral("Streaming")).writeEntry(QStringLiteral("SunshinePath"), m_sunshinePath);
 
     config->sync();
 }
@@ -131,6 +141,37 @@ void SettingsManager::setIgnoredDevices(const QStringList &value)
     }
 }
 
+void SettingsManager::setSunshinePath(const QString &value)
+{
+    if (m_sunshinePath != value) {
+        m_sunshinePath = value;
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("Streaming")).writeEntry(QStringLiteral("SunshinePath"), value);
+        config->sync();
+        Q_EMIT sunshinePathChanged();
+    }
+}
+
+QString SettingsManager::resolvedSunshinePath() const
+{
+    if (!m_sunshinePath.isEmpty()) {
+        return m_sunshinePath;
+    }
+
+    // Under Flatpak QDir::homePath() may be the sandbox home; HOME is the host user's home.
+    const QString home = qEnvironmentVariable("HOME", QDir::homePath());
+    const QStringList candidates{QStringLiteral("/usr/bin/sunshine"),
+                                 QStringLiteral("/usr/local/bin/sunshine"),
+                                 QStringLiteral("/home/linuxbrew/.linuxbrew/bin/sunshine"),
+                                 home + QStringLiteral("/.local/bin/sunshine")};
+    for (const QString &candidate : candidates) {
+        if (HostProcess::hostExecutableExists(candidate)) {
+            return candidate;
+        }
+    }
+    return QString();
+}
+
 void SettingsManager::addIgnoredDevice(const QString &stableId)
 {
     if (!m_ignoredDevices.contains(stableId)) {
@@ -161,6 +202,7 @@ void SettingsManager::resetToDefaults()
     m_scalingMode = QStringLiteral("fit");
     m_filterMode = QStringLiteral("linear");
     m_borderlessWindows = true;
+    m_sunshinePath.clear();
     m_ignoredDevices.clear();
 
     saveAllSettings();
@@ -172,6 +214,7 @@ void SettingsManager::resetToDefaults()
     Q_EMIT filterModeChanged();
     Q_EMIT borderlessWindowsChanged();
     Q_EMIT ignoredDevicesChanged();
+    Q_EMIT sunshinePathChanged();
 
     qDebug() << "SettingsManager: Reset all settings to defaults";
 }

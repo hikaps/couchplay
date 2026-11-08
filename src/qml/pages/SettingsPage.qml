@@ -168,6 +168,46 @@ Kirigami.ScrollablePage {
                 Controls.ToolTip.delay: 1000
             }
         }
+
+        Kirigami.FormLayout {
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Streaming")
+            }
+
+            Controls.TextField {
+                id: sunshinePathField
+                objectName: "fieldSunshinePath"
+                Kirigami.FormData.label: i18nc("@label:textbox", "Sunshine executable")
+                Accessible.role: Accessible.EditableText
+                Accessible.name: Kirigami.FormData.label
+                placeholderText: i18nc("@info:placeholder", "Detect automatically")
+                text: root.settingsManager?.sunshinePath ?? ""
+                onEditingFinished: if (root.settingsManager) root.settingsManager.sunshinePath = text.trim()
+            }
+
+            Controls.Label {
+                objectName: "labelSunshineDetected"
+                Kirigami.FormData.label: i18nc("@label", "Detected")
+                readonly property string detected: root.settingsManager && root.settingsManager.sunshinePath !== undefined ? root.settingsManager.resolvedSunshinePath() : ""
+                text: detected.length > 0
+                    ? i18nc("@info", "Detected: %1", detected)
+                    : i18nc("@info", "Sunshine was not found on the host")
+                color: detected.length > 0 ? Kirigami.Theme.textColor : Kirigami.Theme.neutralTextColor
+                wrapMode: Text.Wrap
+            }
+
+            Controls.Label {
+                Layout.maximumWidth: Kirigami.Units.gridUnit * 25
+                text: i18nc("@info", "Sunshine must be installed on the host. The Sunshine Flatpak is not supported because KWin denies screen capture to sandboxed applications.")
+                wrapMode: Text.Wrap
+                color: Kirigami.Theme.disabledTextColor
+                font: Kirigami.Theme.smallFont
+            }
+        }
         Kirigami.FormLayout {
             Layout.alignment: Qt.AlignLeft | Qt.AlignTop
             wideMode: root.width > Kirigami.Units.gridUnit * 30
