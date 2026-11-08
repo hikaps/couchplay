@@ -332,6 +332,14 @@ void SessionRunner::setSettingsManager(SettingsManager *manager)
     }
 }
 
+void SessionRunner::setSkipPairingCheck(bool skip)
+{
+    if (m_skipPairingCheck != skip) {
+        m_skipPairingCheck = skip;
+        Q_EMIT skipPairingCheckChanged();
+    }
+}
+
 bool SessionRunner::start()
 {
     if (!m_sessionManager) {
@@ -374,6 +382,14 @@ bool SessionRunner::start()
         Q_EMIT errorOccurred(displayError);
         setStatus(QStringLiteral("Error"));
         return false;
+    }
+    if (!m_skipPairingCheck) {
+        const QString pairingError = validatePairing(profile);
+        if (!pairingError.isEmpty()) {
+            Q_EMIT errorOccurred(pairingError);
+            setStatus(QStringLiteral("Error"));
+            return false;
+        }
     }
     m_startingSnapshot.profile = profile;
     m_startingSnapshot.syncSteamShortcuts = m_steamConfigManager && m_steamConfigManager->syncShortcutsEnabled();
@@ -1431,6 +1447,31 @@ QString SessionRunner::validateDisplays(const SessionProfile &profile,
     if (anyMainPlayer && monitorOwner.contains(mainName)) {
         return QStringLiteral("Monitor %1 is the main screen; choose another main screen or move the players")
             .arg(mainName);
+    }
+    return {};
+}
+
+QString SessionRunner::validatePairing(const SessionProfile &profile)
+{
+    return validatePairing(profile, [](const QString &username) { return SunshineConfig::pairedClientCount(username); });
+}
+
+QString SessionRunner::validatePairing(const SessionProfile &profile,
+                                       const std::function<int(const QString &username)> &pairedCount)
+{
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        const InstanceConfig &instance = profile.instances[i];
+        const bool streaming = instance.display != InstanceConfig::DisplayMain
+            && (instance.display == InstanceConfig::DisplayVirtual || instance.streamToMoonlight);
+        if (!streaming || instance.username.isEmpty()) {
+            continue;
+        }
+        if (pairedCount(instance.username) == 0) {
+            return QStringLiteral("Player %1 (%2) has no paired Moonlight client. "
+                                  "Use \"Pair Moonlight client\" on that player first.")
+                .arg(i + 1)
+                .arg(instance.username);
+        }
     }
     return {};
 }

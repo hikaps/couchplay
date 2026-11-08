@@ -7,10 +7,14 @@
 #include <QDir>
 #include <QFile>
 #include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QUdpSocket>
+#include <QVariantMap>
 
 namespace
 {
@@ -230,4 +234,31 @@ int SunshineConfig::allocatePort(int preferred, int attempts)
         }
     }
     return -1;
+}
+
+QVariantList SunshineConfig::pairedClients(const QString &identityKey)
+{
+    QFile file(stateDirectory(identityKey) + QStringLiteral("/sunshine_state.json"));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    const QJsonArray devices =
+        document.object().value(QLatin1String("root")).toObject().value(QLatin1String("named_devices")).toArray();
+    QVariantList clients;
+    for (const QJsonValue &value : devices) {
+        const QJsonObject device = value.toObject();
+        const QString uuid = device.value(QLatin1String("uuid")).toString();
+        if (uuid.isEmpty()) {
+            continue;
+        }
+        clients.append(QVariantMap{{QStringLiteral("name"), device.value(QLatin1String("name")).toString()},
+                                   {QStringLiteral("uuid"), uuid}});
+    }
+    return clients;
+}
+
+int SunshineConfig::pairedClientCount(const QString &identityKey)
+{
+    return static_cast<int>(pairedClients(identityKey).size());
 }

@@ -24,7 +24,7 @@ public:
     }
 
 Q_SIGNALS:
-    void launchRequested(const QString &profileName, bool start, bool exitAfterSession);
+    void launchRequested(const QString &profileName, bool start, bool exitAfterSession, bool skipPairingCheck);
 
 private:
     bool m_requestAccepted = false;

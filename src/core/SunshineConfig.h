@@ -5,6 +5,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 
 /**
  * @brief Everything Sunshine needs to stream one KWin output for one player
@@ -67,4 +68,14 @@ public:
      * @return The port, or -1 when none is free
      */
     static int allocatePort(int preferred, int attempts = 10);
+
+    /**
+     * Moonlight clients paired with this identity: [{name, uuid}] read from
+     * <stateDir>/sunshine_state.json (root.named_devices). Empty when the file is missing or invalid.
+     * Never creates the state directory.
+     */
+    static QVariantList pairedClients(const QString &identityKey);
+
+    /** Number of entries pairedClients() returns. */
+    static int pairedClientCount(const QString &identityKey);
 };

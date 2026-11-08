@@ -324,6 +324,11 @@ private Q_SLOTS:
     void testValidateDisplaysStreamWithMain();
     void testValidateDisplaysValidProfile();
     void testStartRejectsInvalidDisplay();
+    void testValidatePairingGate();
+    void testValidatePairingSkipsUnpairedNonStreamingAndNoUser();
+    void testStartRejectsUnpairedStreamingPlayer();
+    void testStartSkipPairingCheck();
+    void testStartAllowsPairedStreamingPlayer();
     void testDeviceReconnectIgnoredDuringPostHook();
     void testDeviceReconnectIgnoredDuringPreHook();
     void testSunshineGamepadClaimsAreFifo();
@@ -1858,6 +1863,7 @@ public:
         writeExecutable(vdisplay,
                         vdisplayWorks ? QByteArray("echo 'READY 1'\nexec sleep 30")
                                       : QByteArray("echo 'protocol missing' >&2\nexit 2"));
+        runner->setSkipPairingCheck(true);
         const QString pactl = m_dir.filePath(QStringLiteral("pactl"));
         writeExecutable(pactl,
                         "case \"$1\" in\nget-default-sink) echo alsa_default;;\nload-module) echo 7;;\nesac\nexit 0");
@@ -2088,6 +2094,96 @@ void TestSessionRunner::testStartRejectsInvalidDisplay()
     QCOMPARE(m_runner->status(), QStringLiteral("Error"));
     QVERIFY(!m_runner->isActive());
     QVERIFY(m_helperClient->launchCommands.isEmpty());
+}
+
+void TestSessionRunner::testValidatePairingGate()
+{
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("virtual")});
+    profile.instances[0].username = QStringLiteral("player1");
+    profile.instances[1].username = QStringLiteral("player2");
+    const auto none = [](const QString &) { return 0; };
+    const auto onlyPlayer2 = [](const QString &username) { return username == QStringLiteral("player2") ? 1 : 0; };
+
+    QCOMPARE(SessionRunner::validatePairing(profile, none),
+             QStringLiteral("Player 2 (player2) has no paired Moonlight client. "
+                            "Use \"Pair Moonlight client\" on that player first."));
+    QCOMPARE(SessionRunner::validatePairing(profile, onlyPlayer2), QString());
+
+    // A real monitor only streams when the player opted in
+    profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:DP-1")});
+    profile.instances[1].username = QStringLiteral("player2");
+    QCOMPARE(SessionRunner::validatePairing(profile, none), QString());
+    profile.instances[1].streamToMoonlight = true;
+    QVERIFY(!SessionRunner::validatePairing(profile, none).isEmpty());
+}
+
+void TestSessionRunner::testValidatePairingSkipsUnpairedNonStreamingAndNoUser()
+{
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("virtual")});
+    profile.instances[0].username = QStringLiteral("player1");
+    profile.instances[1].username.clear();
+    QCOMPARE(SessionRunner::validatePairing(profile, [](const QString &) { return 0; }), QString());
+}
+
+void TestSessionRunner::testStartRejectsUnpairedStreamingPlayer()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Unpaired"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    StreamingFakes fakes(m_runner);
+    m_runner->setSkipPairingCheck(false);
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+
+    QVERIFY(!m_runner->start());
+    QCOMPARE(errorSpy.count(), 1);
+    QVERIFY(errorSpy.first().constFirst().toString().contains(QStringLiteral("has no paired Moonlight client")));
+    QCOMPARE(m_runner->status(), QStringLiteral("Error"));
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(m_helperClient->launchCommands.isEmpty());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+}
+
+void TestSessionRunner::testStartSkipPairingCheck()
+{
+    QVERIFY(!SessionRunner().skipPairingCheck());
+    SessionRunner runner;
+    QSignalSpy changedSpy(&runner, &SessionRunner::skipPairingCheckChanged);
+    runner.setSkipPairingCheck(true);
+    runner.setSkipPairingCheck(true);
+    QVERIFY(runner.skipPairingCheck());
+    QCOMPARE(changedSpy.count(), 1);
+}
+
+void TestSessionRunner::testStartAllowsPairedStreamingPlayer()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Paired"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    // Sunshine is missing, so a start that passes the gate fails later with a Sunshine error, not a pairing one
+    StreamingFakes fakes(m_runner, /*vdisplayWorks=*/true, /*sunshineExists=*/false);
+    m_runner->setSkipPairingCheck(false);
+    const QString stateDir = SunshineConfig::ensureStateDirectory(QStringLiteral("player2"));
+    QVERIFY(!stateDir.isEmpty());
+    QFile state(stateDir + QStringLiteral("/sunshine_state.json"));
+    QVERIFY(state.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    state.write(R"({"root":{"uniqueid":"x","named_devices":[{"name":"Phone","uuid":"u1"}]}})");
+    state.close();
+
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    QVERIFY(m_runner->start());
+    QCOMPARE(errorSpy.count(), 0);
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 5000);
+    QVERIFY(!failedSpy.first().constFirst().toString().contains(QStringLiteral("paired")));
+    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 3000);
 }
 
 void TestSessionRunner::testDeviceReconnectIgnoredDuringPostHook()

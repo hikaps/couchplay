@@ -11,6 +11,7 @@ struct CommandLineRequest
     QString profileName;
     bool start = false;
     bool exitAfterSession = false;
+    bool skipPairingCheck = false;
 
     bool requested() const
     {

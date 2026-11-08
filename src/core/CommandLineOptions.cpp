@@ -42,6 +42,12 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
                 return {};
             }
             request.exitAfterSession = true;
+        } else if (argument == QStringLiteral("--skip-pairing-check")) {
+            if (request.skipPairingCheck) {
+                fail(QStringLiteral("--skip-pairing-check was specified more than once"));
+                return {};
+            }
+            request.skipPairingCheck = true;
         } else {
             fail(QStringLiteral("Unknown command-line argument: %1").arg(argument));
             return {};
@@ -54,6 +60,10 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
     }
     if (request.exitAfterSession && (!request.start || request.profileName.isEmpty())) {
         fail(QStringLiteral("--exit-after-session requires --profile and --start"));
+        return {};
+    }
+    if (request.skipPairingCheck && (!request.start || request.profileName.isEmpty())) {
+        fail(QStringLiteral("--skip-pairing-check requires --profile and --start"));
         return {};
     }
     return request;

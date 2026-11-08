@@ -70,6 +70,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/HostProcess.h
     ../src/core/VirtualDisplayManager.cpp
     ../src/core/VirtualDisplayManager.h
+    ../src/core/PairingSession.cpp
+    ../src/core/PairingSession.h
     ../src/core/StreamAudio.cpp
     ../src/core/StreamAudio.h
     ../src/dbus/CouchPlayHelperClient.cpp
@@ -188,6 +190,7 @@ target_link_libraries(test_sessionrunner PRIVATE ${LIBACL_LIBRARY})
 add_couchplay_test(test_streamaudio)
 add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
+add_couchplay_test(test_pairingsession)
 add_couchplay_test(test_streammanager)
 add_couchplay_test(test_sunshine_api)
 target_compile_definitions(test_sunshine_api PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
