@@ -46,6 +46,7 @@ struct InstanceConfig {
     Q_PROPERTY(int streamBitrate MEMBER streamBitrate)
     Q_PROPERTY(QString streamCodec MEMBER streamCodec)
     Q_PROPERTY(int sunshinePort MEMBER sunshinePort)
+    Q_PROPERTY(QString audioDevice MEMBER audioDevice)
 
 public:
     QString username;
@@ -71,6 +72,7 @@ public:
     int streamBitrate = 20000;                        // Kbps (20000 = 20 Mbps)
     QString streamCodec = QStringLiteral("h264");     // "h264", "h265", "av1"
     int sunshinePort = 47989;                         // Base port for Sunshine instance
+    QString audioDevice;                              // PulseAudio/PipeWire sink name for physical output; empty = default
 };
 
 Q_DECLARE_METATYPE(InstanceConfig)

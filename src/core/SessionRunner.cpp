@@ -547,6 +547,10 @@ void SessionRunner::continueStart()
             config[QStringLiteral("outputHeight")] = m_layouts[layoutIndex].height();
             config[QStringLiteral("positionX")] = m_layouts[layoutIndex].x();
             config[QStringLiteral("positionY")] = m_layouts[layoutIndex].y();
+            if (!instConfig.audioDevice.isEmpty()) {
+                // Players reach the host's PipeWire-Pulse over TCP, so a host sink name is valid for them.
+                config[QStringLiteral("sink")] = instConfig.audioDevice;
+            }
         }
         config[QStringLiteral("refreshRate")] = instConfig.refreshRate;
         config[QStringLiteral("scalingMode")] = instConfig.scalingMode;

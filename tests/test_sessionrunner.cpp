@@ -92,6 +92,7 @@ public:
     }
 
     QList<QStringList> launchCommands;
+    QList<QStringList> launchEnvironments;
     QStringList launchUsernames;
     QList<QVariantList> launchPreparations;
     QList<qint64> stopPids;
@@ -122,7 +123,7 @@ public:
         Q_UNUSED(gamescopeArgs)
         Q_UNUSED(workingDirectory)
         Q_UNUSED(sharedRoots)
-        Q_UNUSED(environment)
+        launchEnvironments.append(environment);
         Q_UNUSED(privateTemporaryDirectories)
         launchCommands.append(gameCommand);
         launchUsernames.append(username);
@@ -350,6 +351,7 @@ private Q_SLOTS:
     void testPreHookUsesStartingProfileSnapshot();
     void testPreHookUsesCapturedApplicationRevision();
     void testReadinessAdvancesSequentialStartup();
+    void testPhysicalInstanceAudioDeviceRoutesOnlyThatPlayer();
     void testPreparationFailureAbortsStartup();
     void testCancelWhilePreparing();
     void testStopFailureRetainsPreparingInstanceForRetry();
@@ -2164,6 +2166,36 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     const QByteArray vdfContent = vdf.readAll();
     QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
     QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
+}
+
+void TestSessionRunner::testPhysicalInstanceAudioDeviceRoutesOnlyThatPlayer()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Audio routing"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    QVariantMap playerTwo = m_sessionManager->getInstanceConfig(1);
+    playerTwo[QStringLiteral("audioDevice")] = QStringLiteral("alsa_output.usb-soundbar.analog-stereo");
+    m_sessionManager->setInstanceConfig(1, playerTwo);
+
+    QVERIFY(m_runner->start());
+    QCOMPARE(m_helperClient->launchEnvironments.size(), 2);
+
+    const QString sinkPrefix = QStringLiteral("PULSE_SINK=");
+    auto sinkOf = [&](const QStringList &environment) {
+        for (const QString &entry : environment) {
+            if (entry.startsWith(sinkPrefix)) return entry.mid(sinkPrefix.size());
+        }
+        return QString();
+    };
+    QCOMPARE(m_helperClient->launchUsernames.at(0), QStringLiteral("player1"));
+    QVERIFY(sinkOf(m_helperClient->launchEnvironments.at(0)).isEmpty());
+    QCOMPARE(m_helperClient->launchUsernames.at(1), QStringLiteral("player2"));
+    QCOMPARE(sinkOf(m_helperClient->launchEnvironments.at(1)),
+             QStringLiteral("alsa_output.usb-soundbar.analog-stereo"));
+    m_runner->stop();
 }
 
 QTEST_MAIN(TestSessionRunner)

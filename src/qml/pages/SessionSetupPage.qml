@@ -22,6 +22,7 @@ Kirigami.ScrollablePage {
     required property var presetManager
     required property var steamConfigManager
     required property var heroicConfigManager
+    required property var audioManager
 
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
@@ -482,6 +483,9 @@ Kirigami.ScrollablePage {
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
                 readonly property string labelResolution: i18nc("@label", "Game Resolution:")
+                readonly property string labelAudioOutput: i18nc("@label", "Audio Output:")
+                readonly property string optionAudioDefault: i18nc("@item:inlistbox", "Default output")
+                property var cardAudioManager: root.audioManager
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelGame: i18nc("@label", "Game:")
@@ -690,6 +694,69 @@ Kirigami.ScrollablePage {
                             visible: !instanceCard.isStreaming
                             text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
                             opacity: 0.8
+                        }
+                        // Audio device for this player; players share the host's PipeWire-Pulse, so a host sink name works.
+                        Controls.ComboBox {
+                            id: audioOutputCombo
+                            objectName: "comboAudioOutput"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelAudioOutput
+                            Kirigami.FormData.label: instanceCard.labelAudioOutput
+                            visible: !instanceCard.isStreaming
+                            Layout.fillWidth: true
+                            textRole: "text"
+                            valueRole: "value"
+
+                            function savedDevice() {
+                                if (!instanceCard.cardSessionManager) return ""
+                                return instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).audioDevice || ""
+                            }
+
+                            function buildModel() {
+                                let entries = [{ text: instanceCard.optionAudioDefault, value: "" }]
+                                let known = false
+                                const saved = savedDevice()
+                                const devices = instanceCard.cardAudioManager ? instanceCard.cardAudioManager.outputDevices : []
+                                for (let i = 0; i < devices.length; ++i) {
+                                    entries.push({ text: devices[i].description, value: devices[i].name })
+                                    if (devices[i].name === saved) known = true
+                                }
+                                // Keep a saved device that is currently unplugged visible instead of silently dropping it.
+                                if (saved !== "" && !known) entries.push({ text: saved, value: saved })
+                                return entries
+                            }
+
+                            function updateIndex() {
+                                const idx = indexOfValue(savedDevice())
+                                currentIndex = idx >= 0 ? idx : 0
+                            }
+
+                            model: buildModel()
+                            onModelChanged: updateIndex()
+                            Component.onCompleted: updateIndex()
+
+                            Connections {
+                                target: instanceCard
+                                function onCardRevisionChanged() {
+                                    audioOutputCombo.model = audioOutputCombo.buildModel()
+                                    audioOutputCombo.updateIndex()
+                                }
+                            }
+
+                            Connections {
+                                target: instanceCard.cardAudioManager
+                                function onOutputDevicesChanged() {
+                                    audioOutputCombo.model = audioOutputCombo.buildModel()
+                                }
+                            }
+
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.audioDevice = currentValue
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
                         }
                         Controls.ComboBox {
                             id: streamResolutionCombo

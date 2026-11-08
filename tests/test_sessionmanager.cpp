@@ -70,6 +70,7 @@ private Q_SLOTS:
     void testLoadProfile();
     void testPrivateTemporaryDirectoriesRoundtrip();
     void testLoadProfileLegacySharedDirectories();
+    void testAudioDeviceRoundtrip();
     void testMigrationPreservesExistingBackup();
     void testMigrationUnsafeBackupLeavesStateUnchanged();
     void testSymlinkedProfileWithoutLegacyKeysStillWorks();
@@ -386,6 +387,25 @@ void TestSessionManager::testPrivateTemporaryDirectoriesRoundtrip()
     QCOMPARE(restoredPlayerTwo.value(KEY("streamCodec")).toString(), QStringLiteral("h265"));
 
     m_sessionManager->deleteProfile(QStringLiteral("PrivateTemporaryDirectoriesProfile"));
+}
+
+void TestSessionManager::testAudioDeviceRoundtrip()
+{
+    m_sessionManager->setInstanceCount(2);
+    QVERIFY(m_sessionManager->getInstanceConfig(0).value(KEY("audioDevice")).toString().isEmpty());
+
+    QVariantMap playerTwo = m_sessionManager->getInstanceConfig(1);
+    playerTwo[KEY("audioDevice")] = QStringLiteral("alsa_output.usb-soundbar.analog-stereo");
+    m_sessionManager->setInstanceConfig(1, playerTwo);
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("AudioDeviceProfile")));
+
+    m_sessionManager->newSession();
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("AudioDeviceProfile")));
+    QVERIFY(m_sessionManager->getInstanceConfig(0).value(KEY("audioDevice")).toString().isEmpty());
+    QCOMPARE(m_sessionManager->getInstanceConfig(1).value(KEY("audioDevice")).toString(),
+             QStringLiteral("alsa_output.usb-soundbar.analog-stereo"));
+
+    m_sessionManager->deleteProfile(QStringLiteral("AudioDeviceProfile"));
 }
 
 void TestSessionManager::testLoadProfileLegacySharedDirectories()
