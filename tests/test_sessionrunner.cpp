@@ -269,14 +269,16 @@ public:
         return {{QStringLiteral("home"), home}, {QStringLiteral("canonicalHome"), canonical}};
     }
 
+    // When set, "player2" looks like a user whose Steam has never been started.
+    bool player2SteamNeverRun = false;
     QString getUserSteamId(const QString &username) override
     {
         return username == QStringLiteral("player1") ? QStringLiteral("12345")
-             : username == QStringLiteral("player2") ? QStringLiteral("12346") : QString();
+             : username == QStringLiteral("player2") && !player2SteamNeverRun ? QStringLiteral("12346") : QString();
     }
     bool isSteamBootstrapped(const QString &username) override
     {
-        return username == QStringLiteral("player1") || username == QStringLiteral("player2");
+        return username == QStringLiteral("player1") || (username == QStringLiteral("player2") && !player2SteamNeverRun);
     }
     QString player1SteamRoot;
     QString player2SteamRoot;
@@ -326,6 +328,7 @@ private Q_SLOTS:
     void testSetupResourcesSyncsSelectedSteamAccount();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
     void testSteamNativeSessionRefreshesWithoutShortcutSync();
+    void testOptionalShortcutSyncSkippedForUnbootstrappedPlayer();
     void testSetupDataDirectoriesUseApplicationSettings();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testHeroicPresetAclDirectoriesBecomeBootstrapPreparationsWithoutInstanceSnapshot();
@@ -571,6 +574,43 @@ void TestSessionRunner::testSetupResourcesSyncsSelectedSteamAccount()
     QFile untouchedSource(accountA);
     QVERIFY(untouchedSource.open(QIODevice::ReadOnly));
     QCOMPARE(untouchedSource.readAll(), dataA);
+}
+void TestSessionRunner::testOptionalShortcutSyncSkippedForUnbootstrappedPlayer()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    TestEnvironmentGuard configGuard("XDG_CONFIG_HOME");
+    qputenv("HOME", home.path().toLocal8Bit());
+    qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+    const QString shortcutsPath = home.path() + QStringLiteral("/.local/share/Steam/userdata/123/config/shortcuts.vdf");
+    QVERIFY(QDir().mkpath(QFileInfo(shortcutsPath).absolutePath()));
+    QFile shortcuts(shortcutsPath);
+    QVERIFY(shortcuts.open(QIODevice::WriteOnly));
+    QVERIFY(shortcuts.write(SteamShortcutsVdf::emptyDocument()) > 0);
+    shortcuts.close();
+
+    m_presetManager->setSteamConfigManager(nullptr);
+    m_runner->setSteamConfigManager(nullptr);
+    delete m_steamConfigManager;
+    m_steamConfigManager = new SteamConfigManager(this);
+    m_steamConfigManager->setHelperClient(m_helperClient);
+    m_presetManager->setSteamConfigManager(m_steamConfigManager);
+    m_runner->setSteamConfigManager(m_steamConfigManager);
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
+    m_steamConfigManager->setSyncShortcutsEnabled(true);
+
+    m_helperClient->player2SteamNeverRun = true;
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QSignalSpy failed(m_runner, &SessionRunner::sessionStartFailed);
+    QSignalSpy errors(m_runner, &SessionRunner::errorOccurred);
+    QVERIFY2(m_runner->start(), qPrintable(errors.value(0).value(0).toString()));
+    QVERIFY(failed.isEmpty());
+    m_runner->stop();
 }
 void TestSessionRunner::testSteamNativeSessionRefreshesWithoutShortcutSync()
 {
