@@ -216,6 +216,11 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.deleteEntry("overlayPatterns");
         instGroup.writeEntry("outputMode", inst.outputMode);
         instGroup.writeEntry("streamResolution", inst.streamResolution);
+        if (inst.renderResolution.isEmpty()) {
+            instGroup.deleteEntry("renderResolution");
+        } else {
+            instGroup.writeEntry("renderResolution", inst.renderResolution);
+        }
         instGroup.writeEntry("streamFps", inst.streamFps);
         instGroup.writeEntry("streamBitrate", inst.streamBitrate);
         instGroup.writeEntry("streamCodec", inst.streamCodec);
@@ -444,6 +449,7 @@ bool SessionManager::loadProfile(const QString &name)
 
         inst.outputMode = instGroup.readEntry("outputMode", QStringLiteral("physical"));
         inst.streamResolution = instGroup.readEntry("streamResolution", QStringLiteral("1920x1080"));
+        inst.renderResolution = instGroup.readEntry("renderResolution", QString());
         inst.streamFps = instGroup.readEntry("streamFps", 60);
         inst.streamBitrate = instGroup.readEntry("streamBitrate", 20000);
         inst.streamCodec = instGroup.readEntry("streamCodec", QStringLiteral("h264"));
@@ -679,6 +685,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("privateTemporaryDirectories")] = inst.privateTemporaryDirectories;
     map[QStringLiteral("outputMode")] = inst.outputMode;
     map[QStringLiteral("streamResolution")] = inst.streamResolution;
+    map[QStringLiteral("renderResolution")] = inst.renderResolution;
     map[QStringLiteral("streamFps")] = inst.streamFps;
     map[QStringLiteral("streamBitrate")] = inst.streamBitrate;
     map[QStringLiteral("streamCodec")] = inst.streamCodec;
@@ -742,6 +749,8 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.outputMode = config[QStringLiteral("outputMode")].toString();
     if (config.contains(QStringLiteral("streamResolution")))
         inst.streamResolution = config[QStringLiteral("streamResolution")].toString();
+    if (config.contains(QStringLiteral("renderResolution")))
+        inst.renderResolution = config[QStringLiteral("renderResolution")].toString();
     if (config.contains(QStringLiteral("streamFps")))
         inst.streamFps = config[QStringLiteral("streamFps")].toInt();
     if (config.contains(QStringLiteral("streamBitrate")))

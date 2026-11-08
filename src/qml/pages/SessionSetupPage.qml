@@ -481,7 +481,9 @@ Kirigami.ScrollablePage {
                 readonly property string labelFrameRate: i18nc("@label", "Frame Rate:")
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
-                readonly property string labelResolution: i18nc("@label", "Game Resolution:")
+                readonly property string labelResolution: i18nc("@label", "Window Size:")
+                readonly property string labelRenderResolution: i18nc("@label", "Render Resolution:")
+                readonly property string optionRenderAuto: i18nc("@item:inlistbox", "Auto (match window)")
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelGame: i18nc("@label", "Game:")
@@ -690,6 +692,46 @@ Kirigami.ScrollablePage {
                             visible: !instanceCard.isStreaming
                             text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
                             opacity: 0.8
+                        }
+                        // Lower than the window size renders faster; gamescope scales it up to the window.
+                        Controls.ComboBox {
+                            id: renderResolutionCombo
+                            objectName: "comboRenderResolution"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelRenderResolution
+                            Kirigami.FormData.label: instanceCard.labelRenderResolution
+                            visible: !instanceCard.isStreaming
+                            Layout.fillWidth: true
+                            textRole: "text"
+                            valueRole: "value"
+                            model: [
+                                { text: instanceCard.optionRenderAuto, value: "" },
+                                { text: "1280x720", value: "1280x720" },
+                                { text: "1920x1080", value: "1920x1080" },
+                                { text: "2560x1440", value: "2560x1440" }
+                            ]
+
+                            function updateIndex() {
+                                if (!instanceCard.cardSessionManager) { currentIndex = 0; return }
+                                let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).renderResolution || ""
+                                let idx = indexOfValue(res)
+                                currentIndex = idx >= 0 ? idx : 0
+                            }
+
+                            Component.onCompleted: { updateIndex() }
+
+                            Connections {
+                                target: instanceCard
+                                function onCardRevisionChanged() { renderResolutionCombo.updateIndex() }
+                            }
+
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.renderResolution = currentValue
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
                         }
                         Controls.ComboBox {
                             id: streamResolutionCombo
