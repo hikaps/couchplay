@@ -256,80 +256,6 @@ Kirigami.ScrollablePage {
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
 
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Heading {
-                text: i18nc("@title", "Automation")
-                level: 2
-                Kirigami.FormData.label: i18nc("@title", "Automation")
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
-
-                Controls.TextField {
-                    objectName: "fieldPreSessionScript"
-                    Accessible.role: Accessible.EditableText
-                    Accessible.name: i18nc("@label", "Pre-session script")
-                    readOnly: true
-                    text: sessionManager?.preSessionExecutable ?? ""
-                    placeholderText: i18nc("@info:placeholder", "Optional executable")
-                    Layout.fillWidth: true
-                }
-
-                Controls.Button {
-                    objectName: "btnBrowsePreSessionScript"
-                    text: i18nc("@action:button", "Browse...")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    onClicked: preSessionScriptDialog.open()
-                }
-
-                Controls.Button {
-                    objectName: "btnClearPreSessionScript"
-                    text: i18nc("@action:button", "Clear")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
-                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
-
-                Controls.TextField {
-                    objectName: "fieldPostSessionScript"
-                    Accessible.role: Accessible.EditableText
-                    Accessible.name: i18nc("@label", "Post-session script")
-                    readOnly: true
-                    text: sessionManager?.postSessionExecutable ?? ""
-                    placeholderText: i18nc("@info:placeholder", "Optional executable")
-                    Layout.fillWidth: true
-                }
-
-                Controls.Button {
-                    objectName: "btnBrowsePostSessionScript"
-                    text: i18nc("@action:button", "Browse...")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    onClicked: postSessionScriptDialog.open()
-                }
-
-                Controls.Button {
-                    objectName: "btnClearPostSessionScript"
-                    text: i18nc("@action:button", "Clear")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
-                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
-                }
-            }
-        }
-
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             visible: sessionRunner?.running ?? false
@@ -1325,6 +1251,86 @@ Kirigami.ScrollablePage {
 
             Item { Layout.fillWidth: true }
         }
+
+        Kirigami.Separator {
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.largeSpacing
+        }
+
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+
+            Kirigami.Heading {
+                text: i18nc("@title", "Automation")
+                level: 2
+                Kirigami.FormData.label: i18nc("@title", "Automation")
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPreSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Pre-session script")
+                    readOnly: true
+                    text: sessionManager?.preSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePreSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: preSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPreSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPostSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Post-session script")
+                    readOnly: true
+                    text: sessionManager?.postSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePostSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: postSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPostSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
+                }
+            }
+        }
+
     }
 
     component LayoutCard: Kirigami.AbstractCard {
