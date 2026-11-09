@@ -63,22 +63,23 @@ void TestStreamingConfig::testStreamingDefaults()
 {
     QVariantMap config = m_sessionManager->getInstanceConfig(0);
 
-    QCOMPARE(config.value(KEY("outputMode")).toString(), QStringLiteral("physical"));
-    QCOMPARE(config.value(KEY("streamResolution")).toString(), QStringLiteral("1920x1080"));
-    QCOMPARE(config.value(KEY("streamFps")).toInt(), 60);
+    QCOMPARE(config.value(KEY("display")).toString(), QStringLiteral("main"));
+    QCOMPARE(config.value(KEY("streamToMoonlight")).toBool(), false);
+    QCOMPARE(config.value(KEY("virtualResolution")).toString(), QStringLiteral("1920x1080"));
     QCOMPARE(config.value(KEY("streamBitrate")).toInt(), 20000);
-    QCOMPARE(config.value(KEY("streamCodec")).toString(), QStringLiteral("h264"));
+    QCOMPARE(config.value(KEY("streamCodec")).toString(), QStringLiteral("auto"));
+    QVERIFY(!config.contains(KEY("outputMode")));
+    QVERIFY(!config.contains(KEY("streamFps")));
     QCOMPARE(config.value(KEY("sunshinePort")).toInt(), 47989);
 }
 
 void TestStreamingConfig::testStreamingConfigRoundTrip()
 {
     QVariantMap streamConfig;
-    streamConfig.insert(KEY("outputMode"), QStringLiteral("streaming"));
-    streamConfig.insert(KEY("streamResolution"), QStringLiteral("1280x720"));
-    streamConfig.insert(KEY("streamFps"), 30);
+    streamConfig.insert(KEY("display"), QStringLiteral("virtual"));
+    streamConfig.insert(KEY("virtualResolution"), QStringLiteral("1280x720"));
     streamConfig.insert(KEY("streamBitrate"), 15000);
-    streamConfig.insert(KEY("streamCodec"), QStringLiteral("h265"));
+    streamConfig.insert(KEY("streamCodec"), QStringLiteral("hevc"));
     streamConfig.insert(KEY("sunshinePort"), 48020);
 
     m_sessionManager->setInstanceConfig(0, streamConfig);
@@ -93,11 +94,11 @@ void TestStreamingConfig::testStreamingConfigRoundTrip()
     QVERIFY(loaded);
 
     QVariantMap loadedConfig = m_sessionManager->getInstanceConfig(0);
-    QCOMPARE(loadedConfig.value(KEY("outputMode")).toString(), QStringLiteral("streaming"));
-    QCOMPARE(loadedConfig.value(KEY("streamResolution")).toString(), QStringLiteral("1280x720"));
-    QCOMPARE(loadedConfig.value(KEY("streamFps")).toInt(), 30);
+    QCOMPARE(loadedConfig.value(KEY("display")).toString(), QStringLiteral("virtual"));
+    QCOMPARE(loadedConfig.value(KEY("streamToMoonlight")).toBool(), true);
+    QCOMPARE(loadedConfig.value(KEY("virtualResolution")).toString(), QStringLiteral("1280x720"));
     QCOMPARE(loadedConfig.value(KEY("streamBitrate")).toInt(), 15000);
-    QCOMPARE(loadedConfig.value(KEY("streamCodec")).toString(), QStringLiteral("h265"));
+    QCOMPARE(loadedConfig.value(KEY("streamCodec")).toString(), QStringLiteral("hevc"));
     QCOMPARE(loadedConfig.value(KEY("sunshinePort")).toInt(), 48020);
 }
 
@@ -149,16 +150,15 @@ void TestStreamingConfig::testBackwardCompatibilityOldProfile()
 
     QVariantMap config0 = m_sessionManager->getInstanceConfig(0);
     QCOMPARE(config0.value(KEY("username")).toString(), QStringLiteral("player1"));
-    QCOMPARE(config0.value(KEY("outputMode")).toString(), QStringLiteral("physical"));
-    QCOMPARE(config0.value(KEY("streamResolution")).toString(), QStringLiteral("1920x1080"));
-    QCOMPARE(config0.value(KEY("streamFps")).toInt(), 60);
+    QCOMPARE(config0.value(KEY("display")).toString(), QStringLiteral("main"));
+    QCOMPARE(config0.value(KEY("virtualResolution")).toString(), QStringLiteral("1920x1080"));
     QCOMPARE(config0.value(KEY("streamBitrate")).toInt(), 20000);
-    QCOMPARE(config0.value(KEY("streamCodec")).toString(), QStringLiteral("h264"));
+    QCOMPARE(config0.value(KEY("streamCodec")).toString(), QStringLiteral("auto"));
     QCOMPARE(config0.value(KEY("sunshinePort")).toInt(), 47989);
 
     QVariantMap config1 = m_sessionManager->getInstanceConfig(1);
     QCOMPARE(config1.value(KEY("username")).toString(), QStringLiteral("player2"));
-    QCOMPARE(config1.value(KEY("outputMode")).toString(), QStringLiteral("physical"));
+    QCOMPARE(config1.value(KEY("display")).toString(), QStringLiteral("main"));
 
     file.remove();
 }
@@ -168,7 +168,7 @@ void TestStreamingConfig::testSetInstanceStreamingConfig()
     QSignalSpy spy(m_sessionManager, &SessionManager::instancesChanged);
 
     QVariantMap config;
-    config.insert(KEY("outputMode"), QStringLiteral("streaming"));
+    config.insert(KEY("display"), QStringLiteral("virtual"));
     config.insert(KEY("streamCodec"), QStringLiteral("av1"));
     config.insert(KEY("sunshinePort"), 48050);
 
@@ -176,7 +176,7 @@ void TestStreamingConfig::testSetInstanceStreamingConfig()
     QCOMPARE(spy.count(), 1);
 
     QVariantMap retrieved = m_sessionManager->getInstanceConfig(1);
-    QCOMPARE(retrieved.value(KEY("outputMode")).toString(), QStringLiteral("streaming"));
+    QCOMPARE(retrieved.value(KEY("display")).toString(), QStringLiteral("virtual"));
     QCOMPARE(retrieved.value(KEY("streamCodec")).toString(), QStringLiteral("av1"));
     QCOMPARE(retrieved.value(KEY("sunshinePort")).toInt(), 48050);
 }

@@ -74,8 +74,6 @@ Kirigami.ScrollablePage {
     Kirigami.PromptDialog {
         id: deleteDialog
         objectName: "dialogDeleteProfile"
-        Accessible.role: Accessible.Dialog
-        Accessible.name: i18nc("@title:dialog", "Delete Profile")
         title: i18nc("@title:dialog", "Delete Profile")
         subtitle: i18nc("@info", "Are you sure you want to delete the profile '%1'?", deleteDialog.profileName)
         standardButtons: Kirigami.Dialog.Yes | Kirigami.Dialog.No
@@ -259,7 +257,6 @@ Kirigami.ScrollablePage {
                                     case "horizontal": return "view-split-left-right"
                                     case "vertical": return "view-split-top-bottom"
                                     case "grid": return "view-grid"
-                                    case "multi-monitor": return "video-display"
                                     default: return "view-split-left-right"
                                 }
                             }
@@ -275,7 +272,6 @@ Kirigami.ScrollablePage {
                                     case "horizontal": return i18nc("@info", "Side by Side")
                                     case "vertical": return i18nc("@info", "Top and Bottom")
                                     case "grid": return i18nc("@info", "Grid")
-                                    case "multi-monitor": return i18nc("@info", "Multi-Monitor")
                                     default: return layout
                                 }
                             }

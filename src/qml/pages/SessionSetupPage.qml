@@ -22,6 +22,10 @@ Kirigami.ScrollablePage {
     required property var presetManager
     required property var steamConfigManager
     required property var heroicConfigManager
+    required property var audioManager
+
+    // Asks the application to show the Users page, where Moonlight clients are paired
+    signal openUsersRequested()
 
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
@@ -60,6 +64,10 @@ Kirigami.ScrollablePage {
         function onPendingDevicesChanged() {
             root.devicesRevision++
         }
+        function onCaptureTimedOut(instanceIndex) {
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "No controller input detected"))
+        }
     }
 
     // Get available users for a specific instance
@@ -74,11 +82,38 @@ Kirigami.ScrollablePage {
         return [{ username: "" }].concat(filtered)
     }
 
-    function getPrimaryMonitorSize() {
+    // Connector of the effective main screen: the saved one if connected, else the primary monitor.
+    property string mainScreenConnector: {
+        const monitors = monitorManager ? monitorManager.monitors : []
+        const saved = sessionManager ? sessionManager.currentMainScreen : ""
+        if (saved !== "") {
+            for (let i = 0; i < monitors.length; i++) {
+                if (monitors[i].connector === saved) return saved
+            }
+        }
+        for (let i = 0; i < monitors.length; i++) {
+            if (monitors[i].primary) return monitors[i].connector
+        }
+        return monitors.length > 0 ? monitors[0].connector : saved
+    }
+
+    // Number of players placed on the main screen (display === "main")
+    property int mainPlayerCount: {
+        void(instancesRevision)
+        if (!sessionManager) return instanceCount
+        let n = 0
+        for (let i = 0; i < instanceCount; i++) {
+            const display = sessionManager.getInstanceConfig(i)?.display || "main"
+            if (display === "main") n++
+        }
+        return n
+    }
+
+    function getMainScreenSize() {
         if (!monitorManager) return { width: 1920, height: 1080 }
         let monitors = monitorManager.monitors
         for (let i = 0; i < monitors.length; i++) {
-            if (monitors[i].primary) {
+            if (monitors[i].connector === mainScreenConnector) {
                 return { width: monitors[i].width, height: monitors[i].height }
             }
         }
@@ -88,27 +123,40 @@ Kirigami.ScrollablePage {
         return { width: 1920, height: 1080 }
     }
 
+    function recalculateResolutions() {
+        if (!sessionManager) return
+        let screenSize = getMainScreenSize()
+        sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+    }
+
+    Connections {
+        target: root.sessionManager
+        function onCurrentMainScreenChanged() { root.recalculateResolutions() }
+    }
+
+    Connections {
+        target: root.monitorManager
+        function onMonitorsChanged() { root.recalculateResolutions() }
+    }
+
     onLayoutModeChanged: {
         if (sessionManager) {
             sessionManager.currentLayout = layoutMode
-            let screenSize = getPrimaryMonitorSize()
-            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+            recalculateResolutions()
         }
     }
 
     onGridSubLayoutChanged: {
         if (sessionManager && sessionManager.currentLayout === "grid") {
             sessionManager.currentGridSubLayout = gridSubLayout
-            let screenSize = getPrimaryMonitorSize()
-            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+            recalculateResolutions()
         }
     }
 
     onInstanceCountChanged: {
         if (sessionManager && sessionManager.instanceCount !== instanceCount) {
             sessionManager.instanceCount = instanceCount
-            let screenSize = getPrimaryMonitorSize()
-            sessionManager.recalculateOutputResolutions(screenSize.width, screenSize.height)
+            recalculateResolutions()
         }
     }
 
@@ -157,8 +205,6 @@ Kirigami.ScrollablePage {
     Kirigami.PromptDialog {
         id: saveProfileDialog
         objectName: "dialogSaveProfile"
-        Accessible.role: Accessible.Dialog
-        Accessible.name: i18nc("@title:dialog", "Save Profile")
         title: i18nc("@title:dialog", "Save Profile")
         subtitle: sessionManager?.currentProfileName 
             ? i18nc("@info", "Save changes to '%1' or enter a new name", sessionManager.currentProfileName)
@@ -214,80 +260,6 @@ Kirigami.ScrollablePage {
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
 
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Heading {
-                text: i18nc("@title", "Automation")
-                level: 2
-                Kirigami.FormData.label: i18nc("@title", "Automation")
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
-
-                Controls.TextField {
-                    objectName: "fieldPreSessionScript"
-                    Accessible.role: Accessible.EditableText
-                    Accessible.name: i18nc("@label", "Pre-session script")
-                    readOnly: true
-                    text: sessionManager?.preSessionExecutable ?? ""
-                    placeholderText: i18nc("@info:placeholder", "Optional executable")
-                    Layout.fillWidth: true
-                }
-
-                Controls.Button {
-                    objectName: "btnBrowsePreSessionScript"
-                    text: i18nc("@action:button", "Browse...")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    onClicked: preSessionScriptDialog.open()
-                }
-
-                Controls.Button {
-                    objectName: "btnClearPreSessionScript"
-                    text: i18nc("@action:button", "Clear")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
-                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
-
-                Controls.TextField {
-                    objectName: "fieldPostSessionScript"
-                    Accessible.role: Accessible.EditableText
-                    Accessible.name: i18nc("@label", "Post-session script")
-                    readOnly: true
-                    text: sessionManager?.postSessionExecutable ?? ""
-                    placeholderText: i18nc("@info:placeholder", "Optional executable")
-                    Layout.fillWidth: true
-                }
-
-                Controls.Button {
-                    objectName: "btnBrowsePostSessionScript"
-                    text: i18nc("@action:button", "Browse...")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    onClicked: postSessionScriptDialog.open()
-                }
-
-                Controls.Button {
-                    objectName: "btnClearPostSessionScript"
-                    text: i18nc("@action:button", "Clear")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
-                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
-                }
-            }
-        }
-
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             visible: sessionRunner?.running ?? false
@@ -341,9 +313,58 @@ Kirigami.ScrollablePage {
         }
 
         RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.Label {
+                text: i18nc("@label", "Main screen:")
+            }
+
+            Controls.ComboBox {
+                id: mainScreenCombo
+                objectName: "comboMainScreen"
+                Accessible.role: Accessible.ComboBox
+                Accessible.name: i18nc("@label", "Main screen")
+                Layout.fillWidth: true
+                textRole: "displayString"
+                valueRole: "connector"
+                model: root.monitorManager ? root.monitorManager.monitors : []
+
+                function updateIndex() {
+                    const idx = indexOfValue(root.mainScreenConnector)
+                    currentIndex = idx >= 0 ? idx : 0
+                }
+
+                onModelChanged: updateIndex()
+                Component.onCompleted: updateIndex()
+
+                Connections {
+                    target: root
+                    function onMainScreenConnectorChanged() { mainScreenCombo.updateIndex() }
+                }
+
+                onActivated: {
+                    if (root.sessionManager && currentValue) {
+                        root.sessionManager.currentMainScreen = currentValue
+                    }
+                }
+            }
+        }
+
+        Controls.Label {
+            objectName: "labelMainScreenArrangement"
+            text: i18nc("@info", "Arrangement for the %1 players on the main screen", root.mainPlayerCount)
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            opacity: 0.7
+        }
+
+        RowLayout {
             spacing: Kirigami.Units.largeSpacing
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.smallSpacing
+            visible: root.mainPlayerCount > 1
 
             LayoutCard {
                 objectName: "cardLayoutHorizontal"
@@ -352,7 +373,7 @@ Kirigami.ScrollablePage {
                 selected: layoutMode === "horizontal"
                 title: i18nc("@option", "Side by Side")
                 description: i18nc("@info", "Split screen horizontally")
-                instanceCount: root.instanceCount
+                instanceCount: root.mainPlayerCount
                 onClicked: layoutMode = "horizontal"
             }
 
@@ -363,7 +384,7 @@ Kirigami.ScrollablePage {
                 selected: layoutMode === "vertical"
                 title: i18nc("@option", "Top and Bottom")
                 description: i18nc("@info", "Split screen vertically")
-                instanceCount: root.instanceCount
+                instanceCount: root.mainPlayerCount
                 onClicked: layoutMode = "vertical"
             }
             LayoutCard {
@@ -372,27 +393,16 @@ Kirigami.ScrollablePage {
                 layoutType: "grid"
                 selected: layoutMode === "grid"
                 title: i18nc("@option", "Grid")
-                description: root.instanceCount === 3
+                description: root.mainPlayerCount === 3
                     ? (root.gridSubLayout === "grid-2x2"
                         ? i18nc("@info", "2×2 grid with one empty cell")
                         : root.gridSubLayout === "left-right"
                             ? i18nc("@info", "Player 1 left, players 2–3 right")
                             : i18nc("@info", "3×1 horizontal layout"))
                     : i18nc("@info", "2×2 grid layout")
-                instanceCount: root.instanceCount
-                visible: root.instanceCount > 2
+                instanceCount: root.mainPlayerCount
+                visible: root.mainPlayerCount > 2
                 onClicked: layoutMode = "grid"
-            }
-
-            LayoutCard {
-                objectName: "cardLayoutMultiMonitor"
-                Layout.fillWidth: true
-                layoutType: "multi-monitor"
-                selected: layoutMode === "multi-monitor"
-                title: i18nc("@option", "Multi-Monitor")
-                description: i18nc("@info", "One instance per monitor")
-                instanceCount: root.instanceCount
-                onClicked: layoutMode = "multi-monitor"
             }
         }
 
@@ -400,7 +410,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.smallSpacing
             Layout.leftMargin: Kirigami.Units.largeSpacing
-            visible: layoutMode === "grid" && root.instanceCount === 3
+            visible: root.mainPlayerCount > 1 && layoutMode === "grid" && root.mainPlayerCount === 3
             spacing: Kirigami.Units.mediumSpacing
 
             Controls.Label {
@@ -465,29 +475,80 @@ Kirigami.ScrollablePage {
                     return config?.presetId || "steam"
                 }
                 
-                property bool isStreaming: {
+                property string displayValue: {
+                    void(cardRevision)
+                    if (!cardSessionManager) return "main"
+                    let config = cardSessionManager.getInstanceConfig(instanceCard.index)
+                    return config?.display || "main"
+                }
+
+                property bool isStreaming: displayValue === "virtual"
+
+                property bool streamToMoonlightValue: {
                     void(cardRevision)
                     if (!cardSessionManager) return false
                     let config = cardSessionManager.getInstanceConfig(instanceCard.index)
-                    return config?.outputMode === "streaming"
+                    return config?.streamToMoonlight ?? false
+                }
+
+                // Virtual displays always stream; real monitors stream only when the toggle is on
+                property bool streamsToMoonlight: displayValue === "virtual" || (displayValue !== "main" && streamToMoonlightValue)
+
+                readonly property var streamManager: root.sessionRunner ? root.sessionRunner.streamManager : null
+                readonly property string cardUsername: {
+                    void(cardRevision)
+                    if (!cardSessionManager) return ""
+                    return cardSessionManager.getInstanceConfig(instanceCard.index)?.username ?? ""
+                }
+
+                // Paired Moonlight clients of this player's gaming user
+                readonly property int pairedCount: root.sessionRunner ? root.sessionRunner.pairedClientCount(cardUsername) : 0
+
+
+
+                // Entry of streamManager.streams for this player; only exists while a session runs
+                readonly property var streamEntry: {
+                    const list = streamManager ? streamManager.streams : []
+                    for (let i = 0; i < list.length; ++i) {
+                        if (list[i].instanceIndex === instanceCard.index) return list[i]
+                    }
+                    return null
+                }
+
+                function streamStatusText() {
+                    if (streamEntry === null) return ""
+                    if (streamEntry.state === 2) return i18nc("@info:status", "Ready on port %1", streamEntry.port)
+                    if (streamEntry.state === 3) return i18nc("@info:status", "Failed: %1", streamEntry.error)
+                    return i18nc("@info:status", "Starting")
                 }
                 
                 
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
                 readonly property string labelUser: i18nc("@label", "User:")
                 readonly property string labelLauncher: i18nc("@label", "Launcher:")
-                readonly property string labelOutputMode: i18nc("@label", "Output Mode:")
-                readonly property string optionPhysical: i18nc("@option", "Physical Display")
-                readonly property string optionStreaming: i18nc("@option", "Moonlight Stream")
-                readonly property string labelStreamResolution: i18nc("@label", "Stream Resolution:")
-                readonly property string labelFrameRate: i18nc("@label", "Frame Rate:")
+                readonly property string labelDisplay: i18nc("@label", "Display:")
+                readonly property string optionMainScreen: i18nc("@item:inlistbox", "Main screen")
+                readonly property string optionVirtualDisplay: i18nc("@item:inlistbox", "Virtual display (Moonlight only)")
+                readonly property string labelVirtualResolution: i18nc("@label", "Virtual Resolution:")
+                readonly property string optionCodecAuto: i18nc("@item:inlistbox", "Automatic")
+                readonly property string labelStreamToMoonlight: i18nc("@label", "Moonlight:")
+                readonly property string textStreamToMoonlight: i18nc("@option:check", "Stream to Moonlight")
+                readonly property string textStreamMonitorHint: i18nc("@info", "Streaming a real monitor also shows the game on that monitor.")
+                readonly property string labelStreamStatus: i18nc("@label", "Stream:")
+                readonly property string labelPairing: i18nc("@label", "Pairing:")
+                readonly property string textNotPaired: i18nc("@info:status", "Moonlight: not paired yet")
+                readonly property string textManageMoonlight: i18nc("@action:button", "Manage on Users page")
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
-                readonly property string labelResolution: i18nc("@label", "Game Resolution:")
+                readonly property string labelResolution: i18nc("@label", "Window Size:")
+                readonly property string labelRenderResolution: i18nc("@label", "Render Resolution:")
+                readonly property string optionRenderAuto: i18nc("@item:inlistbox", "Auto (match window)")
+                readonly property string labelAudioOutput: i18nc("@label", "Audio Output:")
+                readonly property string optionAudioDefault: i18nc("@item:inlistbox", "Default output")
+                property var cardAudioManager: root.audioManager
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelGame: i18nc("@label", "Game:")
-                readonly property string labelDevices: i18nc("@label", "Devices:")
                 readonly property string labelPlayerData: i18nc("@action:button", "Player data")
                 readonly property string tooltipPlayerData: i18nc("@info:tooltip", "Open a folder where you can place per-player files (e.g. configs). They are copied into this player's copy of the shared directories at session start.")
 
@@ -495,8 +556,11 @@ Kirigami.ScrollablePage {
                 readonly property string labelPrivateTemporaryDirectories: i18nc("@option:check", "Private temporary directories")
                 readonly property string tooltipPrivateTemporaryDirectories: i18nc("@info:tooltip", "Use private /tmp and /var/tmp directories for this instance. They are removed when the instance stops and are not part of the shared-data snapshot.")
 
-                readonly property string textNoneAssigned: i18nc("@info", "None assigned")
-                readonly property string textAssign: i18nc("@action:button", "Assign...")
+                readonly property string labelControllers: i18nc("@label", "Controllers:")
+                readonly property string textPressToAssign: i18nc("@action:button", "Press a button…")
+                readonly property string textCapturePrompt: i18nc("@info", "Press any button on the controller you want for this player…")
+                readonly property string textCancelCapture: i18nc("@action:button", "Cancel")
+                readonly property string textOtherDevices: i18nc("@action:button", "Other devices…")
 
                 header: RowLayout {
                     spacing: Kirigami.Units.smallSpacing
@@ -508,7 +572,7 @@ Kirigami.ScrollablePage {
                     }
 
                     Kirigami.Icon {
-                        visible: instanceCard.isStreaming
+                        visible: instanceCard.streamsToMoonlight
                         source: "network-wireless"
                         Layout.preferredWidth: Kirigami.Units.iconSizes.small
                         Layout.preferredHeight: Kirigami.Units.iconSizes.small
@@ -640,44 +704,100 @@ Kirigami.ScrollablePage {
                         }
 
                         Controls.ComboBox {
-                            id: outputModeCombo
-                            objectName: "comboOutputMode"
+                            id: displayCombo
+                            objectName: "comboDisplay"
                             Accessible.role: Accessible.ComboBox
-                            Accessible.name: instanceCard.labelOutputMode
-                            Kirigami.FormData.label: instanceCard.labelOutputMode
+                            Accessible.name: instanceCard.labelDisplay
+                            Kirigami.FormData.label: instanceCard.labelDisplay
                             Layout.fillWidth: true
-                            
-                            model: ListModel {
-                                ListElement { text: "Physical Display"; value: "physical" }
-                                ListElement { text: "Moonlight Stream"; value: "streaming" }
-                            }
-                            
                             textRole: "text"
                             valueRole: "value"
-                            
-                            Component.onCompleted: {
-                                model.setProperty(0, "text", instanceCard.optionPhysical)
-                                model.setProperty(1, "text", instanceCard.optionStreaming)
-                                currentIndex = instanceCard.isStreaming ? 1 : 0
+
+                            function buildModel() {
+                                void(instanceCard.cardRevision)
+                                const mainConnector = root.mainScreenConnector
+                                const saved = instanceCard.displayValue
+                                let entries = [{ text: instanceCard.optionMainScreen, value: "main" }]
+                                let known = false
+                                const monitors = root.monitorManager ? root.monitorManager.monitors : []
+                                for (let i = 0; i < monitors.length; ++i) {
+                                    if (monitors[i].connector === mainConnector) continue
+                                    const value = "monitor:" + monitors[i].connector
+                                    entries.push({ text: monitors[i].displayString, value: value })
+                                    if (value === saved) known = true
+                                }
+                                // Keep a saved monitor that is disconnected (or now the main screen) visible so the validation message stays explainable.
+                                if (saved.startsWith("monitor:") && !known) entries.push({ text: saved.substring(8), value: saved })
+                                entries.push({ text: instanceCard.optionVirtualDisplay, value: "virtual" })
+                                return entries
                             }
-                            
+
+                            function updateIndex() {
+                                const idx = indexOfValue(instanceCard.displayValue)
+                                currentIndex = idx >= 0 ? idx : 0
+                            }
+
+                            model: buildModel()
+                            onModelChanged: updateIndex()
+                            Component.onCompleted: updateIndex()
+
                             Connections {
                                 target: instanceCard
-                                function onIsStreamingChanged() {
-                                    outputModeCombo.currentIndex = instanceCard.isStreaming ? 1 : 0
-                                }
+                                function onDisplayValueChanged() { displayCombo.updateIndex() }
                             }
-                            
+
                             onActivated: {
                                 if (instanceCard.cardSessionManager) {
                                     let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    config.outputMode = currentValue
+                                    config.display = currentValue
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                    root.recalculateResolutions()
                                 }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Kirigami.FormData.label: instanceCard.labelStreamToMoonlight
+                            visible: instanceCard.displayValue !== "main"
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Controls.Switch {
+                                objectName: "switchStreamToMoonlight"
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: instanceCard.textStreamToMoonlight
+                                text: instanceCard.textStreamToMoonlight
+                                visible: instanceCard.displayValue !== "virtual"
+                                checked: instanceCard.streamsToMoonlight
+                                onToggled: {
+                                    if (instanceCard.cardSessionManager) {
+                                        let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                        config.streamToMoonlight = checked
+                                        instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                    }
+                                }
+                            }
+
+                            Controls.Label {
+                                objectName: "labelStreamAlwaysOn"
+                                visible: instanceCard.displayValue === "virtual"
+                                text: i18nc("@info", "Virtual displays are always streamed to Moonlight.")
+                                wrapMode: Text.WordWrap
+                                opacity: 0.7
+                                Layout.fillWidth: true
+                            }
+
+                            Controls.Label {
+                                visible: instanceCard.displayValue !== "virtual"
+                                text: instanceCard.textStreamMonitorHint
+                                wrapMode: Text.WordWrap
+                                opacity: 0.7
+                                Layout.fillWidth: true
                             }
                         }
                         Components.GameSelector {
                             objectName: "comboGame"
+                            Kirigami.FormData.label: instanceCard.labelGame
                             presetManager: instanceCard.cardPresetManager
                             sessionManager: instanceCard.cardSessionManager
                             instanceIndex: instanceCard.index
@@ -692,78 +812,145 @@ Kirigami.ScrollablePage {
                             text: root.sessionManager ? (root.sessionManager.getInstanceConfig(instanceCard.index).outputWidth + " x " + root.sessionManager.getInstanceConfig(instanceCard.index).outputHeight) : "1920 x 1080"
                             opacity: 0.8
                         }
+                        // Lower than the window size renders faster; gamescope scales it up to the window.
                         Controls.ComboBox {
-                            id: streamResolutionCombo
-                            objectName: "comboStreamResolution"
+                            id: renderResolutionCombo
+                            objectName: "comboRenderResolution"
                             Accessible.role: Accessible.ComboBox
-                            Accessible.name: instanceCard.labelStreamResolution
-                            Kirigami.FormData.label: instanceCard.labelStreamResolution
+                            Accessible.name: instanceCard.labelRenderResolution
+                            Kirigami.FormData.label: instanceCard.labelRenderResolution
+                            visible: !instanceCard.isStreaming
+                            Layout.fillWidth: true
+                            textRole: "text"
+                            valueRole: "value"
+                            model: [
+                                { text: instanceCard.optionRenderAuto, value: "" },
+                                { text: "1280x720", value: "1280x720" },
+                                { text: "1920x1080", value: "1920x1080" },
+                                { text: "2560x1440", value: "2560x1440" }
+                            ]
+
+                            function updateIndex() {
+                                if (!instanceCard.cardSessionManager) { currentIndex = 0; return }
+                                let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).renderResolution || ""
+                                let idx = indexOfValue(res)
+                                currentIndex = idx >= 0 ? idx : 0
+                            }
+
+                            Component.onCompleted: { updateIndex() }
+
+                            Connections {
+                                target: instanceCard
+                                function onCardRevisionChanged() { renderResolutionCombo.updateIndex() }
+                            }
+
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.renderResolution = currentValue
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
+                        }
+                        // Audio device for this player; players share the host's PipeWire-Pulse, so a host sink name works.
+                        Controls.ComboBox {
+                            id: audioOutputCombo
+                            objectName: "comboAudioOutput"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelAudioOutput
+                            Kirigami.FormData.label: instanceCard.labelAudioOutput
+                            visible: !instanceCard.streamsToMoonlight
+                            Layout.fillWidth: true
+                            textRole: "text"
+                            valueRole: "value"
+
+                            function savedDevice() {
+                                if (!instanceCard.cardSessionManager) return ""
+                                return instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).audioDevice || ""
+                            }
+
+                            function buildModel() {
+                                let entries = [{ text: instanceCard.optionAudioDefault, value: "" }]
+                                let known = false
+                                const saved = savedDevice()
+                                const devices = instanceCard.cardAudioManager ? instanceCard.cardAudioManager.outputDevices : []
+                                for (let i = 0; i < devices.length; ++i) {
+                                    entries.push({ text: devices[i].description, value: devices[i].name })
+                                    if (devices[i].name === saved) known = true
+                                }
+                                // Keep a saved device that is currently unplugged visible instead of silently dropping it.
+                                if (saved !== "" && !known) entries.push({ text: saved, value: saved })
+                                return entries
+                            }
+
+                            function updateIndex() {
+                                const idx = indexOfValue(savedDevice())
+                                currentIndex = idx >= 0 ? idx : 0
+                            }
+
+                            model: buildModel()
+                            onModelChanged: updateIndex()
+                            Component.onCompleted: updateIndex()
+
+                            Connections {
+                                target: instanceCard
+                                function onCardRevisionChanged() {
+                                    audioOutputCombo.model = audioOutputCombo.buildModel()
+                                    audioOutputCombo.updateIndex()
+                                }
+                            }
+
+                            Connections {
+                                target: instanceCard.cardAudioManager
+                                function onOutputDevicesChanged() {
+                                    audioOutputCombo.model = audioOutputCombo.buildModel()
+                                }
+                            }
+
+                            onActivated: {
+                                if (instanceCard.cardSessionManager) {
+                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
+                                    config.audioDevice = currentValue
+                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
+                                }
+                            }
+                        }
+                        Controls.ComboBox {
+                            id: virtualResolutionCombo
+                            objectName: "comboVirtualResolution"
+                            Accessible.role: Accessible.ComboBox
+                            Accessible.name: instanceCard.labelVirtualResolution
+                            Kirigami.FormData.label: instanceCard.labelVirtualResolution
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
                             model: ["1280x720", "1920x1080", "2560x1440", "3840x2160"]
-                            
+
                             function updateIndex() {
                                 if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
-                                let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamResolution || "1920x1080"
+                                let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).virtualResolution || "1920x1080"
                                 let idx = model.indexOf(res)
                                 currentIndex = idx >= 0 ? idx : 1
                             }
-                            
+
                             Component.onCompleted: { updateIndex() }
-                            
+
                             Connections {
                                 target: instanceCard
-                                function onCardRevisionChanged() { streamResolutionCombo.updateIndex() }
+                                function onCardRevisionChanged() { virtualResolutionCombo.updateIndex() }
                             }
-                            
+
                             onActivated: {
                                 if (instanceCard.cardSessionManager) {
                                     let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    config.streamResolution = currentText
+                                    config.virtualResolution = currentText
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
                         }
-                        
-                        Controls.ComboBox {
-                            id: frameRateCombo
-                            objectName: "comboFrameRate"
-                            Accessible.role: Accessible.ComboBox
-                            Accessible.name: instanceCard.labelFrameRate
-                            Kirigami.FormData.label: instanceCard.labelFrameRate
-                            visible: instanceCard.isStreaming
-                            Layout.fillWidth: true
-                            model: [30, 60, 120]
-                            textRole: "" // Just use the integer values directly
-                            
-                            displayText: i18nc("@unit", "%1 FPS", currentText)
-                            
-                            function updateIndex() {
-                                if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
-                                let fps = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamFps || 60
-                                let idx = model.indexOf(fps)
-                                currentIndex = idx >= 0 ? idx : 1
-                            }
-                            
-                            Component.onCompleted: { updateIndex() }
-                            
-                            Connections {
-                                target: instanceCard
-                                function onCardRevisionChanged() { frameRateCombo.updateIndex() }
-                            }
-                            
-                            onActivated: {
-                                if (instanceCard.cardSessionManager) {
-                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    config.streamFps = currentValue
-                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
-                                }
-                            }
-                        }
-                        
+
                         RowLayout {
                             Kirigami.FormData.label: instanceCard.labelBitrate
-                            visible: instanceCard.isStreaming
+                            visible: instanceCard.streamsToMoonlight
                             Layout.fillWidth: true
                             spacing: Kirigami.Units.smallSpacing
                             
@@ -812,65 +999,189 @@ Kirigami.ScrollablePage {
                             Accessible.role: Accessible.ComboBox
                             Accessible.name: instanceCard.labelCodec
                             Kirigami.FormData.label: instanceCard.labelCodec
-                            visible: instanceCard.isStreaming
+                            visible: instanceCard.streamsToMoonlight
                             Layout.fillWidth: true
-                            model: ["H.264", "H.265", "AV1"]
-                            
+                            textRole: "text"
+                            valueRole: "value"
+                            model: [
+                                { text: instanceCard.optionCodecAuto, value: "auto" },
+                                { text: "H.264", value: "h264" },
+                                { text: "HEVC", value: "hevc" },
+                                { text: "AV1", value: "av1" }
+                            ]
+
                             function updateIndex() {
                                 if (!instanceCard.cardSessionManager) { currentIndex = 0; return }
-                                let codec = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamCodec || "h264"
-                                if (codec === "h265" || codec === "hevc") currentIndex = 1
-                                else if (codec === "av1") currentIndex = 2
-                                else currentIndex = 0
+                                let codec = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).streamCodec || "auto"
+                                let idx = indexOfValue(codec)
+                                currentIndex = idx >= 0 ? idx : 0
                             }
-                            
+
                             Component.onCompleted: { updateIndex() }
-                            
+
                             Connections {
                                 target: instanceCard
                                 function onCardRevisionChanged() { codecCombo.updateIndex() }
                             }
-                            
+
                             onActivated: {
                                 if (instanceCard.cardSessionManager) {
                                     let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    let codecStr = "h264"
-                                    if (currentIndex === 1) codecStr = "h265"
-                                    if (currentIndex === 2) codecStr = "av1"
-                                    config.streamCodec = codecStr
+                                    config.streamCodec = currentValue
                                     instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
                                 }
                             }
                         }
 
                         RowLayout {
-                            Kirigami.FormData.label: instanceCard.labelDevices
+                            Kirigami.FormData.label: instanceCard.labelStreamStatus
+                            visible: instanceCard.streamsToMoonlight && instanceCard.streamEntry !== null
+                            Layout.fillWidth: true
                             spacing: Kirigami.Units.smallSpacing
 
                             Controls.Label {
-                                text: {
-                                    // Reference devicesRevision to force re-evaluation on device changes
-                                    void(root.devicesRevision)
-                                    if (!root.deviceManager) return instanceCard.textNoneAssigned
-                                    var paths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
-                                    if (paths.length === 0) return instanceCard.textNoneAssigned
-                                    return paths.length === 1
-                                        ? (paths.length + " device")
-                                        : (paths.length + " devices")
-                                }
-                                opacity: 0.7
+                                objectName: "labelStreamStatus"
+                                text: instanceCard.streamStatusText()
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        RowLayout {
+                            objectName: "rowMoonlightPairing"
+                            Kirigami.FormData.label: instanceCard.labelPairing
+                            visible: instanceCard.streamsToMoonlight
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Controls.Label {
+                                objectName: "labelPairedStatus"
+                                text: instanceCard.pairedCount > 0
+                                    ? i18ncp("@info:status", "Moonlight: %1 paired", "Moonlight: %1 paired", instanceCard.pairedCount)
+                                    : instanceCard.textNotPaired
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
                             }
 
                             Controls.Button {
-                                objectName: "btnAssignDevices"
+                                objectName: "buttonManageMoonlight"
                                 Accessible.role: Accessible.Button
-                                Accessible.name: instanceCard.textAssign
-                                Accessible.onPressAction: clicked()
-                                text: instanceCard.textAssign
+                                Accessible.name: instanceCard.textManageMoonlight
+                                text: instanceCard.textManageMoonlight
+                                icon.name: "user-properties"
                                 flat: true
-                                onClicked: applicationWindow().pushDeviceAssignmentPage()
+                                onClicked: root.openUsersRequested()
                             }
                         }
+
+                        // Controller assignment: press a button on the pad to give it to this player
+                        ColumnLayout {
+                            id: controllersColumn
+                            objectName: "rowControllers"
+                            Kirigami.FormData.label: instanceCard.labelControllers
+                            spacing: Kirigami.Units.smallSpacing
+
+                            // Physical pads only; grouped siblings (touchpad, motion sensors) stay hidden
+                            readonly property var assignedControllers: {
+                                void(root.devicesRevision)
+                                if (!root.deviceManager) return []
+                                let result = []
+                                let events = root.deviceManager.getDevicesForInstance(instanceCard.index)
+                                for (let i = 0; i < events.length; i++) {
+                                    let device = root.deviceManager.getDevice(events[i])
+                                    if (device.type === "controller") {
+                                        result.push({ eventNumber: events[i], name: device.name })
+                                    }
+                                }
+                                return result
+                            }
+                            readonly property bool capturing: !!root.deviceManager
+                                && root.deviceManager.captureInstance === instanceCard.index
+
+                            // Streaming players get their pads from Moonlight; only stale assignments show up
+                            visible: !instanceCard.streamsToMoonlight || assignedControllers.length > 0
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                visible: controllersColumn.assignedControllers.length > 0
+
+                                Repeater {
+                                    model: controllersColumn.assignedControllers
+
+                                    Kirigami.Chip {
+                                        required property var modelData
+                                        objectName: "chipAssignedController"
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: text
+                                        text: modelData.name
+                                        icon.name: "input-gamepad"
+                                        checkable: false
+                                        closable: true
+                                        onRemoved: {
+                                            if (root.deviceManager) {
+                                                root.deviceManager.unassignDevice(modelData.eventNumber)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                visible: !instanceCard.streamsToMoonlight
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Controls.Button {
+                                    objectName: "buttonPressToAssign"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textPressToAssign
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textPressToAssign
+                                    icon.name: "input-gamepad"
+                                    visible: !controllersColumn.capturing
+                                    enabled: root.deviceManager !== null
+                                    onClicked: root.deviceManager.startCapture(instanceCard.index)
+                                }
+
+                                Controls.BusyIndicator {
+                                    running: controllersColumn.capturing
+                                    visible: controllersColumn.capturing
+                                    Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                                }
+
+                                Controls.Label {
+                                    objectName: "labelCapturePrompt"
+                                    visible: controllersColumn.capturing
+                                    text: instanceCard.textCapturePrompt
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+
+                                Controls.Button {
+                                    objectName: "buttonCancelCapture"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textCancelCapture
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textCancelCapture
+                                    icon.name: "dialog-cancel"
+                                    visible: controllersColumn.capturing
+                                    onClicked: root.deviceManager.cancelCapture()
+                                }
+
+                                Controls.Button {
+                                    objectName: "buttonAdvancedDevices"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textOtherDevices
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textOtherDevices
+                                    flat: true
+                                    visible: !controllersColumn.capturing
+                                    onClicked: applicationWindow().pushDeviceAssignmentPage()
+                                }
+                            }
+                        }
+
                         Controls.CheckBox {
                             objectName: "checkPrivateTemporaryDirectories"
                             Kirigami.FormData.label: instanceCard.labelPrivateTemporaryDirectories
@@ -934,7 +1245,9 @@ Kirigami.ScrollablePage {
                         visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.active
                         type: Kirigami.MessageType.Information
                         text: i18nc("@info", "Sunshine streaming is active on port %1",
-                                    root.sessionManager ? root.sessionManager.getInstanceConfig(instanceCard.index).sunshinePort : 47989)
+                                    instanceCard.streamEntry !== null
+                                        ? instanceCard.streamEntry.port
+                                        : (root.sessionManager ? root.sessionManager.effectiveSunshinePort(instanceCard.index) : 47989))
                     }
 
                     // Warning for missing devices
@@ -986,8 +1299,11 @@ Kirigami.ScrollablePage {
 
                             return true
                         }
+                        objectName: "messageNoController"
                         type: Kirigami.MessageType.Information
-                        text: i18nc("@info", "No controller assigned to this player")
+                        text: instanceCard.streamsToMoonlight
+                            ? i18nc("@info", "Controllers come from the Moonlight client when it connects")
+                            : i18nc("@info", "No controller assigned to this player")
                     }
                 }
             }
@@ -1012,7 +1328,8 @@ Kirigami.ScrollablePage {
                 onClicked: {
                     if (deviceManager) {
                         deviceManager.instanceCount = root.instanceCount
-                        let count = deviceManager.autoAssignControllers()
+                        let skip = root.sessionManager ? root.sessionManager.streamingInstanceIndexes() : []
+                        let count = deviceManager.autoAssignControllers(skip)
                         applicationWindow().showPassiveNotification(
                             i18ncp("@info", "Assigned %1 controller", "Assigned %1 controllers", count))
                     }
@@ -1021,6 +1338,86 @@ Kirigami.ScrollablePage {
 
             Item { Layout.fillWidth: true }
         }
+
+        Kirigami.Separator {
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.largeSpacing
+        }
+
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+
+            Kirigami.Heading {
+                text: i18nc("@title", "Automation")
+                level: 2
+                Kirigami.FormData.label: i18nc("@title", "Automation")
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPreSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Pre-session script")
+                    readOnly: true
+                    text: sessionManager?.preSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePreSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: preSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPreSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPostSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Post-session script")
+                    readOnly: true
+                    text: sessionManager?.postSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePostSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: postSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPostSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
+                }
+            }
+        }
+
     }
 
     component LayoutCard: Kirigami.AbstractCard {
@@ -1082,7 +1479,6 @@ Kirigami.ScrollablePage {
                             case "horizontal": return horizontalLayout
                             case "vertical": return verticalLayout
                             case "grid": return gridLayout
-                            case "multi-monitor": return multiMonitorLayout
                             default: return horizontalLayout
                         }
                     }
@@ -1232,36 +1628,6 @@ Kirigami.ScrollablePage {
                                 text: (index + 2).toString()
                                 font.bold: true
                             }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: multiMonitorLayout
-        RowLayout {
-            spacing: Kirigami.Units.smallSpacing
-            Repeater {
-                model: root.instanceCount
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: "transparent"
-                    border.color: Kirigami.Theme.textColor
-                    border.width: 1
-                    radius: 4
-                    Rectangle {
-                        anchors.fill: parent
-                        anchors.margins: 2
-                        color: index === 0 ? Kirigami.Theme.highlightColor : Kirigami.Theme.positiveBackgroundColor
-                        opacity: 0.5
-                        radius: 2
-                        Controls.Label {
-                            anchors.centerIn: parent
-                            text: (index + 1).toString()
-                            font.bold: true
                         }
                     }
                 }

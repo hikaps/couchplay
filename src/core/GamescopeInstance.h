@@ -29,7 +29,6 @@ class GamescopeInstance : public QObject
     Q_PROPERTY(qint64 gamescopePid READ gamescopePid NOTIFY gamescopePidChanged)
     Q_PROPERTY(QString username READ username NOTIFY configChanged)
     Q_PROPERTY(QRect windowGeometry READ windowGeometry NOTIFY configChanged)
-    Q_PROPERTY(QString virtualDisplaySocket READ virtualDisplaySocket WRITE setVirtualDisplaySocket NOTIFY configChanged)
 
 public:
     explicit GamescopeInstance(QObject *parent = nullptr);
@@ -66,8 +65,6 @@ public:
     {
         return m_windowGeometry;
     }
-    QString virtualDisplaySocket() const { return m_virtualDisplaySocket; }
-    void setVirtualDisplaySocket(const QString &socket);
     void setHelperClient(CouchPlayHelperClient *client);
 
     static QStringList buildGamescopeArgs(const QVariantMap &config);
@@ -93,7 +90,6 @@ private:
     int m_index = -1;
     QString m_status;
     QString m_username;
-    QString m_virtualDisplaySocket;
     QRect m_windowGeometry;
     qint64 m_helperPid = 0;
     CouchPlayHelperClient *m_helperClient = nullptr;

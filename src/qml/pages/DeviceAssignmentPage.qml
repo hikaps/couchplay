@@ -12,6 +12,7 @@ Kirigami.ScrollablePage {
     title: i18nc("@title", "Assign Devices")
     
     required property var deviceManager
+    property var sessionManager: null
     property int instanceCount: 2
 
     actions: [
@@ -39,7 +40,7 @@ Kirigami.ScrollablePage {
             tooltip: i18nc("@info:tooltip", "Automatically assign one controller per player")
             onTriggered: {
                 if (!deviceManager) return
-                let count = deviceManager.autoAssignControllers()
+                let count = deviceManager.autoAssignControllers(sessionManager ? sessionManager.streamingInstanceIndexes() : [])
                 if (count > 0) {
                     applicationWindow().showPassiveNotification(
                         i18nc("@info", "Assigned %1 controller(s)", count))

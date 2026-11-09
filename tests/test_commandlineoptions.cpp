@@ -33,6 +33,35 @@ private Q_SLOTS:
         QVERIFY(request.exitAfterSession);
     }
 
+    void testSkipPairingCheck()
+    {
+        QString error;
+        CommandLineRequest request = CommandLineOptions::parse(
+            {QStringLiteral("couchplay"), QStringLiteral("--profile"), QStringLiteral("P"), QStringLiteral("--start"),
+             QStringLiteral("--skip-pairing-check")},
+            &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(request.skipPairingCheck);
+
+        request = CommandLineOptions::parse(
+            {QStringLiteral("couchplay"), QStringLiteral("--profile"), QStringLiteral("P"), QStringLiteral("--start")},
+            &error);
+        QVERIFY(!request.skipPairingCheck);
+
+        error.clear();
+        QVERIFY(!CommandLineOptions::parse({QStringLiteral("couchplay"), QStringLiteral("--skip-pairing-check")}, &error)
+                     .requested());
+        QVERIFY(!error.isEmpty());
+
+        error.clear();
+        QVERIFY(!CommandLineOptions::parse({QStringLiteral("couchplay"), QStringLiteral("--profile"), QStringLiteral("P"),
+                                            QStringLiteral("--start"), QStringLiteral("--skip-pairing-check"),
+                                            QStringLiteral("--skip-pairing-check")},
+                                           &error)
+                     .requested());
+        QVERIFY(!error.isEmpty());
+    }
+
     void testForwardedArgumentList()
     {
         QString error;

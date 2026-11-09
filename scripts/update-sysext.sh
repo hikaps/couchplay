@@ -15,7 +15,7 @@ RAW_IMAGE="/home/deck/.couchplay.steamos.raw"
 BUILD_DIR="build"
 
 # Verify built binaries exist
-if [[ ! -f "$BUILD_DIR/bin/couchplay" ]] || [[ ! -f "$BUILD_DIR/bin/couchplay-helper" ]]; then
+if [[ ! -f "$BUILD_DIR/bin/couchplay" ]] || [[ ! -f "$BUILD_DIR/bin/couchplay-helper" ]] || [[ ! -f "$BUILD_DIR/bin/couchplay-vdisplay" ]]; then
     echo "Error: Local build binaries not found in $BUILD_DIR/bin/."
     echo "Please compile the project first (e.g. cmake --build build)."
     exit 1
@@ -45,6 +45,7 @@ unsquashfs -d "$TEMP_DIR/mount" "$RAW_IMAGE"
 echo "Injecting updated binaries..."
 cp "$BUILD_DIR/bin/couchplay" "$TEMP_DIR/mount/usr/local/bin/couchplay"
 cp "$BUILD_DIR/bin/couchplay-helper" "$TEMP_DIR/mount/usr/local/libexec/couchplay-helper"
+cp "$BUILD_DIR/bin/couchplay-vdisplay" "$TEMP_DIR/mount/usr/local/libexec/couchplay-vdisplay"
 
 # 3. Copy other configuration/helper scripts if they have changed
 if [[ -f "scripts/couchplay-gamemode.sh" ]]; then

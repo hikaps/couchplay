@@ -35,7 +35,6 @@ public:
     QString earlyStopReason = QStringLiteral("failed");
 
     qint64 launchInstance(const QString &username,
-                          const QString &,
                           const QStringList &,
                           const QStringList &gameCommand,
                           const QString &,

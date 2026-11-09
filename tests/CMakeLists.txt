@@ -27,6 +27,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/LaunchTypes.h
     ../src/core/CommandLineOptions.cpp
     ../src/core/CommandLineOptions.h
+    ../src/core/SignalBridge.cpp
+    ../src/core/SignalBridge.h
     ../src/core/GamescopeInstance.cpp
     ../src/core/GamescopeInstance.h
     ../src/core/UserManager.cpp
@@ -62,6 +64,16 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SunshineConfig.h
     ../src/core/StreamManager.cpp
     ../src/core/StreamManager.h
+    ../src/core/SunshineApiClient.cpp
+    ../src/core/SunshineApiClient.h
+    ../src/core/HostProcess.cpp
+    ../src/core/HostProcess.h
+    ../src/core/VirtualDisplayManager.cpp
+    ../src/core/VirtualDisplayManager.h
+    ../src/core/PairingSession.cpp
+    ../src/core/PairingSession.h
+    ../src/core/StreamAudio.cpp
+    ../src/core/StreamAudio.h
     ../src/dbus/CouchPlayHelperClient.cpp
     ../src/dbus/CouchPlayHelperClient.h
 )
@@ -95,6 +107,7 @@ function(add_couchplay_test TEST_NAME)
         Qt6::QuickControls2
         Qt6::Widgets
         Qt6::DBus
+        Qt6::Network
         Qt6::Test
         KF6::I18n
         KF6::CoreAddons
@@ -154,6 +167,7 @@ endfunction()
 
 
 add_couchplay_test(test_commandlineoptions)
+add_couchplay_test(test_signalbridge)
 # Add test executables
 add_couchplay_test(test_steamshortcutmanager)
 add_couchplay_test(test_steamregistration)
@@ -173,11 +187,16 @@ add_couchplay_test(test_sessionrunner)
 target_sources(test_sessionrunner PRIVATE ../helper/SecureFs.cpp)
 target_include_directories(test_sessionrunner PRIVATE ${LIBACL_INCLUDE_DIR})
 target_link_libraries(test_sessionrunner PRIVATE ${LIBACL_LIBRARY})
+add_couchplay_test(test_streamaudio)
 add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
+add_couchplay_test(test_pairingsession)
 add_couchplay_test(test_streammanager)
+add_couchplay_test(test_sunshine_api)
+target_compile_definitions(test_sunshine_api PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
+add_couchplay_test(test_virtualdisplaymanager)
 
 # Add helper tests
 add_helper_test(test_couchplayhelper)

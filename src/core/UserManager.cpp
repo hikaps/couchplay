@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2024 hikaps
 
 #include "UserManager.h"
+#include "SunshineConfig.h"
 #include "../dbus/CouchPlayHelperClient.h"
 
 #include <QDebug>
@@ -265,6 +266,10 @@ bool UserManager::deleteUser(const QString &username, bool removeHome)
 
     // Helper will verify user is in couchplay group
     if (m_helperClient->deleteUser(username, removeHome)) {
+        // Paired Moonlight clients, Sunshine credentials and the reserved port belong to the account
+        if (!SunshineConfig::removeState(username)) {
+            qWarning() << "UserManager: could not remove the Sunshine state of" << username;
+        }
         refresh();
         Q_EMIT userDeleted(username);
         return true;

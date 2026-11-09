@@ -94,7 +94,6 @@ public:
      * @return PID of launched process, or 0 on failure
      */
     Q_INVOKABLE virtual qint64 launchInstance(const QString &username,
-                                               const QString &displayContext,
                                                const QStringList &gamescopeArgs,
                                                const QStringList &gameCommand,
                                                const QString &workingDirectory,
@@ -102,16 +101,6 @@ public:
                                                const QStringList &environment,
                                                bool privateTemporaryDirectories,
                                                const QVariantList &directoryPreparations);
-
-    /** Launch a separate user-credentialed auxiliary process alongside Gamescope. */
-    Q_INVOKABLE virtual qint64 launchAuxiliaryInstance(const QString &username,
-                                                        const QString &displayContext,
-                                                        const QStringList &gamescopeArgs,
-                                                        const QStringList &gameCommand,
-                                                        const QString &workingDirectory,
-                                                        const QStringList &sharedRoots,
-                                                        const QStringList &environment,
-                                                        bool privateTemporaryDirectories);
 
     /**
      * @brief Stop a launched instance gracefully (SIGTERM)
@@ -126,6 +115,15 @@ public:
      * @return true if successfully signaled
      */
     Q_INVOKABLE virtual bool killInstance(qint64 pid);
+
+    /**
+     * @brief Grant the couchplay group access to the calling user's runtime directory and audio sockets
+     *
+     * Also deploys the PipeWire-Pulse TCP listener (restarting pipewire-pulse the first time). Idempotent;
+     * the helper resolves the target from the D-Bus caller, so this takes no arguments.
+     * @return true if access was set up
+     */
+    Q_INVOKABLE virtual bool setupRuntimeAccess();
 
     Q_INVOKABLE void checkAvailability();
 
@@ -183,14 +181,6 @@ public:
      * @return true if successful
      */
     Q_INVOKABLE virtual bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
-
-    Q_INVOKABLE virtual QString createVirtualOutput(const QString &username, int width, int height, int refreshRate);
-
-    Q_INVOKABLE virtual bool destroyVirtualOutput(const QString &username, const QString &waylandSocketName);
-
-    Q_INVOKABLE virtual QString createNullSink(const QString &username, const QString &sinkName);
-
-    Q_INVOKABLE virtual bool destroyNullSink(const QString &username, const QString &sinkName);
 
 
     /**

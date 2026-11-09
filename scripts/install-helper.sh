@@ -61,6 +61,7 @@ fi
 
 # Binary name
 HELPER_BINARY="couchplay-helper"
+VDISPLAY_BINARY="couchplay-vdisplay"
 
 # Export directory: where the helper files are staged for the host-side `sudo ... install`.
 # Inside a Flatpak the sandbox home ($HOME) is NOT persisted to the host, so writing to
@@ -102,6 +103,9 @@ else
     DATA_DIR="${PROJECT_DIR}/data"
 fi
 
+# The virtual display holder always ships next to the helper in every layout above.
+VDISPLAY_PATH="$(dirname "${BINARY_PATH}")/${VDISPLAY_BINARY}"
+
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -128,6 +132,12 @@ check_binary() {
         echo "    mkdir -p build && cd build"
         echo "    cmake .."
         echo "    make"
+        exit 1
+    fi
+
+    if [[ ! -f "${VDISPLAY_PATH}" ]]; then
+        print_error "Virtual display binary not found at ${VDISPLAY_PATH}"
+        print_info "Please build the project first (cmake --build build)."
         exit 1
     fi
 }
@@ -170,6 +180,11 @@ export_helper() {
         print_error "Helper binary not found at ${BINARY_PATH}"
         exit 1
     fi
+
+    if [[ ! -f "${VDISPLAY_PATH}" ]]; then
+        print_error "Virtual display binary not found at ${VDISPLAY_PATH}"
+        exit 1
+    fi
     
     # Create export directory
     mkdir -p "${EXPORT_DIR}"
@@ -177,6 +192,7 @@ export_helper() {
     # Copy helper binary
     print_info "Copying helper binary to ${EXPORT_DIR}/"
     install -m755 "${BINARY_PATH}" "${EXPORT_DIR}/${HELPER_BINARY}"
+    install -m755 "${VDISPLAY_PATH}" "${EXPORT_DIR}/${VDISPLAY_BINARY}"
     
     # Copy this script
     print_info "Copying install script to ${EXPORT_DIR}/"
@@ -235,6 +251,7 @@ install_helper() {
     # Install binary
     print_info "Installing binary to ${LIBEXEC_DIR}/"
     install -Dm755 "${BINARY_PATH}" "${LIBEXEC_DIR}/${HELPER_BINARY}"
+    install -Dm755 "${VDISPLAY_PATH}" "${LIBEXEC_DIR}/${VDISPLAY_BINARY}"
 
     # Install bundled runtime libraries, if the release ships them (the binary's
     # RPATH is $ORIGIN/../lib/couchplay, so this lets the helper run without
@@ -325,6 +342,7 @@ uninstall_helper() {
     # Remove files
     print_info "Removing installed files..."
     rm -f "${LIBEXEC_DIR}/${HELPER_BINARY}"
+    rm -f "${LIBEXEC_DIR}/${VDISPLAY_BINARY}"
     rm -f "${DBUS_SYSTEM_DIR}/io.github.hikaps.CouchPlayHelper.conf"
     rm -f "${DBUS_SERVICE_DIR}/io.github.hikaps.CouchPlayHelper.service"
     rm -f "${SYSTEMD_DIR}/couchplay-helper.service"
@@ -355,6 +373,13 @@ status_helper() {
         echo -e "Binary:          ${GREEN}Installed${NC} (${LIBEXEC_DIR}/${HELPER_BINARY})"
     else
         echo -e "Binary:          ${RED}Not installed${NC}"
+    fi
+
+    # Check virtual display binary
+    if [[ -f "${LIBEXEC_DIR}/${VDISPLAY_BINARY}" ]]; then
+        echo -e "Virtual display: ${GREEN}Installed${NC} (${LIBEXEC_DIR}/${VDISPLAY_BINARY})"
+    else
+        echo -e "Virtual display: ${RED}Missing${NC}"
     fi
 
     # Check D-Bus config

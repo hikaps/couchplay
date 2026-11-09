@@ -19,12 +19,14 @@ Kirigami.ApplicationWindow {
     property string startupProfileName: ""
     property bool startupStart: false
     property bool startupExitAfterSession: false
+    property bool startupSkipPairingCheck: false
     property bool initialRequestPending: false
     property bool exitOnStartupFailure: false
     property bool exitAfterActiveSession: false
+    property bool shuttingDown: false
     signal startupFailed(int exitCode)
 
-    function handleLaunchRequest(profileName, start, exitAfterSession) {
+    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck) {
         if (!profileName || profileName === "" || sessionRunner.active) {
             return false
         }
@@ -38,6 +40,7 @@ Kirigami.ApplicationWindow {
         }
         exitOnStartupFailure = initialRequestPending
         exitAfterActiveSession = exitAfterSession
+        sessionRunner.skipPairingCheck = skipPairingCheck
         if (!sessionRunner.start()) {
             exitOnStartupFailure = false
             exitAfterActiveSession = false
@@ -47,11 +50,36 @@ Kirigami.ApplicationWindow {
         return true
     }
 
+    // Stop any running session before quitting so gamescope/Steam instances are not left behind.
+    // A second request (or the timeout) quits immediately.
+    function requestShutdown() {
+        if (shuttingDown || !sessionRunner.active) {
+            Qt.quit()
+            return
+        }
+        shuttingDown = true
+        shutdownTimeout.start()
+        sessionRunner.stop()
+    }
+
+    onClosing: (close) => {
+        if (sessionRunner.active && !shuttingDown) {
+            close.accepted = false
+            requestShutdown()
+        }
+    }
+
+    Timer {
+        id: shutdownTimeout
+        interval: 30000
+        onTriggered: Qt.quit()
+    }
+
     Component.onCompleted: {
         if (startupProfileName !== "") {
             initialRequestPending = true
             Qt.callLater(function() {
-                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession)
+                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck)
                 initialRequestPending = false
             })
         }
@@ -62,8 +90,8 @@ Kirigami.ApplicationWindow {
     }
     Connections {
         target: commandLineBridge
-        function onLaunchRequested(profileName, start, exitAfterSession) {
-            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession))
+        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck) {
+            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck))
         }
     }
 
@@ -143,13 +171,26 @@ Kirigami.ApplicationWindow {
                 root.exitAfterActiveSession = false
                 Qt.callLater(function() { Qt.quit() })
             }
+            if (root.shuttingDown) {
+                Qt.callLater(function() { Qt.quit() })
+            }
         }
         onSessionStartFailed: function(message) {
             if (root.exitOnStartupFailure) {
                 root.exitOnStartupFailure = false
                 root.startupFailed(1)
             }
+            if (root.shuttingDown) {
+                Qt.callLater(function() { Qt.quit() })
+            }
         }
+    }
+
+    PairingSession {
+        id: pairingSession
+        sessionManager: sessionManager
+        sessionRunner: sessionRunner
+        settingsManager: settingsManager
     }
 
     UserManager {
@@ -306,7 +347,7 @@ Kirigami.ApplicationWindow {
 
     function pushSessionSetupPage() {
         pageStack.clear()
-        pageStack.push(sessionSetupPage, {
+        const page = pageStack.push(sessionSetupPage, {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
             deviceManager: deviceManager,
@@ -314,14 +355,17 @@ Kirigami.ApplicationWindow {
             userManager: userManager,
             steamConfigManager: steamConfigManager,
             heroicConfigManager: heroicConfigManager,
-            presetManager: presetManager
+            presetManager: presetManager,
+            audioManager: audioManager
         })
+        page.openUsersRequested.connect(pushUsersPage)
     }
 
     function pushDeviceAssignmentPage() {
         pageStack.clear()
         pageStack.push(deviceAssignmentPage, {
             deviceManager: deviceManager,
+            sessionManager: sessionManager,
             instanceCount: sessionManager.instanceCount
         })
     }
@@ -339,7 +383,9 @@ Kirigami.ApplicationWindow {
         pageStack.clear()
         pageStack.push(usersPage, {
             userManager: userManager,
-            helperClient: helperClient
+            helperClient: helperClient,
+            pairingSession: pairingSession,
+            sessionRunner: sessionRunner
         })
     }
 

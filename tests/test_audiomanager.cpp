@@ -30,6 +30,8 @@ private Q_SLOTS:
     void testAudioServerChangedSignal();
     void testCheckSocketAclNonexistent();
     void testCheckSocketAclWithFakeSocket();
+    void testParseSinksSkipsCouchPlayNullSinks();
+    void testParseSinksRejectsInvalidInput();
 
 private:
     AudioManager *m_manager = nullptr;
@@ -198,6 +200,32 @@ void TestAudioManager::testCheckSocketAclWithFakeSocket()
     const bool result = m_manager->checkSocketAcl(fakeSocket);
 
     QVERIFY(!result);
+}
+
+void TestAudioManager::testParseSinksSkipsCouchPlayNullSinks()
+{
+    const QByteArray json = R"([
+        {"index": 1, "name": "alsa_output.usb-soundbar.analog-stereo", "description": "USB Soundbar"},
+        {"index": 2, "name": "couchplay-sunshine-0", "description": "Null Output"},
+        {"index": 3, "name": "alsa_output.pci-hdmi", "description": ""}
+    ])";
+
+    const QVariantList devices = AudioManager::parseSinks(json);
+    QCOMPARE(devices.size(), 2);
+    QCOMPARE(devices.at(0).toMap().value(QStringLiteral("name")).toString(),
+             QStringLiteral("alsa_output.usb-soundbar.analog-stereo"));
+    QCOMPARE(devices.at(0).toMap().value(QStringLiteral("description")).toString(), QStringLiteral("USB Soundbar"));
+    // A missing description falls back to the sink name so the entry is still selectable.
+    QCOMPARE(devices.at(1).toMap().value(QStringLiteral("description")).toString(),
+             QStringLiteral("alsa_output.pci-hdmi"));
+}
+
+void TestAudioManager::testParseSinksRejectsInvalidInput()
+{
+    QVERIFY(AudioManager::parseSinks(QByteArray()).isEmpty());
+    QVERIFY(AudioManager::parseSinks("not json").isEmpty());
+    QVERIFY(AudioManager::parseSinks(R"({"name": "x"})").isEmpty());
+    QVERIFY(AudioManager::parseSinks(R"([{"description": "no name"}])").isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestAudioManager)

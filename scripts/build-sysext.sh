@@ -74,6 +74,15 @@ mkdir -p "$STAGE_DIR/usr/lib/extension-release.d"
 print_info "Copying helper binary..."
 cp "$HELPER_BIN" "$STAGE_DIR/usr/local/libexec/couchplay-helper"
 
+# Desktop-user virtual display holder (links only libwayland-client; sits next to the helper)
+VDISPLAY_BIN="$(dirname "$HELPER_BIN")/couchplay-vdisplay"
+if [[ ! -f "$VDISPLAY_BIN" ]]; then
+    print_error "Virtual display binary not found at: $VDISPLAY_BIN"
+    exit 1
+fi
+print_info "Copying virtual display binary..."
+cp "$VDISPLAY_BIN" "$STAGE_DIR/usr/local/libexec/couchplay-vdisplay"
+
 # Bundle helper's runtime libraries (RPATH is $ORIGIN/../lib/couchplay)
 print_info "Bundling runtime libraries..."
 (cd "$PROJECT_DIR" && ./scripts/package-helper.sh "$STAGE_DIR/usr/local/libexec/couchplay-helper")

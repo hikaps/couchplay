@@ -4,6 +4,7 @@
 #include "SessionManager.h"
 #include "Logging.h"
 #include "SessionRunner.h"
+#include "SunshineConfig.h"
 #include "UserLookup.h"
 #include "../../helper/DirectoryPlan.h"
 
@@ -113,6 +114,22 @@ bool SessionManager::isValidProfileName(const QString &name)
 }
 
 
+/// Clamp inconsistent display/stream combinations: the main screen cannot be
+/// streamed (capture is per output) and a virtual display exists only to stream.
+static void normalizeDisplay(InstanceConfig &inst)
+{
+    if (inst.display.isEmpty() || (inst.display != InstanceConfig::DisplayMain
+                                   && inst.display != InstanceConfig::DisplayVirtual
+                                   && InstanceConfig::monitorConnector(inst.display).isEmpty())) {
+        inst.display = InstanceConfig::DisplayMain;
+    }
+    if (inst.display == InstanceConfig::DisplayMain) {
+        inst.streamToMoonlight = false;
+    } else if (inst.display == InstanceConfig::DisplayVirtual) {
+        inst.streamToMoonlight = true;
+    }
+}
+
 void SessionManager::newSession()
 {
     m_currentProfile = SessionProfile();
@@ -122,7 +139,6 @@ void SessionManager::newSession()
     m_currentProfile.instances.clear();
     for (int i = 0; i < 2; ++i) {
         InstanceConfig config;
-        config.monitor = 0;
         m_currentProfile.instances.append(config);
     }
 
@@ -181,6 +197,11 @@ bool SessionManager::saveProfile(const QString &name)
     KConfigGroup general = config.group(QStringLiteral("General"));
     general.writeEntry("name", profileName);
     general.writeEntry("layout", m_currentProfile.layout);
+    if (m_currentProfile.mainScreen.isEmpty()) {
+        general.deleteEntry("mainScreen");
+    } else {
+        general.writeEntry("mainScreen", m_currentProfile.mainScreen);
+    }
     general.writeEntry("gridSubLayout", m_currentProfile.gridSubLayout);
     general.writeEntry("preSessionExecutable", m_currentProfile.preSessionExecutable);
     general.writeEntry("postSessionExecutable", m_currentProfile.postSessionExecutable);
@@ -191,7 +212,6 @@ bool SessionManager::saveProfile(const QString &name)
         KConfigGroup instGroup = config.group(QStringLiteral("Instance%1").arg(i));
 
         instGroup.writeEntry("username", inst.username);
-        instGroup.writeEntry("monitor", inst.monitor);
         instGroup.writeEntry("internalWidth", inst.internalWidth);
         instGroup.writeEntry("internalHeight", inst.internalHeight);
         instGroup.writeEntry("outputWidth", inst.outputWidth);
@@ -213,12 +233,26 @@ bool SessionManager::saveProfile(const QString &name)
         instGroup.deleteEntry("overridePatterns");
         instGroup.deleteEntry("overlayGamePath");
         instGroup.deleteEntry("overlayPatterns");
-        instGroup.writeEntry("outputMode", inst.outputMode);
-        instGroup.writeEntry("streamResolution", inst.streamResolution);
-        instGroup.writeEntry("streamFps", inst.streamFps);
+        instGroup.writeEntry("display", inst.display);
+        instGroup.writeEntry("streamToMoonlight", inst.streamToMoonlight);
+        instGroup.writeEntry("virtualResolution", inst.virtualResolution);
+        instGroup.deleteEntry("outputMode");
+        instGroup.deleteEntry("streamResolution");
+        instGroup.deleteEntry("streamFps");
+        instGroup.deleteEntry("monitor");
+        if (inst.renderResolution.isEmpty()) {
+            instGroup.deleteEntry("renderResolution");
+        } else {
+            instGroup.writeEntry("renderResolution", inst.renderResolution);
+        }
         instGroup.writeEntry("streamBitrate", inst.streamBitrate);
         instGroup.writeEntry("streamCodec", inst.streamCodec);
         instGroup.writeEntry("sunshinePort", inst.sunshinePort);
+        if (inst.audioDevice.isEmpty()) {
+            instGroup.deleteEntry("audioDevice");
+        } else {
+            instGroup.writeEntry("audioDevice", inst.audioDevice);
+        }
 
         QStringList deviceStrings;
         for (int dev : inst.devices) {
@@ -409,6 +443,10 @@ bool SessionManager::loadProfile(const QString &name)
     m_currentProfile.name = profileName;
     m_currentProfile.filePath = path;
     m_currentProfile.layout = general.readEntry("layout", QStringLiteral("horizontal"));
+    if (m_currentProfile.layout == QStringLiteral("multi-monitor")) {
+        m_currentProfile.layout = QStringLiteral("horizontal");
+    }
+    m_currentProfile.mainScreen = general.readEntry("mainScreen", QString());
     m_currentProfile.gridSubLayout = general.readEntry("gridSubLayout", QString());
     m_currentProfile.preSessionExecutable = general.readEntry("preSessionExecutable", QString());
     m_currentProfile.postSessionExecutable = general.readEntry("postSessionExecutable", QString());
@@ -420,7 +458,6 @@ bool SessionManager::loadProfile(const QString &name)
 
         InstanceConfig inst;
         inst.username = instGroup.readEntry("username", QString());
-        inst.monitor = instGroup.readEntry("monitor", 0);
         inst.internalWidth = instGroup.readEntry("internalWidth", 1920);
         inst.internalHeight = instGroup.readEntry("internalHeight", 1080);
         inst.outputWidth = instGroup.readEntry("outputWidth", 960);
@@ -441,12 +478,24 @@ bool SessionManager::loadProfile(const QString &name)
             }
         }
 
-        inst.outputMode = instGroup.readEntry("outputMode", QStringLiteral("physical"));
-        inst.streamResolution = instGroup.readEntry("streamResolution", QStringLiteral("1920x1080"));
-        inst.streamFps = instGroup.readEntry("streamFps", 60);
+        inst.streamToMoonlight = instGroup.readEntry("streamToMoonlight", false);
+        inst.virtualResolution = instGroup.readEntry("virtualResolution",
+                                                      instGroup.readEntry("streamResolution", QStringLiteral("1920x1080")));
+        inst.renderResolution = instGroup.readEntry("renderResolution", QString());
         inst.streamBitrate = instGroup.readEntry("streamBitrate", 20000);
-        inst.streamCodec = instGroup.readEntry("streamCodec", QStringLiteral("h264"));
+        inst.streamCodec = instGroup.readEntry("streamCodec", QStringLiteral("auto"));
+        if (inst.streamCodec == QStringLiteral("h265")) {
+            inst.streamCodec = QStringLiteral("hevc");
+        }
         inst.sunshinePort = instGroup.readEntry("sunshinePort", 47989);
+        inst.audioDevice = instGroup.readEntry("audioDevice", QString());
+        if (instGroup.hasKey("display")) {
+            inst.display = instGroup.readEntry("display", InstanceConfig::DisplayMain);
+        } else if (instGroup.readEntry("outputMode", QString()) == QStringLiteral("streaming")) {
+            inst.display = InstanceConfig::DisplayVirtual;
+            inst.streamToMoonlight = true;
+        }
+        normalizeDisplay(inst);
 
         inst.deviceStableIds = instGroup.readEntry("deviceStableIds", QStringList());
         inst.deviceStableIdNames = instGroup.readEntry("deviceStableIdNames", QStringList());
@@ -614,6 +663,14 @@ void SessionManager::setCurrentLayout(const QString &layout)
     }
 }
 
+void SessionManager::setCurrentMainScreen(const QString &connector)
+{
+    if (m_currentProfile.mainScreen != connector) {
+        m_currentProfile.mainScreen = connector;
+        Q_EMIT currentMainScreenChanged();
+    }
+}
+
 void SessionManager::setCurrentGridSubLayout(const QString &subLayout)
 {
     if (m_currentProfile.gridSubLayout != subLayout) {
@@ -635,7 +692,6 @@ void SessionManager::setInstanceCount(int count)
 
     while (m_currentProfile.instances.size() < count) {
         InstanceConfig config;
-        config.monitor = 0;
         m_currentProfile.instances.append(config);
     }
 
@@ -645,6 +701,28 @@ void SessionManager::setInstanceCount(int count)
 
     Q_EMIT instanceCountChanged();
     Q_EMIT instancesChanged();
+}
+
+int SessionManager::effectiveSunshinePort(int index) const
+{
+    if (index < 0 || index >= m_currentProfile.instances.size()) {
+        return SunshineConfig::calculatePort(0);
+    }
+    const InstanceConfig &instance = m_currentProfile.instances[index];
+    return SunshineConfig::preferredPort(instance.username, index, instance.sunshinePort);
+}
+
+QVariantList SessionManager::streamingInstanceIndexes() const
+{
+    QVariantList indexes;
+    for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
+        const InstanceConfig &inst = m_currentProfile.instances[i];
+        if (inst.display != InstanceConfig::DisplayMain
+            && (inst.display == InstanceConfig::DisplayVirtual || inst.streamToMoonlight)) {
+            indexes << i;
+        }
+    }
+    return indexes;
 }
 
 QVariantMap SessionManager::getInstanceConfig(int index) const
@@ -657,7 +735,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
 
     const InstanceConfig &inst = m_currentProfile.instances[index];
     map[QStringLiteral("username")] = inst.username;
-    map[QStringLiteral("monitor")] = inst.monitor;
+    map[QStringLiteral("display")] = inst.display;
     map[QStringLiteral("internalWidth")] = inst.internalWidth;
     map[QStringLiteral("internalHeight")] = inst.internalHeight;
     map[QStringLiteral("outputWidth")] = inst.outputWidth;
@@ -668,12 +746,13 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("gameSelection")] = inst.gameSelectionAsVariant();
     map[QStringLiteral("presetId")] = inst.presetId;
     map[QStringLiteral("privateTemporaryDirectories")] = inst.privateTemporaryDirectories;
-    map[QStringLiteral("outputMode")] = inst.outputMode;
-    map[QStringLiteral("streamResolution")] = inst.streamResolution;
-    map[QStringLiteral("streamFps")] = inst.streamFps;
+    map[QStringLiteral("streamToMoonlight")] = inst.streamToMoonlight;
+    map[QStringLiteral("virtualResolution")] = inst.virtualResolution;
+    map[QStringLiteral("renderResolution")] = inst.renderResolution;
     map[QStringLiteral("streamBitrate")] = inst.streamBitrate;
     map[QStringLiteral("streamCodec")] = inst.streamCodec;
     map[QStringLiteral("sunshinePort")] = inst.sunshinePort;
+    map[QStringLiteral("audioDevice")] = inst.audioDevice;
 
     QVariantList deviceList;
     for (int dev : inst.devices) {
@@ -706,8 +785,8 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
 
     if (config.contains(QStringLiteral("username")))
         inst.username = config[QStringLiteral("username")].toString();
-    if (config.contains(QStringLiteral("monitor")))
-        inst.monitor = config[QStringLiteral("monitor")].toInt();
+    if (config.contains(QStringLiteral("display")))
+        inst.display = config[QStringLiteral("display")].toString();
     if (config.contains(QStringLiteral("internalWidth")))
         inst.internalWidth = config[QStringLiteral("internalWidth")].toInt();
     if (config.contains(QStringLiteral("internalHeight")))
@@ -729,18 +808,21 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
         inst.presetId = config[QStringLiteral("presetId")].toString();
     if (config.contains(QStringLiteral("privateTemporaryDirectories")))
         inst.privateTemporaryDirectories = config[QStringLiteral("privateTemporaryDirectories")].toBool();
-    if (config.contains(QStringLiteral("outputMode")))
-        inst.outputMode = config[QStringLiteral("outputMode")].toString();
-    if (config.contains(QStringLiteral("streamResolution")))
-        inst.streamResolution = config[QStringLiteral("streamResolution")].toString();
-    if (config.contains(QStringLiteral("streamFps")))
-        inst.streamFps = config[QStringLiteral("streamFps")].toInt();
+    if (config.contains(QStringLiteral("streamToMoonlight")))
+        inst.streamToMoonlight = config[QStringLiteral("streamToMoonlight")].toBool();
+    if (config.contains(QStringLiteral("virtualResolution")))
+        inst.virtualResolution = config[QStringLiteral("virtualResolution")].toString();
+    if (config.contains(QStringLiteral("renderResolution")))
+        inst.renderResolution = config[QStringLiteral("renderResolution")].toString();
     if (config.contains(QStringLiteral("streamBitrate")))
         inst.streamBitrate = config[QStringLiteral("streamBitrate")].toInt();
     if (config.contains(QStringLiteral("streamCodec")))
         inst.streamCodec = config[QStringLiteral("streamCodec")].toString();
     if (config.contains(QStringLiteral("sunshinePort")))
         inst.sunshinePort = config[QStringLiteral("sunshinePort")].toInt();
+    if (config.contains(QStringLiteral("audioDevice")))
+        inst.audioDevice = config[QStringLiteral("audioDevice")].toString();
+    normalizeDisplay(inst);
 
     Q_EMIT instancesChanged();
 
@@ -753,17 +835,6 @@ void SessionManager::setInstanceUser(int index, const QString &username)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
         m_currentProfile.instances[index].username = username;
-        Q_EMIT instancesChanged();
-        if (!m_currentProfile.name.isEmpty()) {
-            saveProfile(m_currentProfile.name);
-        }
-    }
-}
-
-void SessionManager::setInstanceMonitor(int index, int monitor)
-{
-    if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].monitor = monitor;
         Q_EMIT instancesChanged();
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
@@ -948,15 +1019,30 @@ QVariantList SessionManager::instancesAsVariant() const
 
 void SessionManager::recalculateOutputResolutions(int screenWidth, int screenHeight)
 {
-    int count = m_currentProfile.instances.size();
+    // Only players on the main screen share its area; dedicated monitors and
+    // virtual displays get their geometry from the output itself.
+    QList<int> mainIndices;
+    for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
+        if (m_currentProfile.instances[i].display == InstanceConfig::DisplayMain) {
+            mainIndices.append(i);
+        }
+    }
+    const int count = mainIndices.size();
     if (count < 1) {
         return;
     }
 
-    QString layout = m_currentProfile.layout;
+    const QString layout = m_currentProfile.layout;
+    QList<QRect> layouts;
+    if (layout == QStringLiteral("grid")) {
+        layouts = SessionRunner::calculateLayout(layout,
+                                                 count,
+                                                 QRect(0, 0, screenWidth, screenHeight),
+                                                 m_currentProfile.gridSubLayout);
+    }
 
-    for (int i = 0; i < count; ++i) {
-        InstanceConfig &inst = m_currentProfile.instances[i];
+    for (int n = 0; n < count; ++n) {
+        InstanceConfig &inst = m_currentProfile.instances[mainIndices[n]];
 
         if (layout == QStringLiteral("horizontal")) {
             inst.outputWidth = screenWidth / count;
@@ -965,16 +1051,11 @@ void SessionManager::recalculateOutputResolutions(int screenWidth, int screenHei
             inst.outputWidth = screenWidth;
             inst.outputHeight = screenHeight / count;
         } else if (layout == QStringLiteral("grid")) {
-            QList<QRect> layouts = SessionRunner::calculateLayout(layout,
-                                                                  count,
-                                                                  QRect(0, 0, screenWidth, screenHeight),
-                                                                  m_currentProfile.gridSubLayout);
-            if (i < layouts.size()) {
-                inst.outputWidth = layouts[i].width();
-                inst.outputHeight = layouts[i].height();
+            if (n < layouts.size()) {
+                inst.outputWidth = layouts[n].width();
+                inst.outputHeight = layouts[n].height();
             }
         } else {
-            // multi-monitor or unknown: use full resolution
             inst.outputWidth = screenWidth;
             inst.outputHeight = screenHeight;
         }

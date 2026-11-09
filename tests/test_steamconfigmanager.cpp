@@ -27,7 +27,8 @@ void appendString(QByteArray &data, const QByteArray &key, const QByteArray &val
 }
 }
 
-QByteArray makeShortcutDocument(const QByteArray &name, quint8 appId)
+QByteArray makeShortcutDocument(const QByteArray &name, quint8 appId, const QByteArray &exe = {},
+                                const QByteArray &startDir = {}, const QByteArray &icon = {})
 {
     QByteArray data;
     data.append(char(0x00));
@@ -37,6 +38,9 @@ QByteArray makeShortcutDocument(const QByteArray &name, quint8 appId)
     data.append("0");
     data.append(char(0));
     appendString(data, "AppName", name);
+    if (!exe.isEmpty()) appendString(data, "exe", exe);
+    if (!startDir.isEmpty()) appendString(data, "StartDir", startDir);
+    if (!icon.isEmpty()) appendString(data, "icon", icon);
     data.append(char(0x02));
     data.append("appid");
     data.append(char(0));
@@ -310,6 +314,50 @@ private Q_SLOTS:
         manager.refreshSourceAccounts();
         QVERIFY(manager.sourceAccountAvailable());
         QCOMPARE(manager.sourceAccountIndex(), 1);
+    }
+
+    void testShortcutDirectoriesExcludeRelativeAndSystemPaths()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString steamRoot = home.path() + QStringLiteral("/.local/share/Steam");
+        const QString gameDir = home.path() + QStringLiteral("/games/Game");
+        const QString iconDir = home.path() + QStringLiteral("/icons");
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/userdata/123/config")));
+        QVERIFY(QDir().mkpath(gameDir));
+        QVERIFY(QDir().mkpath(iconDir));
+
+        // A relative "./" start dir is dropped; the home-based exe and icon directories are kept.
+        const QByteArray data = makeShortcutDocument("Mixed", 7, (gameDir + QStringLiteral("/run.sh")).toUtf8(),
+                                                     "\"./\"", (iconDir + QStringLiteral("/icon.png")).toUtf8());
+        QFile shortcuts(steamRoot + QStringLiteral("/userdata/123/config/shortcuts.vdf"));
+        QVERIFY(shortcuts.open(QIODevice::WriteOnly));
+        QCOMPARE(shortcuts.write(data), qint64(data.size()));
+        shortcuts.close();
+
+        SteamConfigManager manager;
+        QVERIFY(manager.sourceAccountAvailable());
+        manager.loadShortcuts();
+        QCOMPARE(manager.shortcutCount(), 1);
+        QStringList dirs = manager.extractShortcutDirectories();
+        dirs.sort();
+        QStringList expected{gameDir, iconDir};
+        expected.sort();
+        QCOMPARE(dirs, expected);
+
+        // A system binary, the filesystem root and a relative icon leave nothing to ACL.
+        const QByteArray system = makeShortcutDocument("System", 8, "/usr/bin/true", "/", "relative/icon.png");
+        QVERIFY(shortcuts.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(shortcuts.write(system), qint64(system.size()));
+        shortcuts.close();
+        manager.loadShortcuts();
+        QCOMPARE(manager.shortcutCount(), 1);
+        QVERIFY(manager.extractShortcutDirectories().isEmpty());
     }
     void testSavedSourceDoesNotFollowRetargetedSteamRoot()
     {

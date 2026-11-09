@@ -1,18 +1,56 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
-#include <QCryptographicHash>
-#include <algorithm>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QObject>
+#include <QStandardPaths>
+#include <QTcpServer>
 #include <QTest>
-#include <QDebug>
 
-#include <QDir>
-#include <QFile>
-#include <QTemporaryDir>
 #include "../src/core/SunshineConfig.h"
+
+namespace
+{
+QStringList readLines(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+}
+
+// Parses "key = value" lines
+QMap<QString, QString> readConf(const QString &path)
+{
+    QMap<QString, QString> result;
+    for (const QString &line : readLines(path)) {
+        const qsizetype eq = line.indexOf(QStringLiteral(" = "));
+        if (eq > 0) {
+            result.insert(line.left(eq), line.mid(eq + 3));
+        }
+    }
+    return result;
+}
+
+StreamSpec makeSpec()
+{
+    StreamSpec spec;
+    spec.instanceIndex = 1;
+    spec.identityKey = QStringLiteral("player2");
+    spec.outputName = QStringLiteral("Virtual-couchplay-p2");
+    spec.sinkName = QStringLiteral("couchplay-stream-p2");
+    spec.port = 48019;
+    spec.bitrate = 15000;
+    return spec;
+}
+}
 
 class TestSunshineConfig : public QObject
 {
@@ -20,344 +58,372 @@ class TestSunshineConfig : public QObject
 
 private Q_SLOTS:
     void initTestCase();
-    void cleanupTestCase();
-    void cleanup();
     void testPortCalculation();
-    void testPortCalculationWithCustomBase();
-    void testGenerateConfigCreatesFiles();
-    void testGeneratedConfigContent();
-    void testDifferentInstancesProduceDifferentPorts();
-    void testDifferentInstancesProduceDifferentPaths();
-    void testConfigParsesAsValidINI();
-    void testAppsJsonIsValid();
-    void testDefaultCredentials();
-    void testCustomCredentials();
-    void testOutputNameIncluded();
-    void testBitrateIncluded();
-    void testConfigValueInjectionStripped();
-    void testEmptyConfigDirFails();
-    void testNegativeIndexFails();
-    void testDefaultConfigDir();
-    void testDirectoryPermissions();
-
-private:
-    QTemporaryDir *m_tempDir = nullptr;
+    void testStateDirectorySanitized();
+    void testEnsureStateDirectoryPermissions();
+    void testSecretStableAndPrivate();
+    void testGenerateConfigKeys();
+    void testGenerateConfigWithoutSink();
+    void testCustomDisplayName();
+    void testCodecMapping_data();
+    void testCodecMapping();
+    void testAppsJson();
+    void testConfigRewrittenEveryTime();
+    void testValueInjectionStripped();
+    void testCredentialArguments();
+    void testAllocatePortSkipsBusyPort();
+    void testAllocatePortExhausted();
+    void testPairedClients();
+    void testPairedClientsMissingOrMalformed();
+    void testUserPortStableAndDistinct();
+    void testUserPortInvalidFileRewritten();
+    void testUserPortEmptyIdentityAndPreferredPort();
+    void testRemoveState();
 };
-
 
 void TestSunshineConfig::initTestCase()
 {
-    m_tempDir = new QTemporaryDir(QDir::tempPath() + QStringLiteral("/couchplay-sunshine-test-XXXXXX"));
-    QVERIFY(m_tempDir->isValid());
+    QStandardPaths::setTestModeEnabled(true);
 }
 
-void TestSunshineConfig::cleanupTestCase()
+void TestSunshineConfig::testPairedClients()
 {
-    delete m_tempDir;
-    m_tempDir = nullptr;
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("paired-test"));
+    QFile file(dir + QStringLiteral("/sunshine_state.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(R"({"root":{"uniqueid":"abc","named_devices":[)"
+               R"({"name":"Phone","uuid":"u1"},{"name":"No uuid","uuid":""},{"name":"Deck","uuid":"u2"}]}})");
+    file.close();
+
+    const QVariantList clients = SunshineConfig::pairedClients(QStringLiteral("paired-test"));
+    QCOMPARE(clients.size(), 2);
+    QCOMPARE(clients.at(0).toMap().value(QStringLiteral("name")).toString(), QStringLiteral("Phone"));
+    QCOMPARE(clients.at(1).toMap().value(QStringLiteral("uuid")).toString(), QStringLiteral("u2"));
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-test")), 2);
 }
 
-void TestSunshineConfig::cleanup()
+void TestSunshineConfig::testPairedClientsMissingOrMalformed()
 {
-    if (!m_tempDir)
-        return;
-    QDir dir(m_tempDir->path());
-    const QStringList entries = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString &entry : entries) {
-        QDir subDir(dir.filePath(entry));
-        const QStringList files = subDir.entryList(QDir::Files);
-        for (const QString &file : files) {
-            QFile::remove(subDir.filePath(file));
-        }
-        subDir.rmdir(subDir.absolutePath());
-    }
+    // Unknown user: no file, and the state directory must not be created
+    const QString missing = SunshineConfig::stateDirectory(QStringLiteral("paired-never-created"));
+    QDir(missing).removeRecursively();
+    QVERIFY(SunshineConfig::pairedClients(QStringLiteral("paired-never-created")).isEmpty());
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-never-created")), 0);
+    QVERIFY(!QFileInfo::exists(missing));
+
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("paired-malformed"));
+    QFile file(dir + QStringLiteral("/sunshine_state.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("{not json");
+    file.close();
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-malformed")), 0);
+
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(R"({"root":{"uniqueid":"x"}})");
+    file.close();
+    QCOMPARE(SunshineConfig::pairedClientCount(QStringLiteral("paired-malformed")), 0);
 }
 
 void TestSunshineConfig::testPortCalculation()
 {
-    QCOMPARE(SunshineConfig::calculatePort(0), 47989);
-    QCOMPARE(SunshineConfig::calculatePort(1), 48019);
-    QCOMPARE(SunshineConfig::calculatePort(2), 48049);
-    QCOMPARE(SunshineConfig::calculatePort(3), 48079);
+    QCOMPARE(SunshineConfig::calculatePort(0), SunshineConfig::BASE_PORT);
+    QCOMPARE(SunshineConfig::calculatePort(2), SunshineConfig::BASE_PORT + 2 * SunshineConfig::PORT_SPACING);
+    QCOMPARE(SunshineConfig::calculatePort(1, 50000), 50000 + SunshineConfig::PORT_SPACING);
+    QCOMPARE(SunshineConfig::calculatePort(1000), SunshineConfig::MAX_PORT);
+    QCOMPARE(SunshineConfig::calculatePort(0, 100), SunshineConfig::MIN_PORT);
 }
 
-void TestSunshineConfig::testPortCalculationWithCustomBase()
+void TestSunshineConfig::testStateDirectorySanitized()
 {
-    QCOMPARE(SunshineConfig::calculatePort(0, 50000), 50000);
-    QCOMPARE(SunshineConfig::calculatePort(1, 50000), 50030);
-    QCOMPARE(SunshineConfig::calculatePort(2, 50000), 50060);
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/sunshine/");
+    QCOMPARE(SunshineConfig::stateDirectory(QStringLiteral("player1")), root + QStringLiteral("player1"));
+    QCOMPARE(SunshineConfig::stateDirectory(QString()), root + QStringLiteral("_desktop"));
+    QCOMPARE(SunshineConfig::stateDirectory(QStringLiteral("..")), root + QStringLiteral("_desktop"));
+    QCOMPARE(SunshineConfig::stateDirectory(QStringLiteral("a/../b c")), root + QStringLiteral("a_.._b_c"));
 }
 
-void TestSunshineConfig::testGenerateConfigCreatesFiles()
+void TestSunshineConfig::testEnsureStateDirectoryPermissions()
 {
-    QString configDir = m_tempDir->path() + QStringLiteral("/instance-0");
-    QVariantMap config;
-
-    QString result = SunshineConfig::generateConfig(config, 0, configDir);
-
-    QVERIFY(!result.isEmpty());
-    QCOMPARE(result, configDir + QStringLiteral("/sunshine.conf"));
-    QVERIFY(QFile::exists(result));
-    QVERIFY(QFile::exists(configDir + QStringLiteral("/apps.json")));
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("perm-test"));
+    QVERIFY(!dir.isEmpty());
+    QVERIFY(QFileInfo(dir).isDir());
+    QCOMPARE(QFileInfo(dir).permissions() & 0x7077, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
 }
 
-void TestSunshineConfig::testGeneratedConfigContent()
+void TestSunshineConfig::testSecretStableAndPrivate()
 {
-    QString configDir = m_tempDir->path() + QStringLiteral("/content-test");
-    QVariantMap config;
-    config.insert(QStringLiteral("outputName"), QStringLiteral("2"));
-    config.insert(QStringLiteral("username"), QStringLiteral("player1"));
-    config.insert(QStringLiteral("password"), QStringLiteral("s3cret"));
-    config.insert(QStringLiteral("streamBitrate"), 15000);
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("secret-test"));
+    QVERIFY(!dir.isEmpty());
+    QFile::remove(dir + QStringLiteral("/couchplay.secret"));
 
-    QString configPath = SunshineConfig::generateConfig(config, 1, configDir);
-    QVERIFY(!configPath.isEmpty());
-
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content = QString::fromUtf8(file.readAll());
-    file.close();
-
-    QVERIFY(content.contains(QStringLiteral("port = 48019")));
-    QVERIFY(content.contains(QStringLiteral("output_name = 2")));
-    QVERIFY(!content.contains(QStringLiteral("username = ")));
-    QVERIFY(!content.contains(QStringLiteral("password = ")));
-    QVERIFY(content.contains(QStringLiteral("max_bitrate = 15000")));
-    QVERIFY(content.contains(QStringLiteral("gamepad = auto")));
-    QVERIFY(content.contains(QStringLiteral("controller = enabled")));
-    QVERIFY(content.contains(QStringLiteral("keyboard = enabled")));
-    QVERIFY(content.contains(QStringLiteral("mouse = enabled")));
-    QVERIFY(content.contains(QStringLiteral("sunshine_name = CouchPlay Player 1")));
-    QVERIFY(content.contains(QStringLiteral("origin_web_ui_allowed = pc")));
-    QVERIFY(content.contains(configDir + QStringLiteral("/apps.json")));
-    QVERIFY(content.contains(configDir + QStringLiteral("/credentials.json")));
-    QVERIFY(content.contains(configDir + QStringLiteral("/sunshine.log")));
-
-    // Credentials should be in a separate JSON file, not in sunshine.conf
-    QVERIFY(QFile::exists(configDir + QStringLiteral("/credentials.json")));
-}
-
-void TestSunshineConfig::testDifferentInstancesProduceDifferentPorts()
-{
-    QString dir0 = m_tempDir->path() + QStringLiteral("/diff-port-0");
-    QString dir1 = m_tempDir->path() + QStringLiteral("/diff-port-1");
-
-    QVariantMap config;
-    QString path0 = SunshineConfig::generateConfig(config, 0, dir0);
-    QString path1 = SunshineConfig::generateConfig(config, 1, dir1);
-    QVERIFY(!path0.isEmpty());
-    QVERIFY(!path1.isEmpty());
-
-    QFile f0(path0);
-    QVERIFY(f0.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content0 = QString::fromUtf8(f0.readAll());
-
-    QFile f1(path1);
-    QVERIFY(f1.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content1 = QString::fromUtf8(f1.readAll());
-
-    QVERIFY(content0.contains(QStringLiteral("port = 47989")));
-    QVERIFY(content1.contains(QStringLiteral("port = 48019")));
-}
-
-void TestSunshineConfig::testDifferentInstancesProduceDifferentPaths()
-{
-    QString dir0 = m_tempDir->path() + QStringLiteral("/diff-path-0");
-    QString dir1 = m_tempDir->path() + QStringLiteral("/diff-path-1");
-
-    QVariantMap config;
-    QString path0 = SunshineConfig::generateConfig(config, 0, dir0);
-    QString path1 = SunshineConfig::generateConfig(config, 1, dir1);
-
-    QVERIFY(path0 != path1);
-    QVERIFY(path0.contains(QStringLiteral("diff-path-0")));
-    QVERIFY(path1.contains(QStringLiteral("diff-path-1")));
-}
-
-void TestSunshineConfig::testConfigParsesAsValidINI()
-{
-    QString configDir = m_tempDir->path() + QStringLiteral("/ini-valid");
-    QVariantMap config;
-    config.insert(QStringLiteral("outputName"), QStringLiteral("1"));
-
-    QString configPath = SunshineConfig::generateConfig(config, 0, configDir);
-    QVERIFY(!configPath.isEmpty());
-
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    const QStringList lines = QString::fromUtf8(file.readAll()).split(QStringLiteral("\n"));
-    file.close();
-
-    for (const QString &line : lines) {
-        if (line.isEmpty())
-            continue;
-
-        QVERIFY2(line.contains(QStringLiteral("=")),
-                 qPrintable(QStringLiteral("Line is not valid INI key=value: ") + line));
+    const QString first = SunshineConfig::secret(dir);
+    QCOMPARE(first.size(), 32);
+    for (const QChar ch : first) {
+        QVERIFY(ch.isLetterOrNumber() && ch.unicode() < 128);
     }
+    QCOMPARE(SunshineConfig::secret(dir), first);
+
+    QCOMPARE(QFileInfo(dir + QStringLiteral("/couchplay.secret")).permissions() & 0x7077,
+             QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+
+    // A different state dir gets a different secret
+    const QString other = SunshineConfig::ensureStateDirectory(QStringLiteral("secret-test-other"));
+    QFile::remove(other + QStringLiteral("/couchplay.secret"));
+    QVERIFY(SunshineConfig::secret(other) != first);
 }
 
-void TestSunshineConfig::testAppsJsonIsValid()
+void TestSunshineConfig::testGenerateConfigKeys()
 {
-    QString configDir = m_tempDir->path() + QStringLiteral("/apps-json");
-    QVariantMap config;
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("keys-test"));
+    const StreamSpec spec = makeSpec();
+    const QString conf = SunshineConfig::generateConfig(spec, dir);
+    QCOMPARE(conf, dir + QStringLiteral("/sunshine.conf"));
 
-    SunshineConfig::generateConfig(config, 0, configDir);
+    const QMap<QString, QString> values = readConf(conf);
+    const QStringList expectedKeys{QStringLiteral("sunshine_name"),
+                                   QStringLiteral("port"),
+                                   QStringLiteral("capture"),
+                                   QStringLiteral("output_name"),
+                                   QStringLiteral("audio_sink"),
+                                   QStringLiteral("file_state"),
+                                   QStringLiteral("credentials_file"),
+                                   QStringLiteral("pkey"),
+                                   QStringLiteral("cert"),
+                                   QStringLiteral("file_apps"),
+                                   QStringLiteral("log_path"),
+                                   QStringLiteral("keyboard"),
+                                   QStringLiteral("mouse"),
+                                   QStringLiteral("controller"),
+                                   QStringLiteral("max_bitrate"),
+                                   QStringLiteral("origin_web_ui_allowed"),
+                                   QStringLiteral("upnp")};
+    QCOMPARE(QStringList(values.keys()), [&]() {
+        QStringList sorted = expectedKeys;
+        sorted.sort();
+        return sorted;
+    }());
 
-    QFile appsFile(configDir + QStringLiteral("/apps.json"));
-    QVERIFY(appsFile.open(QIODevice::ReadOnly | QIODevice::Text));
-    QByteArray content = appsFile.readAll();
-    appsFile.close();
+    QCOMPARE(values.value(QStringLiteral("sunshine_name")), QStringLiteral("CouchPlay – Player 2 (player2)"));
+    QCOMPARE(values.value(QStringLiteral("port")), QStringLiteral("48019"));
+    QCOMPARE(values.value(QStringLiteral("capture")), QStringLiteral("kwin"));
+    QCOMPARE(values.value(QStringLiteral("output_name")), QStringLiteral("Virtual-couchplay-p2"));
+    QCOMPARE(values.value(QStringLiteral("audio_sink")), QStringLiteral("couchplay-stream-p2"));
+    QCOMPARE(values.value(QStringLiteral("file_state")), dir + QStringLiteral("/sunshine_state.json"));
+    QCOMPARE(values.value(QStringLiteral("credentials_file")), dir + QStringLiteral("/credentials.json"));
+    QCOMPARE(values.value(QStringLiteral("pkey")), dir + QStringLiteral("/pkey.pem"));
+    QCOMPARE(values.value(QStringLiteral("cert")), dir + QStringLiteral("/cert.pem"));
+    QCOMPARE(values.value(QStringLiteral("file_apps")), dir + QStringLiteral("/apps.json"));
+    QCOMPARE(values.value(QStringLiteral("log_path")), dir + QStringLiteral("/sunshine.log"));
+    QCOMPARE(values.value(QStringLiteral("keyboard")), QStringLiteral("enabled"));
+    QCOMPARE(values.value(QStringLiteral("mouse")), QStringLiteral("enabled"));
+    QCOMPARE(values.value(QStringLiteral("controller")), QStringLiteral("enabled"));
+    QCOMPARE(values.value(QStringLiteral("max_bitrate")), QStringLiteral("15000"));
+    QCOMPARE(values.value(QStringLiteral("origin_web_ui_allowed")), QStringLiteral("pc"));
+    QCOMPARE(values.value(QStringLiteral("upnp")), QStringLiteral("disabled"));
 
-    QVERIFY(content.contains(QByteArrayLiteral("\"env\"")));
-    QVERIFY(content.contains(QByteArrayLiteral("\"apps\"")));
-    QVERIFY(content.contains(QByteArrayLiteral("\"Desktop\"")));
+    QVERIFY(!values.contains(QStringLiteral("encoder")));
+    QVERIFY(!values.contains(QStringLiteral("sink")));
+    QVERIFY(!values.contains(QStringLiteral("hevc_mode")));
+    QVERIFY(!values.contains(QStringLiteral("av1_mode")));
 }
 
-void TestSunshineConfig::testDefaultCredentials()
+void TestSunshineConfig::testGenerateConfigWithoutSink()
 {
-    QString configDir = m_tempDir->path() + QStringLiteral("/default-creds");
-    QVariantMap config;
-
-    QString configPath = SunshineConfig::generateConfig(config, 0, configDir);
-    QVERIFY(!configPath.isEmpty());
-
-    // credentials.json should contain the default username
-    QFile credsFile(configDir + QStringLiteral("/credentials.json"));
-    QVERIFY(credsFile.open(QIODevice::ReadOnly));
-    QJsonDocument doc = QJsonDocument::fromJson(credsFile.readAll());
-    credsFile.close();
-
-    QCOMPARE(doc.object().value(QStringLiteral("username")).toString(), QStringLiteral("couchplay"));
-    QVERIFY(!doc.object().value(QStringLiteral("salt")).toString().isEmpty());
-    QVERIFY(!doc.object().value(QStringLiteral("password")).toString().isEmpty());
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("nosink-test"));
+    StreamSpec spec = makeSpec();
+    spec.sinkName.clear();
+    const QMap<QString, QString> values = readConf(SunshineConfig::generateConfig(spec, dir));
+    QVERIFY(!values.contains(QStringLiteral("audio_sink")));
+    QVERIFY(!values.contains(QStringLiteral("sink")));
 }
 
-void TestSunshineConfig::testCustomCredentials()
+void TestSunshineConfig::testCustomDisplayName()
 {
-    // Self-consistency / regression guard ONLY: recomputes the hash with the
-    // SAME algorithm SunshineConfig uses. This catches accidental changes to
-    // the hash scheme. It does not check whether Sunshine accepts the generated
-    // credentials or completes pairing; those are manual release checks.
-    QString configDir = m_tempDir->path() + QStringLiteral("/custom-creds");
-    QVariantMap config;
-    config.insert(QStringLiteral("username"), QStringLiteral("admin"));
-    config.insert(QStringLiteral("password"), QStringLiteral("hunter2"));
-
-    QString configPath = SunshineConfig::generateConfig(config, 0, configDir);
-    QVERIFY(!configPath.isEmpty());
-
-    QFile credsFile(configDir + QStringLiteral("/credentials.json"));
-    QVERIFY(credsFile.open(QIODevice::ReadOnly));
-    QJsonDocument doc = QJsonDocument::fromJson(credsFile.readAll());
-    credsFile.close();
-
-    QCOMPARE(doc.object().value(QStringLiteral("username")).toString(), QStringLiteral("admin"));
-    // Verify the hash matches reversed SHA256("hunter2" + salt)
-    QString salt = doc.object().value(QStringLiteral("salt")).toString();
-    QByteArray expectedRaw = QCryptographicHash::hash((QStringLiteral("hunter2") + salt).toUtf8(), QCryptographicHash::Sha256);
-    std::reverse(expectedRaw.begin(), expectedRaw.end());
-    QString expectedHash = QString::fromLatin1(expectedRaw.toHex()).toUpper();
-    QCOMPARE(doc.object().value(QStringLiteral("password")).toString(), expectedHash);
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("name-test"));
+    StreamSpec spec = makeSpec();
+    spec.displayName = QStringLiteral("Living Room");
+    const QMap<QString, QString> values = readConf(SunshineConfig::generateConfig(spec, dir));
+    QCOMPARE(values.value(QStringLiteral("sunshine_name")), QStringLiteral("Living Room"));
+    QCOMPARE(SunshineConfig::displayName(spec), QStringLiteral("Living Room"));
 }
 
-void TestSunshineConfig::testOutputNameIncluded()
+void TestSunshineConfig::testCodecMapping_data()
 {
-    QString configDir = m_tempDir->path() + QStringLiteral("/output-name");
-    QVariantMap config;
-    config.insert(QStringLiteral("outputName"), QStringLiteral("3"));
+    QTest::addColumn<QString>("codec");
+    QTest::addColumn<QString>("hevc");
+    QTest::addColumn<QString>("av1");
 
-    QString configPath = SunshineConfig::generateConfig(config, 0, configDir);
-    QVERIFY(!configPath.isEmpty());
+    QTest::newRow("auto") << QStringLiteral("auto") << QString() << QString();
+    QTest::newRow("h264") << QStringLiteral("h264") << QStringLiteral("1") << QStringLiteral("1");
+    QTest::newRow("hevc") << QStringLiteral("hevc") << QString() << QStringLiteral("1");
+    QTest::newRow("av1") << QStringLiteral("av1") << QString() << QString();
+}
 
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content = QString::fromUtf8(file.readAll());
+void TestSunshineConfig::testCodecMapping()
+{
+    QFETCH(QString, codec);
+    QFETCH(QString, hevc);
+    QFETCH(QString, av1);
+
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("codec-test"));
+    StreamSpec spec = makeSpec();
+    spec.codec = codec;
+    const QMap<QString, QString> values = readConf(SunshineConfig::generateConfig(spec, dir));
+
+    QCOMPARE(values.value(QStringLiteral("hevc_mode")), hevc);
+    QCOMPARE(values.contains(QStringLiteral("hevc_mode")), !hevc.isEmpty());
+    QCOMPARE(values.value(QStringLiteral("av1_mode")), av1);
+    QCOMPARE(values.contains(QStringLiteral("av1_mode")), !av1.isEmpty());
+}
+
+void TestSunshineConfig::testAppsJson()
+{
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("apps-test"));
+    QVERIFY(!SunshineConfig::generateConfig(makeSpec(), dir).isEmpty());
+
+    QFile file(dir + QStringLiteral("/apps.json"));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    QVERIFY(doc.isObject());
+    QVERIFY(doc.object().value(QStringLiteral("env")).toObject().isEmpty());
+    const QJsonArray apps = doc.object().value(QStringLiteral("apps")).toArray();
+    QCOMPARE(apps.size(), 1);
+    QCOMPARE(apps.at(0).toObject().value(QStringLiteral("name")).toString(), QStringLiteral("CouchPlay"));
+    QCOMPARE(apps.at(0).toObject().value(QStringLiteral("image-path")).toString(), QStringLiteral("desktop.png"));
+}
+
+void TestSunshineConfig::testConfigRewrittenEveryTime()
+{
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("rewrite-test"));
+    StreamSpec spec = makeSpec();
+    QVERIFY(!SunshineConfig::generateConfig(spec, dir).isEmpty());
+    spec.port = 48049;
+    spec.outputName = QStringLiteral("HDMI-A-1");
+    const QMap<QString, QString> values = readConf(SunshineConfig::generateConfig(spec, dir));
+    QCOMPARE(values.value(QStringLiteral("port")), QStringLiteral("48049"));
+    QCOMPARE(values.value(QStringLiteral("output_name")), QStringLiteral("HDMI-A-1"));
+}
+
+void TestSunshineConfig::testValueInjectionStripped()
+{
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("inject-test"));
+    StreamSpec spec = makeSpec();
+    spec.outputName = QStringLiteral("DP-1\nencoder = software");
+    const QString conf = SunshineConfig::generateConfig(spec, dir);
+    const QMap<QString, QString> values = readConf(conf);
+    QVERIFY(!values.contains(QStringLiteral("encoder")));
+    QCOMPARE(values.value(QStringLiteral("output_name")), QStringLiteral("DP-1encoder = software"));
+}
+
+void TestSunshineConfig::testCredentialArguments()
+{
+    const QStringList args = SunshineConfig::credentialArguments(QStringLiteral("/x/sunshine.conf"), QStringLiteral("s3cret"));
+    QCOMPARE(args,
+             (QStringList{QStringLiteral("/x/sunshine.conf"),
+                          QStringLiteral("--creds"),
+                          QStringLiteral("couchplay"),
+                          QStringLiteral("s3cret")}));
+}
+
+void TestSunshineConfig::testAllocatePortSkipsBusyPort()
+{
+    // Find a preferred port whose TCP base port can be held by this test
+    for (int preferred = 51000; preferred < 52000; preferred += 100) {
+        QTcpServer holder;
+        if (!holder.listen(QHostAddress::Any, static_cast<quint16>(preferred))) {
+            continue;
+        }
+        const int allocated = SunshineConfig::allocatePort(preferred);
+        QVERIFY(allocated != preferred);
+        if (allocated == -1) {
+            QSKIP("No free port block near the preferred port on this machine");
+        }
+        QCOMPARE(allocated, preferred + SunshineConfig::PORT_SPACING);
+        return;
+    }
+    QSKIP("Could not hold a TCP port for the test");
+}
+
+void TestSunshineConfig::testAllocatePortExhausted()
+{
+    for (int preferred = 53000; preferred < 54000; preferred += 100) {
+        QTcpServer holder;
+        if (!holder.listen(QHostAddress::Any, static_cast<quint16>(preferred))) {
+            continue;
+        }
+        QCOMPARE(SunshineConfig::allocatePort(preferred, 1), -1);
+        return;
+    }
+    QSKIP("Could not hold a TCP port for the test");
+}
+
+void TestSunshineConfig::testUserPortStableAndDistinct()
+{
+    const QString a = QStringLiteral("userport-a");
+    const QString b = QStringLiteral("userport-b");
+    QDir(SunshineConfig::stateDirectory(a)).removeRecursively();
+    QDir(SunshineConfig::stateDirectory(b)).removeRecursively();
+
+    const int portA = SunshineConfig::userPort(a);
+    QVERIFY(portA >= SunshineConfig::BASE_PORT);
+    QCOMPARE((portA - SunshineConfig::BASE_PORT) % SunshineConfig::PORT_SPACING, 0);
+    QCOMPARE(SunshineConfig::userPort(a), portA);
+
+    QFile file(SunshineConfig::stateDirectory(a) + QStringLiteral("/port"));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll().trimmed().toInt(), portA);
     file.close();
 
-    QVERIFY(content.contains(QStringLiteral("output_name = 3")));
+    const int portB = SunshineConfig::userPort(b);
+    QVERIFY(portB > 0);
+    QVERIFY(portB != portA);
+    QCOMPARE(SunshineConfig::userPort(a), portA);
+
+    QDir(SunshineConfig::stateDirectory(a)).removeRecursively();
+    QDir(SunshineConfig::stateDirectory(b)).removeRecursively();
 }
 
-void TestSunshineConfig::testBitrateIncluded()
+void TestSunshineConfig::testUserPortInvalidFileRewritten()
 {
-    QString configDir = m_tempDir->path() + QStringLiteral("/bitrate");
-    QVariantMap config;
-    config.insert(QStringLiteral("streamBitrate"), 25000);
-
-    QString configPath = SunshineConfig::generateConfig(config, 0, configDir);
-    QVERIFY(!configPath.isEmpty());
-
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content = QString::fromUtf8(file.readAll());
+    const QString user = QStringLiteral("userport-invalid");
+    QDir(SunshineConfig::stateDirectory(user)).removeRecursively();
+    const QString dir = SunshineConfig::ensureStateDirectory(user);
+    QFile file(dir + QStringLiteral("/port"));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("not-a-port\n");
     file.close();
 
-    QVERIFY(content.contains(QStringLiteral("max_bitrate = 25000")));
-}
-
-void TestSunshineConfig::testConfigValueInjectionStripped()
-{
-    QString configDir = m_tempDir->path() + QStringLiteral("/inject");
-    QVariantMap config;
-    // CR/LF in a value must not inject an extra config line into sunshine.conf
-    // (it is read by Sunshine, which the helper launches).
-    config.insert(QStringLiteral("outputName"), QStringLiteral("0\nfake_injected_key = pwned\rsecond = bad"));
-
-    SunshineConfig::generateConfig(config, 0, configDir);
-
-    QFile file(configDir + QStringLiteral("/sunshine.conf"));
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    const QString content = QString::fromUtf8(file.readAll());
+    const int port = SunshineConfig::userPort(user);
+    QVERIFY(port >= SunshineConfig::BASE_PORT);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll().trimmed().toInt(), port);
     file.close();
 
-    QVERIFY2(!content.contains(QLatin1String("\nfake_injected_key")),
-             "CR/LF injection survived into sunshine.conf");
-    QVERIFY2(!content.contains(QLatin1String("fake_injected_key = pwned\n")),
-             "injected key became its own config line");
-    // The legitimate key is still emitted, value kept to the pre-newline text.
-    QVERIFY(content.contains(QStringLiteral("output_name = 0")));
+    QDir(dir).removeRecursively();
 }
 
-void TestSunshineConfig::testEmptyConfigDirFails()
+void TestSunshineConfig::testUserPortEmptyIdentityAndPreferredPort()
 {
-    QVariantMap config;
-    QString result = SunshineConfig::generateConfig(config, 0, QString());
-    QVERIFY(result.isEmpty());
+    QCOMPARE(SunshineConfig::userPort(QString()), -1);
+    // No user, or an explicit profile port: slot-based behaviour
+    QCOMPARE(SunshineConfig::preferredPort(QString(), 1, SunshineConfig::BASE_PORT), SunshineConfig::calculatePort(1));
+    QCOMPARE(SunshineConfig::preferredPort(QStringLiteral("userport-pref"), 1, 50000), SunshineConfig::calculatePort(1, 50000));
+
+    const QString user = QStringLiteral("userport-pref");
+    QCOMPARE(SunshineConfig::preferredPort(user, 1, SunshineConfig::BASE_PORT), SunshineConfig::userPort(user));
+    QDir(SunshineConfig::stateDirectory(user)).removeRecursively();
 }
 
-void TestSunshineConfig::testNegativeIndexFails()
+void TestSunshineConfig::testRemoveState()
 {
-    QString configDir = m_tempDir->path() + QStringLiteral("/negative");
-    QVariantMap config;
-    QString result = SunshineConfig::generateConfig(config, -1, configDir);
-    QVERIFY(result.isEmpty());
-}
+    const QString user = QStringLiteral("userport-remove");
+    const int port = SunshineConfig::userPort(user);
+    QVERIFY(port > 0);
+    QVERIFY(QFileInfo::exists(SunshineConfig::stateDirectory(user)));
 
-void TestSunshineConfig::testDefaultConfigDir()
-{
-    QCOMPARE(SunshineConfig::defaultConfigDir(0), QStringLiteral("/tmp/couchplay-sunshine-0"));
-    QCOMPARE(SunshineConfig::defaultConfigDir(1), QStringLiteral("/tmp/couchplay-sunshine-1"));
-    QCOMPARE(SunshineConfig::defaultConfigDir(5), QStringLiteral("/tmp/couchplay-sunshine-5"));
-}
-
-void TestSunshineConfig::testDirectoryPermissions()
-{
-    QString configDir = m_tempDir->path() + QStringLiteral("/perms-test");
-    QVariantMap config;
-
-    QString result = SunshineConfig::generateConfig(config, 0, configDir);
-    QVERIFY(!result.isEmpty());
-    QVERIFY(QDir(configDir).exists());
-
-    QFileInfo dirInfo(configDir);
-    QFile::Permissions perms = dirInfo.permissions();
-    QVERIFY(perms & QFileDevice::ReadOwner);
-    QVERIFY(perms & QFileDevice::WriteOwner);
-    QVERIFY(perms & QFileDevice::ExeOwner);
-    QVERIFY(perms & QFileDevice::ReadGroup);
-    QVERIFY(perms & QFileDevice::ExeGroup);
-    QVERIFY(perms & QFileDevice::ReadOther);
-    QVERIFY(perms & QFileDevice::ExeOther);
+    QVERIFY(SunshineConfig::removeState(user));
+    QVERIFY(!QFileInfo::exists(SunshineConfig::stateDirectory(user)));
+    QVERIFY(!SunshineConfig::removeState(QString()));
 }
 
 QTEST_MAIN(TestSunshineConfig)

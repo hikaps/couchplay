@@ -26,6 +26,7 @@
 #include "dbus/CouchPlayHelperClient.h"
 #include "core/CommandLineBridge.h"
 #include "core/CommandLineOptions.h"
+#include "core/SignalBridge.h"
 
 #include <QFile>
 #include <QTextStream>
@@ -91,6 +92,8 @@ int main(int argc, char *argv[])
                       QStringLiteral("name")});
     parser.addOption({QStringLiteral("start"), QStringLiteral("Start the loaded profile session")});
     parser.addOption({QStringLiteral("exit-after-session"), QStringLiteral("Exit after the session and post hook finish")});
+    parser.addOption({QStringLiteral("skip-pairing-check"),
+                      QStringLiteral("Start streaming players even without a paired Moonlight client")});
     parser.process(app);
 
     QString parseError;
@@ -116,6 +119,7 @@ int main(int argc, char *argv[])
         {QStringLiteral("startupProfileName"), initialRequest.profileName},
         {QStringLiteral("startupStart"), initialRequest.start},
         {QStringLiteral("startupExitAfterSession"), initialRequest.exitAfterSession},
+        {QStringLiteral("startupSkipPairingCheck"), initialRequest.skipPairingCheck},
     });
     engine.rootContext()->setContextObject(new KLocalizedContext(&engine));
     engine.loadFromModule("io.github.hikaps.couchplay", "Main");
@@ -125,6 +129,11 @@ int main(int argc, char *argv[])
     }
 
     QObject *root = engine.rootObjects().constFirst();
+    SignalBridge signalBridge;
+    QObject::connect(&signalBridge, &SignalBridge::terminationRequested, root, [root](int signalNumber) {
+        qInfo() << "Received signal" << signalNumber << "- stopping session and quitting";
+        QMetaObject::invokeMethod(root, "requestShutdown");
+    });
     QObject::connect(root, SIGNAL(startupFailed(int)), &app, SLOT(exit(int)));
     QObject::connect(&service,
                      &KDBusService::activateRequested,
@@ -150,7 +159,10 @@ int main(int argc, char *argv[])
                              return;
                          }
                          commandLineBridge.setRequestAccepted(false);
-                         Q_EMIT commandLineBridge.launchRequested(request.profileName, request.start, request.exitAfterSession);
+                         Q_EMIT commandLineBridge.launchRequested(request.profileName,
+                                                                  request.start,
+                                                                  request.exitAfterSession,
+                                                                  request.skipPairingCheck);
                          service.setExitValue(commandLineBridge.requestAccepted() ? 0 : 2);
                      },
                      Qt::DirectConnection);

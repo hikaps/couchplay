@@ -191,7 +191,6 @@ Kirigami.ScrollablePage {
                                         case "horizontal": return i18nc("@info", "Side by Side")
                                         case "vertical": return i18nc("@info", "Top and Bottom")
                                         case "grid": return i18nc("@info", "Grid")
-                                        case "multi-monitor": return i18nc("@info", "Multi-Monitor")
                                         default: return modelData.layout
                                     }
                                 }

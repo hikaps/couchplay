@@ -10,13 +10,19 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QList>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QTimer>
 #include <unistd.h>
 
+#define private public
+#include "DeviceManager.h"
+#undef private
 #define private public
 #include "WindowManager.h"
 #include "SessionRunner.h"
@@ -36,6 +42,8 @@
 #undef private
 #include "DeviceManager.h"
 #include "StreamManager.h"
+#include "SunshineConfig.h"
+#include "VirtualDisplayManager.h"
 #include "UserLookup.h"
 
 class TestEnvironmentGuard
@@ -91,24 +99,19 @@ public:
     }
 
     QList<QStringList> launchCommands;
+    QList<QStringList> launchEnvironments;
     QStringList launchUsernames;
     QList<QVariantList> launchPreparations;
     QList<qint64> stopPids;
     QList<qint64> killPids;
     QStringList copiedFileUsers;
-    QList<QStringList> auxiliaryCommands;
-    QStringList auxiliaryUsernames;
-    QList<qint64> auxiliaryPids;
     bool autoReady = true;
-    bool autoAuxiliaryReady = true;
     bool launchFails = false;
-    bool auxiliaryLaunchFails = false;
     bool stopSucceeds = true;
     bool killSucceeds = true;
     std::function<void(qint64)> onStopInstance;
     qint64 nextPid = 1000;
     qint64 launchInstance(const QString &username,
-                          const QString &displayContext,
                           const QStringList &gamescopeArgs,
                           const QStringList &gameCommand,
                           const QString &workingDirectory,
@@ -117,11 +120,10 @@ public:
                           bool privateTemporaryDirectories,
                           const QVariantList &directoryPreparations) override
     {
-        Q_UNUSED(displayContext)
         Q_UNUSED(gamescopeArgs)
         Q_UNUSED(workingDirectory)
         Q_UNUSED(sharedRoots)
-        Q_UNUSED(environment)
+        launchEnvironments.append(environment);
         Q_UNUSED(privateTemporaryDirectories)
         launchCommands.append(gameCommand);
         launchUsernames.append(username);
@@ -134,33 +136,6 @@ public:
         if (autoReady) Q_EMIT instanceReady(username, pid);
         return pid;
     }
-    qint64 launchAuxiliaryInstance(const QString &username,
-                                   const QString &displayContext,
-                                   const QStringList &gamescopeArgs,
-                                   const QStringList &gameCommand,
-                                   const QString &workingDirectory,
-                                   const QStringList &sharedRoots,
-                                   const QStringList &environment,
-                                   bool privateTemporaryDirectories) override
-    {
-        Q_UNUSED(displayContext)
-        Q_UNUSED(gamescopeArgs)
-        Q_UNUSED(workingDirectory)
-        Q_UNUSED(sharedRoots)
-        Q_UNUSED(environment)
-        Q_UNUSED(privateTemporaryDirectories)
-        auxiliaryCommands.append(gameCommand);
-        auxiliaryUsernames.append(username);
-        if (auxiliaryLaunchFails) {
-            Q_EMIT errorOccurred(QStringLiteral("simulated auxiliary launch failure"));
-            return 0;
-        }
-        const qint64 pid = nextPid++;
-        auxiliaryPids.append(pid);
-        if (autoAuxiliaryReady) Q_EMIT instanceReady(username, pid);
-        return pid;
-    }
-
 
     bool stopInstance(qint64 pid) override
     {
@@ -175,26 +150,14 @@ public:
         return killSucceeds;
     }
 
-    QSet<QString> liveVirtualOutputs;
-    QSet<QString> liveNullSinks;
-    QString createVirtualOutput(const QString &username, int, int, int) override
+    int setupRuntimeAccessCalls = 0;
+    bool setupRuntimeAccessSucceeds = true;
+    std::function<void()> onSetupRuntimeAccess;
+    bool setupRuntimeAccess() override
     {
-        const QString context = QStringLiteral("display-%1").arg(username);
-        liveVirtualOutputs.insert(context);
-        return context;
-    }
-    bool destroyVirtualOutput(const QString &, const QString &context) override
-    {
-        return liveVirtualOutputs.remove(context);
-    }
-    QString createNullSink(const QString &, const QString &sinkName) override
-    {
-        liveNullSinks.insert(sinkName);
-        return sinkName;
-    }
-    bool destroyNullSink(const QString &, const QString &sinkName) override
-    {
-        return liveNullSinks.remove(sinkName);
+        ++setupRuntimeAccessCalls;
+        if (onSetupRuntimeAccess) onSetupRuntimeAccess();
+        return setupRuntimeAccessSucceeds;
     }
 
     bool setPathAclWithParents(const QString &path, const QString &username) override
@@ -268,14 +231,16 @@ public:
         return {{QStringLiteral("home"), home}, {QStringLiteral("canonicalHome"), canonical}};
     }
 
+    // When set, "player2" looks like a user whose Steam has never been started.
+    bool player2SteamNeverRun = false;
     QString getUserSteamId(const QString &username) override
     {
         return username == QStringLiteral("player1") ? QStringLiteral("12345")
-             : username == QStringLiteral("player2") ? QStringLiteral("12346") : QString();
+             : username == QStringLiteral("player2") && !player2SteamNeverRun ? QStringLiteral("12346") : QString();
     }
     bool isSteamBootstrapped(const QString &username) override
     {
-        return username == QStringLiteral("player1") || username == QStringLiteral("player2");
+        return username == QStringLiteral("player1") || (username == QStringLiteral("player2") && !player2SteamNeverRun);
     }
     QString player1SteamRoot;
     QString player2SteamRoot;
@@ -325,11 +290,13 @@ private Q_SLOTS:
     void testSetupResourcesSyncsSelectedSteamAccount();
     void testStartSessionHeroicPresetUsesAclsAndSharedConfig();
     void testSteamNativeSessionRefreshesWithoutShortcutSync();
+    void testOptionalShortcutSyncSkippedForUnbootstrappedPlayer();
     void testSetupDataDirectoriesUseApplicationSettings();
     void testSetupDataDirectoriesFallsBackToPresetDirs();
     void testHeroicPresetAclDirectoriesBecomeBootstrapPreparationsWithoutInstanceSnapshot();
     void testAutomaticHeroicGameRootsCreateAclPreparation();
     void testSetupDataDirectoriesFollowCurrentPreset();
+    void testParseRenderResolution();
     void testNativeApplicationAccessDoesNotMutateApplicationSettings();
     void testNativeApplicationAclUsesConfiguredRootCoverage();
     void testSetupDataDirectoriesCreatesBindPlan();
@@ -349,6 +316,7 @@ private Q_SLOTS:
     void testPreHookUsesStartingProfileSnapshot();
     void testPreHookUsesCapturedApplicationRevision();
     void testReadinessAdvancesSequentialStartup();
+    void testPhysicalInstanceAudioDeviceRoutesOnlyThatPlayer();
     void testPreparationFailureAbortsStartup();
     void testCancelWhilePreparing();
     void testStopFailureRetainsPreparingInstanceForRetry();
@@ -356,12 +324,32 @@ private Q_SLOTS:
     void testStopDefersCleanupUntilStopReturns();
     void testStoppedInstanceCancelsItsPositionListener();
     void testSynchronousLaunchFailureRunsPostHookOnce();
-    void testStreamingStartupWaitsForAuxiliaryReadiness();
+    void testVirtualDisplayFailureAbortsStartup();
+    void testStreamingStartupWaitsForSunshineReady();
+    void testStreamingRuntimeAccessPrecedesSinkPreparation();
+    void testNoRuntimeAccessSetupWithoutStreamingPlayers();
+    void testStreamingRuntimeAccessFailureAbortsStartup();
+    void testStreamingInstancesGetDistinctSunshinePorts();
     void testStreamingLaunchFailureAbortsStartup();
-    void testStreamingResourcesSurviveIncompleteStop_data();
-    void testStreamingResourcesSurviveIncompleteStop();
+    void testValidateDisplaysMonitorNotConnected();
+    void testValidateDisplaysSharedMonitor();
+    void testValidateDisplaysMonitorIsMainScreen();
+    void testValidateDisplaysStreamWithMain();
+    void testValidateDisplaysValidProfile();
+    void testStartRejectsInvalidDisplay();
+    void testValidatePairingGate();
+    void testValidatePairingSkipsUnpairedNonStreamingAndNoUser();
+    void testStartRejectsUnpairedStreamingPlayer();
+    void testStartSkipPairingCheck();
+    void testStartAllowsPairedStreamingPlayer();
     void testDeviceReconnectIgnoredDuringPostHook();
     void testDeviceReconnectIgnoredDuringPreHook();
+    void testSunshineGamepadClaimsAreFifo();
+    void testSunshineGamepadUniqGroupsDevices();
+    void testSunshineGamepadSingleStreamerFallback();
+    void testSunshineGamepadClaimExpires();
+    void testSunshineKeyboardMouseNotChowned();
+    void testSunshineGamepadUnownedWithoutClaim();
     void testInvalidPostSessionReportsError();
     void testPostSessionRunsOnceAfterStop();
 
@@ -569,6 +557,43 @@ void TestSessionRunner::testSetupResourcesSyncsSelectedSteamAccount()
     QFile untouchedSource(accountA);
     QVERIFY(untouchedSource.open(QIODevice::ReadOnly));
     QCOMPARE(untouchedSource.readAll(), dataA);
+}
+void TestSessionRunner::testOptionalShortcutSyncSkippedForUnbootstrappedPlayer()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    TestEnvironmentGuard homeGuard("HOME");
+    TestEnvironmentGuard configGuard("XDG_CONFIG_HOME");
+    qputenv("HOME", home.path().toLocal8Bit());
+    qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+    const QString shortcutsPath = home.path() + QStringLiteral("/.local/share/Steam/userdata/123/config/shortcuts.vdf");
+    QVERIFY(QDir().mkpath(QFileInfo(shortcutsPath).absolutePath()));
+    QFile shortcuts(shortcutsPath);
+    QVERIFY(shortcuts.open(QIODevice::WriteOnly));
+    QVERIFY(shortcuts.write(SteamShortcutsVdf::emptyDocument()) > 0);
+    shortcuts.close();
+
+    m_presetManager->setSteamConfigManager(nullptr);
+    m_runner->setSteamConfigManager(nullptr);
+    delete m_steamConfigManager;
+    m_steamConfigManager = new SteamConfigManager(this);
+    m_steamConfigManager->setHelperClient(m_helperClient);
+    m_presetManager->setSteamConfigManager(m_steamConfigManager);
+    m_runner->setSteamConfigManager(m_steamConfigManager);
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
+    m_steamConfigManager->setSyncShortcutsEnabled(true);
+
+    m_helperClient->player2SteamNeverRun = true;
+    m_sessionManager->setInstanceCount(1);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(0, QStringLiteral("steam"));
+
+    QSignalSpy failed(m_runner, &SessionRunner::sessionStartFailed);
+    QSignalSpy errors(m_runner, &SessionRunner::errorOccurred);
+    QVERIFY2(m_runner->start(), qPrintable(errors.value(0).value(0).toString()));
+    QVERIFY(failed.isEmpty());
+    m_runner->stop();
 }
 void TestSessionRunner::testSteamNativeSessionRefreshesWithoutShortcutSync()
 {
@@ -1825,107 +1850,156 @@ void TestSessionRunner::testSynchronousLaunchFailureRunsPostHookOnce()
     QCOMPARE(marker.readAll(), QByteArray("post"));
 }
 
-void TestSessionRunner::testStreamingStartupWaitsForAuxiliaryReadiness()
+namespace
+{
+bool writeExecutable(const QString &path, const QByteArray &body)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    file.write("#!/bin/sh\n" + body + "\n");
+    file.close();
+    return QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+}
+
+// Fake couchplay-vdisplay, pactl and sunshine so streaming sessions run without a compositor.
+class StreamingFakes
+{
+public:
+    explicit StreamingFakes(SessionRunner *runner, bool vdisplayWorks = true, bool sunshineExists = true)
+        : m_oldDataHome(qgetenv("XDG_DATA_HOME"))
+        , m_hadDataHome(qEnvironmentVariableIsSet("XDG_DATA_HOME"))
+    {
+        qputenv("XDG_DATA_HOME", m_dir.filePath(QStringLiteral("data")).toUtf8());
+        const QString vdisplay = m_dir.filePath(QStringLiteral("vdisplay"));
+        writeExecutable(vdisplay,
+                        vdisplayWorks ? QByteArray("echo 'READY 1'\nexec sleep 30")
+                                      : QByteArray("echo 'protocol missing' >&2\nexit 2"));
+        runner->setSkipPairingCheck(true);
+        const QString pactl = m_dir.filePath(QStringLiteral("pactl"));
+        writeExecutable(pactl,
+                        "case \"$1\" in\nget-default-sink) echo alsa_default;;\nload-module) echo 7;;\nesac\nexit 0");
+        const QString sunshine = m_dir.filePath(QStringLiteral("sunshine"));
+        writeExecutable(sunshine,
+                        "conf=\"$1\"\ndir=$(dirname \"$conf\")\n"
+                        "if [ \"$2\" = \"--creds\" ]; then echo '{}' > \"$dir/credentials.json\"; exit 0; fi\n"
+                        "log=$(sed -n 's/^log_path = //p' \"$conf\")\n"
+                        "echo 'Info: Configuration UI available at [https://localhost:48020]' >> \"$log\"\n"
+                        "exec sleep 30");
+
+        runner->m_virtualDisplays->setProgramOverride(vdisplay);
+        runner->m_virtualDisplays->setScreenLookup(
+            [](const QString &name, const QSize &size, const QSet<QString> &, QString *outName, QRect *geometry) {
+                *outName = name;
+                *geometry = QRect(QPoint(5000, 0), size);
+                return true;
+            });
+        runner->m_streamAudio.setProgramOverride(pactl);
+        runner->m_streamManager->setProgramOverride(sunshineExists ? sunshine
+                                                                   : QStringLiteral("/nonexistent/sunshine"));
+    }
+
+    ~StreamingFakes()
+    {
+        if (m_hadDataHome) {
+            qputenv("XDG_DATA_HOME", m_oldDataHome);
+        } else {
+            qunsetenv("XDG_DATA_HOME");
+        }
+    }
+
+private:
+    QTemporaryDir m_dir;
+    QByteArray m_oldDataHome;
+    bool m_hadDataHome;
+};
+}
+
+void TestSessionRunner::testVirtualDisplayFailureAbortsStartup()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Vdisplay failure"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    StreamingFakes fakes(m_runner, /*vdisplayWorks=*/false);
+
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 3000);
+    QVERIFY(failedSpy.first().constFirst().toString().contains(
+        QStringLiteral("Player 2: could not create virtual display")));
+    QCOMPARE(startedSpy.count(), 0);
+    QCOMPARE(m_helperClient->launchCommands.size(), 0);
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+}
+
+void TestSessionRunner::testStreamingInstancesGetDistinctSunshinePorts()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Streaming ports"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+        m_sessionManager->setInstanceConfig(i, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    }
+    StreamingFakes fakes(m_runner);
+    m_helperClient->autoReady = false;
+
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(m_runner->m_pendingInstanceConfigs.size(), 2, 3000);
+    for (int i = 0; i < 2; ++i) {
+        const QVariantMap config = m_runner->m_pendingInstanceConfigs.value(i);
+        QCOMPARE(config.value(QStringLiteral("sunshinePort")).toInt(),
+                 SunshineConfig::userPort(QStringLiteral("player%1").arg(i + 1)));
+        QCOMPARE(config.value(QStringLiteral("monitorName")).toString(),
+                 QStringLiteral("Virtual-couchplay-p%1").arg(i + 1));
+        QCOMPARE(config.value(QStringLiteral("sink")).toString(), QStringLiteral("couchplay-stream-p%1").arg(i + 1));
+        QCOMPARE(config.value(QStringLiteral("positionX")).toInt(), 5000);
+    }
+
+    m_runner->stop();
+}
+
+void TestSessionRunner::testStreamingStartupWaitsForSunshineReady()
 {
     const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Streaming startup"), QStringLiteral("/usr/bin/true"));
     m_sessionManager->setInstanceCount(2);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     m_sessionManager->setInstancePreset(0, presetId);
-    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstancePreset(1, presetId);
+    StreamingFakes fakes(m_runner);
     m_helperClient->autoReady = false;
-    m_helperClient->autoAuxiliaryReady = false;
-    m_runner->m_streamManager->setStartupTimeout(30);
 
     QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
     QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
     QSignalSpy streamStartedSpy(m_runner->m_streamManager, &StreamManager::streamStarted);
     QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
     QVERIFY(m_runner->start());
-    const qint64 firstPid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), firstPid);
-    QCOMPARE(m_helperClient->launchCommands.size(), 1);
-    QCOMPARE(m_helperClient->auxiliaryCommands.size(), 1);
-    const qint64 streamPid = m_helperClient->auxiliaryPids.constFirst();
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 1, 3000);
+    QCOMPARE(m_runner->m_streamManager->streamState(0), StreamManager::NotStarted);
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), m_helperClient->nextPid - 1);
 
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), streamPid);
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), streamPid + 50);
-    QTest::qWait(80);
-    QCOMPARE(streamStartedSpy.count(), 0);
-    QCOMPARE(m_helperClient->launchCommands.size(), 1);
-    QCOMPARE(m_runner->m_streamManager->streamState(0), StreamManager::Waiting);
-
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), streamPid);
-    QTRY_COMPARE_WITH_TIMEOUT(streamStartedSpy.count(), 1, 1000);
-    QCOMPARE(m_helperClient->launchCommands.size(), 2);
+    // The next player waits until Sunshine for this one reports ready.
+    QTRY_COMPARE_WITH_TIMEOUT(streamStartedSpy.count(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 2, 3000);
     QCOMPARE(startedSpy.count(), 0);
-    const qint64 secondPid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), secondPid);
-    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 1000);
+    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), m_helperClient->nextPid - 1);
+    QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 3000);
     QCOMPARE(failedSpy.count(), 0);
 
     m_runner->stop();
-    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 1000);
-}
-
-void TestSessionRunner::testStreamingResourcesSurviveIncompleteStop_data()
-{
-    QTest::addColumn<bool>("streamStopsFirst");
-    QTest::addColumn<bool>("stopSingleInstance");
-    QTest::newRow("stream-first-session-stop") << true << false;
-    QTest::newRow("game-first-session-stop") << false << false;
-    QTest::newRow("stream-first-instance-stop") << true << true;
-    QTest::newRow("game-first-instance-stop") << false << true;
-}
-
-void TestSessionRunner::testStreamingResourcesSurviveIncompleteStop()
-{
-    QFETCH(bool, streamStopsFirst);
-    QFETCH(bool, stopSingleInstance);
-    const QString presetId = m_presetManager->addCustomPreset(
-        QStringLiteral("Streaming stop"), QStringLiteral("/usr/bin/true"));
-    m_sessionManager->setInstanceCount(2);
-    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
-    m_sessionManager->setInstancePreset(0, presetId);
-    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
-    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
-    m_sessionManager->setInstancePreset(1, presetId);
-    m_helperClient->autoReady = false;
-    m_helperClient->autoAuxiliaryReady = false;
-    m_runner->m_streamManager->setStartupTimeout(10);
-    QVERIFY(m_runner->start());
-    const qint64 gamePid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), gamePid);
-    QTRY_VERIFY_WITH_TIMEOUT(!m_helperClient->auxiliaryPids.isEmpty(), 1000);
-    const qint64 streamPid = m_helperClient->auxiliaryPids.constFirst();
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player1"), streamPid);
-    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 2, 1000);
-    const qint64 secondPid = m_helperClient->nextPid - 1;
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player2"), secondPid);
-    QTRY_VERIFY_WITH_TIMEOUT(m_runner->m_sessionStartupComplete, 1000);
-    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player2"), secondPid, QStringLiteral("stopped"));
-    QCOMPARE(m_helperClient->liveVirtualOutputs.size(), 1);
-    QCOMPARE(m_helperClient->liveNullSinks.size(), 1);
-
-    m_helperClient->stopSucceeds = false;
-    m_helperClient->killSucceeds = false;
-    if (stopSingleInstance) m_runner->stopInstance(0);
-    else m_runner->stop();
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(m_helperClient->liveVirtualOutputs.size(), 1);
-    QCOMPARE(m_helperClient->liveNullSinks.size(), 1);
-
-    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player1"),
-                                         streamStopsFirst ? streamPid : gamePid, QStringLiteral("stopped"));
-    QVERIFY(m_runner->isActive());
-    QCOMPARE(m_helperClient->liveVirtualOutputs.size(), 1);
-    QCOMPARE(m_helperClient->liveNullSinks.size(), 1);
-    Q_EMIT m_helperClient->instanceStopped(QStringLiteral("player1"),
-                                         streamStopsFirst ? gamePid : streamPid, QStringLiteral("stopped"));
-    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 1000);
-    QVERIFY(m_helperClient->liveVirtualOutputs.isEmpty());
-    QVERIFY(m_helperClient->liveNullSinks.isEmpty());
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 10000);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+    QVERIFY(!m_runner->m_streamManager->hasOwnedPids());
 }
 
 void TestSessionRunner::testStreamingLaunchFailureAbortsStartup()
@@ -1934,22 +2008,271 @@ void TestSessionRunner::testStreamingLaunchFailureAbortsStartup()
     m_sessionManager->setInstanceCount(2);
     m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
     m_sessionManager->setInstancePreset(0, presetId);
-    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("outputMode"), QStringLiteral("streaming")}});
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
     m_sessionManager->setInstancePreset(1, presetId);
-    m_helperClient->auxiliaryLaunchFails = true;
+    StreamingFakes fakes(m_runner, /*vdisplayWorks=*/true, /*sunshineExists=*/false);
 
     QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
     QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
-    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
     QVERIFY(m_runner->start());
-    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 1000);
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 5000);
     QCOMPARE(startedSpy.count(), 0);
     QCOMPARE(m_helperClient->launchCommands.size(), 1);
-    QCOMPARE(m_helperClient->auxiliaryCommands.size(), 1);
-    QVERIFY(errorSpy.first().constFirst().toString().contains(QStringLiteral("Failed to launch Sunshine")));
-    QVERIFY(m_helperClient->stopPids.contains(1000));
+    QVERIFY(failedSpy.first().constFirst().toString().contains(QStringLiteral("Sunshine")));
+    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 3000);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+}
+
+void TestSessionRunner::testStreamingRuntimeAccessPrecedesSinkPreparation()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Runtime access order"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    StreamingFakes fakes(m_runner);
+    m_helperClient->autoReady = false;
+
+    // The helper restarts pipewire-pulse inside this call; the sinks must not exist yet and no game may run.
+    bool sinksPreparedAtSetup = true;
+    int launchesAtSetup = -1;
+    m_helperClient->onSetupRuntimeAccess = [&] {
+        sinksPreparedAtSetup = m_runner->m_streamAudio.isActive() || !m_runner->m_streamAudio.streamSink(0).isEmpty();
+        launchesAtSetup = m_helperClient->launchCommands.size();
+    };
+
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 1, 3000);
+    QCOMPARE(m_helperClient->setupRuntimeAccessCalls, 1);
+    QVERIFY(!sinksPreparedAtSetup);
+    QCOMPARE(launchesAtSetup, 0);
+    QVERIFY(m_runner->m_streamAudio.isActive());
+    QCOMPARE(m_runner->m_streamAudio.streamSink(0), QStringLiteral("couchplay-stream-p1"));
+
+    m_helperClient->onSetupRuntimeAccess = nullptr;
+    m_runner->stop();
+}
+
+void TestSessionRunner::testNoRuntimeAccessSetupWithoutStreamingPlayers()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("No streaming"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_helperClient->autoReady = false;
+
+    QVERIFY(m_runner->start());
+    QTRY_VERIFY_WITH_TIMEOUT(m_helperClient->launchCommands.size() >= 1, 3000);
+    QCOMPARE(m_helperClient->setupRuntimeAccessCalls, 0);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+
+    m_runner->stop();
+}
+
+void TestSessionRunner::testStreamingRuntimeAccessFailureAbortsStartup()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Runtime access failure"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    StreamingFakes fakes(m_runner);
+    m_helperClient->setupRuntimeAccessSucceeds = false;
+
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 3000);
+    QVERIFY(failedSpy.first().constFirst().toString().contains(QStringLiteral("audio access")));
+    QCOMPARE(startedSpy.count(), 0);
+    QCOMPARE(m_helperClient->setupRuntimeAccessCalls, 1);
+    QCOMPARE(m_helperClient->launchCommands.size(), 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 3000);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+}
+
+static SessionProfile displayProfile(const QStringList &displays, const QString &mainScreen = QString())
+{
+    SessionProfile profile;
+    profile.mainScreen = mainScreen;
+    for (const QString &display : displays) {
+        InstanceConfig instance;
+        instance.display = display;
+        instance.streamToMoonlight = display == InstanceConfig::DisplayVirtual;
+        profile.instances.append(instance);
+    }
+    return profile;
+}
+
+void TestSessionRunner::testValidateDisplaysMonitorNotConnected()
+{
+    const SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:DP-99")});
+    QCOMPARE(SessionRunner::validateDisplays(profile), QStringLiteral("Player 2: monitor DP-99 is not connected"));
+}
+
+void TestSessionRunner::testValidateDisplaysSharedMonitor()
+{
+    const QStringList screens{QStringLiteral("DP-1"), QStringLiteral("HDMI-A-1")};
+    const SessionProfile profile = displayProfile({QStringLiteral("monitor:DP-1"), QStringLiteral("monitor:DP-1")});
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, QStringLiteral("HDMI-A-1")),
+             QStringLiteral("Players 1 and 2 cannot share monitor DP-1"));
+}
+
+void TestSessionRunner::testValidateDisplaysMonitorIsMainScreen()
+{
+    const QStringList screens{QStringLiteral("DP-1"), QStringLiteral("HDMI-A-1")};
+    const QString primary = QStringLiteral("HDMI-A-1");
+    const QString expected =
+        QStringLiteral("Monitor HDMI-A-1 is the main screen; choose another main screen or move the players");
+
+    // Empty mainScreen means the primary screen
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:HDMI-A-1")});
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, primary), expected);
+
+    // Explicit main screen naming the same connector
+    profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:HDMI-A-1")}, QStringLiteral("HDMI-A-1"));
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, QStringLiteral("DP-1")), expected);
+
+    // Choosing the other screen as main frees the monitor
+    profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:HDMI-A-1")}, QStringLiteral("DP-1"));
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, primary), QString());
+
+    // Without any main-screen player the monitor is free to use
+    profile = displayProfile({QStringLiteral("monitor:HDMI-A-1"), QStringLiteral("virtual")});
+    QCOMPARE(SessionRunner::validateDisplays(profile, screens, primary), QString());
+}
+
+void TestSessionRunner::testValidateDisplaysStreamWithMain()
+{
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("main")});
+    profile.instances[1].streamToMoonlight = true;
+    QCOMPARE(SessionRunner::validateDisplays(profile),
+             QStringLiteral("Player 2: streaming needs a dedicated monitor or a virtual display"));
+}
+
+void TestSessionRunner::testValidateDisplaysValidProfile()
+{
+    QCOMPARE(SessionRunner::validateDisplays(displayProfile({QStringLiteral("main"), QStringLiteral("main")})),
+             QString());
+    QCOMPARE(SessionRunner::validateDisplays(displayProfile({QStringLiteral("main"), QStringLiteral("virtual")})),
+             QString());
+    // A main screen that is not connected falls back to the primary screen
+    QCOMPARE(SessionRunner::validateDisplays(displayProfile({QStringLiteral("main"), QStringLiteral("virtual")},
+                                                            QStringLiteral("DP-99"))),
+             QString());
+}
+
+void TestSessionRunner::testStartRejectsInvalidDisplay()
+{
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("monitor:DP-99")}});
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+
+    QVERIFY(!m_runner->start());
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(errorSpy.first().constFirst().toString(), QStringLiteral("Player 2: monitor DP-99 is not connected"));
+    QCOMPARE(m_runner->status(), QStringLiteral("Error"));
     QVERIFY(!m_runner->isActive());
+    QVERIFY(m_helperClient->launchCommands.isEmpty());
+}
+
+void TestSessionRunner::testValidatePairingGate()
+{
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("virtual")});
+    profile.instances[0].username = QStringLiteral("player1");
+    profile.instances[1].username = QStringLiteral("player2");
+    const auto none = [](const QString &) { return 0; };
+    const auto onlyPlayer2 = [](const QString &username) { return username == QStringLiteral("player2") ? 1 : 0; };
+
+    QCOMPARE(SessionRunner::validatePairing(profile, none),
+             QStringLiteral("Player 2 (player2) has no paired Moonlight client. "
+                            "Pair one for player2 on the Users page first."));
+    QCOMPARE(SessionRunner::validatePairing(profile, onlyPlayer2), QString());
+
+    // A real monitor only streams when the player opted in
+    profile = displayProfile({QStringLiteral("main"), QStringLiteral("monitor:DP-1")});
+    profile.instances[1].username = QStringLiteral("player2");
+    QCOMPARE(SessionRunner::validatePairing(profile, none), QString());
+    profile.instances[1].streamToMoonlight = true;
+    QVERIFY(!SessionRunner::validatePairing(profile, none).isEmpty());
+}
+
+void TestSessionRunner::testValidatePairingSkipsUnpairedNonStreamingAndNoUser()
+{
+    SessionProfile profile = displayProfile({QStringLiteral("main"), QStringLiteral("virtual")});
+    profile.instances[0].username = QStringLiteral("player1");
+    profile.instances[1].username.clear();
+    QCOMPARE(SessionRunner::validatePairing(profile, [](const QString &) { return 0; }), QString());
+}
+
+void TestSessionRunner::testStartRejectsUnpairedStreamingPlayer()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Unpaired"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    StreamingFakes fakes(m_runner);
+    m_runner->setSkipPairingCheck(false);
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+
+    QVERIFY(!m_runner->start());
+    QCOMPARE(errorSpy.count(), 1);
+    QVERIFY(errorSpy.first().constFirst().toString().contains(QStringLiteral("has no paired Moonlight client")));
+    QCOMPARE(m_runner->status(), QStringLiteral("Error"));
+    QVERIFY(!m_runner->isActive());
+    QVERIFY(m_helperClient->launchCommands.isEmpty());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+}
+
+void TestSessionRunner::testStartSkipPairingCheck()
+{
+    QVERIFY(!SessionRunner().skipPairingCheck());
+    SessionRunner runner;
+    QSignalSpy changedSpy(&runner, &SessionRunner::skipPairingCheckChanged);
+    runner.setSkipPairingCheck(true);
+    runner.setSkipPairingCheck(true);
+    QVERIFY(runner.skipPairingCheck());
+    QCOMPARE(changedSpy.count(), 1);
+}
+
+void TestSessionRunner::testStartAllowsPairedStreamingPlayer()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Paired"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_sessionManager->setInstanceConfig(1, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    // Sunshine is missing, so a start that passes the gate fails later with a Sunshine error, not a pairing one
+    StreamingFakes fakes(m_runner, /*vdisplayWorks=*/true, /*sunshineExists=*/false);
+    m_runner->setSkipPairingCheck(false);
+    const QString stateDir = SunshineConfig::ensureStateDirectory(QStringLiteral("player2"));
+    QVERIFY(!stateDir.isEmpty());
+    QFile state(stateDir + QStringLiteral("/sunshine_state.json"));
+    QVERIFY(state.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    state.write(R"({"root":{"uniqueid":"x","named_devices":[{"name":"Phone","uuid":"u1"}]}})");
+    state.close();
+
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    QVERIFY(m_runner->start());
+    QCOMPARE(errorSpy.count(), 0);
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 5000);
+    QVERIFY(!failedSpy.first().constFirst().toString().contains(QStringLiteral("paired")));
+    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 3000);
 }
 
 void TestSessionRunner::testDeviceReconnectIgnoredDuringPostHook()
@@ -2017,6 +2340,175 @@ void TestSessionRunner::testDeviceReconnectIgnoredDuringPreHook()
     // Positive control: once started, the same reconnect is handled.
     m_runner->onDeviceReconnected(QStringLiteral("test-device"), 99, 0);
     QVERIFY(m_helperClient->deviceOwnerCalls.size() > ownerCalls);
+}
+
+static InputDevice makeInputDevice(int eventNumber, const QString &name, const QString &type, const QString &uniq = QString())
+{
+    InputDevice device;
+    device.eventNumber = eventNumber;
+    device.name = name;
+    device.type = type;
+    device.uniq = uniq;
+    return device;
+}
+
+// Starts a two-player session on the mock helper, then marks the given players as streaming and
+// replaces the device list; everything stays synchronous so no timer can refresh the devices.
+static bool startSessionWithDevices(SessionRunner *runner,
+                                    SessionManager *sessionManager,
+                                    PresetManager *presetManager,
+                                    const QList<int> &streaming,
+                                    const QList<InputDevice> &devices)
+{
+    const QString presetId = presetManager->addCustomPreset(QStringLiteral("Gamepad attribution"), QStringLiteral("/usr/bin/true"));
+    sessionManager->setInstanceCount(2);
+    sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    sessionManager->setInstancePreset(0, presetId);
+    sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    sessionManager->setInstancePreset(1, presetId);
+    auto *deviceManager = new DeviceManager(runner);
+    runner->setDeviceManager(deviceManager);
+    if (!runner->start() || !runner->m_sessionStartupComplete) {
+        return false;
+    }
+    for (int index : streaming) {
+        runner->m_streamingInstances[index] = SessionRunner::StreamingInstanceInfo{};
+    }
+    deviceManager->m_devices = devices;
+    return true;
+}
+
+static int ownerUidOf(const MockCouchPlayHelperClient *helper, int eventNumber)
+{
+    const QString path = QStringLiteral("/dev/input/event%1").arg(eventNumber);
+    for (const auto &call : helper->deviceOwnerCalls) {
+        if (call.path == path) {
+            return call.uid;
+        }
+    }
+    return -1;
+}
+
+void TestSessionRunner::testSunshineGamepadClaimsAreFifo()
+{
+    const QString pad = QStringLiteral("Sunshine PS5 (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller")),
+                                     makeInputDevice(902, pad, QStringLiteral("controller"))}));
+
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(0);
+    QCOMPARE(m_runner->m_gamepadClaims.size(), 2);
+
+    m_runner->onDeviceAdded(901, pad);
+    m_runner->onDeviceAdded(902, pad);
+
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1002);
+    QCOMPARE(ownerUidOf(m_helperClient, 902), 1001);
+    QVERIFY(m_runner->m_gamepadClaims.isEmpty());
+    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event901")));
+    QVERIFY(m_runner->m_ownedDevicePaths.contains(QStringLiteral("/dev/input/event902")));
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadUniqGroupsDevices()
+{
+    const QString pad = QStringLiteral("Sunshine PS5 (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller"), QStringLiteral("sunshine-pad-1")),
+                                     makeInputDevice(902, pad + QStringLiteral(" motion"), QStringLiteral("other"),
+                                                     QStringLiteral("sunshine-pad-1"))}));
+    m_runner->m_clockOverrideMs = 10000;
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+
+    m_runner->onDeviceAdded(901, pad);
+    // Within 3 s the motion node shares the uniq and follows the first node without a claim.
+    m_runner->m_clockOverrideMs = 12999;
+    m_runner->onDeviceAdded(902, pad + QStringLiteral(" motion"));
+
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1002);
+    QCOMPARE(ownerUidOf(m_helperClient, 902), 1002);
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadSingleStreamerFallback()
+{
+    const QString pad = QStringLiteral("Sunshine X-Box One (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller"))}));
+    QVERIFY(m_runner->m_gamepadClaims.isEmpty());
+
+    m_runner->onDeviceAdded(901, pad);
+
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1002);
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadClaimExpires()
+{
+    const QString pad = QStringLiteral("Sunshine X-Box One (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller")),
+                                     makeInputDevice(902, pad, QStringLiteral("controller"))}));
+
+    m_runner->m_clockOverrideMs = 1000;
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(0);
+    m_runner->m_clockOverrideMs = 1000 + m_runner->m_claimTtlMs - 1;
+    m_runner->onDeviceAdded(901, pad);
+    QCOMPARE(ownerUidOf(m_helperClient, 901), 1001);
+
+    m_runner->m_clockOverrideMs = 20000;
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+    m_runner->m_clockOverrideMs = 20000 + m_runner->m_claimTtlMs + 1;
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("Cannot attribute Moonlight gamepad")));
+    m_runner->onDeviceAdded(902, pad);
+    QCOMPARE(ownerUidOf(m_helperClient, 902), -1);
+    QVERIFY(m_runner->m_gamepadClaims.isEmpty());
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineKeyboardMouseNotChowned()
+{
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {1},
+                                    {makeInputDevice(901, QStringLiteral("Sunshine Keyboard"), QStringLiteral("keyboard")),
+                                     makeInputDevice(902, QStringLiteral("Sunshine Mouse"), QStringLiteral("mouse")),
+                                     makeInputDevice(903, QStringLiteral("Logitech Gamepad"), QStringLiteral("controller"))}));
+    Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
+    const qsizetype ownerCalls = m_helperClient->deviceOwnerCalls.size();
+
+    m_runner->onDeviceAdded(901, QStringLiteral("Sunshine Keyboard"));
+    m_runner->onDeviceAdded(902, QStringLiteral("Sunshine Mouse"));
+    m_runner->onDeviceAdded(903, QStringLiteral("Logitech Gamepad"));
+
+    QCOMPARE(m_helperClient->deviceOwnerCalls.size(), ownerCalls);
+    QCOMPARE(m_runner->m_gamepadClaims.size(), 1); // claim not consumed
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
+}
+
+void TestSessionRunner::testSunshineGamepadUnownedWithoutClaim()
+{
+    const QString pad = QStringLiteral("Sunshine PS5 (virtual) pad");
+    QVERIFY(startSessionWithDevices(m_runner, m_sessionManager, m_presetManager, {0, 1},
+                                    {makeInputDevice(901, pad, QStringLiteral("controller"))}));
+    const qsizetype ownerCalls = m_helperClient->deviceOwnerCalls.size();
+
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("Cannot attribute Moonlight gamepad")));
+    m_runner->onDeviceAdded(901, pad);
+
+    QCOMPARE(m_helperClient->deviceOwnerCalls.size(), ownerCalls);
+
+    m_runner->m_streamingInstances.clear();
+    m_runner->stop();
 }
 
 void TestSessionRunner::testInvalidPostSessionReportsError()
@@ -2141,6 +2633,52 @@ void TestSessionRunner::testFinalizeDataDirResolvesIdentityViaHelper()
     const QByteArray vdfContent = vdf.readAll();
     QVERIFY(vdfContent.contains(".couchplay/steam-libs"));
     QVERIFY(!vdfContent.contains("extlib")); // only alias paths + the player's own root
+}
+
+void TestSessionRunner::testPhysicalInstanceAudioDeviceRoutesOnlyThatPlayer()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Audio routing"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    QVariantMap playerTwo = m_sessionManager->getInstanceConfig(1);
+    playerTwo[QStringLiteral("audioDevice")] = QStringLiteral("alsa_output.usb-soundbar.analog-stereo");
+    m_sessionManager->setInstanceConfig(1, playerTwo);
+
+    QVERIFY(m_runner->start());
+    QCOMPARE(m_helperClient->launchEnvironments.size(), 2);
+
+    const QString sinkPrefix = QStringLiteral("PULSE_SINK=");
+    auto sinkOf = [&](const QStringList &environment) {
+        for (const QString &entry : environment) {
+            if (entry.startsWith(sinkPrefix)) return entry.mid(sinkPrefix.size());
+        }
+        return QString();
+    };
+    QCOMPARE(m_helperClient->launchUsernames.at(0), QStringLiteral("player1"));
+    QVERIFY(sinkOf(m_helperClient->launchEnvironments.at(0)).isEmpty());
+    QCOMPARE(m_helperClient->launchUsernames.at(1), QStringLiteral("player2"));
+    QCOMPARE(sinkOf(m_helperClient->launchEnvironments.at(1)),
+             QStringLiteral("alsa_output.usb-soundbar.analog-stereo"));
+    m_runner->stop();
+}
+
+void TestSessionRunner::testParseRenderResolution()
+{
+    QCOMPARE(SessionRunner::parseRenderResolution(QStringLiteral("1280x720")), QSize(1280, 720));
+    QCOMPARE(SessionRunner::parseRenderResolution(QStringLiteral(" 2560x1440 ")), QSize(2560, 1440));
+    // Empty means "match the window".
+    QVERIFY(!SessionRunner::parseRenderResolution(QString()).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("1280")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("1280x")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("axb")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("1280x720x60")).isValid());
+    // Out-of-range values must not reach gamescope.
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("0x0")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("-1280x720")).isValid());
+    QVERIFY(!SessionRunner::parseRenderResolution(QStringLiteral("99999x720")).isValid());
 }
 
 QTEST_MAIN(TestSessionRunner)

@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
+#include <QSocketNotifier>
 #include <QTextStream>
 #include <QThread>
 
@@ -60,11 +61,19 @@ DeviceManager::DeviceManager(QObject *parent)
     m_debounceTimer->setInterval(500); // 500ms debounce
     connect(m_debounceTimer, &QTimer::timeout, this, &DeviceManager::onDebounceTimeout);
 
+    m_captureTimer = new QTimer(this);
+    m_captureTimer->setSingleShot(true);
+    connect(m_captureTimer, &QTimer::timeout, this, &DeviceManager::onCaptureTimeout);
+
     refresh();
     setupHotplugWatcher();
 }
 
-DeviceManager::~DeviceManager() = default;
+DeviceManager::~DeviceManager()
+{
+    // Closes capture descriptors; the notifiers are children and die with us
+    stopCapture();
+}
 
 void DeviceManager::setupHotplugWatcher()
 {
@@ -204,6 +213,8 @@ void DeviceManager::onDebounceTimeout()
         }
     }
 
+    pruneCaptureWatches();
+
     Q_EMIT devicesChanged();
 
     if (pendingChanged) {
@@ -218,6 +229,7 @@ void DeviceManager::refresh()
 {
     m_devices.clear();
     parseDevices();
+    pruneCaptureWatches();
     Q_EMIT devicesChanged();
 }
 
@@ -625,6 +637,11 @@ bool DeviceManager::assignDevice(int eventNumber, int instanceIndex)
     return false;
 }
 
+void DeviceManager::unassignDevice(int eventNumber)
+{
+    assignDevice(eventNumber, -1);
+}
+
 void DeviceManager::unassignAll()
 {
     for (int i = 0; i < m_devices.size(); ++i) {
@@ -674,9 +691,17 @@ QStringList DeviceManager::getHidrawPathsForInstance(int instanceIndex) const
     return paths;
 }
 
-int DeviceManager::autoAssignControllers()
+int DeviceManager::autoAssignControllers(const QVariantList &skipInstances)
 {
+    QSet<int> skipped;
+    for (const QVariant &instance : skipInstances) {
+        skipped.insert(instance.toInt());
+    }
+
     for (auto &device : m_devices) {
+        if (skipped.contains(device.assignedInstance)) {
+            continue;
+        }
         if (device.type == QStringLiteral("controller") || device.name.toLower().contains(QStringLiteral("steam controller"))) {
             device.assigned = false;
             device.assignedInstance = -1;
@@ -688,13 +713,17 @@ int DeviceManager::autoAssignControllers()
 
     QList<int> controllerIndices;
     for (int i = 0; i < m_devices.size(); ++i) {
-        if (m_devices[i].type == QStringLiteral("controller") && !m_devices[i].isVirtual) {
+        if (m_devices[i].type == QStringLiteral("controller") && !m_devices[i].isVirtual
+            && !skipped.contains(m_devices[i].assignedInstance)) {
             controllerIndices.append(i);
         }
     }
 
     int assignedCount = 0;
     for (int instance = 0; instance < m_instanceCount && assignedCount < controllerIndices.size(); ++instance) {
+        if (skipped.contains(instance)) {
+            continue;
+        }
         int deviceIndex = controllerIndices[assignedCount];
         int previousInstance = m_devices[deviceIndex].assignedInstance;
 
@@ -839,6 +868,7 @@ QVariantMap DeviceManager::deviceToVariantMap(const InputDevice &device) const
     map[QStringLiteral("productId")] = device.productId;
     map[QStringLiteral("physPath")] = device.physPath;
     map[QStringLiteral("stableId")] = device.stableId;
+    map[QStringLiteral("uniq")] = device.uniq;
     map[QStringLiteral("assigned")] = device.assigned;
     map[QStringLiteral("assignedInstance")] = device.assignedInstance;
     map[QStringLiteral("isVirtual")] = device.isVirtual;
@@ -1187,6 +1217,162 @@ QString DeviceManager::findHidrawForEvent(int eventNumber) const
     }
 
     return QString();
+}
+
+QList<int> DeviceManager::captureCandidates() const
+{
+    QList<int> candidates;
+    for (const auto &device : m_devices) {
+        // Ignored devices never reach m_devices; Sunshine's uhid pads are the streamed players' controllers
+        if (device.type == QStringLiteral("controller") && !device.isVirtual
+            && !device.name.startsWith(QLatin1String("Sunshine "))) {
+            candidates.append(device.eventNumber);
+        }
+    }
+    return candidates;
+}
+
+void DeviceManager::startCapture(int instanceIndex)
+{
+    stopCapture();
+    if (instanceIndex < 0) {
+        return;
+    }
+
+    for (int eventNumber : captureCandidates()) {
+        const int fd = openDevice(QStringLiteral("/dev/input/event%1").arg(eventNumber), O_RDONLY | O_NONBLOCK);
+        if (fd < 0) {
+            qDebug() << "DeviceManager: Cannot open event" << eventNumber << "for capture";
+            continue;
+        }
+        auto *notifier = new QSocketNotifier(fd, QSocketNotifier::Read, this);
+        connect(notifier, &QSocketNotifier::activated, this, [this, eventNumber]() { readCaptureEvents(eventNumber); });
+        m_captureWatches.insert(eventNumber, CaptureWatch{fd, notifier});
+    }
+
+    if (m_captureWatches.isEmpty()) {
+        Q_EMIT captureTimedOut(instanceIndex);
+        return;
+    }
+
+    m_captureInstance = instanceIndex;
+    m_captureTimer->start(m_captureTimeoutMs);
+    Q_EMIT captureChanged();
+    qDebug() << "DeviceManager: Capturing a button press for instance" << instanceIndex << "on"
+             << m_captureWatches.size() << "controllers";
+}
+
+void DeviceManager::cancelCapture()
+{
+    stopCapture();
+}
+
+void DeviceManager::onCaptureTimeout()
+{
+    const int instanceIndex = m_captureInstance;
+    if (instanceIndex < 0) {
+        return;
+    }
+    stopCapture();
+    Q_EMIT captureTimedOut(instanceIndex);
+}
+
+void DeviceManager::readCaptureEvents(int eventNumber)
+{
+    const auto it = m_captureWatches.constFind(eventNumber);
+    if (it == m_captureWatches.constEnd()) {
+        return;
+    }
+    const int fd = it->fd;
+
+    // Drain everything pending; the descriptor is non-blocking so EAGAIN ends the loop.
+    // handleCaptureEvent() may finish the capture, which closes the descriptor.
+    while (m_captureWatches.contains(eventNumber)) {
+        input_event event;
+        const ssize_t bytes = ::read(fd, &event, sizeof(event));
+        if (bytes == static_cast<ssize_t>(sizeof(event))) {
+            handleCaptureEvent(eventNumber, event.type, event.code, event.value);
+            continue;
+        }
+        if (bytes < 0 && errno == EINTR) {
+            continue;
+        }
+        if (bytes == 0 || (bytes < 0 && errno != EAGAIN)) {
+            // Device went away (ENODEV) or closed
+            removeCaptureWatch(eventNumber);
+        }
+        // Partial reads and EAGAIN: wait for the next notification
+        break;
+    }
+}
+
+void DeviceManager::handleCaptureEvent(int eventNumber, quint16 type, quint16 code, qint32 value)
+{
+    if (m_captureInstance < 0 || !m_captureWatches.contains(eventNumber)) {
+        return;
+    }
+    if (type != EV_KEY || value != 1) {
+        return;
+    }
+    const bool isGamepadButton = (code >= BTN_GAMEPAD && code <= BTN_THUMBR) || (code >= BTN_DPAD_UP && code <= BTN_DPAD_RIGHT);
+    if (!isGamepadButton) {
+        return;
+    }
+
+    const int instanceIndex = m_captureInstance;
+    QString name;
+    for (const auto &device : std::as_const(m_devices)) {
+        if (device.eventNumber == eventNumber) {
+            name = device.name;
+            break;
+        }
+    }
+
+    stopCapture();
+    if (assignDevice(eventNumber, instanceIndex)) {
+        Q_EMIT captureFinished(instanceIndex, eventNumber, name);
+    }
+}
+
+void DeviceManager::removeCaptureWatch(int eventNumber)
+{
+    const auto it = m_captureWatches.find(eventNumber);
+    if (it == m_captureWatches.end()) {
+        return;
+    }
+    const CaptureWatch watch = it.value();
+    m_captureWatches.erase(it);
+    // May run inside the notifier's own activated() handler, so delete it later
+    watch.notifier->setEnabled(false);
+    watch.notifier->deleteLater();
+    closeDevice(watch.fd);
+}
+
+void DeviceManager::stopCapture()
+{
+    m_captureTimer->stop();
+    const QList<int> eventNumbers = m_captureWatches.keys();
+    for (int eventNumber : eventNumbers) {
+        removeCaptureWatch(eventNumber);
+    }
+    if (m_captureInstance != -1) {
+        m_captureInstance = -1;
+        Q_EMIT captureChanged();
+    }
+}
+
+void DeviceManager::pruneCaptureWatches()
+{
+    if (m_captureWatches.isEmpty()) {
+        return;
+    }
+    const QList<int> candidates = captureCandidates();
+    const QList<int> watched = m_captureWatches.keys();
+    for (int eventNumber : watched) {
+        if (!candidates.contains(eventNumber)) {
+            removeCaptureWatch(eventNumber);
+        }
+    }
 }
 
 int DeviceManager::openDevice(const QString &path, int flags) const

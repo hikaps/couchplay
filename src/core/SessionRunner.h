@@ -4,6 +4,8 @@
 #pragma once
 
 #include <QList>
+#include <functional>
+#include <QElapsedTimer>
 #include <QMap>
 #include <QProcess>
 #include <QObject>
@@ -19,14 +21,18 @@
 #include "../dbus/CouchPlayHelperClient.h"
 #include "HeroicConfigManager.h"
 #include "SteamConfigManager.h"
+#include "StreamManager.h"
+#include "StreamAudio.h"
 
 class QAction;
+class QScreen;
 
 class GamescopeInstance;
 class DeviceManager;
 class SessionManager;
 class SettingsManager;
 class StreamManager;
+class VirtualDisplayManager;
 class WindowManager;
 class PresetManager;
 
@@ -59,6 +65,8 @@ class SessionRunner : public QObject
                    heroicConfigManagerChanged)
     Q_PROPERTY(
         SettingsManager *settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
+    Q_PROPERTY(StreamManager *streamManager READ streamManager CONSTANT)
+    Q_PROPERTY(bool skipPairingCheck READ skipPairingCheck WRITE setSkipPairingCheck NOTIFY skipPairingCheckChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -96,6 +104,16 @@ public:
     int runningInstanceCount() const;
 
     /**
+     * @brief Instance index of the streaming player assigned to this gaming user, or -1
+     *
+     * Only players with a stream in the current session count; an empty username never matches.
+     */
+    Q_INVOKABLE int streamingInstanceForUser(const QString &username) const;
+
+    /// Number of Moonlight clients paired with the gaming user's Sunshine identity
+    Q_INVOKABLE int pairedClientCount(const QString &username) const;
+
+    /**
      * @brief Get current status message
      */
     QString status() const
@@ -118,6 +136,10 @@ public:
     DeviceManager *deviceManager() const
     {
         return m_deviceManager;
+    }
+    StreamManager *streamManager() const
+    {
+        return m_streamManager;
     }
     void setDeviceManager(DeviceManager *manager);
 
@@ -151,9 +173,16 @@ public:
     }
     void setSettingsManager(SettingsManager *manager);
 
+    /** When true, start() does not require a paired Moonlight client for streaming players (--skip-pairing-check). */
+    bool skipPairingCheck() const
+    {
+        return m_skipPairingCheck;
+    }
+    void setSkipPairingCheck(bool skip);
+
     /**
      * @brief Calculate window geometries for a given layout
-     * @param layout Layout type: "horizontal", "vertical", "multi-monitor", "grid"
+     * @param layout Layout type: "horizontal", "vertical", "grid"
      * @param instanceCount Number of instances
      * @param screenGeometry Available screen geometry
      * @param gridSubLayout For "grid" layout with 3 players: "horizontal" (3×1), "grid-2x2" (2×2 with gap), or empty
@@ -164,6 +193,36 @@ public:
                                         int instanceCount,
                                         const QRect &screenGeometry,
                                         const QString &gridSubLayout = QString());
+
+    /**
+     * Parse a per-instance render resolution such as "1280x720".
+     * @return the size, or an invalid QSize if empty, malformed, or outside 320x200..7680x4320
+     */
+    static QSize parseRenderResolution(const QString &text);
+
+    /** The connected screen whose QScreen::name() equals the connector, or nullptr. */
+    static QScreen *screenByConnector(const QString &connector);
+
+    /**
+     * Check the per-player display choices of a profile against the connected screens.
+     * @return an empty string when valid, otherwise the user-facing error
+     */
+    static QString validateDisplays(const SessionProfile &profile);
+
+    /** Same check against an explicit set of connected connectors (testable without a real display). */
+    static QString validateDisplays(const SessionProfile &profile,
+                                    const QStringList &connectors,
+                                    const QString &primaryConnector);
+
+    /**
+     * Every streaming player with a gaming user needs at least one paired Moonlight client.
+     * @return an empty string when satisfied, otherwise the user-facing error
+     */
+    static QString validatePairing(const SessionProfile &profile);
+
+    /** Same check with an explicit paired-client count lookup (testable without disk state). */
+    static QString validatePairing(const SessionProfile &profile,
+                                   const std::function<int(const QString &username)> &pairedCount);
 
 Q_SIGNALS:
     void runningChanged();
@@ -177,6 +236,7 @@ Q_SIGNALS:
     void steamConfigManagerChanged();
     void heroicConfigManagerChanged();
     void settingsManagerChanged();
+    void skipPairingCheckChanged();
     void errorOccurred(const QString &message);
     void activeChanged();
     void sessionStartFailed(const QString &message);
@@ -192,6 +252,7 @@ private Q_SLOTS:
     void onWindowPositioned(int requestId, const QString &windowId);
     void onWindowPositioningTimeout(int requestId);
     void onDeviceReconnected(const QString &stableId, int eventNumber, int instanceIndex);
+    void onDeviceAdded(int eventNumber, const QString &name);
     void startNextInstance();
     void onHookFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onHookError(QProcess::ProcessError error);
@@ -209,15 +270,17 @@ private:
     void restoreDeviceOwnership();
     bool setupSessionResources();
     void teardownSharingState();
-    QRect getScreenGeometry() const;
+    static QRect mainScreenGeometry(const SessionProfile &profile);
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
     void inhibitScreenSaver();
     void uninhibitScreenSaver();
-    bool setupStreamingInstance(int instanceIndex, const QVariantMap &config);
     void teardownStreamingInstances();
     void cleanupStreamingInstance(int index);
     void continueFinalizationAfterStopping();
+    bool grantDeviceToInstance(int eventNumber, int instanceIndex);
+    qint64 nowMs() const;
+    void resetGamepadAttribution();
     bool hasOwnedPids() const;
 
     struct SessionRuntimeSnapshot {
@@ -230,12 +293,13 @@ private:
     };
 
     struct StreamingInstanceInfo {
-        QString username;
-        QString displayContext;
-        QString sinkName;
-        bool virtualDisplayCreated = false;
-        bool nullSinkCreated = false;
+        QString outputName; // KWin output Sunshine captures
+        QString sinkName;   // Per-player stream sink
     };
+
+    void startVirtualDisplays();
+    void continueStartAfterDisplays();
+    void proceedAfterInstanceStarted(GamescopeInstance *instance);
 
     QMap<int, QVariantList> m_instanceDirectoryPreparations;
     uint m_screenSaverCookie = 0;
@@ -254,6 +318,12 @@ private:
     SettingsManager *m_settingsManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     StreamManager *m_streamManager = nullptr;
+    VirtualDisplayManager *m_virtualDisplays = nullptr;
+    bool m_skipPairingCheck = false;
+    StreamAudio m_streamAudio;
+    QSet<int> m_pendingDisplays;
+    QHash<int, QString> m_virtualOutputNames;
+    QHash<int, QRect> m_virtualRects;
     QList<GamescopeInstance *> m_instances;
     QAction *m_stopAction = nullptr;
     QString m_status;
@@ -279,6 +349,23 @@ private:
     QList<QVariantMap> m_pendingInstanceConfigs;
     QList<QRect> m_layouts;
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
+
+    // Moonlight gamepad attribution (Sunshine uhid devices -> streaming player)
+    struct GamepadClaim {
+        int instanceIndex = -1;
+        qint64 atMs = 0;
+    };
+    struct SunshineAttribution {
+        QString uniq;
+        int instanceIndex = -1;
+        qint64 atMs = 0;
+    };
+    QList<GamepadClaim> m_gamepadClaims;
+    QList<SunshineAttribution> m_sunshineAttributions;
+    qint64 m_claimTtlMs = 5000;
+    qint64 m_uniqWindowMs = 3000;
+    qint64 m_clockOverrideMs = -1; // test seam: >= 0 replaces the monotonic clock
+    QElapsedTimer m_clock;
 
     // Privileged sharing state (mounts, Steam library sharing) is active from
     // setup until teardown — natural instance exit must release it too
