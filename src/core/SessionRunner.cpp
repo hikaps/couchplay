@@ -591,6 +591,12 @@ void SessionRunner::continueStartAfterDisplays()
 
     m_streamingInstances.clear();
     if (!streamingIndices.isEmpty()) {
+        // The helper restarts pipewire-pulse when it first opens cross-user audio access, which drops every
+        // sink loaded before it. Do that now so the sinks created below survive until the game starts.
+        if (!m_helperClient || !m_helperClient->setupRuntimeAccess()) {
+            beginFinalization(true, QStringLiteral("Could not set up audio access for streaming"));
+            return;
+        }
         QString audioError;
         if (!m_streamAudio.prepare(streamingIndices, &audioError)) {
             beginFinalization(true, audioError);
@@ -1604,7 +1610,10 @@ void SessionRunner::onInstanceStarted()
     }
 
     // The helper's first launch restarts pipewire-pulse, which unloads the stream sinks
-    m_streamAudio.ensureSinks();
+    if (!m_streamAudio.ensureSinks()) {
+        beginFinalization(true, QStringLiteral("Could not restore the stream audio sinks"));
+        return;
+    }
 
     Q_EMIT instanceStarted(idx);
     Q_EMIT instancesChanged();

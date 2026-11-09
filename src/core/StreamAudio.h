@@ -26,11 +26,14 @@ public:
     /** The recorded default sink (may be empty). */
     QString defaultSink() const;
 
-    /** Unload modules and restore the default sink; idempotent. */
+    /** Unload the sinks (looked up by name, not module number) and restore the default sink; idempotent. */
     void teardown();
 
-    /** Reloads any prepared sink that is no longer present (pipewire-pulse restarted). */
-    void ensureSinks();
+    /**
+     * Reloads any prepared sink that is no longer present (pipewire-pulse restarted).
+     * @return false if the sinks could not be listed or a missing sink could not be reloaded
+     */
+    bool ensureSinks();
 
     bool isActive() const;
 
@@ -39,11 +42,10 @@ public:
 
 private:
     bool runPactl(const QStringList &args, QString *output) const;
-    bool loadSink(int index, uint *moduleIndex);
+    bool loadSink(int index);
 
     QString m_programOverride;
     QString m_defaultSink;
     QMap<int, QString> m_sinks; ///< instance index -> sink name
-    QMap<int, uint> m_modules; ///< instance index -> loaded module index
     bool m_active = false;
 };

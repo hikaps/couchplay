@@ -150,6 +150,16 @@ public:
         return killSucceeds;
     }
 
+    int setupRuntimeAccessCalls = 0;
+    bool setupRuntimeAccessSucceeds = true;
+    std::function<void()> onSetupRuntimeAccess;
+    bool setupRuntimeAccess() override
+    {
+        ++setupRuntimeAccessCalls;
+        if (onSetupRuntimeAccess) onSetupRuntimeAccess();
+        return setupRuntimeAccessSucceeds;
+    }
+
     bool setPathAclWithParents(const QString &path, const QString &username) override
     {
         aclCalls.append({path, username});
@@ -316,6 +326,9 @@ private Q_SLOTS:
     void testSynchronousLaunchFailureRunsPostHookOnce();
     void testVirtualDisplayFailureAbortsStartup();
     void testStreamingStartupWaitsForSunshineReady();
+    void testStreamingRuntimeAccessPrecedesSinkPreparation();
+    void testNoRuntimeAccessSetupWithoutStreamingPlayers();
+    void testStreamingRuntimeAccessFailureAbortsStartup();
     void testStreamingInstancesGetDistinctSunshinePorts();
     void testStreamingLaunchFailureAbortsStartup();
     void testValidateDisplaysMonitorNotConnected();
@@ -2007,6 +2020,81 @@ void TestSessionRunner::testStreamingLaunchFailureAbortsStartup()
     QCOMPARE(startedSpy.count(), 0);
     QCOMPARE(m_helperClient->launchCommands.size(), 1);
     QVERIFY(failedSpy.first().constFirst().toString().contains(QStringLiteral("Sunshine")));
+    QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 3000);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+    QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());
+}
+
+void TestSessionRunner::testStreamingRuntimeAccessPrecedesSinkPreparation()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Runtime access order"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    StreamingFakes fakes(m_runner);
+    m_helperClient->autoReady = false;
+
+    // The helper restarts pipewire-pulse inside this call; the sinks must not exist yet and no game may run.
+    bool sinksPreparedAtSetup = true;
+    int launchesAtSetup = -1;
+    m_helperClient->onSetupRuntimeAccess = [&] {
+        sinksPreparedAtSetup = m_runner->m_streamAudio.isActive() || !m_runner->m_streamAudio.streamSink(0).isEmpty();
+        launchesAtSetup = m_helperClient->launchCommands.size();
+    };
+
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 1, 3000);
+    QCOMPARE(m_helperClient->setupRuntimeAccessCalls, 1);
+    QVERIFY(!sinksPreparedAtSetup);
+    QCOMPARE(launchesAtSetup, 0);
+    QVERIFY(m_runner->m_streamAudio.isActive());
+    QCOMPARE(m_runner->m_streamAudio.streamSink(0), QStringLiteral("couchplay-stream-p1"));
+
+    m_helperClient->onSetupRuntimeAccess = nullptr;
+    m_runner->stop();
+}
+
+void TestSessionRunner::testNoRuntimeAccessSetupWithoutStreamingPlayers()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("No streaming"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, presetId);
+    }
+    m_helperClient->autoReady = false;
+
+    QVERIFY(m_runner->start());
+    QTRY_VERIFY_WITH_TIMEOUT(m_helperClient->launchCommands.size() >= 1, 3000);
+    QCOMPARE(m_helperClient->setupRuntimeAccessCalls, 0);
+    QVERIFY(!m_runner->m_streamAudio.isActive());
+
+    m_runner->stop();
+}
+
+void TestSessionRunner::testStreamingRuntimeAccessFailureAbortsStartup()
+{
+    const QString presetId = m_presetManager->addCustomPreset(QStringLiteral("Runtime access failure"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, presetId);
+    m_sessionManager->setInstanceConfig(0, {{QStringLiteral("display"), QStringLiteral("virtual")}});
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, presetId);
+    StreamingFakes fakes(m_runner);
+    m_helperClient->setupRuntimeAccessSucceeds = false;
+
+    QSignalSpy startedSpy(m_runner, &SessionRunner::sessionStarted);
+    QSignalSpy failedSpy(m_runner, &SessionRunner::sessionStartFailed);
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 3000);
+    QVERIFY(failedSpy.first().constFirst().toString().contains(QStringLiteral("audio access")));
+    QCOMPARE(startedSpy.count(), 0);
+    QCOMPARE(m_helperClient->setupRuntimeAccessCalls, 1);
+    QCOMPARE(m_helperClient->launchCommands.size(), 0);
     QTRY_VERIFY_WITH_TIMEOUT(!m_runner->isActive(), 3000);
     QVERIFY(!m_runner->m_streamAudio.isActive());
     QVERIFY(!m_runner->m_virtualDisplays->hasDisplays());

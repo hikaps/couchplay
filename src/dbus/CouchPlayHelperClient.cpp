@@ -317,6 +317,23 @@ bool CouchPlayHelperClient::killInstance(qint64 pid)
     return reply.value();
 }
 
+bool CouchPlayHelperClient::setupRuntimeAccess()
+{
+    if (!m_available) {
+        Q_EMIT errorOccurred(QStringLiteral("Helper not available"));
+        return false;
+    }
+
+    QDBusReply<bool> reply = m_interface->call(QStringLiteral("SetupRuntimeAccess"));
+
+    if (!reply.isValid()) {
+        Q_EMIT errorOccurred(reply.error().message());
+        return false;
+    }
+
+    return reply.value();
+}
+
 
 
 

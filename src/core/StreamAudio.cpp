@@ -56,15 +56,13 @@ bool StreamAudio::prepare(const QList<int> &streamingIndices, QString *error)
     for (const int index : streamingIndices) {
         const int player = index + 1;
         m_sinks.insert(index, QStringLiteral("couchplay-stream-p%1").arg(player));
-        uint moduleIndex = 0;
-        if (!loadSink(index, &moduleIndex)) {
+        if (!loadSink(index)) {
             if (error) {
                 *error = QStringLiteral("Player %1: could not create stream audio sink").arg(player);
             }
             teardown();
             return false;
         }
-        m_modules.insert(index, moduleIndex);
     }
 
     m_active = true;
@@ -83,33 +81,64 @@ QString StreamAudio::defaultSink() const
 
 void StreamAudio::teardown()
 {
-    for (const uint moduleIndex : std::as_const(m_modules)) {
-        runPactl({QStringLiteral("unload-module"), QString::number(moduleIndex)}, nullptr);
+    if (!m_active && m_sinks.isEmpty()) {
+        return;
     }
 
-    if (!m_defaultSink.isEmpty() && (!m_modules.isEmpty() || m_active)) {
+    // The helper restarts pipewire-pulse when the last instance stops, so module numbers from load time
+    // may now belong to unrelated modules: look the modules up by sink name instead.
+    if (!m_sinks.isEmpty()) {
+        QString listing;
+        if (runPactl({QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("modules")}, &listing)) {
+            const QStringList names = m_sinks.values();
+            for (const QString &line : listing.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                const QStringList columns = line.split(QLatin1Char('\t'));
+                if (columns.size() < 3 || columns.at(1) != QLatin1String("module-null-sink")) {
+                    continue;
+                }
+                bool isIndex = false;
+                const uint moduleIndex = columns.at(0).toUInt(&isIndex);
+                if (!isIndex) {
+                    continue;
+                }
+                const QStringList arguments = columns.at(2).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                for (const QString &argument : arguments) {
+                    if (!argument.startsWith(QLatin1String("sink_name="))) {
+                        continue;
+                    }
+                    QString sinkName = argument.mid(QLatin1String("sink_name=").size());
+                    sinkName.remove(QLatin1Char('"'));
+                    if (names.contains(sinkName)) {
+                        runPactl({QStringLiteral("unload-module"), QString::number(moduleIndex)}, nullptr);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!m_defaultSink.isEmpty()) {
         QString current;
         if (!runPactl({QStringLiteral("get-default-sink")}, &current) || current != m_defaultSink) {
             runPactl({QStringLiteral("set-default-sink"), m_defaultSink}, nullptr);
         }
     }
 
-    m_modules.clear();
     m_sinks.clear();
     m_active = false;
 }
 
-void StreamAudio::ensureSinks()
+bool StreamAudio::ensureSinks()
 {
     if (!m_active || m_sinks.isEmpty()) {
-        return;
+        return true;
     }
 
     // The helper restarts pipewire-pulse while it opens cross-user audio access, which drops
     // every module loaded before the first instance launched.
     QString listing;
     if (!runPactl({QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("sinks")}, &listing)) {
-        return;
+        return false;
     }
     QStringList present;
     for (const QString &line : listing.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
@@ -119,19 +148,20 @@ void StreamAudio::ensureSinks()
         }
     }
 
+    bool allPresent = true;
     for (auto it = m_sinks.constBegin(); it != m_sinks.constEnd(); ++it) {
         if (present.contains(it.value())) {
             continue;
         }
         qWarning() << "StreamAudio: sink" << it.value() << "disappeared; reloading it";
-        uint moduleIndex = 0;
-        if (loadSink(it.key(), &moduleIndex)) {
-            m_modules.insert(it.key(), moduleIndex);
+        if (!loadSink(it.key())) {
+            allPresent = false;
         }
     }
+    return allPresent;
 }
 
-bool StreamAudio::loadSink(int index, uint *moduleIndex)
+bool StreamAudio::loadSink(int index)
 {
     const int player = index + 1;
     QString output;
@@ -141,7 +171,7 @@ bool StreamAudio::loadSink(int index, uint *moduleIndex)
                         QStringLiteral("sink_properties=device.description=CouchPlay_Player_%1_stream").arg(player)},
                        &output);
     if (ok) {
-        *moduleIndex = output.toUInt(&ok);
+        static_cast<void>(output.toUInt(&ok)); // pactl prints the module number; anything else is a failure
     }
     return ok;
 }
