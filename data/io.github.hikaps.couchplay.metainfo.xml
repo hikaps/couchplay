@@ -65,17 +65,22 @@
   </screenshots>
   
   <releases>
-    <release version="0.5.1" date="2026-11-07">
+    <release version="0.6.0" date="2026-11-09">
       <description>
-        <p>Bug fix release with per-player render resolution and audio output</p>
+        <p>Feature release: Moonlight streaming, per-player display placement and controller assignment from player cards. Reinstall the privileged helper after updating: its D-Bus API changed.</p>
         <ul>
-          <li>Choose a render resolution per player (Window Size is now shown separately)</li>
-          <li>Choose an audio output device per player</li>
-          <li>Stop the running session cleanly on SIGTERM, SIGINT, SIGHUP or window close, so no player instances are left behind</li>
+          <li>Stream any player to a Moonlight client through Sunshine, from a virtual display or a monitor</li>
+          <li>Pair Moonlight clients per gaming user on the Users page, with a stable port per user</li>
+          <li>Choose each player's display: main screen, a specific monitor or a virtual display</li>
+          <li>Assign controllers from the player cards with "Press a button…"; Moonlight controllers are assigned to the streaming player automatically</li>
+          <li>Per-player stream audio sinks, restored reliably around the PipeWire restart</li>
+          <li>Choose a render resolution and an audio output device per player</li>
+          <li>Stop the running session cleanly on SIGTERM, SIGINT, SIGHUP or window close</li>
           <li>Don't abort launch when the optional Steam shortcut sync can't run for a player who hasn't started Steam</li>
           <li>Fix the game selector error in the session setup page, and a first-run window timeout</li>
           <li>Grant Flatpak read access to Heroic config and the default game directory</li>
           <li>Fix Sunshine port collisions between streaming players</li>
+          <li>README restructured; internals moved to docs/</li>
         </ul>
       </description>
     </release>
