@@ -365,6 +365,7 @@ Kirigami.ApplicationWindow {
         pageStack.clear()
         pageStack.push(deviceAssignmentPage, {
             deviceManager: deviceManager,
+            sessionManager: sessionManager,
             instanceCount: sessionManager.instanceCount
         })
     }

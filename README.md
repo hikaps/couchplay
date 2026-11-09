@@ -57,7 +57,7 @@
 
 ### Assigning Controllers
 
-Connect your gamepads, then use the **Auto-Assign Controllers** button to let CouchPlay distribute them across player instances. You can also drag and drop devices for manual assignment. Each controller gets locked to its assigned instance so inputs don't leak between players.
+Connect your gamepads, then use the **Auto-Assign Controllers** button to let CouchPlay distribute them across player instances, or click **Press a button…** on a player's card and press any button on the controller you want for that player. Keyboards, mice and manual drag-and-drop assignment live under **Other devices…**. Each controller gets locked to its assigned instance so inputs don't leak between players.
 
 ### Exiting a Session
 

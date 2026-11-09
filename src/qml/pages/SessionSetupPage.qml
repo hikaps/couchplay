@@ -64,6 +64,10 @@ Kirigami.ScrollablePage {
         function onPendingDevicesChanged() {
             root.devicesRevision++
         }
+        function onCaptureTimedOut(instanceIndex) {
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "No controller input detected"))
+        }
     }
 
     // Get available users for a specific instance
@@ -555,6 +559,11 @@ Kirigami.ScrollablePage {
 
                 readonly property string textNoneAssigned: i18nc("@info", "None assigned")
                 readonly property string textAssign: i18nc("@action:button", "Assign...")
+                readonly property string labelControllers: i18nc("@label", "Controllers:")
+                readonly property string textPressToAssign: i18nc("@action:button", "Press a button…")
+                readonly property string textCapturePrompt: i18nc("@info", "Press any button on the controller you want for this player…")
+                readonly property string textCancelCapture: i18nc("@action:button", "Cancel")
+                readonly property string textOtherDevices: i18nc("@action:button", "Other devices…")
 
                 header: RowLayout {
                     spacing: Kirigami.Units.smallSpacing
@@ -1096,6 +1105,115 @@ Kirigami.ScrollablePage {
                                 onClicked: applicationWindow().pushDeviceAssignmentPage()
                             }
                         }
+
+                        // Controller assignment: press a button on the pad to give it to this player
+                        ColumnLayout {
+                            id: controllersColumn
+                            objectName: "rowControllers"
+                            Kirigami.FormData.label: instanceCard.labelControllers
+                            spacing: Kirigami.Units.smallSpacing
+
+                            // Physical pads only; grouped siblings (touchpad, motion sensors) stay hidden
+                            readonly property var assignedControllers: {
+                                void(root.devicesRevision)
+                                if (!root.deviceManager) return []
+                                let result = []
+                                let events = root.deviceManager.getDevicesForInstance(instanceCard.index)
+                                for (let i = 0; i < events.length; i++) {
+                                    let device = root.deviceManager.getDevice(events[i])
+                                    if (device.type === "controller") {
+                                        result.push({ eventNumber: events[i], name: device.name })
+                                    }
+                                }
+                                return result
+                            }
+                            readonly property bool capturing: !!root.deviceManager
+                                && root.deviceManager.captureInstance === instanceCard.index
+
+                            // Streaming players get their pads from Moonlight; only stale assignments show up
+                            visible: !instanceCard.streamsToMoonlight || assignedControllers.length > 0
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                visible: controllersColumn.assignedControllers.length > 0
+
+                                Repeater {
+                                    model: controllersColumn.assignedControllers
+
+                                    Kirigami.Chip {
+                                        required property var modelData
+                                        objectName: "chipAssignedController"
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: text
+                                        text: modelData.name
+                                        icon.name: "input-gamepad"
+                                        checkable: false
+                                        closable: true
+                                        onRemoved: {
+                                            if (root.deviceManager) {
+                                                root.deviceManager.unassignDevice(modelData.eventNumber)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                visible: !instanceCard.streamsToMoonlight
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Controls.Button {
+                                    objectName: "buttonPressToAssign"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textPressToAssign
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textPressToAssign
+                                    icon.name: "input-gamepad"
+                                    visible: !controllersColumn.capturing
+                                    enabled: root.deviceManager !== null
+                                    onClicked: root.deviceManager.startCapture(instanceCard.index)
+                                }
+
+                                Controls.BusyIndicator {
+                                    running: controllersColumn.capturing
+                                    visible: controllersColumn.capturing
+                                    Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                                }
+
+                                Controls.Label {
+                                    objectName: "labelCapturePrompt"
+                                    visible: controllersColumn.capturing
+                                    text: instanceCard.textCapturePrompt
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+
+                                Controls.Button {
+                                    objectName: "buttonCancelCapture"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textCancelCapture
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textCancelCapture
+                                    icon.name: "dialog-cancel"
+                                    visible: controllersColumn.capturing
+                                    onClicked: root.deviceManager.cancelCapture()
+                                }
+
+                                Controls.Button {
+                                    objectName: "buttonAdvancedDevices"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textOtherDevices
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textOtherDevices
+                                    flat: true
+                                    visible: !controllersColumn.capturing
+                                    onClicked: applicationWindow().pushDeviceAssignmentPage()
+                                }
+                            }
+                        }
+
                         Controls.CheckBox {
                             objectName: "checkPrivateTemporaryDirectories"
                             Kirigami.FormData.label: instanceCard.labelPrivateTemporaryDirectories
@@ -1242,7 +1360,8 @@ Kirigami.ScrollablePage {
                 onClicked: {
                     if (deviceManager) {
                         deviceManager.instanceCount = root.instanceCount
-                        let count = deviceManager.autoAssignControllers()
+                        let skip = root.sessionManager ? root.sessionManager.streamingInstanceIndexes() : []
+                        let count = deviceManager.autoAssignControllers(skip)
                         applicationWindow().showPassiveNotification(
                             i18ncp("@info", "Assigned %1 controller", "Assigned %1 controllers", count))
                     }
