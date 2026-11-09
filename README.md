@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Couch co-op for any game on Linux: split-screen it, or stream players to Moonlight.</strong><br/>
-  CouchPlay launches multiple Steam or Heroic instances side by side through Gamescope — no native split-screen support needed — and can stream any player to a Moonlight client through Sunshine. Each player gets their own isolated input, save data, and audio. Works on KDE Plasma, designed for immutable distros like Bazzite and Fedora Silverblue.
+  CouchPlay launches multiple Steam or Heroic instances side by side through Gamescope — no native split-screen support needed — and can stream any player to a Moonlight client through Sunshine. Each player gets their own isolated input, save data, and audio. Works on KDE Plasma (Wayland), including immutable distros like Bazzite.
 </p>
 
 <p align="center">
@@ -41,7 +41,7 @@
 - 🧭 **Per-player display placement** — put each player on the main screen, a specific monitor, or a virtual display.
 - ⚡ **Sequential launching** — instances start one at a time to avoid GPU contention.
 - 🖼️ **Borderless windows** — optional borderless mode for cleaner multi-window setups.
-- 🐧 **Atomic-ready** — designed for immutable distributions like Bazzite and Fedora Silverblue. Available as a Flatpak.
+- 🐧 **Runs on many distros** — the Flatpak GUI works on any distro with KDE Plasma on Wayland, including immutable ones like Bazzite. Developed and tested on Bazzite; the installer also supports SteamOS, and CI builds on Fedora.
 - ⏹️ **Controller exit chord** — hold **Start + Select** on any assigned gamepad for 2 seconds to stop the entire split-screen session without touching a keyboard.
 
 ## Usage
