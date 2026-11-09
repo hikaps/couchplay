@@ -41,7 +41,7 @@
 - 🧭 **Per-player display placement** — put each player on the main screen, a specific monitor, or a virtual display.
 - ⚡ **Sequential launching** — instances start one at a time to avoid GPU contention.
 - 🖼️ **Borderless windows** — optional borderless mode for cleaner multi-window setups.
-- 🐧 **Runs on many distros** — the Flatpak GUI works on any distro with KDE Plasma on Wayland, including immutable ones like Bazzite. Developed and tested on Bazzite; the installer also supports SteamOS, and CI builds on Fedora.
+- 🐧 **Runs on many distros** — the Flatpak GUI works on any distro with KDE Plasma on Wayland, including immutable ones like Bazzite. Developed and tested on Bazzite; the installer also supports SteamOS, and CI builds on Fedora. Arch-based distros such as CachyOS are expected to work via the Flatpak but haven't been tested.
 - ⏹️ **Controller exit chord** — hold **Start + Select** on any assigned gamepad for 2 seconds to stop the entire split-screen session without touching a keyboard.
 
 ## Usage
