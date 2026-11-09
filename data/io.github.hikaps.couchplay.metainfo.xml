@@ -5,7 +5,7 @@
   <id>io.github.hikaps.couchplay</id>
   
   <name>CouchPlay</name>
-  <summary>Split-screen gaming with gamescope</summary>
+  <summary>Split-screen and streamed couch co-op</summary>
   
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
@@ -16,15 +16,16 @@
   
   <description>
     <p>
-      CouchPlay enables local split-screen multiplayer gaming on Linux by running 
-      multiple gamescope instances simultaneously. Each player gets their own 
-      isolated Steam instance with dedicated input devices.
+      CouchPlay enables local couch co-op on Linux by running multiple gamescope
+      instances simultaneously, and can stream any player to a Moonlight client.
+      Each player gets their own isolated Steam instance with dedicated input devices.
     </p>
     <p>Features:</p>
     <ul>
       <li>Run 2-4 simultaneous gamescope/Steam instances</li>
       <li>Automatic input device detection and assignment</li>
       <li>Flexible screen layout configuration (split horizontally, vertically, or custom)</li>
+      <li>Stream any player to a Moonlight client through Sunshine</li>
       <li>Per-user Steam configurations and save games</li>
       <li>Save and load session profiles for quick setup</li>
       <li>Create desktop shortcuts for one-click game launching</li>
@@ -197,6 +198,10 @@
     <keyword>couch</keyword>
     <keyword>local</keyword>
     <keyword>controller</keyword>
+    <keyword>co-op</keyword>
+    <keyword>moonlight</keyword>
+    <keyword>sunshine</keyword>
+    <keyword>streaming</keyword>
   </keywords>
   
   <provides>
