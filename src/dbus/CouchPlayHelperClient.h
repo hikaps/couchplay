@@ -116,6 +116,15 @@ public:
      */
     Q_INVOKABLE virtual bool killInstance(qint64 pid);
 
+    /**
+     * @brief Grant the couchplay group access to the calling user's runtime directory and audio sockets
+     *
+     * Also deploys the PipeWire-Pulse TCP listener (restarting pipewire-pulse the first time). Idempotent;
+     * the helper resolves the target from the D-Bus caller, so this takes no arguments.
+     * @return true if access was set up
+     */
+    Q_INVOKABLE virtual bool setupRuntimeAccess();
+
     Q_INVOKABLE void checkAvailability();
 
 
