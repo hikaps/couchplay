@@ -6,11 +6,13 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRandomGenerator>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QUdpSocket>
@@ -77,6 +79,21 @@ bool portSetFree(int port)
     }
     return true;
 }
+
+constexpr int kMinBasePort = 1024 + 5;
+constexpr int kMaxBasePort = 65535 - 21;
+
+// Stored base port of a user; 0 when the file is missing or holds anything but a usable port.
+int readPortFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return 0;
+    }
+    bool ok = false;
+    const int port = QString::fromUtf8(file.read(32)).trimmed().toInt(&ok);
+    return (ok && port >= kMinBasePort && port <= kMaxBasePort) ? port : 0;
+}
 }
 
 QString SunshineConfig::apiUser()
@@ -104,6 +121,80 @@ int SunshineConfig::calculatePort(int instanceIndex, int basePort)
         return MIN_PORT;
     }
     return port;
+}
+
+int SunshineConfig::userPort(const QString &identityKey)
+{
+    if (identityKey.isEmpty()) {
+        return -1;
+    }
+    const QString dir = stateDirectory(identityKey);
+    const QString portPath = dir + QStringLiteral("/port");
+    if (const int stored = readPortFile(portPath); stored > 0) {
+        return stored;
+    }
+
+    QSet<int> claimed;
+    const QFileInfo own(dir);
+    const QDir root(own.absolutePath());
+    const QStringList others = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &name : others) {
+        if (name == own.fileName()) {
+            continue;
+        }
+        if (const int port = readPortFile(root.filePath(name) + QStringLiteral("/port")); port > 0) {
+            claimed.insert(port);
+        }
+    }
+
+    int chosen = -1;
+    int firstUnclaimed = -1;
+    for (int candidate = BASE_PORT; candidate <= kMaxBasePort; candidate += PORT_SPACING) {
+        if (claimed.contains(candidate)) {
+            continue;
+        }
+        if (firstUnclaimed < 0) {
+            firstUnclaimed = candidate;
+        }
+        if (portSetFree(candidate)) {
+            chosen = candidate;
+            break;
+        }
+    }
+    // Nothing probes free right now: keep the first unclaimed slot; allocatePort() still bumps at bind time
+    if (chosen < 0) {
+        chosen = firstUnclaimed;
+    }
+    if (chosen < 0) {
+        return -1;
+    }
+
+    if (ensureStateDirectory(identityKey).isEmpty()
+        || !writeFile(portPath, QByteArray::number(chosen) + '\n')) {
+        qWarning() << "SunshineConfig: could not persist the port of" << identityKey;
+        return chosen;
+    }
+    QFile::setPermissions(portPath, kOwnerFile);
+    return chosen;
+}
+
+int SunshineConfig::preferredPort(const QString &identityKey, int instanceIndex, int configuredPort)
+{
+    if (!identityKey.isEmpty() && configuredPort == BASE_PORT) {
+        if (const int port = userPort(identityKey); port > 0) {
+            return port;
+        }
+    }
+    return calculatePort(instanceIndex, configuredPort);
+}
+
+bool SunshineConfig::removeState(const QString &identityKey)
+{
+    if (identityKey.isEmpty()) {
+        return false;
+    }
+    QDir dir(stateDirectory(identityKey));
+    return !dir.exists() || dir.removeRecursively();
 }
 
 QString SunshineConfig::stateDirectory(const QString &identityKey)

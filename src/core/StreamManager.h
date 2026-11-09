@@ -110,6 +110,8 @@ Q_SIGNALS:
     /** Sunshine is about to create a virtual gamepad for the stream (log line "Gamepad N will be ..."). */
     void gamepadAnnounced(int instanceIndex);
     void pinResult(int instanceIndex, bool ok, const QString &message);
+    /** Outcome of unpairClient(); message is empty on success */
+    void unpairResult(int instanceIndex, bool ok, const QString &message);
     void streamsChanged();
     void autoRestartChanged();
     void startupTimeoutChanged();
@@ -135,6 +137,7 @@ private:
         bool legacyPairing = false;
         bool refreshing = false; ///< a pairing refresh request is in flight
         bool pinPending = false; ///< a PIN submission is in flight
+        bool unpairPending = false; ///< an unpair request is in flight
         qint64 logOffset = 0;
         QByteArray logBuffer;
         QStringList recentLines;

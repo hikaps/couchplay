@@ -23,7 +23,9 @@ Kirigami.ScrollablePage {
     required property var steamConfigManager
     required property var heroicConfigManager
     required property var audioManager
-    required property var pairingSession
+
+    // Asks the application to show the Users page, where Moonlight clients are paired
+    signal openUsersRequested()
 
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
@@ -61,6 +63,10 @@ Kirigami.ScrollablePage {
         }
         function onPendingDevicesChanged() {
             root.devicesRevision++
+        }
+        function onCaptureTimedOut(instanceIndex) {
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "No controller input detected"))
         }
     }
 
@@ -253,80 +259,6 @@ Kirigami.ScrollablePage {
 
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
-
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Heading {
-                text: i18nc("@title", "Automation")
-                level: 2
-                Kirigami.FormData.label: i18nc("@title", "Automation")
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
-
-                Controls.TextField {
-                    objectName: "fieldPreSessionScript"
-                    Accessible.role: Accessible.EditableText
-                    Accessible.name: i18nc("@label", "Pre-session script")
-                    readOnly: true
-                    text: sessionManager?.preSessionExecutable ?? ""
-                    placeholderText: i18nc("@info:placeholder", "Optional executable")
-                    Layout.fillWidth: true
-                }
-
-                Controls.Button {
-                    objectName: "btnBrowsePreSessionScript"
-                    text: i18nc("@action:button", "Browse...")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    onClicked: preSessionScriptDialog.open()
-                }
-
-                Controls.Button {
-                    objectName: "btnClearPreSessionScript"
-                    text: i18nc("@action:button", "Clear")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
-                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
-
-                Controls.TextField {
-                    objectName: "fieldPostSessionScript"
-                    Accessible.role: Accessible.EditableText
-                    Accessible.name: i18nc("@label", "Post-session script")
-                    readOnly: true
-                    text: sessionManager?.postSessionExecutable ?? ""
-                    placeholderText: i18nc("@info:placeholder", "Optional executable")
-                    Layout.fillWidth: true
-                }
-
-                Controls.Button {
-                    objectName: "btnBrowsePostSessionScript"
-                    text: i18nc("@action:button", "Browse...")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    onClicked: postSessionScriptDialog.open()
-                }
-
-                Controls.Button {
-                    objectName: "btnClearPostSessionScript"
-                    text: i18nc("@action:button", "Clear")
-                    Accessible.role: Accessible.Button
-                    Accessible.name: text
-                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
-                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
-                }
-            }
-        }
 
         Kirigami.InlineMessage {
             Layout.fillWidth: true
@@ -569,13 +501,8 @@ Kirigami.ScrollablePage {
                     return cardSessionManager.getInstanceConfig(instanceCard.index)?.username ?? ""
                 }
 
-                // Paired Moonlight clients of this player's gaming user; refreshed on username change and pairedChanged
-                property int pairedCount: 0
-                onCardUsernameChanged: refreshPairedCount()
-
-                function refreshPairedCount() {
-                    pairedCount = root.pairingSession ? root.pairingSession.pairedClientCount(cardUsername) : 0
-                }
+                // Paired Moonlight clients of this player's gaming user
+                readonly property int pairedCount: root.sessionRunner ? root.sessionRunner.pairedClientCount(cardUsername) : 0
 
 
 
@@ -587,9 +514,6 @@ Kirigami.ScrollablePage {
                     }
                     return null
                 }
-
-                // StreamManager.StreamState: 1 = Waiting, 2 = Streaming, 3 = Error
-                readonly property bool streamReady: streamEntry !== null && streamEntry.state === 2
 
                 function streamStatusText() {
                     if (streamEntry === null) return ""
@@ -612,10 +536,8 @@ Kirigami.ScrollablePage {
                 readonly property string textStreamMonitorHint: i18nc("@info", "Streaming a real monitor also shows the game on that monitor.")
                 readonly property string labelStreamStatus: i18nc("@label", "Stream:")
                 readonly property string labelPairing: i18nc("@label", "Pairing:")
-                readonly property string textPairClient: i18nc("@action:button", "Pair Moonlight client…")
                 readonly property string textNotPaired: i18nc("@info:status", "Moonlight: not paired yet")
-                readonly property string textStartingPairing: i18nc("@info:status", "Starting pairing…")
-                readonly property string textPairMoonlight: i18nc("@action:button", "Pair Moonlight…")
+                readonly property string textManageMoonlight: i18nc("@action:button", "Manage on Users page")
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
                 readonly property string labelResolution: i18nc("@label", "Window Size:")
@@ -627,7 +549,6 @@ Kirigami.ScrollablePage {
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelGame: i18nc("@label", "Game:")
-                readonly property string labelDevices: i18nc("@label", "Devices:")
                 readonly property string labelPlayerData: i18nc("@action:button", "Player data")
                 readonly property string tooltipPlayerData: i18nc("@info:tooltip", "Open a folder where you can place per-player files (e.g. configs). They are copied into this player's copy of the shared directories at session start.")
 
@@ -635,8 +556,11 @@ Kirigami.ScrollablePage {
                 readonly property string labelPrivateTemporaryDirectories: i18nc("@option:check", "Private temporary directories")
                 readonly property string tooltipPrivateTemporaryDirectories: i18nc("@info:tooltip", "Use private /tmp and /var/tmp directories for this instance. They are removed when the instance stops and are not part of the shared-data snapshot.")
 
-                readonly property string textNoneAssigned: i18nc("@info", "None assigned")
-                readonly property string textAssign: i18nc("@action:button", "Assign...")
+                readonly property string labelControllers: i18nc("@label", "Controllers:")
+                readonly property string textPressToAssign: i18nc("@action:button", "Press a button…")
+                readonly property string textCapturePrompt: i18nc("@info", "Press any button on the controller you want for this player…")
+                readonly property string textCancelCapture: i18nc("@action:button", "Cancel")
+                readonly property string textOtherDevices: i18nc("@action:button", "Other devices…")
 
                 header: RowLayout {
                     spacing: Kirigami.Units.smallSpacing
@@ -1121,145 +1045,143 @@ Kirigami.ScrollablePage {
                                 wrapMode: Text.WordWrap
                                 Layout.fillWidth: true
                             }
-
-                            Controls.Button {
-                                objectName: "buttonPairMoonlight"
-                                Accessible.role: Accessible.Button
-                                Accessible.name: instanceCard.textPairMoonlight
-                                text: instanceCard.textPairMoonlight
-                                icon.name: "network-connect"
-                                enabled: instanceCard.streamReady
-                                onClicked: pairingSheet.open()
-                            }
                         }
 
-                        Components.MoonlightPairingSheet {
-                            id: pairingSheet
-                            streamManager: instanceCard.streamManager
-                            instanceIndex: instanceCard.index
-                        }
-
-                        ColumnLayout {
-                            id: pairingColumn
-                            objectName: "pairingBeforeSession"
+                        RowLayout {
+                            objectName: "rowMoonlightPairing"
                             Kirigami.FormData.label: instanceCard.labelPairing
-                            visible: instanceCard.streamsToMoonlight && !(root.sessionRunner && root.sessionRunner.active)
+                            visible: instanceCard.streamsToMoonlight
                             Layout.fillWidth: true
                             spacing: Kirigami.Units.smallSpacing
 
-                            // This player's pairing session, if one is running or failed.
-                            // PairingSession.State: 0 = Idle, 1 = Starting, 2 = Ready, 3 = Failed
-                            readonly property bool mine: root.pairingSession.instanceIndex === instanceCard.index
+                            Controls.Label {
+                                objectName: "labelPairedStatus"
+                                text: instanceCard.pairedCount > 0
+                                    ? i18ncp("@info:status", "Moonlight: %1 paired", "Moonlight: %1 paired", instanceCard.pairedCount)
+                                    : instanceCard.textNotPaired
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
 
-                            Component.onCompleted: instanceCard.refreshPairedCount()
+                            Controls.Button {
+                                objectName: "buttonManageMoonlight"
+                                Accessible.role: Accessible.Button
+                                Accessible.name: instanceCard.textManageMoonlight
+                                text: instanceCard.textManageMoonlight
+                                icon.name: "user-properties"
+                                flat: true
+                                onClicked: root.openUsersRequested()
+                            }
+                        }
 
-                            Connections {
-                                target: root.pairingSession
+                        // Controller assignment: press a button on the pad to give it to this player
+                        ColumnLayout {
+                            id: controllersColumn
+                            objectName: "rowControllers"
+                            Kirigami.FormData.label: instanceCard.labelControllers
+                            spacing: Kirigami.Units.smallSpacing
 
-                                function onPairedChanged(username) {
-                                    if (username === instanceCard.cardUsername) {
-                                        instanceCard.refreshPairedCount()
+                            // Physical pads only; grouped siblings (touchpad, motion sensors) stay hidden
+                            readonly property var assignedControllers: {
+                                void(root.devicesRevision)
+                                if (!root.deviceManager) return []
+                                let result = []
+                                let events = root.deviceManager.getDevicesForInstance(instanceCard.index)
+                                for (let i = 0; i < events.length; i++) {
+                                    let device = root.deviceManager.getDevice(events[i])
+                                    if (device.type === "controller") {
+                                        result.push({ eventNumber: events[i], name: device.name })
                                     }
                                 }
+                                return result
+                            }
+                            readonly property bool capturing: !!root.deviceManager
+                                && root.deviceManager.captureInstance === instanceCard.index
 
-                                function onStateChanged() {
-                                    if (pairingColumn.mine && root.pairingSession.state === 2) {
-                                        pairingSessionSheet.open()
-                                    } else if (pairingSessionSheet.sheetOpen) {
-                                        pairingSessionSheet.close()
+                            // Streaming players get their pads from Moonlight; only stale assignments show up
+                            visible: !instanceCard.streamsToMoonlight || assignedControllers.length > 0
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                visible: controllersColumn.assignedControllers.length > 0
+
+                                Repeater {
+                                    model: controllersColumn.assignedControllers
+
+                                    Kirigami.Chip {
+                                        required property var modelData
+                                        objectName: "chipAssignedController"
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: text
+                                        text: modelData.name
+                                        icon.name: "input-gamepad"
+                                        checkable: false
+                                        closable: true
+                                        onRemoved: {
+                                            if (root.deviceManager) {
+                                                root.deviceManager.unassignDevice(modelData.eventNumber)
+                                            }
+                                        }
                                     }
                                 }
                             }
 
                             RowLayout {
-                                Layout.fillWidth: true
+                                visible: !instanceCard.streamsToMoonlight
                                 spacing: Kirigami.Units.smallSpacing
 
+                                Controls.Button {
+                                    objectName: "buttonPressToAssign"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textPressToAssign
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textPressToAssign
+                                    icon.name: "input-gamepad"
+                                    visible: !controllersColumn.capturing
+                                    enabled: root.deviceManager !== null
+                                    onClicked: root.deviceManager.startCapture(instanceCard.index)
+                                }
+
+                                Controls.BusyIndicator {
+                                    running: controllersColumn.capturing
+                                    visible: controllersColumn.capturing
+                                    Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                                }
+
                                 Controls.Label {
-                                    objectName: "labelPairedStatus"
-                                    text: instanceCard.pairedCount > 0
-                                        ? i18ncp("@info:status", "Moonlight: %1 paired", "Moonlight: %1 paired", instanceCard.pairedCount)
-                                        : instanceCard.textNotPaired
-                                    wrapMode: Text.WordWrap
+                                    objectName: "labelCapturePrompt"
+                                    visible: controllersColumn.capturing
+                                    text: instanceCard.textCapturePrompt
+                                    wrapMode: Text.Wrap
                                     Layout.fillWidth: true
                                 }
 
                                 Controls.Button {
-                                    objectName: "buttonPairClient"
+                                    objectName: "buttonCancelCapture"
                                     Accessible.role: Accessible.Button
-                                    Accessible.name: instanceCard.textPairClient
-                                    text: instanceCard.textPairClient
-                                    icon.name: "network-connect"
-                                    enabled: instanceCard.cardUsername !== "" && !root.pairingSession.busy
-                                    onClicked: root.pairingSession.start(instanceCard.index, instanceCard.cardUsername)
-                                }
-                            }
-
-                            RowLayout {
-                                objectName: "rowPairingStarting"
-                                visible: pairingColumn.mine && root.pairingSession.state === 1
-                                spacing: Kirigami.Units.smallSpacing
-
-                                Controls.BusyIndicator {
-                                    running: parent.visible
-                                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                                    Accessible.name: instanceCard.textCancelCapture
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textCancelCapture
+                                    icon.name: "dialog-cancel"
+                                    visible: controllersColumn.capturing
+                                    onClicked: root.deviceManager.cancelCapture()
                                 }
 
-                                Controls.Label {
-                                    text: instanceCard.textStartingPairing
-                                }
-                            }
-
-                            Kirigami.InlineMessage {
-                                objectName: "messagePairingSessionError"
-                                Layout.fillWidth: true
-                                visible: pairingColumn.mine && root.pairingSession.state === 3
-                                type: Kirigami.MessageType.Error
-                                text: root.pairingSession.error
-                            }
-                        }
-
-                        Components.MoonlightPairingSheet {
-                            id: pairingSessionSheet
-                            objectName: "pairingSessionSheet"
-                            streamManager: root.pairingSession.streamManager
-                            instanceIndex: instanceCard.index
-                            onClosed: {
-                                if (pairingColumn.mine) {
-                                    root.pairingSession.stop()
+                                Controls.Button {
+                                    objectName: "buttonAdvancedDevices"
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: instanceCard.textOtherDevices
+                                    Accessible.onPressAction: clicked()
+                                    text: instanceCard.textOtherDevices
+                                    flat: true
+                                    visible: !controllersColumn.capturing
+                                    onClicked: applicationWindow().pushDeviceAssignmentPage()
                                 }
                             }
                         }
 
-                        RowLayout {
-                            Kirigami.FormData.label: instanceCard.labelDevices
-                            spacing: Kirigami.Units.smallSpacing
-
-                            Controls.Label {
-                                text: {
-                                    // Reference devicesRevision to force re-evaluation on device changes
-                                    void(root.devicesRevision)
-                                    if (!root.deviceManager) return instanceCard.textNoneAssigned
-                                    var paths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
-                                    if (paths.length === 0) return instanceCard.textNoneAssigned
-                                    return paths.length === 1
-                                        ? (paths.length + " device")
-                                        : (paths.length + " devices")
-                                }
-                                opacity: 0.7
-                            }
-
-                            Controls.Button {
-                                objectName: "btnAssignDevices"
-                                Accessible.role: Accessible.Button
-                                Accessible.name: instanceCard.textAssign
-                                Accessible.onPressAction: clicked()
-                                text: instanceCard.textAssign
-                                flat: true
-                                onClicked: applicationWindow().pushDeviceAssignmentPage()
-                            }
-                        }
                         Controls.CheckBox {
                             objectName: "checkPrivateTemporaryDirectories"
                             Kirigami.FormData.label: instanceCard.labelPrivateTemporaryDirectories
@@ -1323,7 +1245,9 @@ Kirigami.ScrollablePage {
                         visible: instanceCard.isStreaming && root.sessionRunner && root.sessionRunner.active
                         type: Kirigami.MessageType.Information
                         text: i18nc("@info", "Sunshine streaming is active on port %1",
-                                    root.sessionManager ? root.sessionManager.effectiveSunshinePort(instanceCard.index) : 47989)
+                                    instanceCard.streamEntry !== null
+                                        ? instanceCard.streamEntry.port
+                                        : (root.sessionManager ? root.sessionManager.effectiveSunshinePort(instanceCard.index) : 47989))
                     }
 
                     // Warning for missing devices
@@ -1375,8 +1299,11 @@ Kirigami.ScrollablePage {
 
                             return true
                         }
+                        objectName: "messageNoController"
                         type: Kirigami.MessageType.Information
-                        text: i18nc("@info", "No controller assigned to this player")
+                        text: instanceCard.streamsToMoonlight
+                            ? i18nc("@info", "Controllers come from the Moonlight client when it connects")
+                            : i18nc("@info", "No controller assigned to this player")
                     }
                 }
             }
@@ -1401,7 +1328,8 @@ Kirigami.ScrollablePage {
                 onClicked: {
                     if (deviceManager) {
                         deviceManager.instanceCount = root.instanceCount
-                        let count = deviceManager.autoAssignControllers()
+                        let skip = root.sessionManager ? root.sessionManager.streamingInstanceIndexes() : []
+                        let count = deviceManager.autoAssignControllers(skip)
                         applicationWindow().showPassiveNotification(
                             i18ncp("@info", "Assigned %1 controller", "Assigned %1 controllers", count))
                     }
@@ -1410,6 +1338,86 @@ Kirigami.ScrollablePage {
 
             Item { Layout.fillWidth: true }
         }
+
+        Kirigami.Separator {
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.largeSpacing
+        }
+
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+
+            Kirigami.Heading {
+                text: i18nc("@title", "Automation")
+                level: 2
+                Kirigami.FormData.label: i18nc("@title", "Automation")
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Pre-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPreSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Pre-session script")
+                    readOnly: true
+                    text: sessionManager?.preSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePreSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: preSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPreSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.preSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.preSessionExecutable = ""
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Kirigami.FormData.label: i18nc("@label", "Post-session script:")
+
+                Controls.TextField {
+                    objectName: "fieldPostSessionScript"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Post-session script")
+                    readOnly: true
+                    text: sessionManager?.postSessionExecutable ?? ""
+                    placeholderText: i18nc("@info:placeholder", "Optional executable")
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    objectName: "btnBrowsePostSessionScript"
+                    text: i18nc("@action:button", "Browse...")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    onClicked: postSessionScriptDialog.open()
+                }
+
+                Controls.Button {
+                    objectName: "btnClearPostSessionScript"
+                    text: i18nc("@action:button", "Clear")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    enabled: (sessionManager?.postSessionExecutable ?? "") !== ""
+                    onClicked: if (sessionManager) sessionManager.postSessionExecutable = ""
+                }
+            }
+        }
+
     }
 
     component LayoutCard: Kirigami.AbstractCard {

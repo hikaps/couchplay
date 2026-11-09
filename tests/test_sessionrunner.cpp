@@ -1942,7 +1942,8 @@ void TestSessionRunner::testStreamingInstancesGetDistinctSunshinePorts()
     QTRY_COMPARE_WITH_TIMEOUT(m_runner->m_pendingInstanceConfigs.size(), 2, 3000);
     for (int i = 0; i < 2; ++i) {
         const QVariantMap config = m_runner->m_pendingInstanceConfigs.value(i);
-        QCOMPARE(config.value(QStringLiteral("sunshinePort")).toInt(), SunshineConfig::calculatePort(i));
+        QCOMPARE(config.value(QStringLiteral("sunshinePort")).toInt(),
+                 SunshineConfig::userPort(QStringLiteral("player%1").arg(i + 1)));
         QCOMPARE(config.value(QStringLiteral("monitorName")).toString(),
                  QStringLiteral("Virtual-couchplay-p%1").arg(i + 1));
         QCOMPARE(config.value(QStringLiteral("sink")).toString(), QStringLiteral("couchplay-stream-p%1").arg(i + 1));
@@ -2106,7 +2107,7 @@ void TestSessionRunner::testValidatePairingGate()
 
     QCOMPARE(SessionRunner::validatePairing(profile, none),
              QStringLiteral("Player 2 (player2) has no paired Moonlight client. "
-                            "Use \"Pair Moonlight client\" on that player first."));
+                            "Pair one for player2 on the Users page first."));
     QCOMPARE(SessionRunner::validatePairing(profile, onlyPlayer2), QString());
 
     // A real monitor only streams when the player opted in

@@ -44,6 +44,25 @@ public:
     /** Calculate the base port for an instance. */
     static int calculatePort(int instanceIndex, int basePort = BASE_PORT);
 
+    /**
+     * Stable base port of a gaming user, persisted in <stateDir>/port (plain integer).
+     * Allocated on first use: BASE_PORT + PORT_SPACING * k for the smallest k that no other user's port file holds
+     * and whose whole port set is free right now. Later calls return the stored value without probing, so
+     * the address a Moonlight client paired with stays the same. A missing or invalid file is reallocated.
+     * Creates the state directory. Returns -1 for an empty identity (slot-based ports apply there).
+     */
+    static int userPort(const QString &identityKey);
+
+    /**
+     * Port to prefer when binding for @p identityKey. A non-empty identity with the default
+     * @p configuredPort uses userPort(); otherwise (explicit profile port or no user) the slot-based
+     * calculatePort(@p instanceIndex, @p configuredPort). Callers still pass the result to allocatePort().
+     */
+    static int preferredPort(const QString &identityKey, int instanceIndex, int configuredPort);
+
+    /** Recursively delete the identity's state directory. False for an empty identity or on failure. */
+    static bool removeState(const QString &identityKey);
+
     /** State directory for an identity (not created): <AppData>/sunshine/<identityKey>. */
     static QString stateDirectory(const QString &identityKey);
 

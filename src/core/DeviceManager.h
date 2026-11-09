@@ -16,6 +16,8 @@
 
 #include "SettingsManager.h"
 
+class QSocketNotifier;
+
 /**
  * @brief Represents an input device (controller, keyboard, mouse)
  */
@@ -83,6 +85,7 @@ class DeviceManager : public QObject
     Q_PROPERTY(bool hotplugEnabled READ hotplugEnabled WRITE setHotplugEnabled NOTIFY hotplugEnabledChanged)
     Q_PROPERTY(int instanceCount READ instanceCount WRITE setInstanceCount NOTIFY instanceCountChanged)
     Q_PROPERTY(QVariantList pendingDevices READ pendingDevicesAsVariant NOTIFY pendingDevicesChanged)
+    Q_PROPERTY(int captureInstance READ captureInstance NOTIFY captureChanged)
     Q_PROPERTY(
         SettingsManager *settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
 
@@ -123,6 +126,12 @@ public:
     Q_INVOKABLE bool assignDevice(int eventNumber, int instanceIndex);
 
     /**
+     * @brief Unassign a single device (and its grouped siblings) from whichever instance owns it
+     * @param eventNumber The event number of the device
+     */
+    Q_INVOKABLE void unassignDevice(int eventNumber);
+
+    /**
      * @brief Unassign all devices
      */
     Q_INVOKABLE void unassignAll();
@@ -155,9 +164,29 @@ public:
 
     /**
      * @brief Auto-assign controllers to instances (one per instance)
+     * @param skipInstances Instance indexes that must not receive a controller (e.g. streaming players);
+     *        controllers already assigned to them are left untouched
      * @return Number of controllers assigned
      */
-    Q_INVOKABLE int autoAssignControllers();
+    Q_INVOKABLE int autoAssignControllers(const QVariantList &skipInstances = QVariantList());
+
+    /**
+     * @brief Start listening for a button press on every physical controller
+     *
+     * The first gamepad button pressed assigns that controller to @p instanceIndex (moving it away from any
+     * other instance) and emits captureFinished(). Emits captureTimedOut() when nothing is pressed in time.
+     * Starting a capture cancels a running one.
+     */
+    Q_INVOKABLE void startCapture(int instanceIndex);
+
+    /// Stop a running capture without assigning anything
+    Q_INVOKABLE void cancelCapture();
+
+    /// Instance a capture is running for, or -1 when idle
+    int captureInstance() const
+    {
+        return m_captureInstance;
+    }
 
     /**
      * @brief Test/identify a device (trigger rumble or LED if supported)
@@ -304,6 +333,9 @@ Q_SIGNALS:
     void hotplugEnabledChanged();
     void instanceCountChanged();
     void settingsManagerChanged();
+    void captureChanged();
+    void captureFinished(int instanceIndex, int eventNumber, const QString &name);
+    void captureTimedOut(int instanceIndex);
 
 protected:
     virtual int openDevice(const QString &path, int flags) const;
@@ -316,6 +348,7 @@ private Q_SLOTS:
     void onDebounceTimeout();
 
     void onIgnoredDevicesChanged();
+    void onCaptureTimeout();
 
 private:
     void parseDevices();
@@ -325,6 +358,19 @@ private:
     QVariantMap deviceToVariantMap(const InputDevice &device) const;
     void setupHotplugWatcher();
     void checkPendingDevices();
+
+    struct CaptureWatch {
+        int fd = -1;
+        QSocketNotifier *notifier = nullptr;
+    };
+
+    /// Event numbers of devices that may be captured: physical, non-ignored controllers, never Sunshine's pads
+    QList<int> captureCandidates() const;
+    void readCaptureEvents(int eventNumber);
+    void handleCaptureEvent(int eventNumber, quint16 type, quint16 code, qint32 value);
+    void removeCaptureWatch(int eventNumber);
+    void stopCapture();
+    void pruneCaptureWatches();
 
     QList<InputDevice> m_devices;
     SettingsManager *m_settingsManager = nullptr;
@@ -343,4 +389,10 @@ private:
     bool m_showInternalDevices = false;
     bool m_hotplugEnabled = true;
     int m_instanceCount = 2;
+
+    // Button capture: read-only watches on controller event nodes, keyed by event number
+    QMap<int, CaptureWatch> m_captureWatches;
+    QTimer *m_captureTimer = nullptr;
+    int m_captureInstance = -1;
+    int m_captureTimeoutMs = 15000;
 };

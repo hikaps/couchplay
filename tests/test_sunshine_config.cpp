@@ -75,6 +75,10 @@ private Q_SLOTS:
     void testAllocatePortExhausted();
     void testPairedClients();
     void testPairedClientsMissingOrMalformed();
+    void testUserPortStableAndDistinct();
+    void testUserPortInvalidFileRewritten();
+    void testUserPortEmptyIdentityAndPreferredPort();
+    void testRemoveState();
 };
 
 void TestSunshineConfig::initTestCase()
@@ -351,6 +355,75 @@ void TestSunshineConfig::testAllocatePortExhausted()
         return;
     }
     QSKIP("Could not hold a TCP port for the test");
+}
+
+void TestSunshineConfig::testUserPortStableAndDistinct()
+{
+    const QString a = QStringLiteral("userport-a");
+    const QString b = QStringLiteral("userport-b");
+    QDir(SunshineConfig::stateDirectory(a)).removeRecursively();
+    QDir(SunshineConfig::stateDirectory(b)).removeRecursively();
+
+    const int portA = SunshineConfig::userPort(a);
+    QVERIFY(portA >= SunshineConfig::BASE_PORT);
+    QCOMPARE((portA - SunshineConfig::BASE_PORT) % SunshineConfig::PORT_SPACING, 0);
+    QCOMPARE(SunshineConfig::userPort(a), portA);
+
+    QFile file(SunshineConfig::stateDirectory(a) + QStringLiteral("/port"));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll().trimmed().toInt(), portA);
+    file.close();
+
+    const int portB = SunshineConfig::userPort(b);
+    QVERIFY(portB > 0);
+    QVERIFY(portB != portA);
+    QCOMPARE(SunshineConfig::userPort(a), portA);
+
+    QDir(SunshineConfig::stateDirectory(a)).removeRecursively();
+    QDir(SunshineConfig::stateDirectory(b)).removeRecursively();
+}
+
+void TestSunshineConfig::testUserPortInvalidFileRewritten()
+{
+    const QString user = QStringLiteral("userport-invalid");
+    QDir(SunshineConfig::stateDirectory(user)).removeRecursively();
+    const QString dir = SunshineConfig::ensureStateDirectory(user);
+    QFile file(dir + QStringLiteral("/port"));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("not-a-port\n");
+    file.close();
+
+    const int port = SunshineConfig::userPort(user);
+    QVERIFY(port >= SunshineConfig::BASE_PORT);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll().trimmed().toInt(), port);
+    file.close();
+
+    QDir(dir).removeRecursively();
+}
+
+void TestSunshineConfig::testUserPortEmptyIdentityAndPreferredPort()
+{
+    QCOMPARE(SunshineConfig::userPort(QString()), -1);
+    // No user, or an explicit profile port: slot-based behaviour
+    QCOMPARE(SunshineConfig::preferredPort(QString(), 1, SunshineConfig::BASE_PORT), SunshineConfig::calculatePort(1));
+    QCOMPARE(SunshineConfig::preferredPort(QStringLiteral("userport-pref"), 1, 50000), SunshineConfig::calculatePort(1, 50000));
+
+    const QString user = QStringLiteral("userport-pref");
+    QCOMPARE(SunshineConfig::preferredPort(user, 1, SunshineConfig::BASE_PORT), SunshineConfig::userPort(user));
+    QDir(SunshineConfig::stateDirectory(user)).removeRecursively();
+}
+
+void TestSunshineConfig::testRemoveState()
+{
+    const QString user = QStringLiteral("userport-remove");
+    const int port = SunshineConfig::userPort(user);
+    QVERIFY(port > 0);
+    QVERIFY(QFileInfo::exists(SunshineConfig::stateDirectory(user)));
+
+    QVERIFY(SunshineConfig::removeState(user));
+    QVERIFY(!QFileInfo::exists(SunshineConfig::stateDirectory(user)));
+    QVERIFY(!SunshineConfig::removeState(QString()));
 }
 
 QTEST_MAIN(TestSunshineConfig)

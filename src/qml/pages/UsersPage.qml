@@ -14,6 +14,8 @@ Kirigami.ScrollablePage {
 
     required property var userManager
     required property var helperClient
+    required property var pairingSession
+    required property var sessionRunner
 
     // Track which user is being deleted
     property string userToDelete: ""
@@ -108,6 +110,96 @@ Kirigami.ScrollablePage {
 
             delegate: Kirigami.AbstractCard {
                 Layout.fillWidth: true
+                id: userCard
+                objectName: "cardGamingUser"
+
+                readonly property string user: modelData.username
+                readonly property string textStartStreamFirst: i18nc("@info", "Start this player's stream first, or stop the session")
+
+                // Bumped when this user's paired clients may have changed
+                property int clientsRevision: 0
+                property bool unpairing: false
+                // The pairing was requested from this card (a pairing session for this user is not necessarily ours)
+                property bool pairRequested: false
+                property bool sheetLive: false
+                property int sheetInstance: 0
+                property string actionError: ""
+
+                readonly property bool sessionActive: root.sessionRunner.active
+                // Dependency only: re-evaluates the bindings below when streams start, stop or change state
+                readonly property var liveStreams: root.sessionRunner.streamManager.streams
+                // Instance index of this user's player in the running session; -1 when there is none
+                readonly property int liveInstance: {
+                    userCard.liveStreams
+                    return userCard.sessionActive ? root.sessionRunner.streamingInstanceForUser(userCard.user) : -1
+                }
+                // StreamManager.StreamState: 2 = Streaming
+                readonly property bool liveReady: {
+                    if (userCard.liveInstance < 0) return false
+                    for (let i = 0; i < userCard.liveStreams.length; ++i) {
+                        if (userCard.liveStreams[i].instanceIndex === userCard.liveInstance) {
+                            return userCard.liveStreams[i].state === 2
+                        }
+                    }
+                    return false
+                }
+                // PairingSession.State: 0 = Idle, 1 = Starting, 2 = Ready, 3 = Failed
+                readonly property bool pairingMine: root.pairingSession.username === userCard.user
+                readonly property bool canAct: !userCard.unpairing && (userCard.sessionActive ? userCard.liveReady : !root.pairingSession.busy)
+                readonly property bool userBusy: userCard.unpairing
+                    || (root.pairingSession.busy && userCard.pairingMine)
+                    || userCard.liveInstance >= 0
+                readonly property string port: root.pairingSession.hostPort(userCard.user)
+                readonly property string hostAddress: root.pairingSession.streamManager.hostAddress
+                readonly property var pairedClients: {
+                    userCard.clientsRevision
+                    userCard.liveStreams
+                    return root.pairingSession.pairedClients(userCard.user)
+                }
+
+                function startPairing() {
+                    actionError = ""
+                    if (sessionActive) {
+                        sheetLive = true
+                        sheetInstance = liveInstance
+                        pairingSheet.open()
+                        return
+                    }
+                    sheetLive = false
+                    sheetInstance = 0
+                    pairRequested = true
+                    root.pairingSession.start(user)
+                }
+
+                Connections {
+                    target: root.pairingSession
+
+                    function onPairedChanged(username) {
+                        if (username === userCard.user) {
+                            userCard.clientsRevision++
+                        }
+                    }
+
+                    function onStateChanged() {
+                        if (!userCard.pairRequested || userCard.sheetLive) return
+                        const state = root.pairingSession.state
+                        if (state === 2 && userCard.pairingMine) {
+                            pairingSheet.open()
+                        } else if (state === 0) {
+                            userCard.pairRequested = false
+                            if (pairingSheet.sheetOpen) {
+                                pairingSheet.close()
+                            }
+                        }
+                    }
+
+                    function onUnpairFinished(username, ok, message) {
+                        if (username !== userCard.user) return
+                        userCard.unpairing = false
+                        userCard.actionError = ok ? "" : message
+                        userCard.clientsRevision++
+                    }
+                }
 
                 header: Kirigami.Heading {
                     text: modelData.username
@@ -158,7 +250,9 @@ Kirigami.ScrollablePage {
                             Accessible.onPressAction: clicked()
                             icon.name: "edit-delete"
                             text: i18nc("@action:button", "Delete")
-                            enabled: helperClient?.available ?? false
+                            enabled: (helperClient?.available ?? false) && !userCard.userBusy
+                            Controls.ToolTip.visible: hovered && userCard.userBusy
+                            Controls.ToolTip.text: i18nc("@info:tooltip", "Stop this player's pairing or stream before deleting the user")
                             onClicked: {
                                 root.userToDelete = modelData.username
                                 deleteHomeCheckbox.checked = false
@@ -174,6 +268,133 @@ Kirigami.ScrollablePage {
                         opacity: 0.7
                         font.italic: true
                         Layout.fillWidth: true
+                    }
+
+                    // Moonlight pairing: the user's Sunshine identity lives on this page only
+                    Kirigami.Separator {
+                        Layout.fillWidth: true
+                    }
+
+                    Controls.Label {
+                        objectName: "labelMoonlightAddress"
+                        text: userCard.hostAddress !== ""
+                            ? i18nc("@info", "Add in Moonlight: %1:%2", userCard.hostAddress, userCard.port)
+                            : i18nc("@info", "Moonlight port: %1", userCard.port)
+                        font.family: "monospace"
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+
+                    Controls.Label {
+                        objectName: "labelPairedClients"
+                        visible: userCard.pairedClients.length === 0
+                        text: i18nc("@info:status", "No Moonlight clients paired")
+                        opacity: 0.7
+                        Layout.fillWidth: true
+                    }
+
+                    Repeater {
+                        objectName: "repeaterPairedClients"
+                        model: userCard.pairedClients
+
+                        delegate: RowLayout {
+                            id: clientRow
+
+                            required property var modelData
+
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Controls.Label {
+                                text: clientRow.modelData.name
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+
+                            Controls.Button {
+                                objectName: "buttonUnpairClient"
+                                Accessible.role: Accessible.Button
+                                Accessible.name: text
+                                text: i18nc("@action:button", "Unpair")
+                                icon.name: "list-remove"
+                                enabled: userCard.canAct
+                                onClicked: {
+                                    userCard.actionError = ""
+                                    userCard.unpairing = true
+                                    root.pairingSession.unpairClient(userCard.user, clientRow.modelData.uuid)
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        spacing: Kirigami.Units.smallSpacing
+                        Layout.fillWidth: true
+
+                        Controls.Button {
+                            objectName: "buttonPairMoonlightClient"
+                            Accessible.role: Accessible.Button
+                            Accessible.name: text
+                            text: i18nc("@action:button", "Pair Moonlight client…")
+                            icon.name: "network-connect"
+                            enabled: userCard.canAct
+                            onClicked: userCard.startPairing()
+                        }
+
+                        Controls.BusyIndicator {
+                            objectName: "indicatorPairingStarting"
+                            running: visible
+                            visible: (userCard.pairRequested && userCard.pairingMine && root.pairingSession.state === 1)
+                                || userCard.unpairing
+                            Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                            Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                        }
+
+                        Controls.Label {
+                            objectName: "labelPairingStarting"
+                            visible: userCard.pairRequested && userCard.pairingMine && root.pairingSession.state === 1
+                            text: i18nc("@info:status", "Starting pairing…")
+                        }
+
+                        Controls.Label {
+                            objectName: "labelPairingUnavailable"
+                            visible: userCard.sessionActive && !userCard.liveReady
+                            text: userCard.textStartStreamFirst
+                            wrapMode: Text.WordWrap
+                            opacity: 0.7
+                            Layout.fillWidth: true
+                        }
+                    }
+
+                    Kirigami.InlineMessage {
+                        objectName: "messagePairingError"
+                        Layout.fillWidth: true
+                        visible: userCard.pairRequested && userCard.pairingMine && root.pairingSession.state === 3
+                        type: Kirigami.MessageType.Error
+                        text: root.pairingSession.error
+                    }
+
+                    Kirigami.InlineMessage {
+                        objectName: "messageUnpairError"
+                        Layout.fillWidth: true
+                        visible: userCard.actionError !== ""
+                        type: Kirigami.MessageType.Error
+                        text: userCard.actionError
+                    }
+
+                    Components.MoonlightPairingSheet {
+                        id: pairingSheet
+                        objectName: "pairingSheet"
+                        streamManager: userCard.sheetLive ? root.sessionRunner.streamManager : root.pairingSession.streamManager
+                        instanceIndex: userCard.sheetInstance
+                        onClosed: {
+                            // The temporary Sunshine only exists for the sheet; a running session's stream stays
+                            if (!userCard.sheetLive && userCard.pairRequested && root.pairingSession.state !== 0) {
+                                root.pairingSession.stop()
+                            }
+                            userCard.pairRequested = false
+                            userCard.clientsRevision++
+                        }
                     }
                 }
             }

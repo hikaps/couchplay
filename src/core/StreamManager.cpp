@@ -685,11 +685,16 @@ SunshineApiClient *StreamManager::apiClient(int instanceIndex)
         m_streams.value(instanceIndex)->refreshing = false;
         refreshPairing(instanceIndex);
     });
-    connect(api, &SunshineApiClient::unpairResult, this, [this, instanceIndex, current](bool) {
+    connect(api, &SunshineApiClient::unpairResult, this, [this, instanceIndex, current](bool ok) {
         if (!current()) {
             return;
         }
-        m_streams.value(instanceIndex)->refreshing = false;
+        Stream *stream = m_streams.value(instanceIndex);
+        stream->refreshing = false;
+        if (stream->unpairPending) {
+            stream->unpairPending = false;
+            Q_EMIT unpairResult(instanceIndex, ok, ok ? QString() : QStringLiteral("Sunshine could not unpair the client"));
+        }
         refreshPairing(instanceIndex);
     });
     return api;
@@ -747,6 +752,9 @@ void StreamManager::onApiFailed(int instanceIndex, const QString &message)
     if (stream->pinPending) {
         stream->pinPending = false;
         Q_EMIT pinResult(instanceIndex, false, message);
+    } else if (stream->unpairPending) {
+        stream->unpairPending = false;
+        Q_EMIT unpairResult(instanceIndex, false, message);
     } else {
         qDebug() << "StreamManager: Sunshine API request for stream" << instanceIndex << "failed:" << message;
     }
@@ -766,7 +774,10 @@ void StreamManager::submitPin(int instanceIndex, const QString &pairingId, const
 void StreamManager::unpairClient(int instanceIndex, const QString &uuid)
 {
     if (SunshineApiClient *api = apiClient(instanceIndex)) {
+        m_streams.value(instanceIndex)->unpairPending = true;
         api->unpair(uuid);
+    } else {
+        Q_EMIT unpairResult(instanceIndex, false, QStringLiteral("Sunshine is not ready"));
     }
 }
 

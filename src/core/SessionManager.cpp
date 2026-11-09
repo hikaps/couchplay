@@ -708,7 +708,21 @@ int SessionManager::effectiveSunshinePort(int index) const
     if (index < 0 || index >= m_currentProfile.instances.size()) {
         return SunshineConfig::calculatePort(0);
     }
-    return SunshineConfig::calculatePort(index, m_currentProfile.instances[index].sunshinePort);
+    const InstanceConfig &instance = m_currentProfile.instances[index];
+    return SunshineConfig::preferredPort(instance.username, index, instance.sunshinePort);
+}
+
+QVariantList SessionManager::streamingInstanceIndexes() const
+{
+    QVariantList indexes;
+    for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
+        const InstanceConfig &inst = m_currentProfile.instances[i];
+        if (inst.display != InstanceConfig::DisplayMain
+            && (inst.display == InstanceConfig::DisplayVirtual || inst.streamToMoonlight)) {
+            indexes << i;
+        }
+    }
+    return indexes;
 }
 
 QVariantMap SessionManager::getInstanceConfig(int index) const

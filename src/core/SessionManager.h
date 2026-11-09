@@ -160,6 +160,8 @@ public:
     Q_INVOKABLE void newSession();
     Q_INVOKABLE QVariantMap getInstanceConfig(int index) const;
     Q_INVOKABLE int effectiveSunshinePort(int index) const;
+    /// Indexes of players whose display is streamed to Moonlight (their controllers come from the client).
+    Q_INVOKABLE QVariantList streamingInstanceIndexes() const;
     Q_INVOKABLE void setInstanceConfig(int index, const QVariantMap &config);
     Q_INVOKABLE void setInstanceUser(int index, const QString &username);
     Q_INVOKABLE void setInstanceResolution(int index, int internalW, int internalH, int outputW, int outputH);

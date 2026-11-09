@@ -6,6 +6,8 @@
 #include <QSet>
 #include <QTemporaryFile>
 #include <QTest>
+#include <fcntl.h>
+#include <unistd.h>
 #include <linux/input.h>
 
 #define private public
@@ -67,6 +69,17 @@ private Q_SLOTS:
     void testSteamControllerDetection();
     void testPlayStationControllerGrouping();
     void testPlayStationBluetoothControllerGrouping();
+
+    // Button capture tests
+    void testCaptureCandidates();
+    void testCaptureAssignsPressedController();
+    void testCaptureMovesFromOtherInstance();
+    void testCaptureIgnoresNonGamepadEvents();
+    void testCaptureTimeout();
+    void testCaptureCancelAndRestart();
+    void testCaptureWithoutCandidates();
+    void testUnassignDevice();
+    void testAutoAssignSkipsInstances();
 
 private:
     DeviceManager *m_deviceManager = nullptr;
@@ -1127,6 +1140,329 @@ void TestDeviceManager::testPlayStationBluetoothControllerGrouping()
     QCOMPARE(motionDev.value(KEY("assigned")).toBool(), false);
 
     // Clean up env
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+// DeviceManager whose capture descriptors are pipes, so the real read loop and QSocketNotifier run without devices
+class CaptureDeviceManager : public DeviceManager
+{
+public:
+    explicit CaptureDeviceManager(QObject *parent = nullptr) : DeviceManager(parent) {}
+
+    ~CaptureDeviceManager() override
+    {
+        for (int fd : std::as_const(m_writeFds)) {
+            ::close(fd);
+        }
+    }
+
+    void sendEvent(int eventNumber, quint16 type, quint16 code, qint32 value)
+    {
+        input_event event{};
+        event.type = type;
+        event.code = code;
+        event.value = value;
+        QVERIFY(m_writeFds.contains(eventNumber));
+        QCOMPARE(::write(m_writeFds.value(eventNumber), &event, sizeof(event)), static_cast<ssize_t>(sizeof(event)));
+    }
+
+    bool isCaptureOpen(int eventNumber) const
+    {
+        return m_readFds.contains(eventNumber) && !m_closedFds.contains(m_readFds.value(eventNumber));
+    }
+
+protected:
+    int openDevice(const QString &path, int flags) const override
+    {
+        // Type probing opens without O_NONBLOCK; leave it unopenable so the name decides the device type
+        if (!(flags & O_NONBLOCK)) {
+            return -1;
+        }
+        const int eventNumber = path.mid(path.lastIndexOf(QStringLiteral("event")) + 5).toInt();
+        int fds[2];
+        if (::pipe2(fds, O_NONBLOCK | O_CLOEXEC) != 0) {
+            return -1;
+        }
+        m_readFds.insert(eventNumber, fds[0]);
+        m_writeFds.insert(eventNumber, fds[1]);
+        m_closedFds.remove(fds[0]);
+        return fds[0];
+    }
+
+    void closeDevice(int fd) const override
+    {
+        ::close(fd);
+        m_closedFds.insert(fd);
+    }
+
+private:
+    mutable QHash<int, int> m_readFds;
+    mutable QHash<int, int> m_writeFds;
+    mutable QSet<int> m_closedFds;
+};
+
+static void writeCaptureDevices(QTemporaryFile &file, bool includeNormalPads = true)
+{
+    QVERIFY(file.open());
+    QTextStream out(&file);
+    if (includeNormalPads) {
+        out << "I: Bus=0003 Vendor=045e Product=028e Version=0110\n";
+        out << "N: Name=\"Pad One Controller\"\n";
+        out << "P: Phys=usb-0000:00:01.0-1/input0\n";
+        out << "H: Handlers=event30 js0\n\n";
+
+        out << "I: Bus=0003 Vendor=045e Product=028e Version=0110\n";
+        out << "N: Name=\"Pad Two Controller\"\n";
+        out << "P: Phys=usb-0000:00:01.0-2/input0\n";
+        out << "H: Handlers=event31 js1\n\n";
+    }
+    // Streamed player's pad created by Sunshine; looks physical but must never be captured
+    out << "I: Bus=0003 Vendor=045e Product=028e Version=0110\n";
+    out << "N: Name=\"Sunshine Pad Controller\"\n";
+    out << "P: Phys=usb-0000:00:01.0-3/input0\n";
+    out << "H: Handlers=event32 js2\n\n";
+
+    out << "I: Bus=0003 Vendor=045e Product=028e Version=0110\n";
+    out << "N: Name=\"Virtual Test Controller\"\n";
+    out << "P: Phys=usb-0000:00:01.0-4/input0\n";
+    out << "H: Handlers=event33 js3\n\n";
+    out.flush();
+    file.close();
+    qputenv("COUCHPLAY_MOCK_DEVICES_FILE", file.fileName().toLocal8Bit());
+}
+
+void TestDeviceManager::testCaptureCandidates()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.refresh();
+
+    // Sunshine's pad and the virtual pad are excluded
+    const QList<int> candidates = manager.captureCandidates();
+    QCOMPARE(QSet<int>(candidates.begin(), candidates.end()), (QSet<int>{30, 31}));
+
+    // Ignored devices are excluded
+    SettingsManager settings;
+    manager.setSettingsManager(&settings);
+    const QString stableId = manager.getDevice(31).value(KEY("stableId")).toString();
+    QVERIFY(!stableId.isEmpty());
+    manager.ignoreDevice(stableId);
+    manager.refresh();
+    QCOMPARE(manager.captureCandidates(), (QList<int>{30}));
+    manager.unignoreDevice(stableId);
+    manager.setSettingsManager(nullptr);
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testCaptureAssignsPressedController()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.refresh();
+
+    QSignalSpy finished(&manager, &DeviceManager::captureFinished);
+    QSignalSpy changed(&manager, &DeviceManager::captureChanged);
+    QCOMPARE(manager.captureInstance(), -1);
+
+    manager.startCapture(1);
+    QCOMPARE(manager.captureInstance(), 1);
+    QCOMPARE(changed.count(), 1);
+    QVERIFY(manager.isCaptureOpen(30));
+    QVERIFY(manager.isCaptureOpen(31));
+    QVERIFY(!manager.isCaptureOpen(32));
+    QVERIFY(!manager.isCaptureOpen(33));
+
+    // Releases, axis motion and non-gamepad keys are ignored; the real read loop drains them
+    manager.sendEvent(31, EV_KEY, BTN_SOUTH, 0);
+    manager.sendEvent(31, EV_ABS, ABS_X, 1);
+    manager.sendEvent(31, EV_KEY, KEY_A, 1);
+    QTest::qWait(50);
+    QCOMPARE(finished.count(), 0);
+    QCOMPARE(manager.captureInstance(), 1);
+
+    manager.sendEvent(31, EV_KEY, BTN_SOUTH, 1);
+    QTRY_COMPARE(finished.count(), 1);
+
+    const QList<QVariant> args = finished.takeFirst();
+    QCOMPARE(args.at(0).toInt(), 1);
+    QCOMPARE(args.at(1).toInt(), 31);
+    QCOMPARE(args.at(2).toString(), QStringLiteral("Pad Two Controller"));
+    QCOMPARE(manager.getDevicesForInstance(1), (QList<int>{31}));
+    QCOMPARE(manager.captureInstance(), -1);
+    QCOMPARE(changed.count(), 2);
+    QVERIFY(!manager.isCaptureOpen(30));
+    QVERIFY(!manager.isCaptureOpen(31));
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testCaptureMovesFromOtherInstance()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.refresh();
+
+    QVERIFY(manager.assignDevice(30, 0));
+    QSignalSpy finished(&manager, &DeviceManager::captureFinished);
+
+    manager.startCapture(1);
+    manager.handleCaptureEvent(30, EV_KEY, BTN_DPAD_UP, 1);
+
+    QCOMPARE(finished.count(), 1);
+    QVERIFY(manager.getDevicesForInstance(0).isEmpty());
+    QCOMPARE(manager.getDevicesForInstance(1), (QList<int>{30}));
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testCaptureIgnoresNonGamepadEvents()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.refresh();
+    QSignalSpy finished(&manager, &DeviceManager::captureFinished);
+
+    // Nothing happens while idle
+    manager.handleCaptureEvent(30, EV_KEY, BTN_SOUTH, 1);
+    QCOMPARE(finished.count(), 0);
+    QVERIFY(manager.getDevicesForInstance(0).isEmpty());
+
+    manager.startCapture(0);
+    manager.handleCaptureEvent(30, EV_KEY, BTN_SOUTH, 0);       // release
+    manager.handleCaptureEvent(30, EV_KEY, BTN_SOUTH, 2);       // autorepeat
+    manager.handleCaptureEvent(30, EV_ABS, BTN_SOUTH, 1);       // wrong type
+    manager.handleCaptureEvent(30, EV_KEY, KEY_A, 1);           // keyboard key
+    manager.handleCaptureEvent(30, EV_KEY, BTN_THUMBR + 1, 1);  // just past the gamepad range
+    manager.handleCaptureEvent(99, EV_KEY, BTN_SOUTH, 1);       // not a watched device
+    QCOMPARE(finished.count(), 0);
+    QCOMPARE(manager.captureInstance(), 0);
+
+    manager.handleCaptureEvent(30, EV_KEY, BTN_THUMBR, 1);      // last gamepad button
+    QCOMPARE(finished.count(), 1);
+    QCOMPARE(manager.getDevicesForInstance(0), (QList<int>{30}));
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testCaptureTimeout()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.refresh();
+    manager.m_captureTimeoutMs = 50;
+
+    QSignalSpy timedOut(&manager, &DeviceManager::captureTimedOut);
+    manager.startCapture(1);
+    QCOMPARE(manager.captureInstance(), 1);
+
+    QVERIFY(timedOut.wait(2000));
+    QCOMPARE(timedOut.first().at(0).toInt(), 1);
+    QCOMPARE(manager.captureInstance(), -1);
+    QVERIFY(!manager.isCaptureOpen(30));
+    QVERIFY(!manager.isCaptureOpen(31));
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testCaptureCancelAndRestart()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.refresh();
+    manager.m_captureTimeoutMs = 50;
+
+    QSignalSpy timedOut(&manager, &DeviceManager::captureTimedOut);
+    QSignalSpy finished(&manager, &DeviceManager::captureFinished);
+
+    // Cancel: no signal, descriptors closed, timer stopped
+    manager.startCapture(0);
+    manager.cancelCapture();
+    QCOMPARE(manager.captureInstance(), -1);
+    QVERIFY(!manager.isCaptureOpen(30));
+    QTest::qWait(150);
+    QCOMPARE(timedOut.count(), 0);
+
+    // Restart: the second capture replaces the first and wins
+    manager.m_captureTimeoutMs = 15000;
+    manager.startCapture(0);
+    manager.startCapture(1);
+    QCOMPARE(manager.captureInstance(), 1);
+    manager.handleCaptureEvent(30, EV_KEY, BTN_SOUTH, 1);
+    QCOMPARE(finished.count(), 1);
+    QCOMPARE(finished.first().at(0).toInt(), 1);
+    QCOMPARE(manager.getDevicesForInstance(1), (QList<int>{30}));
+    QCOMPARE(timedOut.count(), 0);
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testCaptureWithoutCandidates()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file, false);
+    CaptureDeviceManager manager;
+    manager.refresh();
+    QVERIFY(manager.captureCandidates().isEmpty());
+
+    QSignalSpy timedOut(&manager, &DeviceManager::captureTimedOut);
+    manager.startCapture(0);
+    QCOMPARE(timedOut.count(), 1);
+    QCOMPARE(timedOut.first().at(0).toInt(), 0);
+    QCOMPARE(manager.captureInstance(), -1);
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testUnassignDevice()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.refresh();
+
+    QVERIFY(manager.assignDevice(30, 0));
+    QVERIFY(manager.assignDevice(31, 0));
+    manager.unassignDevice(30);
+    QCOMPARE(manager.getDevicesForInstance(0), (QList<int>{31}));
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testAutoAssignSkipsInstances()
+{
+    QTemporaryFile file;
+    writeCaptureDevices(file);
+    CaptureDeviceManager manager;
+    manager.setInstanceCount(3);
+    manager.refresh();
+
+    // Instance 0 is a streaming player that keeps its pad; the rest are handed out to the other players
+    QVERIFY(manager.assignDevice(30, 0));
+    QCOMPARE(manager.autoAssignControllers(QVariantList{0}), 2);
+    QCOMPARE(manager.getDevicesForInstance(0), (QList<int>{30}));
+    QCOMPARE(manager.getDevicesForInstance(1), (QList<int>{31}));
+    QCOMPARE(manager.getDevicesForInstance(2), (QList<int>{32}));
+
+    // Without a skip list every instance takes part again
+    QCOMPARE(manager.autoAssignControllers(), 3);
+    QCOMPARE(manager.getDevicesForInstance(0), (QList<int>{30}));
+    QCOMPARE(manager.getDevicesForInstance(1), (QList<int>{31}));
+    QCOMPARE(manager.getDevicesForInstance(2), (QList<int>{32}));
+
+    // Skipped instance without a pad stays empty
+    manager.unassignAll();
+    QCOMPARE(manager.autoAssignControllers(QVariantList{0}), 2);
+    QVERIFY(manager.getDevicesForInstance(0).isEmpty());
+    QCOMPARE(manager.getDevicesForInstance(1), (QList<int>{30}));
+    QCOMPARE(manager.getDevicesForInstance(2), (QList<int>{31}));
+
     qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
 }
 

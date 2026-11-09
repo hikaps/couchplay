@@ -57,7 +57,7 @@
 
 ### Assigning Controllers
 
-Connect your gamepads, then use the **Auto-Assign Controllers** button to let CouchPlay distribute them across player instances. You can also drag and drop devices for manual assignment. Each controller gets locked to its assigned instance so inputs don't leak between players.
+Connect your gamepads, then use the **Auto-Assign Controllers** button to let CouchPlay distribute them across player instances, or click **Press a button…** on a player's card and press any button on the controller you want for that player. Keyboards, mice and manual drag-and-drop assignment live under **Other devices…**. Each controller gets locked to its assigned instance so inputs don't leak between players.
 
 ### Exiting a Session
 
@@ -232,9 +232,9 @@ or helper D-Bus call. Native FD-based ACL updates preserve unrelated effective a
 and directory inheritance. ACL mode grants read/traverse access at the original path;
 it neither grants new write access nor projects files into the player home.
 Streaming runs outside the helper: `couchplay-vdisplay` holds each KWin virtual output and Sunshine runs as the desktop user capturing that output with `capture = kwin`. Both are stopped when the session ends.
-Moonlight clients pair from the player card: once a streaming player's Sunshine is ready, "Pair Moonlight…" shows the host address to add in Moonlight and takes the PIN Moonlight displays. The pairing is stored per gaming user, so the client reconnects to that player's stream in later sessions. CouchPlay talks to Sunshine's local web API and trusts only the certificate stored in the player's Sunshine state directory.
+Moonlight clients are paired on the **Users page**, per gaming user. Each user's card shows the address to add in Moonlight (host address and a stable port that CouchPlay remembers for that user), the clients already paired, and "Pair Moonlight client…". With no session running, that button starts a temporary Sunshine on a short-lived virtual display so you can enter the PIN Moonlight displays; closing the pairing sheet stops it again. While a session runs, it pairs against that player's live stream once the stream is ready. "Unpair" next to a client removes it the same way. The pairing is stored per gaming user, so the client reconnects to that player's stream in later sessions, and deleting the user also deletes its pairing state. The session page only shows each player's pairing status and a "Manage on Users page" link. CouchPlay talks to Sunshine's local web API and trusts only the certificate stored in the user's Sunshine state directory.
 
-You can also pair before any session runs: a streaming player's card shows how many Moonlight clients its gaming user has paired, and "Pair Moonlight client…" starts a temporary Sunshine on a short-lived virtual display so you can enter the PIN. Closing the pairing sheet stops it again. As a soft gate, starting a session fails when a streaming player's gaming user has no paired client yet, so you don't launch a stream nobody can connect to; pass `--skip-pairing-check` together with `--profile NAME --start` to start anyway.
+As a soft gate, starting a session fails when a streaming player's gaming user has no paired client yet, so you don't launch a stream nobody can connect to; pass `--skip-pairing-check` together with `--profile NAME --start` to start anyway.
 
 Existing per-player Overlay data survives upgrades: correctly owned upper/work
 directories from older helpers are tightened to `0700` without discarding private edits.

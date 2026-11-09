@@ -347,7 +347,7 @@ Kirigami.ApplicationWindow {
 
     function pushSessionSetupPage() {
         pageStack.clear()
-        pageStack.push(sessionSetupPage, {
+        const page = pageStack.push(sessionSetupPage, {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
             deviceManager: deviceManager,
@@ -356,15 +356,16 @@ Kirigami.ApplicationWindow {
             steamConfigManager: steamConfigManager,
             heroicConfigManager: heroicConfigManager,
             presetManager: presetManager,
-            audioManager: audioManager,
-            pairingSession: pairingSession
+            audioManager: audioManager
         })
+        page.openUsersRequested.connect(pushUsersPage)
     }
 
     function pushDeviceAssignmentPage() {
         pageStack.clear()
         pageStack.push(deviceAssignmentPage, {
             deviceManager: deviceManager,
+            sessionManager: sessionManager,
             instanceCount: sessionManager.instanceCount
         })
     }
@@ -382,7 +383,9 @@ Kirigami.ApplicationWindow {
         pageStack.clear()
         pageStack.push(usersPage, {
             userManager: userManager,
-            helperClient: helperClient
+            helperClient: helperClient,
+            pairingSession: pairingSession,
+            sessionRunner: sessionRunner
         })
     }
 
