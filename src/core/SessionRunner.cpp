@@ -164,6 +164,26 @@ void SessionRunner::setActive(bool active)
     m_active = active;
     Q_EMIT activeChanged();
 }
+
+int SessionRunner::pairedClientCount(const QString &username) const
+{
+    return SunshineConfig::pairedClientCount(username);
+}
+
+int SessionRunner::streamingInstanceForUser(const QString &username) const
+{
+    if (username.isEmpty() || (!m_hasStartingProfile && !m_sessionManager)) {
+        return -1;
+    }
+    const QList<InstanceConfig> &instances = activeProfile().instances;
+    for (auto it = m_streamingInstances.constBegin(); it != m_streamingInstances.constEnd(); ++it) {
+        if (it.key() >= 0 && it.key() < instances.size() && instances[it.key()].username == username) {
+            return it.key();
+        }
+    }
+    return -1;
+}
+
 const SessionProfile &SessionRunner::activeProfile() const
 {
     return m_hasStartingProfile ? m_startingSnapshot.profile : m_sessionManager->currentProfile();
@@ -639,7 +659,8 @@ void SessionRunner::continueStartAfterDisplays()
                 config[QStringLiteral("sink")] = m_streamingInstances[i].sinkName;
                 config[QStringLiteral("streamBitrate")] = instConfig.streamBitrate;
                 config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
-                config[QStringLiteral("sunshinePort")] = SunshineConfig::calculatePort(i, instConfig.sunshinePort);
+                config[QStringLiteral("sunshinePort")] =
+                    SunshineConfig::preferredPort(instConfig.username, i, instConfig.sunshinePort);
             } else if (!instConfig.audioDevice.isEmpty()) {
                 // Players reach the host's PipeWire-Pulse over TCP, so a host sink name is valid for them.
                 config[QStringLiteral("sink")] = instConfig.audioDevice;
@@ -1468,7 +1489,7 @@ QString SessionRunner::validatePairing(const SessionProfile &profile,
         }
         if (pairedCount(instance.username) == 0) {
             return QStringLiteral("Player %1 (%2) has no paired Moonlight client. "
-                                  "Use \"Pair Moonlight client\" on that player first.")
+                                  "Pair one for %2 on the Users page first.")
                 .arg(i + 1)
                 .arg(instance.username);
         }

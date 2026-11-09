@@ -104,6 +104,16 @@ public:
     int runningInstanceCount() const;
 
     /**
+     * @brief Instance index of the streaming player assigned to this gaming user, or -1
+     *
+     * Only players with a stream in the current session count; an empty username never matches.
+     */
+    Q_INVOKABLE int streamingInstanceForUser(const QString &username) const;
+
+    /// Number of Moonlight clients paired with the gaming user's Sunshine identity
+    Q_INVOKABLE int pairedClientCount(const QString &username) const;
+
+    /**
      * @brief Get current status message
      */
     QString status() const

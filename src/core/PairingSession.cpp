@@ -9,6 +9,8 @@ namespace
 {
 constexpr int kPairingDisplayWidth = 1280;
 constexpr int kPairingDisplayHeight = 720;
+// Player slot used for the pairing display and stream entry; see the class comment
+constexpr int kPairingInstanceIndex = 0;
 }
 
 PairingSession::PairingSession(QObject *parent)
@@ -27,9 +29,12 @@ PairingSession::PairingSession(QObject *parent)
     connect(m_streamManager, &StreamManager::streamError, this, &PairingSession::onStreamError);
     connect(m_streamManager, &StreamManager::streamStopped, this, &PairingSession::onStreamStopped);
     connect(m_streamManager, &StreamManager::pinResult, this, [this](int index, bool ok, const QString &) {
-        if (ok && index == m_instanceIndex && !m_username.isEmpty()) {
+        if (ok && index == kPairingInstanceIndex && !m_username.isEmpty()) {
             Q_EMIT pairedChanged(m_username);
         }
+    });
+    connect(m_streamManager, &StreamManager::unpairResult, this, [this](int index, bool ok, const QString &message) {
+        onUnpairResult(m_streamManager, index, ok, message);
     });
 }
 
@@ -55,6 +60,9 @@ void PairingSession::setSessionRunner(SessionRunner *runner)
     }
     if (m_sessionRunner) {
         disconnect(m_sessionRunner, nullptr, this, nullptr);
+        if (m_sessionRunner->streamManager()) {
+            disconnect(m_sessionRunner->streamManager(), &StreamManager::unpairResult, this, nullptr);
+        }
     }
     m_sessionRunner = runner;
     if (runner) {
@@ -63,6 +71,12 @@ void PairingSession::setSessionRunner(SessionRunner *runner)
             if (sessionActive() && m_state != Idle) {
                 stop();
             }
+        });
+    }
+    if (runner && runner->streamManager()) {
+        StreamManager *live = runner->streamManager();
+        connect(live, &StreamManager::unpairResult, this, [this, live](int index, bool ok, const QString &message) {
+            onUnpairResult(live, index, ok, message);
         });
     }
     Q_EMIT sessionRunnerChanged();
@@ -107,6 +121,17 @@ int PairingSession::pairedClientCount(const QString &username) const
     return SunshineConfig::pairedClientCount(username);
 }
 
+QVariantList PairingSession::pairedClients(const QString &username) const
+{
+    return SunshineConfig::pairedClients(username);
+}
+
+QString PairingSession::hostPort(const QString &username) const
+{
+    const int port = SunshineConfig::userPort(username);
+    return port > 0 ? QString::number(port) : QString();
+}
+
 void PairingSession::setState(State state)
 {
     if (m_state == state) {
@@ -124,15 +149,6 @@ void PairingSession::setError(const QString &error)
     }
     m_error = error;
     Q_EMIT errorChanged();
-}
-
-void PairingSession::setInstanceIndex(int index)
-{
-    if (m_instanceIndex == index) {
-        return;
-    }
-    m_instanceIndex = index;
-    Q_EMIT instanceIndexChanged();
 }
 
 void PairingSession::setUsername(const QString &username)
@@ -154,22 +170,19 @@ void PairingSession::updateBusy()
     Q_EMIT busyChanged();
 }
 
-void PairingSession::start(int instanceIndex, const QString &username)
+void PairingSession::start(const QString &username)
 {
     if (m_state == Starting || m_state == Ready) {
         qWarning() << "PairingSession::start: a pairing session is already running";
         return;
     }
 
-    setInstanceIndex(instanceIndex);
     setUsername(username);
     setError(QString());
 
     QString refusal;
     if (username.isEmpty()) {
-        refusal = QStringLiteral("Assign a gaming user to this player first");
-    } else if (instanceIndex < 0) {
-        refusal = QStringLiteral("Invalid player");
+        refusal = QStringLiteral("Choose a gaming user first");
     } else if (sessionActive()) {
         refusal = QStringLiteral("Pairing is not available while a session is running");
     } else if (m_stopping) {
@@ -182,16 +195,23 @@ void PairingSession::start(int instanceIndex, const QString &username)
     }
 
     setState(Starting);
-    m_virtualDisplays->create(instanceIndex, QSize(kPairingDisplayWidth, kPairingDisplayHeight));
+    m_virtualDisplays->create(kPairingInstanceIndex, QSize(kPairingDisplayWidth, kPairingDisplayHeight));
 }
 
 void PairingSession::stop()
 {
+    if (!m_unpairUuid.isEmpty()) {
+        const QString pendingUser = m_unpairUser;
+        m_unpairUuid.clear();
+        m_unpairUser.clear();
+        m_unpairTemporary = false;
+        m_unpairManager.clear();
+        Q_EMIT unpairFinished(pendingUser, false, QStringLiteral("Pairing was stopped"));
+    }
     const QString user = m_username;
     setState(Idle);
     teardown();
     setError(QString());
-    setInstanceIndex(-1);
     setUsername(QString());
     if (!user.isEmpty()) {
         Q_EMIT pairedChanged(user);
@@ -215,24 +235,27 @@ void PairingSession::fail(const QString &message)
     setError(message);
     setState(Failed);
     teardown();
+    if (!m_unpairUuid.isEmpty()) {
+        finishUnpair(false, message);
+    }
 }
 
 void PairingSession::onDisplayReady(int index, const QString &outputName)
 {
-    if (m_state != Starting || index != m_instanceIndex) {
+    if (m_state != Starting || index != kPairingInstanceIndex) {
         return;
     }
 
-    const int preferred = m_sessionManager ? m_sessionManager->effectiveSunshinePort(index)
-                                           : SunshineConfig::calculatePort(index);
-    const int port = SunshineConfig::allocatePort(preferred);
+    // The user's stable port; allocatePort() still bumps it when something else holds it right now
+    const int preferred = SunshineConfig::userPort(m_username);
+    const int port = SunshineConfig::allocatePort(preferred > 0 ? preferred : SunshineConfig::BASE_PORT);
     if (port < 0) {
         fail(QStringLiteral("No free port for Sunshine"));
         return;
     }
 
     StreamSpec spec;
-    spec.instanceIndex = index;
+    spec.instanceIndex = kPairingInstanceIndex;
     spec.identityKey = m_username;
     spec.outputName = outputName;
     spec.port = port;
@@ -248,7 +271,7 @@ void PairingSession::onDisplayReady(int index, const QString &outputName)
 
 void PairingSession::onDisplayFailed(int index, const QString &message)
 {
-    if (index != m_instanceIndex) {
+    if (index != kPairingInstanceIndex) {
         return;
     }
     fail(QStringLiteral("Could not create the virtual display: %1").arg(message));
@@ -256,14 +279,17 @@ void PairingSession::onDisplayFailed(int index, const QString &message)
 
 void PairingSession::onStreamStarted(int index)
 {
-    if (m_state == Starting && index == m_instanceIndex) {
+    if (m_state == Starting && index == kPairingInstanceIndex) {
         setState(Ready);
+        if (!m_unpairUuid.isEmpty() && m_unpairTemporary) {
+            m_streamManager->unpairClient(kPairingInstanceIndex, m_unpairUuid);
+        }
     }
 }
 
 void PairingSession::onStreamError(int index, const QString &message)
 {
-    if (index != m_instanceIndex) {
+    if (index != kPairingInstanceIndex) {
         return;
     }
     fail(message);
@@ -275,4 +301,86 @@ void PairingSession::onStreamStopped(int)
         m_stopping = false;
         updateBusy();
     }
+}
+
+void PairingSession::unpairClient(const QString &username, const QString &uuid)
+{
+    QString refusal;
+    StreamManager *manager = nullptr;
+    int index = kPairingInstanceIndex;
+    bool temporary = false;
+
+    if (username.isEmpty() || uuid.isEmpty()) {
+        refusal = QStringLiteral("Choose a paired client first");
+    } else if (!m_unpairUuid.isEmpty()) {
+        refusal = QStringLiteral("Another unpair is still running");
+    } else if (sessionActive()) {
+        index = m_sessionRunner->streamingInstanceForUser(username);
+        manager = m_sessionRunner->streamManager();
+        if (index < 0 || !manager || manager->streamState(index) != StreamManager::Streaming) {
+            refusal = QStringLiteral("Start this player's stream first, or stop the session");
+        }
+    } else if (m_state == Ready && m_username == username) {
+        manager = m_streamManager;
+    } else if (m_state == Starting || m_state == Ready || m_stopping) {
+        refusal = QStringLiteral("Pairing is busy; try again in a moment");
+    } else {
+        manager = m_streamManager;
+        temporary = true;
+    }
+
+    if (!refusal.isEmpty()) {
+        Q_EMIT unpairFinished(username, false, refusal);
+        return;
+    }
+
+    m_unpairUuid = uuid;
+    m_unpairUser = username;
+    m_unpairTemporary = temporary;
+    m_unpairIndex = index;
+    m_unpairManager = manager;
+
+    if (temporary) {
+        start(username);
+        if (m_state == Failed) {
+            finishUnpair(false, m_error);
+        }
+        return;
+    }
+    manager->unpairClient(index, uuid);
+}
+
+void PairingSession::onUnpairResult(StreamManager *manager, int index, bool ok, const QString &message)
+{
+    if (m_unpairUuid.isEmpty()) {
+        // Unpaired from the pairing sheet
+        if (ok && manager == m_streamManager && !m_username.isEmpty()) {
+            Q_EMIT pairedChanged(m_username);
+        }
+        return;
+    }
+    if (manager != m_unpairManager || index != m_unpairIndex) {
+        return;
+    }
+    finishUnpair(ok, message);
+}
+
+void PairingSession::finishUnpair(bool ok, const QString &message)
+{
+    if (m_unpairUuid.isEmpty()) {
+        return;
+    }
+    const QString user = m_unpairUser;
+    const bool temporary = m_unpairTemporary;
+    m_unpairUuid.clear();
+    m_unpairUser.clear();
+    m_unpairTemporary = false;
+    m_unpairManager.clear();
+
+    if (temporary) {
+        stop();
+    } else if (ok) {
+        Q_EMIT pairedChanged(user);
+    }
+    Q_EMIT unpairFinished(user, ok, ok ? QString() : message);
 }

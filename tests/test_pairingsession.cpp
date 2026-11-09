@@ -100,7 +100,7 @@ private Q_SLOTS:
     void emptyUsernameRefused()
     {
         PairingSession session;
-        session.start(0, QString());
+        session.start(QString());
         QCOMPARE(session.state(), PairingSession::Failed);
         QVERIFY(session.error().contains(QStringLiteral("gaming user")));
         QVERIFY(!session.busy());
@@ -113,7 +113,7 @@ private Q_SLOTS:
         runner.setActive(true);
         PairingSession session;
         session.setSessionRunner(&runner);
-        session.start(0, kUser);
+        session.start(kUser);
         QCOMPARE(session.state(), PairingSession::Failed);
         QVERIFY(!session.error().isEmpty());
         QVERIFY(!session.virtualDisplays()->hasDisplays());
@@ -127,7 +127,7 @@ private Q_SLOTS:
         session.setSessionRunner(&runner);
         configure(session, dir, true, true);
 
-        session.start(0, kUser);
+        session.start(kUser);
         QTRY_COMPARE_WITH_TIMEOUT(session.state(), PairingSession::Ready, 10000);
 
         runner.setActive(true);
@@ -143,23 +143,64 @@ private Q_SLOTS:
         configure(session, dir, true, true);
         QSignalSpy paired(&session, &PairingSession::pairedChanged);
 
-        session.start(0, kUser);
+        session.start(kUser);
         QCOMPARE(session.state(), PairingSession::Starting);
         QVERIFY(session.busy());
         QTRY_COMPARE_WITH_TIMEOUT(session.state(), PairingSession::Ready, 10000);
-        QCOMPARE(session.instanceIndex(), 0);
         QCOMPARE(session.username(), kUser);
         QVERIFY(session.virtualDisplays()->hasDisplays());
         QVERIFY(session.streamManager()->hasOwnedPids());
 
         session.stop();
         QCOMPARE(session.state(), PairingSession::Idle);
-        QCOMPARE(session.instanceIndex(), -1);
         QVERIFY(!session.virtualDisplays()->hasDisplays());
         QTRY_VERIFY(!session.streamManager()->hasOwnedPids());
         QTRY_VERIFY(!session.busy());
         QCOMPARE(paired.count(), 1);
         QCOMPARE(paired.at(0).at(0).toString(), kUser);
+    }
+
+    void sunshineBindsTheStableUserPort()
+    {
+        QTemporaryDir dir;
+        PairingSession session;
+        configure(session, dir, true, true);
+
+        session.start(kUser);
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), PairingSession::Ready, 10000);
+
+        const QVariantList streams = session.streamManager()->streams();
+        QCOMPARE(streams.size(), 1);
+        const int stored = SunshineConfig::userPort(kUser);
+        QVERIFY(stored > 0);
+        QCOMPARE(streams.at(0).toMap().value(QStringLiteral("port")).toInt(), stored);
+        QCOMPARE(session.hostPort(kUser), QString::number(stored));
+    }
+
+    void unpairWithoutClientIsRefused()
+    {
+        PairingSession session;
+        QSignalSpy finished(&session, &PairingSession::unpairFinished);
+
+        session.unpairClient(kUser, QString());
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(!finished.at(0).at(1).toBool());
+        QVERIFY(!session.busy());
+    }
+
+    void unpairDuringSessionNeedsTheUsersStream()
+    {
+        SessionRunner runner;
+        runner.setActive(true);
+        PairingSession session;
+        session.setSessionRunner(&runner);
+        QSignalSpy finished(&session, &PairingSession::unpairFinished);
+
+        session.unpairClient(kUser, QStringLiteral("some-uuid"));
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(finished.at(0).at(0).toString(), kUser);
+        QVERIFY(!finished.at(0).at(1).toBool());
+        QVERIFY(!session.virtualDisplays()->hasDisplays());
     }
 
     void displayFailureFailsWithoutSunshine()
@@ -168,7 +209,7 @@ private Q_SLOTS:
         PairingSession session;
         configure(session, dir, false, true);
 
-        session.start(0, kUser);
+        session.start(kUser);
         QTRY_COMPARE_WITH_TIMEOUT(session.state(), PairingSession::Failed, 10000);
         QVERIFY(session.error().contains(QStringLiteral("virtual display")));
         QVERIFY(!session.streamManager()->hasOwnedPids());
@@ -182,7 +223,7 @@ private Q_SLOTS:
         PairingSession session;
         configure(session, dir, true, false);
 
-        session.start(0, kUser);
+        session.start(kUser);
         QTRY_COMPARE_WITH_TIMEOUT(session.state(), PairingSession::Failed, 10000);
         QVERIFY(!session.error().isEmpty());
         QVERIFY(!session.virtualDisplays()->hasDisplays());
