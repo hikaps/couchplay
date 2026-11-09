@@ -549,7 +549,6 @@ Kirigami.ScrollablePage {
                 readonly property string labelRefreshRate: i18nc("@label", "Refresh Rate:")
                 readonly property string labelScaling: i18nc("@label", "Scaling:")
                 readonly property string labelGame: i18nc("@label", "Game:")
-                readonly property string labelDevices: i18nc("@label", "Devices:")
                 readonly property string labelPlayerData: i18nc("@action:button", "Player data")
                 readonly property string tooltipPlayerData: i18nc("@info:tooltip", "Open a folder where you can place per-player files (e.g. configs). They are copied into this player's copy of the shared directories at session start.")
 
@@ -557,8 +556,6 @@ Kirigami.ScrollablePage {
                 readonly property string labelPrivateTemporaryDirectories: i18nc("@option:check", "Private temporary directories")
                 readonly property string tooltipPrivateTemporaryDirectories: i18nc("@info:tooltip", "Use private /tmp and /var/tmp directories for this instance. They are removed when the instance stops and are not part of the shared-data snapshot.")
 
-                readonly property string textNoneAssigned: i18nc("@info", "None assigned")
-                readonly property string textAssign: i18nc("@action:button", "Assign...")
                 readonly property string labelControllers: i18nc("@label", "Controllers:")
                 readonly property string textPressToAssign: i18nc("@action:button", "Press a button…")
                 readonly property string textCapturePrompt: i18nc("@info", "Press any button on the controller you want for this player…")
@@ -1074,35 +1071,6 @@ Kirigami.ScrollablePage {
                                 icon.name: "user-properties"
                                 flat: true
                                 onClicked: root.openUsersRequested()
-                            }
-                        }
-
-                        RowLayout {
-                            Kirigami.FormData.label: instanceCard.labelDevices
-                            spacing: Kirigami.Units.smallSpacing
-
-                            Controls.Label {
-                                text: {
-                                    // Reference devicesRevision to force re-evaluation on device changes
-                                    void(root.devicesRevision)
-                                    if (!root.deviceManager) return instanceCard.textNoneAssigned
-                                    var paths = root.deviceManager.getDevicePathsForInstance(instanceCard.index)
-                                    if (paths.length === 0) return instanceCard.textNoneAssigned
-                                    return paths.length === 1
-                                        ? (paths.length + " device")
-                                        : (paths.length + " devices")
-                                }
-                                opacity: 0.7
-                            }
-
-                            Controls.Button {
-                                objectName: "btnAssignDevices"
-                                Accessible.role: Accessible.Button
-                                Accessible.name: instanceCard.textAssign
-                                Accessible.onPressAction: clicked()
-                                text: instanceCard.textAssign
-                                flat: true
-                                onClicked: applicationWindow().pushDeviceAssignmentPage()
                             }
                         }
 
