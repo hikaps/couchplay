@@ -4,15 +4,40 @@ Implementation details of the privileged helper and the instance units it manage
 
 ## Flatpak path mapping
 
-Flatpak directory selections are resolved from document-portal exports to host paths before being saved as shared directories. The GUI and helper share one mapping rule: strict descendants of either the account's declared home or its canonical path are home-relative. External paths remain external; traversal and whole-home sharing without an explicit target alias are rejected. This applies to any symlinked home, including `/home` → `/var/home` on Atomic desktops. Both home paths are resolved by the host helper, not inside the Flatpak sandbox. Update the GUI and helper together when installing this fix. Secure path walks require only search permission on ancestor directories and retain read checks on the selected directory. Explicitly projected sources, including symlinked Steam libraries, are resolved on the host and revalidated before no-follow pinning. Implicit target routing and staging directories retain strict no-follow path walks.
+Flatpak directory selections are resolved from document-portal exports to host paths before being saved as shared directories.
+
+**Mapping rule** (shared by the GUI and helper):
+
+- Strict descendants of either the account's declared home or its canonical path are home-relative.
+- External paths remain external.
+- Traversal and whole-home sharing without an explicit target alias are rejected.
+- This applies to any symlinked home, including `/home` → `/var/home` on Atomic desktops.
+- Both home paths are resolved by the host helper, not inside the Flatpak sandbox.
+- Update the GUI and helper together when installing this fix.
+
+**Path walks**
+
+- Secure path walks require only search permission on ancestor directories and retain read checks on the selected directory.
+- Explicitly projected sources, including symlinked Steam libraries, are resolved on the host and revalidated before no-follow pinning.
+- Implicit target routing and staging directories retain strict no-follow path walks.
 
 Player staging directories are resolved to canonical paths before helper handoff, including linked application-data storage. The helper still requires caller-owned home storage and no-follow traversal of the resolved directories and staged files.
 
 ## Mounts and Overlay recovery
 
-Bind and Overlay views exist in each instance's private mount namespace, not in the host file manager or helper service. Startup reports preparation errors before Gamescope window discovery. Stop all sessions before updating the matching GUI and native helper. Directory sources are carried by the preparation plan, independently of working-directory admission.
+**Mount view**
 
-Detached source mounts are made private before attachment, so shared host mounts cannot propagate a player Overlay back onto the original source directory. If an older build leaked an Overlay, inspect the mount before changing ownership: the player-owned view may be hiding an unchanged host directory. After uncovering the host directory, restart the helper so its private namespace does not retain the old leaked view.
+- Bind and Overlay views exist in each instance's private mount namespace, not in the host file manager or helper service.
+- Startup reports preparation errors before Gamescope window discovery.
+- Directory sources are carried by the preparation plan, independently of working-directory admission.
+- Stop all sessions before updating the matching GUI and native helper.
+
+**Detached source mounts** are made private before attachment, so shared host mounts cannot propagate a player Overlay back onto the original source directory.
+
+If an older build leaked an Overlay:
+
+- Inspect the mount before changing ownership: the player-owned view may be hiding an unchanged host directory.
+- After uncovering the host directory, restart the helper so its private namespace does not retain the old leaked view.
 
 Gamescope is projected read-only with `nosuid` inside each instance so distro file capabilities do not prevent an unprivileged launch; the host binary is unchanged.
 
@@ -26,7 +51,16 @@ ACL shares on read-only filesystems are accepted only when the player already ha
 
 ## Cleanup and recovery
 
-Session cleanup waits for stop calls to return, and stale cleanup retries cannot stop a replacement launch. Launch manifests remain available until terminal cleanup succeeds; recovery state is committed before manifest removal. Interrupted copy scratch directories under SGID destination parents can be recovered without accepting unsafe ownership or access. Helper recovery restores the complete device/runtime snapshot before persisting unit cleanup.
+**Stop and retry**
+
+- Session cleanup waits for stop calls to return.
+- Stale cleanup retries cannot stop a replacement launch.
+
+**Manifests and recovery**
+
+- Launch manifests remain available until terminal cleanup succeeds; recovery state is committed before manifest removal.
+- Interrupted copy scratch directories under SGID destination parents can be recovered without accepting unsafe ownership or access.
+- Helper recovery restores the complete device/runtime snapshot before persisting unit cleanup.
 
 ## Instance units
 
