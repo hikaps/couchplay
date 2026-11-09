@@ -1375,8 +1375,11 @@ Kirigami.ScrollablePage {
 
                             return true
                         }
+                        objectName: "messageNoController"
                         type: Kirigami.MessageType.Information
-                        text: i18nc("@info", "No controller assigned to this player")
+                        text: instanceCard.streamsToMoonlight
+                            ? i18nc("@info", "Controllers come from the Moonlight client when it connects")
+                            : i18nc("@info", "No controller assigned to this player")
                     }
                 }
             }
