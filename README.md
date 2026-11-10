@@ -220,6 +220,7 @@ sudo ./install-helper.sh uninstall
 
 - **Only the first instance starts, with a window-positioning timeout.** This is a KWin window-discovery problem, not a launcher lock. Details are in [docs/session-internals.md](docs/session-internals.md#gamescope-positioning).
 - **Errors after updating.** Install the GUI and the helper together, and stop all sessions first. Upgrading to 0.6 changes the helper's D-Bus API and removes the `manage-virtual-display` and `manage-audio-sink` Polkit actions, so reinstall the helper (see [Installation](#2-install-the-helper)).
+- **Flatpak closes right after starting and prints `Failed to register name 'com.github.CouchPlay'`.** Seen with the 0.6.0 Flatpak: its sandbox could not own that D-Bus name. Run `flatpak override --user --own-name=com.github.CouchPlay io.github.hikaps.couchplay`, then start it again. A later release fixes this in the Flatpak itself.
 - **Stream won't start or has no picture.** Check Sunshine's log: `~/.local/share/hikaps/CouchPlay/sunshine/<user>/sunshine.log`. Under Flatpak it is in the app's data directory instead (`~/.var/app/io.github.hikaps.couchplay/data/...`; exact path not verified).
 - **Stream has no sound.** Run `pactl list short sinks` and look for the player's `couchplay-*` sink.
 

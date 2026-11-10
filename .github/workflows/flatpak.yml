@@ -61,6 +61,8 @@ jobs:
             || { echo "::error::helper system-talk-name missing"; exit 1; }
           grep -qE '^devices=.*all' build-dir/metadata \
             || { echo "::error::--device=all missing"; exit 1; }
+          grep -q '^com.github.CouchPlay=own' build-dir/metadata \
+            || { echo "::error::com.github.CouchPlay must be own-name; a later talk-name downgrades it and the app exits at startup"; exit 1; }
 
       - name: Launch smoke (offscreen)
         continue-on-error: true
