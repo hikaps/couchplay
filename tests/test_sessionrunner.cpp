@@ -1103,6 +1103,7 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingGate()
     libraryVdf.close();
 
     auto *steamManager = new SteamConfigManager(this);
+    steamManager->setHelperClient(m_helperClient); // as in production: the player's Steam ID comes from the helper
     m_runner->setSteamConfigManager(steamManager);
     QVERIFY(steamManager->isSteamDetected());
     QVERIFY(steamManager->selectSourceAccount(QFileInfo(selectedSteamRoot).canonicalFilePath(), QStringLiteral("222")));
