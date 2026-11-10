@@ -454,6 +454,8 @@ public:
         m_processInvocations.clear();
         m_mockProcessStart = false;
         m_onSystemctlStop = {};
+        m_processHandler = {};
+        m_removedFiles.clear();
         m_standardOutput.clear();
         m_standardError.clear();
         m_transientServiceName.clear();
@@ -480,6 +482,9 @@ public:
         QStringList args;
     };
     QList<ProcessInvocation> m_processInvocations;
+    // Optional per-invocation process script: returns the exit code and fills the standard output.
+    std::function<int(const QString &, const QStringList &, QByteArray *)> m_processHandler;
+    QStringList m_removedFiles;
     QStringList m_directoryQueries;
     QStringList m_canonicalQueries;
     QStringList m_statQueries;
@@ -637,7 +642,7 @@ public:
     }
     bool removeFile(const QString &path) override
     {
-        Q_UNUSED(path)
+        m_removedFiles.append(path);
         return true;
     }
 
@@ -696,6 +701,11 @@ public:
         m_processArgs = arguments;
         m_processInvocations.append({program, arguments});
         process->setProperty("mockCommand", program);
+        if (m_processHandler) {
+            QByteArray handlerOutput;
+            process->setProperty("mockExitCode", m_processHandler(program, arguments, &handlerOutput));
+            process->setProperty("mockStdout", handlerOutput);
+        }
         if (program == QStringLiteral("systemctl") && arguments.value(0) == QStringLiteral("stop")
             && m_onSystemctlStop) {
             m_onSystemctlStop(arguments.value(1));
@@ -720,9 +730,11 @@ public:
 
     int processExitCode(QProcess *process) override
     {
-        Q_UNUSED(process)
         if (process->property("realAccessProbe").toBool()) {
             return process->exitCode();
+        }
+        if (process->property("mockExitCode").isValid()) {
+            return process->property("mockExitCode").toInt();
         }
         return m_processExitCodes.value(process->property("mockCommand").toString(), m_processExitCode);
     }
@@ -735,7 +747,9 @@ public:
 
     QByteArray readAllStandardOutput(QProcess *process) override
     {
-        Q_UNUSED(process)
+        if (process->property("mockStdout").isValid()) {
+            return process->property("mockStdout").toByteArray();
+        }
         return m_standardOutput;
     }
 
@@ -830,6 +844,77 @@ private:
     std::function<void(const QString &)> m_onSystemctlStop;
     QByteArray m_standardOutput;
     QByteArray m_standardError;
+};
+
+// Scripted `machinectl shell <user>@ <command...>` serving a fake pactl for the compositor user.
+struct FakePactl {
+    explicit FakePactl(MockSystemOps *ops)
+        : m_ops(ops)
+    {
+        m_ops->m_processHandler = [this](const QString &program, const QStringList &args, QByteArray *out) {
+            return handle(program, args, out);
+        };
+    }
+    ~FakePactl()
+    {
+        m_ops->m_processHandler = {};
+    }
+
+    int count(const QString &subcommand) const
+    {
+        int n = 0;
+        for (const QStringList &call : calls) {
+            n += call.value(1) == subcommand;
+        }
+        return n;
+    }
+
+    QStringList loadedModules; // "<id>\tmodule-native-protocol-tcp\t<args>" lines of `list short modules`
+    bool portServedWithoutModule = false; // e.g. pipewire-pulse drop-in; makes the PULSE_SERVER probe succeed
+    bool loadSucceeds = true;
+    QList<QStringList> calls; // commands run in the user's session (after "shell --quiet <user>@")
+
+private:
+    int handle(const QString &program, const QStringList &args, QByteArray *out)
+    {
+        if (program != QLatin1String("machinectl")) {
+            return 0;
+        }
+        const QStringList command = args.mid(3);
+        calls.append(command);
+        const QString pactl = QStringLiteral("/usr/bin/pactl");
+        if (command.value(0) == QLatin1String("/usr/bin/env")) {
+            return portServedWithoutModule ? 0 : 1;
+        }
+        if (command.value(0) != pactl) {
+            return 1;
+        }
+        if (command.mid(1) == QStringList{QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("modules")}) {
+            *out = (loadedModules.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8();
+            return 0;
+        }
+        if (command.value(1) == QLatin1String("load-module")) {
+            if (!loadSucceeds) {
+                return 1;
+            }
+            loadedModules.append(QStringLiteral("42\t%1\t%2").arg(command.value(2), command.mid(3).join(QLatin1Char(' '))));
+            *out = "42\n";
+            return 0;
+        }
+        if (command.value(1) == QLatin1String("unload-module")) {
+            const QString prefix = command.value(2) + QLatin1Char('\t');
+            for (qsizetype i = 0; i < loadedModules.size(); ++i) {
+                if (loadedModules.at(i).startsWith(prefix)) {
+                    loadedModules.removeAt(i);
+                    return 0;
+                }
+            }
+            return 1;
+        }
+        return 1;
+    }
+
+    MockSystemOps *m_ops;
 };
 
 class TestCouchPlayHelper : public QObject
@@ -937,6 +1022,15 @@ private Q_SLOTS:
     void testRemoveRuntimeAccessSuccess();
     void testRemoveRuntimeAccessAuthorizationDenied();
     void testRemoveRuntimeAccessUserNotFound();
+
+    // PulseAudio TCP listener (runtime module load/unload, no pipewire-pulse restart)
+    void testPulseTcpListenerLoadsModuleWhenAbsent();
+    void testPulseTcpListenerSkipsLoadWhenModulePresent();
+    void testPulseTcpListenerSkipsLoadWhenPortServedByDropIn();
+    void testPulseTcpListenerSetupFailure();
+    void testPulseTcpListenerUnloadsOwnModuleOnLastInstanceCleanup();
+    void testPulseTcpListenerKeepsForeignModuleOnCleanup();
+    void testPulseTcpListenerRemovesLegacyDropInWithoutRestart();
 
     // Launch/Stop/Kill instance tests
     void testGenerateServiceName();
@@ -2972,6 +3066,135 @@ void TestCouchPlayHelper::testRemoveRuntimeAccessUserNotFound()
     // (it just runs setfacl on non-existent paths which is a no-op)
     QVERIFY(reply.isValid());
     QVERIFY(reply.value());
+}
+
+static const QStringList kLoadPulseTcpCommand = {QStringLiteral("/usr/bin/pactl"),
+                                                  QStringLiteral("load-module"),
+                                                  QStringLiteral("module-native-protocol-tcp"),
+                                                  QStringLiteral("port=4713"),
+                                                  QStringLiteral("listen=127.0.0.1"),
+                                                  QStringLiteral("auth-anonymous=1")};
+
+void TestCouchPlayHelper::testPulseTcpListenerLoadsModuleWhenAbsent()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setMockProcessStart(true);
+    FakePactl pactl(m_ops);
+
+    QVERIFY(m_helper->setupPulseTcpListener(1000));
+
+    QCOMPARE(pactl.count(QStringLiteral("load-module")), 1);
+    QVERIFY(pactl.calls.contains(kLoadPulseTcpCommand));
+    QVERIFY(m_helper->m_pulseTcpLoadedForUid.contains(1000));
+    // Nothing is written and pipewire-pulse is never restarted
+    for (const MockSystemOps::ProcessInvocation &invocation : m_ops->m_processInvocations) {
+        QVERIFY(!invocation.args.contains(QStringLiteral("restart")));
+        QVERIFY(!invocation.args.contains(QStringLiteral("systemctl")));
+    }
+    QVERIFY(m_ops->m_removedFiles.isEmpty());
+}
+
+void TestCouchPlayHelper::testPulseTcpListenerSkipsLoadWhenModulePresent()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setMockProcessStart(true);
+    FakePactl pactl(m_ops);
+    pactl.loadedModules = {QStringLiteral("7\tmodule-native-protocol-tcp\tport=4713 listen=127.0.0.1 auth-anonymous=1")};
+
+    QVERIFY(m_helper->setupPulseTcpListener(1000));
+
+    QCOMPARE(pactl.count(QStringLiteral("load-module")), 0);
+    QVERIFY(!m_helper->m_pulseTcpLoadedForUid.contains(1000));
+}
+
+void TestCouchPlayHelper::testPulseTcpListenerSkipsLoadWhenPortServedByDropIn()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setMockProcessStart(true);
+    FakePactl pactl(m_ops);
+    pactl.portServedWithoutModule = true;
+
+    QVERIFY(m_helper->setupPulseTcpListener(1000));
+
+    QCOMPARE(pactl.count(QStringLiteral("load-module")), 0);
+    QVERIFY(!m_helper->m_pulseTcpLoadedForUid.contains(1000));
+}
+
+void TestCouchPlayHelper::testPulseTcpListenerSetupFailure()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setMockProcessStart(true);
+    FakePactl pactl(m_ops);
+    pactl.loadSucceeds = false;
+
+    QVERIFY(!m_helper->setupPulseTcpListener(1000));
+    QVERIFY(!m_helper->m_pulseTcpLoadedForUid.contains(1000));
+
+    // Unknown compositor user
+    QVERIFY(!m_helper->setupPulseTcpListener(4242));
+}
+
+void TestCouchPlayHelper::testPulseTcpListenerUnloadsOwnModuleOnLastInstanceCleanup()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setMockProcessStart(true);
+    FakePactl pactl(m_ops);
+    // A module the user loaded on another port must survive
+    pactl.loadedModules = {QStringLiteral("9\tmodule-native-protocol-tcp\tport=4799 listen=127.0.0.1 auth-anonymous=1")};
+
+    QVERIFY(m_helper->setupPulseTcpListener(1000));
+    QCOMPARE(pactl.loadedModules.size(), 2);
+
+    // Two instances share the compositor: the first stopping must not unload
+    m_helper->m_compositorUidForUsername.insert(QStringLiteral("player1"), 1000);
+    m_helper->m_compositorUidForUsername.insert(QStringLiteral("player2"), 1000);
+    m_helper->cleanupTcpListenerIfLast(QStringLiteral("player1"));
+    QCOMPARE(pactl.count(QStringLiteral("unload-module")), 0);
+    QVERIFY(m_helper->m_pulseTcpLoadedForUid.contains(1000));
+
+    m_helper->cleanupTcpListenerIfLast(QStringLiteral("player2"));
+    QCOMPARE(pactl.count(QStringLiteral("unload-module")), 1);
+    QVERIFY(pactl.calls.contains({QStringLiteral("/usr/bin/pactl"), QStringLiteral("unload-module"), QStringLiteral("42")}));
+    QCOMPARE(pactl.loadedModules,
+             QStringList{QStringLiteral("9\tmodule-native-protocol-tcp\tport=4799 listen=127.0.0.1 auth-anonymous=1")});
+    QVERIFY(!m_helper->m_pulseTcpLoadedForUid.contains(1000));
+}
+
+void TestCouchPlayHelper::testPulseTcpListenerKeepsForeignModuleOnCleanup()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setMockProcessStart(true);
+    FakePactl pactl(m_ops);
+    pactl.loadedModules = {QStringLiteral("7\tmodule-native-protocol-tcp\tport=4713 listen=127.0.0.1 auth-anonymous=1")};
+
+    QVERIFY(m_helper->setupPulseTcpListener(1000));
+    m_helper->removePulseTcpListener(1000);
+
+    QCOMPARE(pactl.count(QStringLiteral("unload-module")), 0);
+    QCOMPARE(pactl.loadedModules.size(), 1);
+}
+
+void TestCouchPlayHelper::testPulseTcpListenerRemovesLegacyDropInWithoutRestart()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setMockProcessStart(true);
+    FakePactl pactl(m_ops);
+    const QString legacyConf = QStringLiteral("/home/compositor/.config/pipewire/pipewire-pulse.conf.d/50-couchplay.conf");
+    m_ops->setFileExists(legacyConf, true);
+
+    m_helper->removePulseTcpListener(1000);
+
+    QCOMPARE(m_ops->m_removedFiles, QStringList{legacyConf});
+    // No module was loaded by the helper and pipewire-pulse is left running
+    QVERIFY(pactl.calls.isEmpty());
+    QVERIFY(m_ops->m_processInvocations.isEmpty());
 }
 
 void TestCouchPlayHelper::testGenerateServiceName()

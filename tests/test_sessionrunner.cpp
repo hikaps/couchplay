@@ -2037,7 +2037,7 @@ void TestSessionRunner::testStreamingRuntimeAccessPrecedesSinkPreparation()
     StreamingFakes fakes(m_runner);
     m_helperClient->autoReady = false;
 
-    // The helper restarts pipewire-pulse inside this call; the sinks must not exist yet and no game may run.
+    // The helper loads the PulseAudio TCP module inside this call; the sinks must not exist yet and no game may run.
     bool sinksPreparedAtSetup = true;
     int launchesAtSetup = -1;
     m_helperClient->onSetupRuntimeAccess = [&] {

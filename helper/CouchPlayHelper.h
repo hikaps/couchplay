@@ -388,9 +388,12 @@ private:
     bool isValidDevicePath(const QString &path);
     bool validateUserAndAuth(const QString &username, const QString &action);
     bool runCommand(const QString &program, const QStringList &args, int timeoutMs = 10000);
+    bool runAsUser(const QString &username,
+                   const QStringList &command,
+                   QByteArray *standardOutput = nullptr,
+                   QString *standardError = nullptr);
     bool setupPulseTcpListener(uint compositorUid);
     void removePulseTcpListener(uint compositorUid);
-    void restartUserPipeWirePulse(uint compositorUid);
 
     // Internal helpers (not exposed via D-Bus)
     struct PendingLaunch;
@@ -479,6 +482,9 @@ private:
     QHash<QString, QString> m_failedJobResults;
     // Track which compositor UIDs have runtime access set up
     QSet<uint> m_runtimeAccessSetForUid;
+
+    // Compositor UIDs whose PulseAudio TCP module was loaded by this helper (only those are unloaded)
+    QSet<uint> m_pulseTcpLoadedForUid;
 
     // System operations abstraction (for testing/mocking)
     SystemOps *m_ops;
