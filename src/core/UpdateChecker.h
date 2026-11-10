@@ -17,7 +17,9 @@ class QProcess;
  * @brief Checks GitHub for a newer stable release and, on Flatpak, updates the app in place.
  *
  * The checker only informs: it never updates the root helper or the SteamOS system extension.
- * Flatpak installs may run `flatpak update` on the host through HostProcess.
+ * CouchPlay ships as a Flatpak bundle (no remote), so `flatpak update` cannot update it. On Flatpak
+ * installs updateNow() instead downloads the release bundle, verifies its checksum and installs it
+ * on the host through HostProcess.
  */
 class UpdateChecker : public QObject
 {
@@ -38,8 +40,8 @@ public:
     enum UpdateNowState { UpdateNowIdle, UpdateNowRunning, UpdateNowSucceeded, UpdateNowFailed };
     Q_ENUM(UpdateNowState)
 
-    /** Configures the process that performs the Flatpak update (program, arguments, environment). */
-    using ProcessConfigurator = std::function<void(QProcess &)>;
+    /** Configures the process that downloads and installs the bundle of release @p tag (program, arguments, environment). */
+    using ProcessConfigurator = std::function<void(QProcess &, const QString &tag)>;
 
     explicit UpdateChecker(QObject *parent = nullptr);
     /** Injectable install method and update-process configuration (tests). */
@@ -47,7 +49,7 @@ public:
 
     Q_INVOKABLE void checkForUpdates(); // manual: Settings page
     Q_INVOKABLE void checkForUpdatesOnStartup(); // automatic: Main.qml only, emits checkFinished(automatic=true)
-    /** Runs `flatpak update -y` on the host. Only valid for Flatpak installs; fails otherwise. */
+    /** Downloads, verifies and installs the latest release bundle on the host. Only valid for Flatpak installs with a known update. */
     Q_INVOKABLE void updateNow();
 
     static QString normalizeVersion(const QString &version);
@@ -56,6 +58,10 @@ public:
     /** Tag of a stable release object, or empty when the JSON is invalid or the release is a draft/pre-release. */
     static QString parseLatestTag(const QByteArray &json);
     static QString detectInstallMethod();
+    /** Whether @p tag looks like a release tag (`v1.2.3`); only such tags are ever handed to the install script. */
+    static bool isValidReleaseTag(const QString &tag);
+    /** Fixed POSIX shell script run on the host; the release tag is its only argument ($1) and is never part of the text. */
+    static QString updateScript();
 
     void applyLatestTag(const QString &tag); // called by the reply handler; public for tests
 
@@ -87,6 +93,7 @@ private:
     QNetworkAccessManager *m_nam = nullptr;
     State m_state = Idle;
     QString m_latestVersion;
+    QString m_latestTag;
     bool m_updateAvailable = false;
     bool m_automatic = false;
     QString m_installMethod;

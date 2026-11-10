@@ -220,7 +220,8 @@ sudo ./install-helper.sh uninstall
 
 CouchPlay checks GitHub for a newer **stable** release when it starts (turn this off under **Settings → Software Update**) and shows one notice per launch; **Check Now** checks on demand. The app only informs you: it never updates the privileged helper or the SteamOS system extension itself.
 
-- **Flatpak:** click **Update Now** in Settings → Software Update (it runs `flatpak update -y io.github.hikaps.couchplay` on the host), then restart CouchPlay to finish updating.
+- **Flatpak:** click **Update Now** in Settings → Software Update, then restart CouchPlay to finish updating. It downloads `couchplay.flatpak` and its `.sha256` for the latest release from GitHub on the host, verifies the checksum (a mismatch aborts without installing anything), installs the bundle into the same Flatpak installation (user or system) as the running app, and removes the temporary files. The one-liner ([Quick install](#quick-install-recommended)) also updates it. If a system-wide installation needs administrator rights, Update Now shows the failure instead of escalating; re-run the one-liner then.
+- **Why not `flatpak update`?** CouchPlay is installed from a release bundle, which creates a hidden local remote with no URL. `flatpak update io.github.hikaps.couchplay` therefore always reports "Nothing to update"; use Update Now or the one-liner instead.
 - **Native or SteamOS:** stop any running session and re-run the [Quick install](#quick-install-recommended) one-liner (add `--tarball` to keep the native binary). On SteamOS this also refreshes the system extension. **Open Releases Page** shows the release notes.
 - **Helper:** Update Now does not touch it. The GUI keeps working with an older helper until a release needs a newer one. Settings → Privileged Helper shows the installed helper version and warns when it is too old for the GUI; reinstall it then (see [Install the helper](#2-install-the-helper)).
 

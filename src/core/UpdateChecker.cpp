@@ -21,16 +21,15 @@
 
 namespace
 {
-const QString kFlatpakAppId = QStringLiteral("io.github.hikaps.couchplay");
-
-void configureHostFlatpakUpdate(QProcess &process)
+void configureHostBundleInstall(QProcess &process, const QString &tag)
 {
-    HostProcess::configure(process, QStringLiteral("flatpak"), {QStringLiteral("update"), QStringLiteral("-y"), kFlatpakAppId});
+    // The script text is fixed; the tag travels only as a positional argument ($1).
+    HostProcess::configure(process, QStringLiteral("/bin/sh"), {QStringLiteral("-c"), UpdateChecker::updateScript(), QStringLiteral("sh"), tag});
 }
 }
 
 UpdateChecker::UpdateChecker(QObject *parent)
-    : UpdateChecker(detectInstallMethod(), configureHostFlatpakUpdate, parent)
+    : UpdateChecker(detectInstallMethod(), configureHostBundleInstall, parent)
 {
 }
 
@@ -97,6 +96,7 @@ void UpdateChecker::startCheck(bool automatic)
 
 void UpdateChecker::applyLatestTag(const QString &tag)
 {
+    m_latestTag = tag.trimmed();
     const QString normalized = normalizeVersion(tag);
     if (m_latestVersion != normalized) {
         m_latestVersion = normalized;
@@ -125,10 +125,16 @@ void UpdateChecker::updateNow()
         setUpdateNowState(UpdateNowFailed);
         return;
     }
+    if (!m_updateAvailable || !isValidReleaseTag(m_latestTag)) {
+        qWarning() << "UpdateChecker: updateNow() without a known, valid update tag:" << m_latestTag;
+        setUpdateNowMessage(QStringLiteral("No valid update is known. Check for updates first."));
+        setUpdateNowState(UpdateNowFailed);
+        return;
+    }
 
     auto *process = new QProcess(this);
     process->setProcessChannelMode(QProcess::MergedChannels);
-    m_configurator(*process);
+    m_configurator(*process, m_latestTag);
 
     connect(process, &QProcess::readyRead, this, [this, process]() {
         captureUpdateOutput(process);
@@ -261,6 +267,50 @@ QString UpdateChecker::detectInstallMethod()
     }
 
     return QStringLiteral("native");
+}
+
+bool UpdateChecker::isValidReleaseTag(const QString &tag)
+{
+    static const QRegularExpression pattern(QRegularExpression::anchoredPattern(QStringLiteral("v?[0-9]+(\\.[0-9]+)*")));
+    return pattern.match(tag).hasMatch();
+}
+
+QString UpdateChecker::updateScript()
+{
+    // Runs on the host with the (already validated) release tag as $1. Each line printed becomes the progress
+    // message, so the last line is always the stage or the reason for failure.
+    return QStringLiteral(R"SH(
+tag=$1
+case $tag in
+    ''|*[!v0-9.]*) echo "Refusing to update: invalid release tag"; exit 2 ;;
+esac
+app=io.github.hikaps.couchplay
+base=https://github.com/hikaps/couchplay/releases/download/$tag
+dir=$(mktemp -d) || { echo "Could not create a temporary directory"; exit 1; }
+cleanup() { rm -rf -- "$dir"; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+cd "$dir" || exit 1
+echo "Downloading CouchPlay $tag..."
+for f in couchplay.flatpak couchplay.flatpak.sha256; do
+    curl -fsSL --retry 3 --retry-delay 2 -o "$f" "$base/$f" || { echo "Download failed: $f could not be fetched from GitHub"; exit 1; }
+done
+echo "Verifying download..."
+sha256sum -c couchplay.flatpak.sha256 >/dev/null 2>&1 || { echo "Checksum verification failed: the download does not match its published checksum. Nothing was installed."; exit 1; }
+inst=$(flatpak list --app --columns=application,installation 2>/dev/null | awk -F'\t' -v id="$app" '$1 == id { print $2; exit }')
+case $inst in
+    ''|user) flag=--user; inst=user ;;
+    system) flag=--system ;;
+    *[!A-Za-z0-9_.-]*) echo "Unsupported Flatpak installation name: $inst"; exit 1 ;;
+    *) flag=--installation=$inst ;;
+esac
+echo "Installing CouchPlay $tag ($inst installation)..."
+if ! flatpak install -y --noninteractive "$flag" --bundle couchplay.flatpak; then
+    echo "Installing failed. Install manually: download couchplay.flatpak from the CouchPlay releases page and run: flatpak install $flag couchplay.flatpak (system installations need sudo)"
+    exit 1
+fi
+echo "Update installed."
+)SH");
 }
 
 UpdateChecker::State UpdateChecker::state() const

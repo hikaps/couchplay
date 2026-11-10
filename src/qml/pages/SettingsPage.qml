@@ -902,7 +902,7 @@ Kirigami.ScrollablePage {
             text: {
                 if (!root.updateChecker) return ""
                 if (root.updateChecker.installMethod === "flatpak") {
-                    return i18nc("@info", "Click Update Now to update the Flatpak. The helper is not updated automatically; reinstall it only if the Privileged Helper section says it is outdated.")
+                    return i18nc("@info", "Click Update Now to download and install the new release. The helper is separate and is not updated automatically; reinstall it only if the Privileged Helper section says it is outdated.")
                 }
                 if (root.updateChecker.installMethod === "steamos") {
                     return i18nc("@info", "Stop any running session and re-run the install command from the README to update the app and its system extension.")
@@ -916,7 +916,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             visible: root.updateChecker?.updateNowState === UpdateChecker.UpdateNowSucceeded
             type: Kirigami.MessageType.Positive
-            text: i18nc("@info", "Update installed. Restart CouchPlay to finish updating.")
+            text: i18nc("@info", "Update installed. Restart CouchPlay to finish updating. The helper is separate and is not updated by this.")
         }
 
         Kirigami.InlineMessage {
@@ -925,8 +925,8 @@ Kirigami.ScrollablePage {
             visible: root.updateChecker?.updateNowState === UpdateChecker.UpdateNowFailed
             type: Kirigami.MessageType.Error
             text: root.updateChecker?.updateNowMessage
-                  ? i18nc("@info %1 is the last line of flatpak's output", "The update failed: %1", root.updateChecker.updateNowMessage)
-                  : i18nc("@info", "The update failed. Update manually with: flatpak update io.github.hikaps.couchplay")
+                  ? i18nc("@info %1 is the last line of the update progress or error output", "The update failed: %1", root.updateChecker.updateNowMessage)
+                  : i18nc("@info", "The update failed. Re-run the install command from the README to update manually.")
         }
 
         Kirigami.FormLayout {
