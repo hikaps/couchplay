@@ -4426,7 +4426,7 @@ void TestCouchPlayHelper::testGetVersionInfo()
     const QVariantMap info = reply.value();
     QCOMPARE(info.value(QStringLiteral("version")).toString(), QStringLiteral("9.9.9-test"));
     QCOMPARE(info.value(QStringLiteral("apiLevel")).toInt(), COUCHPLAY_HELPER_API_LEVEL);
-    QVERIFY(COUCHPLAY_HELPER_API_LEVEL >= 1);
+    static_assert(COUCHPLAY_HELPER_API_LEVEL >= 1);
 }
 
 QTEST_MAIN(TestCouchPlayHelper)

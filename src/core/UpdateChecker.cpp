@@ -3,6 +3,10 @@
 
 #include "UpdateChecker.h"
 
+#include <KLocalizedString>
+
+#include <utility>
+
 #include <QDebug>
 #include <QFile>
 #include <QJsonDocument>
@@ -24,7 +28,9 @@ namespace
 void configureHostBundleInstall(QProcess &process, const QString &tag)
 {
     // The script text is fixed; the tag travels only as a positional argument ($1).
-    HostProcess::configure(process, QStringLiteral("/bin/sh"), {QStringLiteral("-c"), UpdateChecker::updateScript(), QStringLiteral("sh"), tag});
+    HostProcess::configure(process,
+                           QStringLiteral("/bin/sh"),
+                           {QStringLiteral("-c"), UpdateChecker::updateScript(), QStringLiteral("sh"), tag});
 }
 }
 
@@ -54,6 +60,8 @@ void UpdateChecker::checkForUpdatesOnStartup()
 void UpdateChecker::startCheck(bool automatic)
 {
     if (m_state == Checking) {
+        // A manual request joins the running check, so its result is not reported as automatic-only
+        m_automatic = m_automatic && automatic;
         return;
     }
 
@@ -127,10 +135,11 @@ void UpdateChecker::updateNow()
     }
     if (!m_updateAvailable || !isValidReleaseTag(m_latestTag)) {
         qWarning() << "UpdateChecker: updateNow() without a known, valid update tag:" << m_latestTag;
-        setUpdateNowMessage(QStringLiteral("No valid update is known. Check for updates first."));
+        setUpdateNowMessage(i18nc("@info", "No valid update is known. Check for updates first."));
         setUpdateNowState(UpdateNowFailed);
         return;
     }
+    m_updateOutputBuffer.clear();
 
     auto *process = new QProcess(this);
     process->setProcessChannelMode(QProcess::MergedChannels);
@@ -148,7 +157,7 @@ void UpdateChecker::updateNow()
         process->deleteLater();
     });
     connect(process, &QProcess::finished, this, [this, process](int exitCode, QProcess::ExitStatus exitStatus) {
-        captureUpdateOutput(process);
+        captureUpdateOutput(process, true);
         finishUpdateNow(exitStatus == QProcess::NormalExit && exitCode == 0);
         process->deleteLater();
     });
@@ -157,10 +166,26 @@ void UpdateChecker::updateNow()
     process->start();
 }
 
-void UpdateChecker::captureUpdateOutput(QProcess *process)
+void UpdateChecker::captureUpdateOutput(QProcess *process, bool flush)
 {
+    m_updateOutputBuffer += process->readAll();
+
+    // A read can end in the middle of a line, so only complete lines are shown until the process has finished.
+    QByteArray ready;
+    if (flush) {
+        ready = std::exchange(m_updateOutputBuffer, QByteArray());
+    } else {
+        const qsizetype end = qMax(m_updateOutputBuffer.lastIndexOf('\n'), m_updateOutputBuffer.lastIndexOf('\r'));
+        if (end < 0) {
+            return;
+        }
+        ready = m_updateOutputBuffer.left(end + 1);
+        m_updateOutputBuffer.remove(0, end + 1);
+    }
+
     // flatpak redraws progress with carriage returns; the last non-empty line is the current status
-    const QStringList lines = QString::fromUtf8(process->readAll()).split(QRegularExpression(QStringLiteral("[\r\n]")), Qt::SkipEmptyParts);
+    const QStringList lines =
+        QString::fromUtf8(ready).split(QRegularExpression(QStringLiteral("[\r\n]")), Qt::SkipEmptyParts);
     for (auto it = lines.crbegin(); it != lines.crend(); ++it) {
         const QString line = it->trimmed();
         if (!line.isEmpty()) {
@@ -293,7 +318,7 @@ trap 'exit 1' HUP INT TERM
 cd "$dir" || exit 1
 echo "Downloading CouchPlay $tag..."
 for f in couchplay.flatpak couchplay.flatpak.sha256; do
-    curl -fsSL --retry 3 --retry-delay 2 -o "$f" "$base/$f" || { echo "Download failed: $f could not be fetched from GitHub"; exit 1; }
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --speed-limit 1024 --speed-time 60 -o "$f" "$base/$f" || { echo "Download failed: $f could not be fetched from GitHub"; exit 1; }
 done
 echo "Verifying download..."
 sha256sum -c couchplay.flatpak.sha256 >/dev/null 2>&1 || { echo "Checksum verification failed: the download does not match its published checksum. Nothing was installed."; exit 1; }

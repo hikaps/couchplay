@@ -88,7 +88,7 @@ private:
     void setUpdateNowState(UpdateNowState state);
     void setUpdateNowMessage(const QString &message);
     void finishUpdateNow(bool success);
-    void captureUpdateOutput(QProcess *process);
+    void captureUpdateOutput(QProcess *process, bool flush = false);
 
     QNetworkAccessManager *m_nam = nullptr;
     State m_state = Idle;
@@ -100,4 +100,5 @@ private:
     ProcessConfigurator m_configurator;
     UpdateNowState m_updateNowState = UpdateNowIdle;
     QString m_updateNowMessage;
+    QByteArray m_updateOutputBuffer;
 };
