@@ -306,6 +306,7 @@ private Q_SLOTS:
     void testSetupDataDirectoriesMirrorsStagedData();
     void testSetupDataDirectoriesLibrarySharingGate();
     void testSetupDataDirectoriesSecondaryLibrariesPrepared();
+    void testSetupDataDirectoriesLibrarySharingSkipsUnbootstrappedPlayer();
     void testSetupDataDirectoriesHeroicNoConfigBulkCopy();
     void testResolveUserIdentityViaHelper();
     void testResolveUserIdentityFallback();
@@ -1189,6 +1190,51 @@ void TestSessionRunner::testSetupDataDirectoriesSecondaryLibrariesPrepared()
              QStringLiteral(".couchplay/steam-libs/1/steamapps/common"));
     QCOMPARE(m_helperClient->mirrorCalls.size(), 0);
     QCOMPARE(m_helperClient->copyDirCalls.size(), 0);
+}
+
+void TestSessionRunner::testSetupDataDirectoriesLibrarySharingSkipsUnbootstrappedPlayer()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    qputenv("HOME", homeDir.path().toLocal8Bit());
+
+    const QString steamRoot = homeDir.path() + QStringLiteral("/.steam/steam");
+    QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+    QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/steamapps/common")));
+    QFile libraryVdf(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+    QVERIFY(libraryVdf.open(QIODevice::WriteOnly));
+    libraryVdf.write("\"libraryfolders\"\n{\n  \"0\"\n  {\n    \"path\"\t\t\"" + steamRoot.toUtf8() + "\"\n  }\n}\n");
+    libraryVdf.close();
+
+    m_helperClient->player1Home = homeDir.path() + QStringLiteral("/player1");
+    m_helperClient->player2Home = homeDir.path() + QStringLiteral("/player2");
+    QVERIFY(QDir().mkpath(m_helperClient->player1Home + QStringLiteral("/.steam/steam/config")));
+    QVERIFY(QDir().mkpath(m_helperClient->player2Home + QStringLiteral("/.steam/steam/config")));
+    m_helperClient->player2SteamNeverRun = true;
+    auto *steamManager = new SteamConfigManager(this);
+    steamManager->setHelperClient(m_helperClient);
+    m_runner->setSteamConfigManager(steamManager);
+    QVERIFY(steamManager->isSteamDetected());
+    steamManager->setShareLibraryEnabled(true);
+
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstancePreset(i, QStringLiteral("steam"));
+    }
+    QVERIFY(m_presetManager->setDataDirectories(QStringLiteral("steam"), {
+        QVariantMap{{QStringLiteral("path"), steamRoot}, {QStringLiteral("mode"), QStringLiteral("overlay")}}
+    }));
+    QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
+    m_runner->m_startingSnapshot.shareSteamLibraries = true;
+
+    // The player who never ran Steam must not abort the session or get mounts; the other player still shares.
+    QVERIFY(m_runner->setupSessionResources());
+    QVERIFY(!m_runner->m_instanceDirectoryPreparations.value(0).isEmpty());
+    QVERIFY(m_runner->m_instanceDirectoryPreparations.value(1).isEmpty());
+    QVERIFY(m_runner->m_steamSharedUsers.contains(QStringLiteral("player1")));
+    QVERIFY(!m_runner->m_steamSharedUsers.contains(QStringLiteral("player2")));
 }
 
 void TestSessionRunner::testSetupDataDirectoriesHeroicNoConfigBulkCopy()
