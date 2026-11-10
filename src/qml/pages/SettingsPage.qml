@@ -29,6 +29,8 @@ Kirigami.ScrollablePage {
 
     property var audioManager: null
 
+    property var updateChecker: null
+
     PresetManager {
         id: internalPresetManager
     }
@@ -646,6 +648,15 @@ Kirigami.ScrollablePage {
                 }
             }
 
+            Controls.Label {
+                objectName: "labelHelperVersion"
+                Kirigami.FormData.label: i18nc("@label", "Version")
+                visible: root.helperAvailable
+                text: root.helperClient?.helperVersion
+                      ? root.helperClient.helperVersion
+                      : i18nc("@info", "Older than 0.6.1 or unknown")
+            }
+
             Controls.Button {
                 objectName: "btnInstallHelper"
                 Accessible.role: Accessible.Button
@@ -715,6 +726,207 @@ Kirigami.ScrollablePage {
                     onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#2-install-the-helper")
                 }
             ]
+        }
+
+        Kirigami.InlineMessage {
+            objectName: "messageHelperOutdated"
+            Layout.fillWidth: true
+            visible: root.helperClient?.helperOutdated ?? false
+            type: Kirigami.MessageType.Warning
+            text: i18nc("@info", "The installed helper is older than this version of CouchPlay supports. Stop any running session and reinstall the helper: re-run the install command from the README, or install it from the Flatpak with install-helper.sh.")
+
+            actions: [
+                Kirigami.Action {
+                    objectName: "actionHelperUpdateHelp"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: i18nc("@action:button", "Learn More")
+                    Accessible.onPressAction: triggered()
+                    icon.name: "help-about"
+                    text: i18nc("@action:button", "Learn More")
+                    onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#updating")
+                }
+            ]
+        }
+
+        Kirigami.FormLayout {
+            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
+            wideMode: root.width > Kirigami.Units.gridUnit * 30
+            visible: root.updateChecker !== null
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18nc("@title:group", "Software Update")
+            }
+
+            RowLayout {
+                Kirigami.FormData.label: i18nc("@label", "Status")
+                spacing: Kirigami.Units.smallSpacing
+
+                Kirigami.Icon {
+                    source: {
+                        const s = root.updateChecker?.state
+                        if (s === UpdateChecker.Checking) return "view-refresh"
+                        if (s === UpdateChecker.UpToDate) return "dialog-ok-apply"
+                        if (s === UpdateChecker.Error) return "dialog-error"
+                        return "dialog-information"
+                    }
+                    color: {
+                        const s = root.updateChecker?.state
+                        if (s === UpdateChecker.UpToDate) return Kirigami.Theme.positiveTextColor
+                        if (s === UpdateChecker.Error) return Kirigami.Theme.negativeTextColor
+                        return Kirigami.Theme.textColor
+                    }
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                }
+
+                Controls.Label {
+                    objectName: "labelUpdateStatus"
+                    text: {
+                        const s = root.updateChecker?.state
+                        if (s === UpdateChecker.Checking) {
+                            return i18nc("@info", "Checking…")
+                        }
+                        if (s === UpdateChecker.UpToDate) {
+                            return i18nc("@info", "Up to date (%1)", root.updateChecker.currentVersion)
+                        }
+                        if (s === UpdateChecker.UpdateAvailable) {
+                            return i18nc("@info", "Update available: %1", root.updateChecker.latestVersion)
+                        }
+                        if (s === UpdateChecker.Error) {
+                            return i18nc("@info", "Could not check for updates")
+                        }
+                        return i18nc("@info", "Not checked yet")
+                    }
+                    color: {
+                        const s = root.updateChecker?.state
+                        if (s === UpdateChecker.UpToDate) return Kirigami.Theme.positiveTextColor
+                        if (s === UpdateChecker.Error) return Kirigami.Theme.negativeTextColor
+                        return Kirigami.Theme.textColor
+                    }
+                }
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: i18nc("@label", "Installed version")
+                text: root.updateChecker?.currentVersion ?? ""
+            }
+
+            Controls.Label {
+                Kirigami.FormData.label: i18nc("@label", "Latest release")
+                text: root.updateChecker && root.updateChecker.latestVersion !== "" ? root.updateChecker.latestVersion : "—"
+            }
+
+            RowLayout {
+                Kirigami.FormData.label: " "
+                spacing: Kirigami.Units.smallSpacing
+
+                Controls.Button {
+                    objectName: "btnCheckUpdates"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Check Now")
+                    icon.name: "view-refresh"
+                    enabled: root.updateChecker?.state !== UpdateChecker.Checking
+                    onClicked: root.updateChecker.checkForUpdates()
+                }
+
+                Controls.Button {
+                    objectName: "btnUpdateNow"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Update Now")
+                    icon.name: "update-none"
+                    visible: root.updateChecker?.installMethod === "flatpak"
+                             && root.updateChecker.updateAvailable
+                             && root.updateChecker.updateNowState !== UpdateChecker.UpdateNowSucceeded
+                    enabled: root.updateChecker?.updateNowState !== UpdateChecker.UpdateNowRunning
+                    onClicked: root.updateChecker.updateNow()
+                }
+
+                Controls.Button {
+                    objectName: "btnOpenReleases"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    Accessible.onPressAction: clicked()
+                    text: i18nc("@action:button", "Open Releases Page")
+                    icon.name: "internet-services"
+                    onClicked: Qt.openUrlExternally(root.updateChecker.releasesUrl)
+                }
+            }
+
+            RowLayout {
+                objectName: "rowUpdateProgress"
+                Kirigami.FormData.label: i18nc("@label", "Progress")
+                visible: root.updateChecker?.updateNowState === UpdateChecker.UpdateNowRunning
+                spacing: Kirigami.Units.smallSpacing
+
+                Controls.BusyIndicator {
+                    running: parent.visible
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                }
+
+                Controls.Label {
+                    text: root.updateChecker?.updateNowMessage || i18nc("@info", "Updating…")
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+            }
+
+            Controls.CheckBox {
+                objectName: "checkUpdateAutomatically"
+                Kirigami.FormData.label: i18nc("@option:check", "Check for updates automatically")
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Kirigami.FormData.label
+                checked: root.settingsManager ? root.settingsManager.checkForUpdatesAutomatically : true
+                enabled: root.settingsManager !== null
+                onToggled: root.settingsManager.checkForUpdatesAutomatically = checked
+
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Checks GitHub for a new release when CouchPlay starts. No data is sent beyond the request itself.")
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.delay: 1000
+            }
+        }
+
+        Kirigami.InlineMessage {
+            objectName: "messageUpdateGuidance"
+            Layout.fillWidth: true
+            visible: !!root.updateChecker
+                     && root.updateChecker.updateAvailable
+                     && root.updateChecker.updateNowState !== UpdateChecker.UpdateNowSucceeded
+                     && root.updateChecker.updateNowState !== UpdateChecker.UpdateNowFailed
+            type: Kirigami.MessageType.Information
+            text: {
+                if (!root.updateChecker) return ""
+                if (root.updateChecker.installMethod === "flatpak") {
+                    return i18nc("@info", "Click Update Now to update the Flatpak. The helper is not updated automatically; reinstall it only if the Privileged Helper section says it is outdated.")
+                }
+                if (root.updateChecker.installMethod === "steamos") {
+                    return i18nc("@info", "Stop any running session and re-run the install command from the README to update the app and its system extension.")
+                }
+                return i18nc("@info", "Stop any running session and re-run the install command from the README (add --tarball to keep the native binary), or download the release from the releases page.")
+            }
+        }
+
+        Kirigami.InlineMessage {
+            objectName: "messageUpdateSucceeded"
+            Layout.fillWidth: true
+            visible: root.updateChecker?.updateNowState === UpdateChecker.UpdateNowSucceeded
+            type: Kirigami.MessageType.Positive
+            text: i18nc("@info", "Update installed. Restart CouchPlay to finish updating.")
+        }
+
+        Kirigami.InlineMessage {
+            objectName: "messageUpdateFailed"
+            Layout.fillWidth: true
+            visible: root.updateChecker?.updateNowState === UpdateChecker.UpdateNowFailed
+            type: Kirigami.MessageType.Error
+            text: root.updateChecker?.updateNowMessage
+                  ? i18nc("@info %1 is the last line of flatpak's output", "The update failed: %1", root.updateChecker.updateNowMessage)
+                  : i18nc("@info", "The update failed. Update manually with: flatpak update io.github.hikaps.couchplay")
         }
 
         Kirigami.FormLayout {

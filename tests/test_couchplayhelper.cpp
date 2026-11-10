@@ -41,6 +41,7 @@
 #include "../helper/SecureFs.h"
 #include "../helper/SystemOps.h"
 #include "../helper/HomePathMapping.h"
+#include "../helper/HelperApiLevel.h"
 #include "../helper/DirectoryPlan.h"
 class MockSystemdUnit final : public QDBusVirtualObject
 {
@@ -964,6 +965,7 @@ private Q_SLOTS:
     void testListCouchPlayUsersFilters();
     void testGetUserInfo();
     void testGetUserInfoNotFound();
+    void testGetVersionInfo();
     void testIsSteamBootstrappedTrue();
     void testIsSteamBootstrappedFalse();
 
@@ -4410,6 +4412,21 @@ void TestCouchPlayHelper::testGetUserInfoNotFound()
 
     QVERIFY(reply.isValid());
     QVERIFY(reply.value().isEmpty());
+}
+
+void TestCouchPlayHelper::testGetVersionInfo()
+{
+    const QString previousVersion = QCoreApplication::applicationVersion();
+    const auto restore = qScopeGuard([&] { QCoreApplication::setApplicationVersion(previousVersion); });
+    QCoreApplication::setApplicationVersion(QStringLiteral("9.9.9-test"));
+
+    QDBusReply<QVariantMap> reply = m_dbusInterface->call(QStringLiteral("GetVersionInfo"));
+
+    QVERIFY(reply.isValid());
+    const QVariantMap info = reply.value();
+    QCOMPARE(info.value(QStringLiteral("version")).toString(), QStringLiteral("9.9.9-test"));
+    QCOMPARE(info.value(QStringLiteral("apiLevel")).toInt(), COUCHPLAY_HELPER_API_LEVEL);
+    QVERIFY(COUCHPLAY_HELPER_API_LEVEL >= 1);
 }
 
 QTEST_MAIN(TestCouchPlayHelper)

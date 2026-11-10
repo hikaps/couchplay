@@ -216,6 +216,14 @@ sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh unin
 sudo ./install-helper.sh uninstall
 ```
 
+### Updating
+
+CouchPlay checks GitHub for a newer **stable** release when it starts (turn this off under **Settings → Software Update**) and shows one notice per launch; **Check Now** checks on demand. The app only informs you: it never updates the privileged helper or the SteamOS system extension itself.
+
+- **Flatpak:** click **Update Now** in Settings → Software Update (it runs `flatpak update -y io.github.hikaps.couchplay` on the host), then restart CouchPlay to finish updating.
+- **Native or SteamOS:** stop any running session and re-run the [Quick install](#quick-install-recommended) one-liner (add `--tarball` to keep the native binary). On SteamOS this also refreshes the system extension. **Open Releases Page** shows the release notes.
+- **Helper:** Update Now does not touch it. The GUI keeps working with an older helper until a release needs a newer one. Settings → Privileged Helper shows the installed helper version and warns when it is too old for the GUI; reinstall it then (see [Install the helper](#2-install-the-helper)).
+
 ## Troubleshooting
 
 - **Only the first instance starts, with a window-positioning timeout.** This is a KWin window-discovery problem, not a launcher lock. Details are in [docs/session-internals.md](docs/session-internals.md#gamescope-positioning).

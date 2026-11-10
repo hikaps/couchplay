@@ -128,6 +128,8 @@ target_sources(couchplay PRIVATE
     core/PairingSession.h
     core/StreamAudio.cpp
     core/StreamAudio.h
+    core/UpdateChecker.cpp
+    core/UpdateChecker.h
     dbus/CouchPlayHelperClient.cpp
     dbus/CouchPlayHelperClient.h
 )

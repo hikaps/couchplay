@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "CouchPlayHelper.h"
+#include "HelperApiLevel.h"
 #include "InstanceBootstrap.h"
 #include "HomePathMapping.h"
 #include "PolkitActions.h"
@@ -879,6 +880,12 @@ QVariantMap CouchPlayHelper::GetUserInfo(const QString &username)
     info.insert(QStringLiteral("gid"), static_cast<uint>(pw->pw_gid));
     info.insert(QStringLiteral("home"), QString::fromLocal8Bit(pw->pw_dir));
     return info;
+}
+
+QVariantMap CouchPlayHelper::GetVersionInfo()
+{
+    return {{QStringLiteral("version"), QCoreApplication::applicationVersion()},
+            {QStringLiteral("apiLevel"), COUCHPLAY_HELPER_API_LEVEL}};
 }
 
 QVariantMap CouchPlayHelper::GetUserHomeInfoByUid(uint uid)
