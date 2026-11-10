@@ -1096,7 +1096,7 @@ bool CouchPlayHelper::SetupRuntimeAccess()
         return false;
     }
 
-    QString waylandSocket = runtimeDir + QStringLiteral("/wayland-0");
+    QString waylandSocket = waylandSocketPath(runtimeDir);
     if (!setAcl(waylandSocket, QStringLiteral("rw"))) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to set ACL on Wayland socket"));
         return false;
@@ -1163,6 +1163,28 @@ bool CouchPlayHelper::RemoveRuntimeAccess()
     return true;
 }
 
+// KWin takes the first free wayland-N name, so the desktop's socket is not always wayland-0 (a stale lock or another
+// compositor can leave it wayland-1). Pick the lowest-numbered socket; a nested compositor starts later and gets a
+// higher number. Falls back to wayland-0 when none is found.
+QString CouchPlayHelper::waylandSocketPath(const QString &runtimeDir)
+{
+    static const QRegularExpression socketName(QStringLiteral("^wayland-([0-9]+)$"));
+    int lowest = -1;
+    const QStringList entries = m_ops->entryList(runtimeDir, {QStringLiteral("wayland-*")},
+                                                 QDir::System | QDir::NoDotAndDotDot);
+    for (const QString &entry : entries) {
+        const QRegularExpressionMatch match = socketName.match(entry);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        const int number = match.captured(1).toInt();
+        if (lowest < 0 || number < lowest) {
+            lowest = number;
+        }
+    }
+    return runtimeDir + QStringLiteral("/wayland-") + QString::number(lowest < 0 ? 0 : lowest);
+}
+
 void CouchPlayHelper::removeRuntimeAcls(const QString &runtimeDir)
 {
     auto removeAcl = [&](const QString &path) {
@@ -1204,7 +1226,7 @@ void CouchPlayHelper::removeRuntimeAcls(const QString &runtimeDir)
         removeAcl(runtimeDir + QStringLiteral("/") + xauthFile);
     }
 
-    removeAcl(runtimeDir + QStringLiteral("/wayland-0"));
+    removeAcl(waylandSocketPath(runtimeDir));
     removeAcl(runtimeDir);
 }
 
@@ -1790,7 +1812,7 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
     gameEnvironment.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"),
                            QStringLiteral("unix:path=%1/bus").arg(userRuntimeDir));
     gameEnvironment.insert(QStringLiteral("WAYLAND_DISPLAY"),
-                           QStringLiteral("/run/user/%1/wayland-0").arg(runtimeUid));
+                           waylandSocketPath(QStringLiteral("/run/user/%1").arg(runtimeUid)));
     gameEnvironment.insert(QStringLiteral("XDG_RUNTIME_DIR"), userRuntimeDir);
     gameEnvironment.insert(QStringLiteral("PIPEWIRE_RUNTIME_DIR"), QStringLiteral("/run/user/%1").arg(runtimeUid));
     gameEnvironment.insert(QStringLiteral("PULSE_SERVER"), QStringLiteral("tcp:127.0.0.1:4713"));
@@ -4507,7 +4529,7 @@ void CouchPlayHelper::loadAndReconcileState()
     QSet<uint> loadedRuntimeUids;
     for (const QJsonValue &val : runtimeUids) {
         uint uid = static_cast<uint>(val.toInteger());
-        QString waylandSocket = QStringLiteral("/run/user/%1/wayland-0").arg(uid);
+        QString waylandSocket = waylandSocketPath(QStringLiteral("/run/user/%1").arg(uid));
         if (m_ops->fileExists(waylandSocket)) {
             QProcess getfaclProc;
             getfaclProc.start(QStringLiteral("getfacl"), {QStringLiteral("-q"), QStringLiteral("-c"), waylandSocket});

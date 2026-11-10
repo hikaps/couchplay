@@ -131,7 +131,7 @@ public Q_SLOTS:
      *
      * Sets group ACLs on compositor's runtime directory sockets:
      * - XDG_RUNTIME_DIR (traverse)
-     * - wayland-0 (rw)
+     * - wayland-N (rw), the desktop's lowest-numbered Wayland socket (wayland-0 if none is found)
      * - xauth_* (r)
      * - pipewire-0 (rw)
      * - pipewire-0-manager (rw)
@@ -506,6 +506,7 @@ private:
     bool readLaunchManifestForUnit(const QString &serviceName, const QString &token,
                                    LaunchManifest *manifest, QString *error = nullptr) const;
     void removeRuntimeAcls(const QString &runtimeDir);
+    QString waylandSocketPath(const QString &runtimeDir);
     void cleanupTcpListenerIfLast(const QString &username);
     void setupUinputAccess();
     void removeUinputAccess();

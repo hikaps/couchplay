@@ -23,8 +23,8 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 | Device ownership | CouchPlayHelper.cpp:ChangeDeviceOwner() | chown /dev/input/event* to gaming user |
 | Process spawning | CouchPlayHelper.cpp:LaunchInstance() | systemd-run --uid transient unit launch |
 | Mount management | CouchPlayHelper.cpp:MountSharedDirectories() | bind-mount for shared game directories |
-| ACL management | CouchPlayHelper.cpp:SetRuntimeAccess() | setfacl on wayland-0, pipewire-0 sockets |
-| Runtime ACL cache | CouchPlayHelper.cpp:loadAndReconcileState() | Verifies ACLs on wayland-0 via getfacl, evicts stale UIDs |
+| ACL management | CouchPlayHelper.cpp:SetRuntimeAccess() | setfacl on wayland-N, pipewire-0 sockets |
+| Runtime ACL cache | CouchPlayHelper.cpp:loadAndReconcileState() | Verifies ACLs on wayland-N via getfacl, evicts stale UIDs |
 | Dynamic gamescope path | CouchPlayHelper.cpp:startTransientUnit() | Falls back to `which gamescope` if /usr/bin/gamescope missing |
 | Validation helpers | CouchPlayHelper.cpp:validateUserAndAuth() | Shared username+auth+userExists check (12 call sites) |
 | Process helper | CouchPlayHelper.cpp:runCommand() | Shared QProcess spawn/await (8 call sites) |
@@ -55,7 +55,7 @@ D-Bus privileged service for split-screen gaming: user creation, device ownershi
 
 **systemd-run Spawning:** LaunchInstance() uses `systemd-run --uid <username> --unit couchplay-<username>.service` to launch gamescope as any user in a transient systemd unit.
 
-**Runtime ACL Dance:** SetRuntimeAccess() grants couchplay group read+execute on XDG_RUNTIME_DIR sockets (wayland-0, pipewire-0) so secondary players can access compositor resources.
+**Runtime ACL Dance:** SetRuntimeAccess() grants couchplay group read+execute on XDG_RUNTIME_DIR sockets (wayland-N, pipewire-0) so secondary players can access compositor resources.
 
 **Mount Aliasing:** MountSharedDirectories() supports both home-relative paths (mounted at same relative location) and absolute paths with explicit aliases or ~/.couchplay/mounts/ default.
 
