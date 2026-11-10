@@ -93,6 +93,8 @@ A player can be streamed to a [Moonlight](https://moonlight-stream.org/) client 
 
 Hold **Start + Select for 2 seconds** on any assigned gamepad, or click **Stop Session**. This works with standard gamepads and the Valve Steam Controller, even while Steam is running.
 
+You can also press **Meta + Shift + Escape** (Meta is the Windows/Super key) to stop the session from the keyboard. This is a KDE global shortcut, so it may not work while the keyboard is assigned to a player, because the desktop no longer receives its keys. You can change it in System Settings → Keyboard → Shortcuts → CouchPlay.
+
 ### Profiles
 
 Save a session as a profile to reload it later. Deleting a profile asks for confirmation.
