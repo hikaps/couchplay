@@ -175,6 +175,26 @@ private Q_SLOTS:
         QCOMPARE(sourceSentinel.readAll(), QByteArray("source remains private\n"));
     }
 
+    void testCleanupDoesNotCreateSteamDirectoryForUnbootstrappedPlayer()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        SteamPlanHelper helper;
+        helper.targetHome = home.path() + QStringLiteral("/player-home");
+        QVERIFY(QDir().mkpath(helper.targetHome));
+        SteamConfigManager manager;
+        manager.setHelperClient(&helper);
+
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player")));
+        QVERIFY(helper.writtenFiles.isEmpty());
+        QVERIFY(!QFileInfo::exists(helper.targetHome + QStringLiteral("/.steam")));
+    }
+
     void testLoadGamesMergesNativeAndShortcut()
     {
         QTemporaryDir home;

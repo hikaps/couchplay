@@ -1052,6 +1052,14 @@ bool SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
         return false;
     }
 
+    // Nothing to restore for a player whose Steam is not set up yet. Writing the file anyway would create
+    // ~/.steam/steam as a real directory, which Steam's first-run setup then cannot turn into its symlink and
+    // aborts with "Couldn't set up Steam data".
+    if (m_helperClient->getUserSteamRoot(targetUsername).isEmpty()) {
+        qCDebug(couchplaySteam) << "No Steam installation for" << targetUsername << "- nothing to clean up";
+        return true;
+    }
+
     const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
     if (!targetPaths.valid || targetPaths.libraryFoldersVdf.isEmpty()) {
         return false;
