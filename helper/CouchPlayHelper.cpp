@@ -316,9 +316,7 @@ CouchPlayHelper::~CouchPlayHelper()
     m_runtimeAccessSetForUid.clear();
 
 
-    QStringList ownedServices = m_usernameToUnitName.values();
-    ownedServices.append(m_auxiliaryUnitNameForUsername.values());
-    ownedServices.removeDuplicates();
+    const QStringList ownedServices = m_usernameToUnitName.values();
     for (const QString &serviceName : ownedServices) {
         m_stoppingUnits.insert(serviceName);
         if (stopServiceInstance(serviceName)) {
@@ -1430,7 +1428,6 @@ qint64 CouchPlayHelper::LaunchInstance(const QString &username,
                        environment,
                        privateTemporaryDirectories,
                        directoryPreparations,
-                       UnitRole::Main,
                        request,
                        replyConnection);
     return 0;
@@ -1531,10 +1528,6 @@ QString CouchPlayHelper::generateServiceName(const QString &username)
 {
     return QStringLiteral("couchplay-%1.service").arg(username);
 }
-QString CouchPlayHelper::generateStreamServiceName(const QString &username)
-{
-    return QStringLiteral("couchplay-stream@%1.service").arg(username);
-}
 
 QString CouchPlayHelper::usernameForUnit(const QString &serviceName) const
 {
@@ -1566,7 +1559,6 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
                                          const QStringList &environment,
                                          bool privateTemporaryDirectories,
                                          const QVariantList &directoryPreparations,
-                                         UnitRole role,
                                          const QDBusMessage &request,
                                          const QDBusConnection &replyConnection)
 {
@@ -1585,14 +1577,11 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
         fail(QDBusError::Failed, QStringLiteral("Failed to subscribe to systemd Manager: %1").arg(subscriptionError));
         return;
     }
-    const QString serviceName = role == UnitRole::Main ? generateServiceName(username)
-                                                       : generateStreamServiceName(username);
-    const bool roleAlreadyTracked = role == UnitRole::Main ? m_usernameToUnitName.contains(username)
-                                                           : m_auxiliaryUnitNameForUsername.contains(username);
-    if (roleAlreadyTracked || m_pendingLaunches.contains(serviceName)
+    const QString serviceName = generateServiceName(username);
+    if (m_usernameToUnitName.contains(username) || m_pendingLaunches.contains(serviceName)
         || m_launchTokenByUnitName.contains(serviceName)) {
         fail(QDBusError::Failed,
-             QStringLiteral("An instance of this role is active, preparing, or has pending cleanup for %1")
+             QStringLiteral("An instance is active, preparing, or has pending cleanup for %1")
                  .arg(username));
         return;
     }
@@ -1604,12 +1593,6 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
         return;
     }
     const uint requestUid = callerUid();
-    const QString otherRoleUnit = role == UnitRole::Main ? m_auxiliaryUnitNameForUsername.value(username)
-                                                         : m_usernameToUnitName.value(username);
-    if (!otherRoleUnit.isEmpty() && m_unitOwnerUid.value(otherRoleUnit, INVALID_CALLER_UID) != requestUid) {
-        fail(QDBusError::AccessDenied, QStringLiteral("An auxiliary/main instance for this player belongs to another caller"));
-        return;
-    }
     struct passwd *callerRecord = requestUid == INVALID_CALLER_UID ? nullptr : m_ops->getpwuid(requestUid);
     if (!callerRecord || requestUid == INVALID_CALLER_UID) {
         fail(QDBusError::AccessDenied, QStringLiteral("Could not resolve authenticated caller identity"));
@@ -1811,7 +1794,6 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
     }
     LaunchManifest manifest;
     manifest.schemaVersion = 1;
-    manifest.unitRole = role == UnitRole::Main ? QStringLiteral("main") : QStringLiteral("stream");
     manifest.unitName = serviceName;
     manifest.callerUid = authenticatedCallerUid;
     manifest.callerGid = authenticatedCallerGid;
@@ -1890,13 +1872,8 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
     auto *jobMonitor = new UnitJobMonitor(serviceName, this);
     jobMonitor->setGeneration(unitGeneration);
     m_jobMonitors.insert(serviceName, jobMonitor);
-    if (role == UnitRole::Main) {
-        m_usernameToUnitName.insert(username, serviceName);
-    } else {
-        m_auxiliaryUnitNameForUsername.insert(username, serviceName);
-    }
+    m_usernameToUnitName.insert(username, serviceName);
     m_unitUsernameByName.insert(serviceName, username);
-    m_unitRoleByName.insert(serviceName, role);
     m_unitOwnerUid.insert(serviceName, requestUid);
     m_monitors.insert(serviceName, propertyMonitor);
     m_targetIdentityByUnit.insert(serviceName, TargetIdentity{targetUid, targetGid, targetHome, targetCanonicalHome});
@@ -2852,11 +2829,7 @@ void CouchPlayHelper::releaseOwnedUnit(const QString &serviceName, bool unlinkMa
     if (m_usernameToUnitName.value(username) == serviceName) {
         m_usernameToUnitName.remove(username);
     }
-    if (m_auxiliaryUnitNameForUsername.value(username) == serviceName) {
-        m_auxiliaryUnitNameForUsername.remove(username);
-    }
     m_unitUsernameByName.remove(serviceName);
-    m_unitRoleByName.remove(serviceName);
     m_unitGenerationByName.remove(serviceName);
     m_pidPollGenerationByUnit.remove(serviceName);
     m_unitOwnerUid.remove(serviceName);
@@ -2891,8 +2864,7 @@ void CouchPlayHelper::releaseOwnedUnit(const QString &serviceName, bool unlinkMa
 
 void CouchPlayHelper::cleanupTcpListenerIfLast(const QString &username)
 {
-    if (m_usernameToUnitName.contains(username) || m_auxiliaryUnitNameForUsername.contains(username)
-        || !m_compositorUidForUsername.contains(username)) {
+    if (m_usernameToUnitName.contains(username) || !m_compositorUidForUsername.contains(username)) {
         return;
     }
     uint compositorUid = m_compositorUidForUsername.value(username);
@@ -3869,11 +3841,6 @@ bool CouchPlayHelper::saveState()
         unitsObject[it.key()] = it.value();
     }
     root[QStringLiteral("activeUnits")] = unitsObject;
-    QJsonObject auxiliaryUnitsObject;
-    for (auto it = m_auxiliaryUnitNameForUsername.constBegin(); it != m_auxiliaryUnitNameForUsername.constEnd(); ++it) {
-        auxiliaryUnitsObject[it.key()] = it.value();
-    }
-    root[QStringLiteral("auxiliaryUnits")] = auxiliaryUnitsObject;
     QJsonObject launchTokensObject;
     for (auto it = m_launchTokenByUnitName.constBegin(); it != m_launchTokenByUnitName.constEnd(); ++it) {
         launchTokensObject[it.key()] = it.value();
@@ -4140,10 +4107,24 @@ void CouchPlayHelper::loadAndReconcileState()
             }
         }
     }
-    QJsonObject unitsObject = root.value(QStringLiteral("activeUnits")).toObject();
-    const QJsonObject auxiliaryUnitsObject = root.value(QStringLiteral("auxiliaryUnits")).toObject();
-    for (auto it = auxiliaryUnitsObject.constBegin(); it != auxiliaryUnitsObject.constEnd(); ++it) {
-        unitsObject.insert(QStringLiteral("stream:") + it.key(), it.value());
+    const QJsonObject unitsObject = root.value(QStringLiteral("activeUnits")).toObject();
+    // State files written before 0.6.0 may list a per-user auxiliary stream unit. The helper no longer
+    // manages such units, so stop any that are still running instead of leaking them, then drop the entry.
+    const QJsonObject legacyAuxiliaryUnits = root.value(QStringLiteral("auxiliaryUnits")).toObject();
+    for (auto it = legacyAuxiliaryUnits.constBegin(); it != legacyAuxiliaryUnits.constEnd(); ++it) {
+        const QString username = it.key();
+        const QString unitName = it.value().toString();
+        changed = true;
+        if (!s_validUsername.match(username).hasMatch()
+            || (unitName != QStringLiteral("couchplay-stream@%1.service").arg(username)
+                && unitName != QStringLiteral("couchplay-%1-stream.service").arg(username))) {
+            continue;
+        }
+        if (stopServiceInstance(unitName)) {
+            stoppedUnitNames.insert(unitName);
+        } else {
+            qWarning() << "Could not stop leftover auxiliary stream unit" << unitName;
+        }
     }
     const QJsonObject launchTokensObject = root.value(QStringLiteral("launchTokens")).toObject();
     QMap<QString, QString> manifestsToUnlink;
@@ -4160,9 +4141,7 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
     m_usernameToUnitName.clear();
-    m_auxiliaryUnitNameForUsername.clear();
     m_unitUsernameByName.clear();
-    m_unitRoleByName.clear();
     m_unitGenerationByName.clear();
     m_pidPollGenerationByUnit.clear();
     m_pidToUsername.clear();
@@ -4174,24 +4153,17 @@ void CouchPlayHelper::loadAndReconcileState()
     m_readyUnitNames.clear();
     m_overlayLeasePathsByUnit.clear();
     QMap<QString, QString> recoveredUnits;
-    QMap<QString, QString> recoveredAuxiliaryUnits;
 
-    const auto trackRecoveredUnit = [&](const QString &username, const QString &unitName, UnitRole role) {
-        if (role == UnitRole::Main) {
-            recoveredUnits.insert(username, unitName);
-        } else {
-            recoveredAuxiliaryUnits.insert(username, unitName);
-        }
+    const auto trackRecoveredUnit = [&](const QString &username, const QString &unitName) {
+        recoveredUnits.insert(username, unitName);
         m_unitUsernameByName.insert(unitName, username);
-        m_unitRoleByName.insert(unitName, role);
         m_unitGenerationByName.insert(unitName, ++m_nextUnitGeneration);
     };
     const auto manifestMatchesCurrentIdentity = [&](const LaunchManifest &manifest,
                                                     const QString &username,
-                                                    const QString &unitName,
-                                                    UnitRole role) {
-        const QString expectedRole = role == UnitRole::Main ? QStringLiteral("main") : QStringLiteral("stream");
-        if (manifest.schemaVersion != 1 || manifest.unitRole != expectedRole || manifest.unitName != unitName
+                                                    const QString &unitName) {
+        if (manifest.schemaVersion != 1 || manifest.unitRole != QStringLiteral("main")
+            || manifest.unitName != unitName
             || manifest.targetUsername != username
             || !DirectoryPlan::validateDirectoryPreparations(manifest.directories)) {
             return false;
@@ -4231,14 +4203,13 @@ void CouchPlayHelper::loadAndReconcileState()
 
     const auto queueStoredPidStops = [&](const QString &username,
                                          const QString &unitName,
-                                         UnitRole role,
                                          const QString &reason) {
         for (auto it = storedPidObject.constBegin(); it != storedPidObject.constEnd(); ++it) {
             if (it.value().toString() != username) {
                 continue;
             }
             QString storedUnitName = storedPidUnits.value(it.key()).toString();
-            if (storedUnitName.isEmpty() && role == UnitRole::Main) {
+            if (storedUnitName.isEmpty()) {
                 storedUnitName = generateServiceName(username);
             }
             if (storedUnitName != unitName) {
@@ -4253,20 +4224,14 @@ void CouchPlayHelper::loadAndReconcileState()
     };
 
     for (auto it = unitsObject.constBegin(); it != unitsObject.constEnd(); ++it) {
-        const bool streamRole = it.key().startsWith(QStringLiteral("stream:"));
-        const UnitRole role = streamRole ? UnitRole::Stream : UnitRole::Main;
-        const QString username = streamRole ? it.key().mid(7) : it.key();
+        const QString username = it.key();
         const QString unitName = it.value().toString();
-        const QString expectedUnitName = role == UnitRole::Main ? generateServiceName(username)
-                                                                : generateStreamServiceName(username);
-        const bool legacyStream = streamRole
-            && unitName == QStringLiteral("couchplay-%1-stream.service").arg(username);
-        if (!s_validUsername.match(username).hasMatch() || (unitName != expectedUnitName && !legacyStream)) {
+        if (!s_validUsername.match(username).hasMatch() || unitName != generateServiceName(username)) {
             changed = true;
             continue;
         }
         QString token = launchTokensObject.value(unitName).toString();
-        if (token.isEmpty() && role == UnitRole::Main) {
+        if (token.isEmpty()) {
             token = launchTokensObject.value(username).toString();
         }
 
@@ -4277,7 +4242,7 @@ void CouchPlayHelper::loadAndReconcileState()
         TargetIdentity targetIdentity;
         if (!ready && DirectoryPlan::isLaunchToken(token)
             && m_ops->readLaunchManifest(token, &manifest, nullptr)
-            && manifestMatchesCurrentIdentity(manifest, username, unitName, role)) {
+            && manifestMatchesCurrentIdentity(manifest, username, unitName)) {
             ownerUid = manifest.callerUid;
             targetIdentity = TargetIdentity{manifest.targetUid,
                                             manifest.targetGid,
@@ -4309,38 +4274,18 @@ void CouchPlayHelper::loadAndReconcileState()
                 stoppedUnitNames.insert(unitName);
             }
             if (stopped) {
-                queueStoredPidStops(username, unitName, role,
+                queueStoredPidStops(username, unitName,
                                     QStringLiteral("Instance was stopped because helper ownership could not be verified"));
                 changed = true;
                 continue;
             }
             qWarning() << "Could not stop active unit with invalid persisted ownership" << unitName;
-            trackRecoveredUnit(username, unitName, role);
+            trackRecoveredUnit(username, unitName);
             if (ownerUid != INVALID_CALLER_UID) {
                 m_unitOwnerUid.insert(unitName, ownerUid);
             }
             if (DirectoryPlan::isLaunchToken(token)) {
                 m_launchTokenByUnitName.insert(unitName, token);
-            }
-            changed = true;
-            continue;
-        }
-        if (legacyStream) {
-            // Never adopt the ambiguous old stream namespace. Keep ownership
-            // tracked if stopping fails, so neither it nor its resources orphan.
-            trackRecoveredUnit(username, unitName, role);
-            m_unitOwnerUid.insert(unitName, ownerUid);
-            m_targetIdentityByUnit.insert(unitName, targetIdentity);
-            if (DirectoryPlan::isLaunchToken(token)) {
-                m_launchTokenByUnitName.insert(unitName, token);
-            }
-            m_stoppingUnits.insert(unitName);
-            const bool stopped = stopServiceInstance(unitName);
-            m_stoppingUnits.remove(unitName);
-            if (stopped) {
-                stoppedUnitNames.insert(unitName);
-                queueStoredPidStops(username, unitName, role, QStringLiteral("Stream stopped for unit-name upgrade"));
-                m_deferredReleaseUnits.insert(unitName);
             }
             changed = true;
             continue;
@@ -4373,12 +4318,12 @@ void CouchPlayHelper::loadAndReconcileState()
                 stoppedUnitNames.insert(unitName);
             }
             if (stopped) {
-                queueStoredPidStops(username, unitName, role,
+                queueStoredPidStops(username, unitName,
                                     QStringLiteral("Instance was stopped because its overlay lease could not be recovered"));
                 changed = true;
                 continue;
             }
-            trackRecoveredUnit(username, unitName, role);
+            trackRecoveredUnit(username, unitName);
             m_unitOwnerUid.insert(unitName, ownerUid);
             m_targetIdentityByUnit.insert(unitName, targetIdentity);
             if (DirectoryPlan::isLaunchToken(token)) {
@@ -4388,7 +4333,7 @@ void CouchPlayHelper::loadAndReconcileState()
             continue;
         }
 
-        trackRecoveredUnit(username, unitName, role);
+        trackRecoveredUnit(username, unitName);
         m_unitOwnerUid.insert(unitName, ownerUid);
         m_targetIdentityByUnit.insert(unitName, targetIdentity);
         m_overlayLeaseFdsByUnit.insert(unitName, leaseFds);
@@ -4401,7 +4346,6 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
     m_usernameToUnitName = recoveredUnits;
-    m_auxiliaryUnitNameForUsername = recoveredAuxiliaryUnits;
 
     for (auto it = storedPidObject.constBegin(); it != storedPidObject.constEnd(); ++it) {
         bool pidOk = false;
@@ -4538,7 +4482,7 @@ void CouchPlayHelper::loadAndReconcileState()
     QHash<QString, uint> loadedCompositorUid;
     for (auto it = compositorUidObject.constBegin(); it != compositorUidObject.constEnd(); ++it) {
         QString user = it.key();
-        if (m_usernameToUnitName.contains(user) || m_auxiliaryUnitNameForUsername.contains(user)) {
+        if (m_usernameToUnitName.contains(user)) {
             loadedCompositorUid[user] = static_cast<uint>(it.value().toInteger());
         }
     }
@@ -4567,7 +4511,7 @@ void CouchPlayHelper::loadAndReconcileState()
         }
     }
 
-    qDebug() << "loadAndReconcileState: Restored" << (m_usernameToUnitName.size() + m_auxiliaryUnitNameForUsername.size())
+    qDebug() << "loadAndReconcileState: Restored" << m_usernameToUnitName.size()
              << "units," << m_modifiedDevices.size() << "devices," << m_runtimeAccessSetForUid.size() << "runtime UIDs";
 }
 
@@ -4685,14 +4629,10 @@ bool CouchPlayHelper::reconcileLegacyMounts(const QSet<QString> &activeSystemdUn
         }
 
         const QString mainUnit = generateServiceName(username);
-        const QString streamUnit = generateStreamServiceName(username);
         const bool mainStopped = stoppedUnitNames.contains(mainUnit);
-        const bool streamStopped = stoppedUnitNames.contains(streamUnit);
         const bool unitStillActive = m_usernameToUnitName.contains(username)
-            || m_auxiliaryUnitNameForUsername.contains(username)
-            || (activeSystemdUnits.contains(mainUnit) && !mainStopped)
-            || (activeSystemdUnits.contains(streamUnit) && !streamStopped);
-        if (unitStillActive || (!systemdStateKnown && !(mainStopped && streamStopped))) {
+            || (activeSystemdUnits.contains(mainUnit) && !mainStopped);
+        if (unitStillActive || (!systemdStateKnown && !mainStopped)) {
             remainingMounts.insert(username, storedMounts);
             continue;
         }

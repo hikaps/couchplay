@@ -712,7 +712,7 @@ Kirigami.ScrollablePage {
                     Accessible.onPressAction: triggered()
                     icon.name: "help-about"
                     text: i18nc("@action:button", "Learn More")
-                    onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#helper-setup")
+                    onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#2-install-the-helper")
                 }
             ]
         }
