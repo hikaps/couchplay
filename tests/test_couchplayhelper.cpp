@@ -942,6 +942,7 @@ private Q_SLOTS:
     void testCreateUserLingerFailure();
     void testCreateUserWithoutInputGroup();
     void testCreateUserWithInputGroup();
+    void testCreateUserRetriesWithoutInputGroupWhenUseraddCannotResolveIt();
     void testDeleteUserSuccess();
     void testDeleteUserInvalidUsername();
     void testDeleteUserNonexistent();
@@ -1407,6 +1408,33 @@ void TestCouchPlayHelper::testCreateUserWithInputGroup()
     QVERIFY(gIdx >= 0);
     QVERIFY(gIdx + 1 < useraddArgs.size());
     QCOMPARE(useraddArgs.at(gIdx + 1), QStringLiteral("input,couchplay"));
+}
+
+void TestCouchPlayHelper::testCreateUserRetriesWithoutInputGroupWhenUseraddCannotResolveIt()
+{
+    // getgrnam() finds "input" (altfiles, /usr/lib/group) but useradd reads only /etc/group and rejects it.
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    m_ops->setStandardError("useradd: group 'input' does not exist\n");
+    m_ops->m_processHandler = [](const QString &program, const QStringList &args, QByteArray *) {
+        const bool inputRequested =
+            program == QStringLiteral("useradd") && args.contains(QStringLiteral("input,couchplay"));
+        return inputRequested ? 6 : 0;
+    };
+
+    QDBusReply<uint> reply = m_dbusInterface->call(QStringLiteral("CreateUser"), QStringLiteral("newuser"),
+                                                   QStringLiteral("New User"));
+    m_ops->m_processHandler = {};
+
+    QVERIFY(!reply.error().message().startsWith(QStringLiteral("Failed to create user")));
+    QStringList groupArguments;
+    for (const auto &inv : m_ops->m_processInvocations) {
+        if (inv.command == QStringLiteral("useradd")) {
+            groupArguments.append(inv.args.value(inv.args.indexOf(QStringLiteral("-G")) + 1));
+        }
+    }
+    QCOMPARE(groupArguments, (QStringList{QStringLiteral("input,couchplay"), QStringLiteral("couchplay")}));
 }
 
 void TestCouchPlayHelper::testDeleteUserSuccess()
