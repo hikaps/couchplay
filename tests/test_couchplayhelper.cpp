@@ -452,6 +452,7 @@ public:
         m_chmodResult = 0;
         m_processArgs.clear();
         m_processInvocations.clear();
+        m_entryLists.clear();
         m_mockProcessStart = false;
         m_onSystemctlStop = {};
         m_processHandler = {};
@@ -485,6 +486,7 @@ public:
     // Optional per-invocation process script: returns the exit code and fills the standard output.
     std::function<int(const QString &, const QStringList &, QByteArray *)> m_processHandler;
     QStringList m_removedFiles;
+    QMap<QString, QStringList> m_entryLists;
     QStringList m_directoryQueries;
     QStringList m_canonicalQueries;
     QStringList m_statQueries;
@@ -755,10 +757,14 @@ public:
 
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override
     {
-        Q_UNUSED(path)
-        Q_UNUSED(nameFilters)
         Q_UNUSED(filters)
-        return QStringList();
+        QStringList matches;
+        for (const QString &entry : m_entryLists.value(path)) {
+            if (nameFilters.isEmpty() || QDir::match(nameFilters, entry)) {
+                matches.append(entry);
+            }
+        }
+        return matches;
     }
 
     bool killProcess(pid_t pid, int signal) override
@@ -1020,6 +1026,7 @@ private Q_SLOTS:
     void testSetupRuntimeAccessAuthorizationDenied();
     void testSetupRuntimeAccessUserNotFound();
     void testRemoveRuntimeAccessSuccess();
+    void testRuntimeAccessUsesActualWaylandSocket();
     void testRemoveRuntimeAccessAuthorizationDenied();
     void testRemoveRuntimeAccessUserNotFound();
 
@@ -3032,6 +3039,44 @@ void TestCouchPlayHelper::testRemoveRuntimeAccessSuccess()
 
     QVERIFY(reply.isValid());
     QVERIFY(reply.value());
+}
+
+void TestCouchPlayHelper::testRuntimeAccessUsesActualWaylandSocket()
+{
+    // KWin can end up on wayland-1 (a stale wayland-0 left by another compositor): the ACL must go on the real socket,
+    // and the lowest wayland-N wins; lock files and wayland-proxy-N entries are not sockets of the desktop.
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
+    m_ops->setUserExists(QStringLiteral("compositor"), true, 1000, 1000, QStringLiteral("/home/compositor"));
+    m_ops->setFileExists(QStringLiteral("/run/user/1000"), true);
+    m_ops->setFileExists(QStringLiteral("/run/user/1000/wayland-1"), true);
+    m_ops->setFileExists(QStringLiteral("/run/user/1000/wayland-2"), true);
+    m_ops->setFileExists(QStringLiteral("/run/user/1000/bus"), true);
+    m_ops->m_entryLists.insert(QStringLiteral("/run/user/1000"),
+                               {QStringLiteral("wayland-2"), QStringLiteral("wayland-1"),
+                                QStringLiteral("wayland-1.lock"), QStringLiteral("wayland-proxy-2")});
+    m_ops->setProcessExitCode(0);
+
+    auto touchedWayland = [this](const QString &socket) {
+        for (const auto &invocation : m_ops->m_processInvocations) {
+            if (invocation.command == QStringLiteral("setfacl") && invocation.args.contains(socket)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    QDBusReply<bool> setupReply = m_dbusInterface->call(QStringLiteral("SetupRuntimeAccess"));
+    QVERIFY(setupReply.isValid());
+    QVERIFY(touchedWayland(QStringLiteral("/run/user/1000/wayland-1")));
+    QVERIFY(!touchedWayland(QStringLiteral("/run/user/1000/wayland-2")));
+    QVERIFY(!touchedWayland(QStringLiteral("/run/user/1000/wayland-0")));
+
+    // Teardown removes the ACL from the same socket
+    m_ops->m_processInvocations.clear();
+    QDBusReply<bool> removeReply = m_dbusInterface->call(QStringLiteral("RemoveRuntimeAccess"));
+    QVERIFY(removeReply.isValid());
+    QVERIFY(touchedWayland(QStringLiteral("/run/user/1000/wayland-1")));
 }
 
 void TestCouchPlayHelper::testRemoveRuntimeAccessAuthorizationDenied()
