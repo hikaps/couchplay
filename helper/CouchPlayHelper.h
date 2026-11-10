@@ -400,9 +400,7 @@ private:
     QString getUserHomeByUid(uint uid);
     int resetAllDevicesInternal();
     QString generateServiceName(const QString &username);
-    QString generateStreamServiceName(const QString &username);
     QString usernameForUnit(const QString &serviceName) const;
-    enum class UnitRole { Main, Stream };
     uint callerUid() const;
     void startTransientUnit(const QString &username,
                             const QStringList &gamescopeArgs,
@@ -412,7 +410,6 @@ private:
                             const QStringList &environment,
                             bool privateTemporaryDirectories,
                             const QVariantList &directoryPreparations,
-                            UnitRole role,
                             const QDBusMessage &request,
                             const QDBusConnection &replyConnection);
     bool stopServiceInstance(const QString &serviceName);
@@ -451,9 +448,7 @@ private:
 
     // Track launched transient units
     QMap<QString, QString> m_usernameToUnitName; // username -> main service name
-    QMap<QString, QString> m_auxiliaryUnitNameForUsername; // username -> auxiliary service name
     QMap<QString, QString> m_unitUsernameByName; // service name -> username
-    QMap<QString, UnitRole> m_unitRoleByName;
     QMap<QString, quint64> m_unitGenerationByName;
     quint64 m_nextUnitGeneration = 0;
     QMap<qint64, QString> m_pidToUsername; // PID -> username (reverse lookup for Stop/Kill)

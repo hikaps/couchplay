@@ -943,6 +943,7 @@ private Q_SLOTS:
     void testLaunchInstance_basicLaunch();
     void testLaunchInstance_subscribesSystemdManagerBeforeSignals();
     void testLegacyMountCleanupUnmountsValidatedTarget();
+    void testRecoveryStopsLeftoverAuxiliaryUnit();
     void testLegacyMountCleanupPreservesFailedUnmount();
     void testLegacyMountCleanupRecognizesBindMountByDirectoryIdentity();
     void testFailedSubscriptionDoesNotOverwritePersistedState();
@@ -3122,6 +3123,44 @@ void TestCouchPlayHelper::testLegacyMountCleanupUnmountsValidatedTarget()
     QCOMPARE(unmountCount, 1);
 }
 
+void TestCouchPlayHelper::testRecoveryStopsLeftoverAuxiliaryUnit()
+{
+    m_ops->clear();
+    m_ops->setMockProcessStart(true);
+    m_ops->setProcessExitCode(0);
+    m_ops->setOnSystemctlStop([this](const QString &unitName) {
+        if (unitName == QStringLiteral("couchplay-stream@player1.service")) {
+            m_auxSystemdUnit->setActiveState(QStringLiteral("inactive"));
+        }
+    });
+
+    // A pre-0.6.0 state file lists a per-user auxiliary stream unit; an entry naming any other unit must be ignored.
+    QJsonObject auxiliaryUnits;
+    auxiliaryUnits.insert(QStringLiteral("player1"), QStringLiteral("couchplay-stream@player1.service"));
+    auxiliaryUnits.insert(QStringLiteral("player2"), QStringLiteral("ssh.service"));
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("activeUnits"), QJsonObject());
+    root.insert(QStringLiteral("auxiliaryUnits"), auxiliaryUnits);
+    QFile stateFile(m_helper->m_stateFilePath);
+    QVERIFY(stateFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray state = QJsonDocument(root).toJson(QJsonDocument::Compact);
+    QCOMPARE(stateFile.write(state), static_cast<qint64>(state.size()));
+    stateFile.close();
+
+    m_helper->loadAndReconcileState();
+
+    QStringList stoppedUnits;
+    for (const MockSystemOps::ProcessInvocation &invocation : m_ops->m_processInvocations) {
+        if (invocation.command == QStringLiteral("systemctl") && invocation.args.value(0) == QStringLiteral("stop")) {
+            stoppedUnits.append(invocation.args.value(1));
+        }
+    }
+    QCOMPARE(stoppedUnits, QStringList{QStringLiteral("couchplay-stream@player1.service")});
+    QVERIFY(m_helper->m_usernameToUnitName.isEmpty());
+    QVERIFY(m_helper->m_unitUsernameByName.isEmpty());
+}
+
 void TestCouchPlayHelper::testTreeRemovalReportsProgress()
 {
     // The start-timeout heartbeat only extends while progressCount() advances; removal must count.
@@ -3156,7 +3195,6 @@ void TestCouchPlayHelper::testLegacyMountCleanupPreservesFailedUnmount()
     m_ops->setProcessExitCodeForCommand(QStringLiteral("umount"), 1);
     m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
     m_helper->m_usernameToUnitName.clear();
-    m_helper->m_auxiliaryUnitNameForUsername.clear();
     m_helper->m_unitUsernameByName.clear();
 
     QJsonObject mount;
@@ -3201,7 +3239,6 @@ void TestCouchPlayHelper::testLegacyMountCleanupRecognizesBindMountByDirectoryId
         m_ops->setProcessExitCode(unmountSucceeds ? 0 : 1);
         m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
         m_helper->m_usernameToUnitName.clear();
-        m_helper->m_auxiliaryUnitNameForUsername.clear();
         m_helper->m_unitUsernameByName.clear();
         QJsonObject mount;
         mount.insert(QStringLiteral("source"), source);
@@ -3251,7 +3288,6 @@ void TestCouchPlayHelper::testLegacyMountCleanupRecognizesOverlayByPersistedUppe
         m_ops->setProcessExitCode(0);
         m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
         m_helper->m_usernameToUnitName.clear();
-        m_helper->m_auxiliaryUnitNameForUsername.clear();
         m_helper->m_unitUsernameByName.clear();
         QJsonObject mount;
         mount.insert(QStringLiteral("source"), source);
@@ -3292,7 +3328,6 @@ void TestCouchPlayHelper::testLegacyMountCleanupRejectsUntrustedTarget()
     m_ops->setProcessExitCode(0);
     m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1001, home);
     m_helper->m_usernameToUnitName.clear();
-    m_helper->m_auxiliaryUnitNameForUsername.clear();
     m_helper->m_unitUsernameByName.clear();
 
     QJsonObject mount;
