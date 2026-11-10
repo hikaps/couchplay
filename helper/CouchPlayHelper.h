@@ -376,8 +376,7 @@ Q_SIGNALS:
     void instanceReady(const QString &username, qint64 pid);
 
     /**
-     * Emitted when a gamepad exit chord (Guide/Steam/PS + Start + Select)
-     * is held for 2 seconds on any monitored controller.
+     * Emitted when the exit chord (Start + Select) is held for 2 seconds on any monitored controller.
      */
     void exitChordTriggered();
 
@@ -388,6 +387,8 @@ private:
     };
     HidDeviceInfo findHidDevice(const QString &devicePath) const;
     QString findHidrawPathForDeviceId(const QString &deviceId) const;
+    /// Current /dev/input/eventN nodes of the input devices below a bound device's sysfs directory.
+    static QStringList findInputEventPaths(const QString &deviceSysfsDir);
     QString getTempUdevRulePath(const QString &deviceId) const;
     bool writeTempUdevRule(const HidDeviceInfo &hid, const QString &username);
     bool removeTempUdevRule(const QString &deviceId);

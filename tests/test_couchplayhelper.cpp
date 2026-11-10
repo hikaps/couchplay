@@ -966,6 +966,7 @@ private Q_SLOTS:
     void testGetUserInfo();
     void testGetUserInfoNotFound();
     void testGetVersionInfo();
+    void testFindInputEventPathsReturnsEveryEventNodeOfADevice();
     void testIsSteamBootstrappedTrue();
     void testIsSteamBootstrappedFalse();
 
@@ -4427,6 +4428,22 @@ void TestCouchPlayHelper::testGetVersionInfo()
     QCOMPARE(info.value(QStringLiteral("version")).toString(), QStringLiteral("9.9.9-test"));
     QCOMPARE(info.value(QStringLiteral("apiLevel")).toInt(), COUCHPLAY_HELPER_API_LEVEL);
     static_assert(COUCHPLAY_HELPER_API_LEVEL >= 1);
+}
+
+void TestCouchPlayHelper::testFindInputEventPathsReturnsEveryEventNodeOfADevice()
+{
+    // A rebound pad exposes its evdev nodes as <device>/input/inputN/eventM; its hidraw and other children don't count.
+    QTemporaryDir sysfs;
+    QVERIFY(sysfs.isValid());
+    const QString device = sysfs.path() + QStringLiteral("/0003:045E:028E.0001");
+    QVERIFY(QDir().mkpath(device + QStringLiteral("/input/input21/event13")));
+    QVERIFY(QDir().mkpath(device + QStringLiteral("/input/input22/event14")));
+    QVERIFY(QDir().mkpath(device + QStringLiteral("/input/input21/js2")));
+    QVERIFY(QDir().mkpath(device + QStringLiteral("/hidraw/hidraw4")));
+
+    QCOMPARE(CouchPlayHelper::findInputEventPaths(device),
+             (QStringList{QStringLiteral("/dev/input/event13"), QStringLiteral("/dev/input/event14")}));
+    QVERIFY(CouchPlayHelper::findInputEventPaths(sysfs.path() + QStringLiteral("/missing")).isEmpty());
 }
 
 QTEST_MAIN(TestCouchPlayHelper)

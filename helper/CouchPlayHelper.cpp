@@ -463,6 +463,16 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
                 m_modifiedDevices.append(resolvedDevicePath);
             }
             startWatchingDevice(resolvedDevicePath);
+
+            // The exit chord is read from evdev (hidraw is only parsed for Steam Controllers). The rebind may have
+            // given the pad new event numbers, so resolve the current nodes instead of trusting the original path.
+            const QStringList eventPaths = findInputEventPaths(hid.driverPath + QLatin1Char('/') + devId);
+            if (eventPaths.isEmpty()) {
+                qWarning() << "CouchPlayHelper: No evdev node found for" << devId << "- exit chord relies on" << resolvedDevicePath;
+            }
+            for (const QString &eventPath : eventPaths) {
+                startWatchingDevice(eventPath);
+            }
             saveState();
             return true;
         }
@@ -4070,6 +4080,23 @@ QString CouchPlayHelper::findHidrawPathForDeviceId(const QString &deviceId) cons
         }
     }
     return {};
+}
+
+QStringList CouchPlayHelper::findInputEventPaths(const QString &deviceSysfsDir)
+{
+    // <device>/input/inputN/eventM  ->  /dev/input/eventM
+    QStringList paths;
+    const QDir inputDir(deviceSysfsDir + QStringLiteral("/input"));
+    const QStringList inputs = inputDir.entryList({QStringLiteral("input*")}, QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &input : inputs) {
+        const QDir inputNode(inputDir.filePath(input));
+        const QStringList events = inputNode.entryList({QStringLiteral("event*")}, QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &event : events) {
+            paths.append(QStringLiteral("/dev/input/") + event);
+        }
+    }
+    paths.sort();
+    return paths;
 }
 
 QString CouchPlayHelper::getTempUdevRulePath(const QString &deviceId) const
