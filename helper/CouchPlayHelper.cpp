@@ -686,31 +686,37 @@ uint CouchPlayHelper::CreateUser(const QString &username, const QString &fullNam
     // -f flag means no error if group exists, so we don't check exit code
     runCommand(QStringLiteral("groupadd"), {QStringLiteral("-f"), COUCHPLAY_GROUP});
 
-    QProcess *process = m_ops->createProcess();
-    QStringList args;
-    args << QStringLiteral("-m") << QStringLiteral("-c") << fullName << QStringLiteral("-s")
-         << QStringLiteral("/bin/bash");
-
-    // "input" group is optional (absent on Bazzite); omit if missing to avoid useradd failure (issue #23)
-    QString supplementaryGroups = COUCHPLAY_GROUP;
-    if (m_ops->getgrnam("input")) {
-        supplementaryGroups = QStringLiteral("input,") + COUCHPLAY_GROUP;
-    }
-    args << QStringLiteral("-G") << supplementaryGroups;
-
-    args << username;
-
-    m_ops->startProcess(process, QStringLiteral("useradd"), args);
-    m_ops->waitForFinished(process, 30000);
-
-    if (m_ops->processExitCode(process) != 0) {
-        sendErrorReply(
-            QDBusError::Failed,
-            QStringLiteral("Failed to create user: %1").arg(QString::fromLocal8Bit(m_ops->readStandardError(process))));
+    auto runUseradd = [&](const QString &supplementaryGroups, QString *errorOutput) {
+        QProcess *process = m_ops->createProcess();
+        m_ops->startProcess(process, QStringLiteral("useradd"),
+                            {QStringLiteral("-m"), QStringLiteral("-c"), fullName, QStringLiteral("-s"),
+                             QStringLiteral("/bin/bash"), QStringLiteral("-G"), supplementaryGroups, username});
+        m_ops->waitForFinished(process, 30000);
+        const bool ok = m_ops->processExitCode(process) == 0;
+        *errorOutput = ok ? QString() : QString::fromLocal8Bit(m_ops->readStandardError(process));
         delete process;
+        return ok;
+    };
+
+    // The "input" group is optional (absent on some Bazzite versions, issue #23). getgrnam() can see it even when
+    // useradd cannot: Bazzite 45 defines it in /usr/lib/group (nss altfiles) while useradd reads only /etc/group and
+    // fails with "group 'input' does not exist". In that case retry without it.
+    QString useraddError;
+    bool created = false;
+    if (m_ops->getgrnam("input")) {
+        created = runUseradd(QStringLiteral("input,") + COUCHPLAY_GROUP, &useraddError);
+        if (!created && useraddError.contains(QStringLiteral("'input' does not exist"))) {
+            qWarning() << "useradd cannot resolve the input group, creating" << username << "without it";
+            created = runUseradd(COUCHPLAY_GROUP, &useraddError);
+        }
+    } else {
+        created = runUseradd(COUCHPLAY_GROUP, &useraddError);
+    }
+
+    if (!created) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to create user: %1").arg(useraddError));
         return 0;
     }
-    delete process;
 
     uint uid = getUserUid(username);
     if (uid == 0) {
