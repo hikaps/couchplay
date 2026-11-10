@@ -51,16 +51,16 @@
   
   <screenshots>
     <screenshot type="default">
-      <caption>Main session setup screen</caption>
-      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/screenshots/session-setup.png</image>
+      <caption>Home</caption>
+      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/assets/couchplay-main-cropped.png</image>
     </screenshot>
     <screenshot>
-      <caption>Device assignment interface</caption>
-      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/screenshots/device-assignment.png</image>
+      <caption>Session configuration</caption>
+      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/assets/couchplay-session-cropped.png</image>
     </screenshot>
     <screenshot>
-      <caption>Layout configuration</caption>
-      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/screenshots/layout-config.png</image>
+      <caption>Split-screen gaming</caption>
+      <image>https://raw.githubusercontent.com/hikaps/couchplay/main/assets/couchplay-split-screen.png</image>
     </screenshot>
   </screenshots>
   

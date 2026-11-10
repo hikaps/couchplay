@@ -49,6 +49,17 @@ Recursive ACL preparation runs in cancellable instance startup, not a blocking G
 
 ACL shares on read-only filesystems are accepted only when the player already has read/execute access to every object; otherwise preparation fails.
 
+## Cross-user audio (PulseAudio TCP listener)
+
+Secondary players reach the compositor user's PipeWire through `tcp:127.0.0.1:4713`. `SetupRuntimeAccess` makes sure that listener exists without restarting the user's `pipewire-pulse`, so the desktop user's running audio streams are not interrupted:
+
+- The helper runs `pactl` as the compositor user through `machinectl shell <user>@ /usr/bin/pactl …` (structured argv, no shell).
+- If `pactl list short modules` already shows a `module-native-protocol-tcp` with `port=4713`, or the port already answers (for example a `pipewire-pulse` drop-in), nothing is loaded.
+- Otherwise it runs `pactl load-module module-native-protocol-tcp port=4713 listen=127.0.0.1 auth-anonymous=1`. The compositor UID is remembered as helper-loaded.
+- When the last instance of that compositor goes away (or `RemoveRuntimeAccess`/helper shutdown runs), only a helper-loaded module with exactly those arguments is removed with `pactl unload-module`. Pre-existing modules and drop-ins are never touched.
+- A `~/.config/pipewire/pipewire-pulse.conf.d/50-couchplay.conf` written by CouchPlay 0.6.0 is deleted during cleanup, without restarting `pipewire-pulse`; it is inert until the next natural restart.
+- A failed load is logged as a warning; the socket ACLs are still applied and runtime access setup continues.
+
 ## Cleanup and recovery
 
 **Stop and retry**
