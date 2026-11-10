@@ -33,8 +33,9 @@ void MonitorManager::refresh()
         info.index = i;
         info.name = screen->name();
         info.connector = screen->name(); // On Linux, name usually is the connector
-        info.width = screen->size().width();
-        info.height = screen->size().height();
+        // QScreen::size() is in logical pixels; at 250% scale a 4K panel reports 1536x864.
+        info.width = qRound(screen->size().width() * screen->devicePixelRatio());
+        info.height = qRound(screen->size().height() * screen->devicePixelRatio());
         info.refreshRate = qRound(screen->refreshRate());
         info.primary = (screen == primaryScreen);
 

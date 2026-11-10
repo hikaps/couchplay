@@ -178,6 +178,8 @@ add_couchplay_test(test_devicemanager)
 add_couchplay_test(test_gamescopeinstance)
 add_couchplay_test(test_heroicconfigmanager)
 add_couchplay_test(test_monitormanager)
+# A fractional scale makes QScreen::size() (logical) differ from the physical size, which the test checks.
+set_tests_properties(test_monitormanager PROPERTIES ENVIRONMENT "QT_SCALE_FACTOR=2.5")
 add_couchplay_test(test_presetmanager)
 add_couchplay_test(test_windowmanager)
 add_couchplay_test(test_presetmanager_integration)
