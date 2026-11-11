@@ -54,6 +54,14 @@ public:
 
 public Q_SLOTS:
     /**
+     * Report the helper build version and D-Bus API level.
+     * Read-only — no polkit.
+     *
+     * @return map with keys "version" (QString) and "apiLevel" (int)
+     */
+    QVariantMap GetVersionInfo();
+
+    /**
      * Create a new Linux user for split-screen gaming
      * Also enables linger for the user automatically and adds to couchplay group
      *

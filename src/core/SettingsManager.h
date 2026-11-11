@@ -23,6 +23,7 @@ class SettingsManager : public QObject
     Q_PROPERTY(bool hidePanels READ hidePanels WRITE setHidePanels NOTIFY hidePanelsChanged)
     Q_PROPERTY(bool killSteam READ killSteam WRITE setKillSteam NOTIFY killSteamChanged)
     Q_PROPERTY(bool restoreSession READ restoreSession WRITE setRestoreSession NOTIFY restoreSessionChanged)
+    Q_PROPERTY(bool checkForUpdatesAutomatically READ checkForUpdatesAutomatically WRITE setCheckForUpdatesAutomatically NOTIFY checkForUpdatesAutomaticallyChanged)
 
     // Gamescope settings
     Q_PROPERTY(QString scalingMode READ scalingMode WRITE setScalingMode NOTIFY scalingModeChanged)
@@ -57,6 +58,12 @@ public:
         return m_restoreSession;
     }
     void setRestoreSession(bool value);
+
+    bool checkForUpdatesAutomatically() const
+    {
+        return m_checkForUpdatesAutomatically;
+    }
+    void setCheckForUpdatesAutomatically(bool value);
 
     // Gamescope settings
     QString scalingMode() const
@@ -108,6 +115,7 @@ Q_SIGNALS:
     void hidePanelsChanged();
     void killSteamChanged();
     void restoreSessionChanged();
+    void checkForUpdatesAutomaticallyChanged();
     void scalingModeChanged();
     void filterModeChanged();
     void borderlessWindowsChanged();
@@ -122,6 +130,7 @@ private:
     bool m_hidePanels = true;
     bool m_killSteam = true;
     bool m_restoreSession = false;
+    bool m_checkForUpdatesAutomatically = true;
 
     // Gamescope settings
     QString m_scalingMode = QStringLiteral("fit");

@@ -19,14 +19,43 @@ class CouchPlayHelperClient : public QObject
     Q_OBJECT
     QML_ELEMENT
     Q_PROPERTY(bool available READ isAvailable NOTIFY availabilityChanged)
+    Q_PROPERTY(QString helperVersion READ helperVersion NOTIFY helperInfoChanged)
+    Q_PROPERTY(int helperApiLevel READ helperApiLevel NOTIFY helperInfoChanged)
+    Q_PROPERTY(int requiredHelperApiLevel READ requiredHelperApiLevel CONSTANT)
+    Q_PROPERTY(bool helperOutdated READ helperOutdated NOTIFY helperInfoChanged)
 
 public:
     explicit CouchPlayHelperClient(QObject *parent = nullptr);
+    /// Connect over @p bus instead of the system bus (tests).
+    explicit CouchPlayHelperClient(const QDBusConnection &bus, QObject *parent = nullptr);
     ~CouchPlayHelperClient() override;
 
     virtual bool isAvailable() const
     {
         return m_available;
+    }
+
+    /// Helper build version; empty when unknown (helper predates GetVersionInfo()).
+    QString helperVersion() const
+    {
+        return m_helperVersion;
+    }
+
+    /// Helper D-Bus API level; 0 when unknown (helper predates GetVersionInfo()).
+    int helperApiLevel() const
+    {
+        return m_helperApiLevel;
+    }
+
+    /// Lowest helper API level this GUI works with; 0 accepts any helper.
+    virtual int requiredHelperApiLevel() const
+    {
+        return 0;
+    }
+
+    bool helperOutdated() const
+    {
+        return isAvailable() && m_helperApiLevel < requiredHelperApiLevel();
     }
 
     Q_INVOKABLE virtual bool setDeviceOwner(const QString &devicePath, int uid);
@@ -204,6 +233,7 @@ public:
     mirrorDirectoryContents(const QString &username, const QString &sourceDir, const QString &targetRelativePath);
 
 Q_SIGNALS:
+    void helperInfoChanged();
     void availabilityChanged();
     void errorOccurred(const QString &message);
     void instanceReady(const QString &username, qint64 pid);
@@ -215,6 +245,11 @@ private Q_SLOTS:
     void onInstanceStopped(const QString &username, qint64 pid, const QString &reason);
 
 private:
+    void refreshHelperInfo();
+    void setHelperInfo(const QString &version, int apiLevel);
+
     QDBusInterface *m_interface = nullptr;
     bool m_available = false;
+    QString m_helperVersion;
+    int m_helperApiLevel = 0;
 };

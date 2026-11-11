@@ -2,6 +2,12 @@
 
 Implementation details of the privileged helper and the instance units it manages. For everyday usage see the [README](../README.md); for session preparation see [session-internals.md](session-internals.md).
 
+## Version and API level
+
+The read-only `GetVersionInfo()` method (no Polkit) returns a map with `version` (the helper build version) and `apiLevel` (`COUCHPLAY_HELPER_API_LEVEL` in `helper/HelperApiLevel.h`). Bump the level whenever a D-Bus change lands that a GUI built against it cannot tolerate from an older helper.
+
+`CouchPlayHelperClient` exposes `helperVersion`, `helperApiLevel`, `requiredHelperApiLevel` and `helperOutdated`. Helpers older than 0.6.1 lack the method; an error reply is mapped to an empty version and level 0. `helperOutdated` is true only when the helper is available and its level is below the level the GUI requires (currently 0, so it does not fire yet). Raise `requiredHelperApiLevel` in the client when the GUI starts depending on a newer helper.
+
 ## Flatpak path mapping
 
 Flatpak directory selections are resolved from document-portal exports to host paths before being saved as shared directories.
