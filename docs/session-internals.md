@@ -4,7 +4,7 @@ Implementation details for how CouchPlay prepares and launches player instances.
 
 ## Helper authorization
 
-Normal session operations use the shared Polkit `manage-session` action (`auth_admin_keep`). Polkit may cache approval for a bounded period, but it is not permanent or guaranteed to last through the CouchPlay session. Account creation, deletion, and explicit linger changes keep their separate Polkit actions.
+Normal session operations use the shared Polkit `manage-session` action. Its policy lets an active local session proceed without a password, because the prompt would open behind the Gamescope windows (for example when stopping a session) and cannot be answered in Game Mode. Callers are still limited to the `wheel` and `games` groups by the D-Bus policy. Remote and inactive sessions still need an administrator, and an administrator can require a password again with a Polkit rules file. Account creation, deletion, and explicit linger changes keep their separate actions, which still ask for a password.
 
 Managed users reload automatically when the helper is attached or becomes available; opening CouchPlay does not require a manual user refresh.
 

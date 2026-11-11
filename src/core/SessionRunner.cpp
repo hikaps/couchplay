@@ -1297,6 +1297,15 @@ bool SessionRunner::setupSessionResources()
                     allSucceeded = false;
                     continue;
                 }
+                // A player whose Steam has never run has no account state to finalize against (no Steam ID), and
+                // Steam creates it on first start. Skip sharing for them instead of failing the whole session; the
+                // next session shares normally.
+                if (!m_helperClient->isSteamBootstrapped(username)
+                    || m_steamConfigManager->getTargetSteamUserId(username).isEmpty()) {
+                    qCInfo(couchplaySteam) << "Skipping Steam library sharing for" << username
+                                           << "- Steam has not been run for this user yet";
+                    continue;
+                }
                 DataDirectory steamMarker = dir;
                 steamMarker.path = m_steamConfigManager->steamPaths().steamRoot;
                 if (!m_steamConfigManager->prepareDataDir(steamMarker, username, directoryPlans)) {

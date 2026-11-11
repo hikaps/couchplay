@@ -242,6 +242,25 @@ Kirigami.ApplicationWindow {
         id: audioManager
     }
 
+    UpdateChecker {
+        id: updateChecker
+
+        Component.onCompleted: {
+            if (settingsManager.checkForUpdatesAutomatically) {
+                updateChecker.checkForUpdatesOnStartup()
+            }
+        }
+
+        // Only the automatic startup check notifies, so there is at most one notice per launch;
+        // manual checks show their result in Settings.
+        onCheckFinished: (automatic, updateAvailable, latestVersion) => {
+            if (automatic && updateAvailable) {
+                applicationWindow().showPassiveNotification(
+                    i18nc("@info", "CouchPlay %1 is available. Open Settings to update.", latestVersion), "long")
+            }
+        }
+    }
+
     globalDrawer: Kirigami.GlobalDrawer {
         id: drawer
         title: i18nc("@title", "CouchPlay")
@@ -398,7 +417,8 @@ Kirigami.ApplicationWindow {
             steamConfigManager: steamConfigManager,
             settingsManager: settingsManager,
             heroicConfigManager: heroicConfigManager,
-            audioManager: audioManager
+            audioManager: audioManager,
+            updateChecker: updateChecker
         })
     }
 }

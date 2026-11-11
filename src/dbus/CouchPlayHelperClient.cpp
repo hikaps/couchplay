@@ -14,9 +14,14 @@ static const QString OBJECT_PATH = QStringLiteral("/io/github/hikaps/CouchPlayHe
 static const QString INTERFACE_NAME = QStringLiteral("io.github.hikaps.CouchPlayHelper");
 
 CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
+    : CouchPlayHelperClient(QDBusConnection::systemBus(), parent)
+{
+}
+
+CouchPlayHelperClient::CouchPlayHelperClient(const QDBusConnection &bus, QObject *parent)
     : QObject(parent)
 {
-    m_interface = new QDBusInterface(SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, QDBusConnection::systemBus(), this);
+    m_interface = new QDBusInterface(SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME, bus, this);
 
     if (!m_interface->isValid()) {
         qWarning() << "CouchPlay helper interface not valid:" << m_interface->lastError().message();
@@ -27,27 +32,29 @@ CouchPlayHelperClient::CouchPlayHelperClient(QObject *parent)
 
     qWarning() << "CouchPlay helper connected";
     m_available = true;
+    refreshHelperInfo();
 
-    QDBusConnection::systemBus().connect(SERVICE_NAME,
-                                         OBJECT_PATH,
-                                         INTERFACE_NAME,
-                                         QStringLiteral("instanceStopped"),
-                                         this,
-                                         SLOT(onInstanceStopped(QString, qint64, QString)));
+    QDBusConnection connection = bus;
+    connection.connect(SERVICE_NAME,
+                       OBJECT_PATH,
+                       INTERFACE_NAME,
+                       QStringLiteral("instanceStopped"),
+                       this,
+                       SLOT(onInstanceStopped(QString, qint64, QString)));
 
-    QDBusConnection::systemBus().connect(SERVICE_NAME,
-                                         OBJECT_PATH,
-                                         INTERFACE_NAME,
-                                         QStringLiteral("instanceReady"),
-                                         this,
-                                         SLOT(onInstanceReady(QString, qint64)));
+    connection.connect(SERVICE_NAME,
+                       OBJECT_PATH,
+                       INTERFACE_NAME,
+                       QStringLiteral("instanceReady"),
+                       this,
+                       SLOT(onInstanceReady(QString, qint64)));
 
-    QDBusConnection::systemBus().connect(SERVICE_NAME,
-                                         OBJECT_PATH,
-                                         INTERFACE_NAME,
-                                         QStringLiteral("exitChordTriggered"),
-                                         this,
-                                         SIGNAL(exitChordTriggered()));
+    connection.connect(SERVICE_NAME,
+                       OBJECT_PATH,
+                       INTERFACE_NAME,
+                       QStringLiteral("exitChordTriggered"),
+                       this,
+                       SIGNAL(exitChordTriggered()));
 }
 
 CouchPlayHelperClient::~CouchPlayHelperClient()
@@ -65,6 +72,47 @@ void CouchPlayHelperClient::checkAvailability()
     if (m_available != wasAvailable) {
         Q_EMIT availabilityChanged();
     }
+
+    const QString previousVersion = m_helperVersion;
+    const int previousApiLevel = m_helperApiLevel;
+    refreshHelperInfo();
+
+    // helperOutdated depends on availability; setHelperInfo() already notified if the version info changed too
+    if (m_available != wasAvailable && previousVersion == m_helperVersion && previousApiLevel == m_helperApiLevel) {
+        Q_EMIT helperInfoChanged();
+    }
+}
+
+void CouchPlayHelperClient::refreshHelperInfo()
+{
+    if (!m_available) {
+        setHelperInfo({}, 0);
+        return;
+    }
+
+    // Helpers older than 0.6.1 have no GetVersionInfo(): an error reply means "unknown", not a failure.
+    // The call blocks the GUI thread, so a helper that holds the bus name but does not answer is given a short wait.
+    const int previousTimeout = m_interface->timeout();
+    m_interface->setTimeout(2000);
+    QDBusReply<QVariantMap> reply = m_interface->call(QStringLiteral("GetVersionInfo"));
+    m_interface->setTimeout(previousTimeout);
+    if (!reply.isValid()) {
+        setHelperInfo({}, 0);
+        return;
+    }
+
+    const QVariantMap info = reply.value();
+    setHelperInfo(info.value(QStringLiteral("version")).toString(), info.value(QStringLiteral("apiLevel")).toInt());
+}
+
+void CouchPlayHelperClient::setHelperInfo(const QString &version, int apiLevel)
+{
+    if (m_helperVersion == version && m_helperApiLevel == apiLevel) {
+        return;
+    }
+    m_helperVersion = version;
+    m_helperApiLevel = apiLevel;
+    Q_EMIT helperInfoChanged();
 }
 
 void CouchPlayHelperClient::onInstanceReady(const QString &username, qint64 pid)

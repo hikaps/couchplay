@@ -1052,17 +1052,29 @@ bool SteamConfigManager::cleanupLibrarySharing(const QString &targetUsername)
         return false;
     }
 
+    // Nothing to restore for a player whose Steam is not set up yet. Writing the file anyway would create
+    // ~/.steam/steam as a real directory, which Steam's first-run setup then cannot turn into its symlink and
+    // aborts with "Couldn't set up Steam data".
+    if (m_helperClient->getUserSteamRoot(targetUsername).isEmpty()) {
+        qCDebug(couchplaySteam) << "No Steam installation for" << targetUsername << "- nothing to clean up";
+        return true;
+    }
+
     const SteamPaths targetPaths = getTargetSteamPaths(targetUsername);
     if (!targetPaths.valid || targetPaths.libraryFoldersVdf.isEmpty()) {
         return false;
     }
 
-    // Restore minimal libraryfolders.vdf — clears shared library entries
+    // Restore minimal libraryfolders.vdf (both locations Steam reads) — clears shared library entries
     // so Steam doesn't reference bind-mounted paths that no longer exist.
-    const QString emptyVdf = QStringLiteral("\"libraryfolders\"\n{\n}\n");
-    if (!m_helperClient->writeFileToUser(emptyVdf.toUtf8(), targetPaths.libraryFoldersVdf, targetUsername)) {
-        qCWarning(couchplaySteam) << "Failed to clean up library sharing for" << targetUsername;
-        return false;
+    const QByteArray emptyVdf = QByteArrayLiteral("\"libraryfolders\"\n{\n}\n");
+    const QStringList vdfPaths = {targetPaths.libraryFoldersVdf,
+                                  targetPaths.steamRoot + QStringLiteral("/steamapps/libraryfolders.vdf")};
+    for (const QString &vdfPath : vdfPaths) {
+        if (!m_helperClient->writeFileToUser(emptyVdf, vdfPath, targetUsername)) {
+            qCWarning(couchplaySteam) << "Failed to clean up library sharing for" << targetUsername << vdfPath;
+            return false;
+        }
     }
 
     qCDebug(couchplaySteam) << "Cleaned up library sharing for" << targetUsername;
@@ -1176,10 +1188,16 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
         ownRoot.path = targetPaths.steamRoot;
         targetLibraries.prepend(ownRoot);
 
-        QString vdfContent = generateLibraryFoldersVdf(targetLibraries);
-        if (!m_helperClient->writeFileToUser(vdfContent.toUtf8(), targetPaths.libraryFoldersVdf, username)) {
-            qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write libraryfolders.vdf for" << username;
-            return false;
+        // Steam loads steamapps/libraryfolders.vdf at startup and then rewrites config/libraryfolders.vdf from it,
+        // so writing only config/ made Steam drop the shared libraries. Write both.
+        const QByteArray vdfContent = generateLibraryFoldersVdf(targetLibraries).toUtf8();
+        const QStringList vdfPaths = {targetPaths.libraryFoldersVdf,
+                                      targetPaths.steamRoot + QStringLiteral("/steamapps/libraryfolders.vdf")};
+        for (const QString &vdfPath : vdfPaths) {
+            if (!m_helperClient->writeFileToUser(vdfContent, vdfPath, username)) {
+                qCWarning(couchplaySteam) << "finalizeDataDir: Failed to write" << vdfPath << "for" << username;
+                return false;
+            }
         }
 
         if (!anyFailure) {

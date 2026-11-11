@@ -54,6 +54,14 @@ public:
 
 public Q_SLOTS:
     /**
+     * Report the helper build version and D-Bus API level.
+     * Read-only — no polkit.
+     *
+     * @return map with keys "version" (QString) and "apiLevel" (int)
+     */
+    QVariantMap GetVersionInfo();
+
+    /**
      * Create a new Linux user for split-screen gaming
      * Also enables linger for the user automatically and adds to couchplay group
      *
@@ -131,7 +139,7 @@ public Q_SLOTS:
      *
      * Sets group ACLs on compositor's runtime directory sockets:
      * - XDG_RUNTIME_DIR (traverse)
-     * - wayland-0 (rw)
+     * - wayland-N (rw), the desktop's lowest-numbered Wayland socket (wayland-0 if none is found)
      * - xauth_* (r)
      * - pipewire-0 (rw)
      * - pipewire-0-manager (rw)
@@ -388,9 +396,12 @@ private:
     bool isValidDevicePath(const QString &path);
     bool validateUserAndAuth(const QString &username, const QString &action);
     bool runCommand(const QString &program, const QStringList &args, int timeoutMs = 10000);
+    bool runAsUser(const QString &username,
+                   const QStringList &command,
+                   QByteArray *standardOutput = nullptr,
+                   QString *standardError = nullptr);
     bool setupPulseTcpListener(uint compositorUid);
     void removePulseTcpListener(uint compositorUid);
-    void restartUserPipeWirePulse(uint compositorUid);
 
     // Internal helpers (not exposed via D-Bus)
     struct PendingLaunch;
@@ -400,9 +411,7 @@ private:
     QString getUserHomeByUid(uint uid);
     int resetAllDevicesInternal();
     QString generateServiceName(const QString &username);
-    QString generateStreamServiceName(const QString &username);
     QString usernameForUnit(const QString &serviceName) const;
-    enum class UnitRole { Main, Stream };
     uint callerUid() const;
     void startTransientUnit(const QString &username,
                             const QStringList &gamescopeArgs,
@@ -412,7 +421,6 @@ private:
                             const QStringList &environment,
                             bool privateTemporaryDirectories,
                             const QVariantList &directoryPreparations,
-                            UnitRole role,
                             const QDBusMessage &request,
                             const QDBusConnection &replyConnection);
     bool stopServiceInstance(const QString &serviceName);
@@ -451,9 +459,7 @@ private:
 
     // Track launched transient units
     QMap<QString, QString> m_usernameToUnitName; // username -> main service name
-    QMap<QString, QString> m_auxiliaryUnitNameForUsername; // username -> auxiliary service name
     QMap<QString, QString> m_unitUsernameByName; // service name -> username
-    QMap<QString, UnitRole> m_unitRoleByName;
     QMap<QString, quint64> m_unitGenerationByName;
     quint64 m_nextUnitGeneration = 0;
     QMap<qint64, QString> m_pidToUsername; // PID -> username (reverse lookup for Stop/Kill)
@@ -485,6 +491,9 @@ private:
     // Track which compositor UIDs have runtime access set up
     QSet<uint> m_runtimeAccessSetForUid;
 
+    // Compositor UIDs whose PulseAudio TCP module was loaded by this helper (only those are unloaded)
+    QSet<uint> m_pulseTcpLoadedForUid;
+
     // System operations abstraction (for testing/mocking)
     SystemOps *m_ops;
 
@@ -505,6 +514,7 @@ private:
     bool readLaunchManifestForUnit(const QString &serviceName, const QString &token,
                                    LaunchManifest *manifest, QString *error = nullptr) const;
     void removeRuntimeAcls(const QString &runtimeDir);
+    QString waylandSocketPath(const QString &runtimeDir);
     void cleanupTcpListenerIfLast(const QString &username);
     void setupUinputAccess();
     void removeUinputAccess();

@@ -14,6 +14,7 @@ set(TEST_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/dbus
     ${CMAKE_CURRENT_BINARY_DIR}
+    ${PROJECT_BINARY_DIR}
 )
 
 # Common manager sources (for tests)
@@ -74,6 +75,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/PairingSession.h
     ../src/core/StreamAudio.cpp
     ../src/core/StreamAudio.h
+    ../src/core/UpdateChecker.cpp
+    ../src/core/UpdateChecker.h
     ../src/dbus/CouchPlayHelperClient.cpp
     ../src/dbus/CouchPlayHelperClient.h
 )
@@ -178,6 +181,8 @@ add_couchplay_test(test_devicemanager)
 add_couchplay_test(test_gamescopeinstance)
 add_couchplay_test(test_heroicconfigmanager)
 add_couchplay_test(test_monitormanager)
+# A fractional scale makes QScreen::size() (logical) differ from the physical size, which the test checks.
+set_tests_properties(test_monitormanager PROPERTIES ENVIRONMENT "QT_SCALE_FACTOR=2.5")
 add_couchplay_test(test_presetmanager)
 add_couchplay_test(test_windowmanager)
 add_couchplay_test(test_presetmanager_integration)
@@ -196,6 +201,8 @@ add_couchplay_test(test_sunshine_api)
 target_compile_definitions(test_sunshine_api PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
+add_couchplay_test(test_couchplayhelperclient)
+add_couchplay_test(test_updatechecker)
 add_couchplay_test(test_virtualdisplaymanager)
 
 # Add helper tests

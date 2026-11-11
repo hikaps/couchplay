@@ -25,6 +25,7 @@ private Q_SLOTS:
     void testPrimaryMonitorFlag();
     void testRefreshEmitsSignal();
     void testDisplayStringFormat();
+    void testSizeIsPhysicalPixels();
 
 private:
     MonitorManager *m_manager = nullptr;
@@ -160,6 +161,26 @@ void TestMonitorManager::testDisplayStringFormat()
     QVERIFY(displayString.contains(QStringLiteral("(")));
     QVERIFY(displayString.contains(QStringLiteral(")")));
     QVERIFY(displayString.contains(QStringLiteral("@")));
+}
+
+// Registered with QT_SCALE_FACTOR=2.5 (tests/CMakeLists.txt): Qt's logical size is then 2.5x smaller than the
+// panel, and the reported size must still be the physical one.
+void TestMonitorManager::testSizeIsPhysicalPixels()
+{
+    if (!m_hasDisplay) {
+        QSKIP("No display available for this test");
+    }
+
+    const QVariantList monitors = m_manager->monitorsAsVariant();
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    QCOMPARE(monitors.size(), screens.size());
+    for (int i = 0; i < screens.size(); ++i) {
+        const QVariantMap monitor = monitors.at(i).toMap();
+        QCOMPARE(monitor[QStringLiteral("width")].toInt(),
+                 qRound(screens.at(i)->size().width() * screens.at(i)->devicePixelRatio()));
+        QCOMPARE(monitor[QStringLiteral("height")].toInt(),
+                 qRound(screens.at(i)->size().height() * screens.at(i)->devicePixelRatio()));
+    }
 }
 
 QTEST_MAIN(TestMonitorManager)

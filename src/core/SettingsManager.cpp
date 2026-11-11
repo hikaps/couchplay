@@ -27,6 +27,7 @@ void SettingsManager::loadSettings()
     m_hidePanels = general.readEntry(QStringLiteral("HidePanels"), true);
     m_killSteam = general.readEntry(QStringLiteral("KillSteam"), true);
     m_restoreSession = general.readEntry(QStringLiteral("RestoreSession"), false);
+    m_checkForUpdatesAutomatically = general.readEntry(QStringLiteral("CheckForUpdatesAutomatically"), true);
     m_ignoredDevices = general.readEntry(QStringLiteral("IgnoredDevices"), QStringList());
 
     // Gamescope settings
@@ -50,6 +51,7 @@ void SettingsManager::saveAllSettings()
     general.writeEntry(QStringLiteral("HidePanels"), m_hidePanels);
     general.writeEntry(QStringLiteral("KillSteam"), m_killSteam);
     general.writeEntry(QStringLiteral("RestoreSession"), m_restoreSession);
+    general.writeEntry(QStringLiteral("CheckForUpdatesAutomatically"), m_checkForUpdatesAutomatically);
     general.writeEntry(QStringLiteral("IgnoredDevices"), m_ignoredDevices);
 
     // Gamescope settings
@@ -94,6 +96,17 @@ void SettingsManager::setRestoreSession(bool value)
         config->group(QStringLiteral("General")).writeEntry(QStringLiteral("RestoreSession"), value);
         config->sync();
         Q_EMIT restoreSessionChanged();
+    }
+}
+
+void SettingsManager::setCheckForUpdatesAutomatically(bool value)
+{
+    if (m_checkForUpdatesAutomatically != value) {
+        m_checkForUpdatesAutomatically = value;
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("General")).writeEntry(QStringLiteral("CheckForUpdatesAutomatically"), value);
+        config->sync();
+        Q_EMIT checkForUpdatesAutomaticallyChanged();
     }
 }
 
@@ -199,6 +212,7 @@ void SettingsManager::resetToDefaults()
     m_hidePanels = true;
     m_killSteam = true;
     m_restoreSession = false;
+    m_checkForUpdatesAutomatically = true;
     m_scalingMode = QStringLiteral("fit");
     m_filterMode = QStringLiteral("linear");
     m_borderlessWindows = true;
@@ -210,6 +224,7 @@ void SettingsManager::resetToDefaults()
     Q_EMIT hidePanelsChanged();
     Q_EMIT killSteamChanged();
     Q_EMIT restoreSessionChanged();
+    Q_EMIT checkForUpdatesAutomaticallyChanged();
     Q_EMIT scalingModeChanged();
     Q_EMIT filterModeChanged();
     Q_EMIT borderlessWindowsChanged();

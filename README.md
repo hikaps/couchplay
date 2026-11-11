@@ -93,6 +93,8 @@ A player can be streamed to a [Moonlight](https://moonlight-stream.org/) client 
 
 Hold **Start + Select for 2 seconds** on any assigned gamepad, or click **Stop Session**. This works with standard gamepads and the Valve Steam Controller, even while Steam is running.
 
+You can also press **Meta + Shift + Escape** (Meta is the Windows/Super key) to stop the session from the keyboard. This is a KDE global shortcut, so it may not work while the keyboard is assigned to a player, because the desktop no longer receives its keys. You can change it in System Settings → Keyboard → Shortcuts → CouchPlay.
+
 ### Profiles
 
 Save a session as a profile to reload it later. Deleting a profile asks for confirmation.
@@ -216,10 +218,22 @@ sudo ~/.var/app/io.github.hikaps.couchplay/data/couchplay/install-helper.sh unin
 sudo ./install-helper.sh uninstall
 ```
 
+### Updating
+
+CouchPlay checks GitHub for a newer **stable** release when it starts (turn this off under **Settings → Software Update**) and shows one notice per launch; **Check Now** checks on demand. The app only informs you: it never updates the privileged helper or the SteamOS system extension itself.
+
+- **Flatpak:** click **Update Now** in Settings → Software Update, then restart CouchPlay to finish updating. It downloads `couchplay.flatpak` and its `.sha256` for the latest release from GitHub on the host, verifies the checksum (a mismatch aborts without installing anything), installs the bundle into the same Flatpak installation (user or system) as the running app, and removes the temporary files. The one-liner ([Quick install](#quick-install-recommended)) also updates it. If a system-wide installation needs administrator rights, Update Now shows the failure instead of escalating; re-run the one-liner then.
+- **Why not `flatpak update`?** CouchPlay is installed from a release bundle, which creates a hidden local remote with no URL. `flatpak update io.github.hikaps.couchplay` therefore always reports "Nothing to update"; use Update Now or the one-liner instead.
+- **Native or SteamOS:** stop any running session and re-run the [Quick install](#quick-install-recommended) one-liner (add `--tarball` to keep the native binary). On SteamOS this also refreshes the system extension. **Open Releases Page** shows the release notes.
+- **Helper:** Update Now does not touch it. The GUI keeps working with an older helper until a release needs a newer one. Settings → Privileged Helper shows the installed helper version and warns when it is too old for the GUI; reinstall it then (see [Install the helper](#2-install-the-helper)).
+
 ## Troubleshooting
 
 - **Only the first instance starts, with a window-positioning timeout.** This is a KWin window-discovery problem, not a launcher lock. Details are in [docs/session-internals.md](docs/session-internals.md#gamescope-positioning).
 - **Errors after updating.** Install the GUI and the helper together, and stop all sessions first. Upgrading to 0.6 changes the helper's D-Bus API and removes the `manage-virtual-display` and `manage-audio-sink` Polkit actions, so reinstall the helper (see [Installation](#2-install-the-helper)).
+- **Password prompt hidden behind the game windows, or a session that won't stop.** Fixed in 0.6.1; reinstall the helper. Session operations no longer ask for a password on an active local session (see [session-internals](docs/session-internals.md#helper-authorization) for the trade-off). Creating and deleting players still asks.
+- **Flatpak closes right after starting and prints `Failed to register name 'com.github.CouchPlay'`.** Seen with the 0.6.0 Flatpak: its sandbox could not own that D-Bus name. Run `flatpak override --user --own-name=com.github.CouchPlay io.github.hikaps.couchplay`, then start it again. A later release fixes this in the Flatpak itself.
+- **A player's Steam exits with `Couldn't set up Steam data`.** Seen with 0.6.0 on a player who had never run Steam: CouchPlay left `~/.steam/steam` in the player's home as a real directory, and Steam's first-run setup needs it to be a link. Check with `sudo ls -ld /home/PLAYER/.steam/steam` (on Bazzite and other atomic distros the home is under `/var/home`). If the line starts with `d`, move it aside with `sudo mv /home/PLAYER/.steam/steam /home/PLAYER/.steam/steam.bak` and start the session again. Steam then sets itself up, which can take several minutes. Later releases no longer create the directory, but do not remove one that already exists.
 - **Stream won't start or has no picture.** Check Sunshine's log: `~/.local/share/hikaps/CouchPlay/sunshine/<user>/sunshine.log`. Under Flatpak it is in the app's data directory instead (`~/.var/app/io.github.hikaps.couchplay/data/...`; exact path not verified).
 - **Stream has no sound.** Run `pactl list short sinks` and look for the player's `couchplay-*` sink.
 

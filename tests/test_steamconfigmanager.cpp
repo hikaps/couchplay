@@ -161,18 +161,49 @@ private Q_SLOTS:
         QVERIFY(helper.parentAclPaths.isEmpty());
 
         QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        // Steam loads steamapps/libraryfolders.vdf, so both locations must carry the shared libraries
         const QString targetLibraryFolders = helper.targetSteamRoot + QStringLiteral("/config/libraryfolders.vdf");
-        QCOMPARE(helper.writtenFiles.size(), 1);
-        QCOMPARE(helper.writtenFiles.constFirst().first, targetLibraryFolders);
-        QVERIFY(QFile::exists(targetLibraryFolders));
-        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player")));
+        const QString steamappsLibraryFolders = helper.targetSteamRoot + QStringLiteral("/steamapps/libraryfolders.vdf");
         QCOMPARE(helper.writtenFiles.size(), 2);
-        QCOMPARE(helper.writtenFiles.constLast().first, targetLibraryFolders);
-        QFile restored(targetLibraryFolders);
-        QVERIFY(restored.open(QIODevice::ReadOnly));
-        QCOMPARE(restored.readAll(), QByteArray("\"libraryfolders\"\n{\n}\n"));
+        QCOMPARE(helper.writtenFiles.at(0).first, targetLibraryFolders);
+        QCOMPARE(helper.writtenFiles.at(1).first, steamappsLibraryFolders);
+        QVERIFY(QFile::exists(targetLibraryFolders));
+        QVERIFY(QFile::exists(steamappsLibraryFolders));
+        QFile shared(steamappsLibraryFolders);
+        QVERIFY(shared.open(QIODevice::ReadOnly));
+        QVERIFY(shared.readAll().contains(".couchplay/steam-libs/1"));
+        shared.close();
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player")));
+        QCOMPARE(helper.writtenFiles.size(), 4);
+        QCOMPARE(helper.writtenFiles.at(2).first, targetLibraryFolders);
+        QCOMPARE(helper.writtenFiles.at(3).first, steamappsLibraryFolders);
+        for (const QString &path : {targetLibraryFolders, steamappsLibraryFolders}) {
+            QFile restored(path);
+            QVERIFY(restored.open(QIODevice::ReadOnly));
+            QCOMPARE(restored.readAll(), QByteArray("\"libraryfolders\"\n{\n}\n"));
+        }
         QVERIFY(sourceSentinel.open(QIODevice::ReadOnly));
         QCOMPARE(sourceSentinel.readAll(), QByteArray("source remains private\n"));
+    }
+
+    void testCleanupDoesNotCreateSteamDirectoryForUnbootstrappedPlayer()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        SteamPlanHelper helper;
+        helper.targetHome = home.path() + QStringLiteral("/player-home");
+        QVERIFY(QDir().mkpath(helper.targetHome));
+        SteamConfigManager manager;
+        manager.setHelperClient(&helper);
+
+        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player")));
+        QVERIFY(helper.writtenFiles.isEmpty());
+        QVERIFY(!QFileInfo::exists(helper.targetHome + QStringLiteral("/.steam")));
     }
 
     void testLoadGamesMergesNativeAndShortcut()
