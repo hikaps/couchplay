@@ -270,6 +270,12 @@ QStringList GamescopeInstance::buildEnvironment(const QVariantMap &config)
         envVars << QStringLiteral("PULSE_SINK=%1").arg(sinkName);
     }
 
+    // Games started by this player's Steam must reach its private IPC port, not the desktop's (57343)
+    const QString steamIpcAddress = config.value(QStringLiteral("steamIpcAddress")).toString();
+    if (!steamIpcAddress.isEmpty()) {
+        envVars << QStringLiteral("steam_master_ipc_name_override=%1").arg(steamIpcAddress);
+    }
+
     return envVars;
 }
 

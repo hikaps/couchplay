@@ -31,6 +31,7 @@
 #include <QScopedValueRollback>
 #include <QSet>
 #include <QFileInfo>
+#include <QTcpServer>
 
 #include <KGlobalAccel>
 #include <KLocalizedString>
@@ -39,7 +40,31 @@
 #include <pwd.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <memory>
+#include <vector>
+
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
+
+// Steam's client IPC listens on a fixed loopback port (57343) shared by every
+// user, so a player's games would reach the desktop's (or another player's)
+// Steam and crash in steamclient.so. Each player's Steam gets a free port of
+// its own; every server stays open until all are chosen so no port repeats.
+static QList<quint16> reserveLoopbackPorts(int count)
+{
+    std::vector<std::unique_ptr<QTcpServer>> servers;
+    QList<quint16> ports;
+    for (int i = 0; i < count; ++i) {
+        auto server = std::make_unique<QTcpServer>();
+        if (!server->listen(QHostAddress::LocalHost, 0)) {
+            qCWarning(couchplaySteam) << "Could not reserve a loopback port for Steam IPC:" << server->errorString();
+            return {};
+        }
+        ports.append(server->serverPort());
+        servers.push_back(std::move(server));
+    }
+    return ports;
+}
 
 static bool isUserInCouchPlayGroup(const QString &username)
 {
@@ -638,6 +663,16 @@ void SessionRunner::continueStartAfterDisplays()
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
         return;
     }
+    const QString steamLauncherId = QStringLiteral("steam");
+    const int steamInstanceCount = static_cast<int>(std::count_if(
+        m_startingSnapshot.presets.cbegin(), m_startingSnapshot.presets.cend(),
+        [&](const LaunchPreset &preset) { return preset.launcherId == steamLauncherId; }));
+    const QList<quint16> steamIpcPorts = reserveLoopbackPorts(steamInstanceCount);
+    if (steamIpcPorts.size() != steamInstanceCount) {
+        beginFinalization(true, QStringLiteral("Failed to reserve a Steam IPC port"));
+        return;
+    }
+    qsizetype nextSteamIpcPort = 0;
     m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
         const InstanceConfig &instConfig = profile.instances[i];
@@ -683,8 +718,15 @@ void SessionRunner::continueStartAfterDisplays()
         config[QStringLiteral("presetId")] = presetId;
         config[QStringLiteral("launcherId")] = m_startingSnapshot.presets.at(i).launcherId;
         const LaunchCommand &command = m_startingSnapshot.launchCommands.at(i);
-        config[QStringLiteral("gameCommand")] = QVariant::fromValue(
-            QStringList{command.program} + command.arguments);
+        QStringList gameCommand = QStringList{command.program} + command.arguments;
+        if (m_startingSnapshot.presets.at(i).launcherId == steamLauncherId) {
+            // Linux Steam takes the override as address:port; the matching
+            // environment variable (GamescopeInstance) points its games at it.
+            const QString address = QStringLiteral("127.0.0.1:%1").arg(steamIpcPorts.at(nextSteamIpcPort++));
+            gameCommand << QStringLiteral("-master_ipc_name_override") << address;
+            config[QStringLiteral("steamIpcAddress")] = address;
+        }
+        config[QStringLiteral("gameCommand")] = QVariant::fromValue(gameCommand);
         config[QStringLiteral("workingDirectory")] = command.workingDirectory;
 
         if (m_deviceManager) {

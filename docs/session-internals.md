@@ -78,6 +78,8 @@ Profiles store the application selection, not a copied directory list. Legacy di
 
 Launch requests support desktop integration (`XDG_CURRENT_DESKTOP`) and per-instance audio routing (`PULSE_SINK`); identity, runtime-directory, and audio-server environment values remain helper-owned. The game inherits the host locale (`LANG`, `LANGUAGE`, `LC_*`).
 
+Each Steam-launcher player gets a private Steam IPC address: a free loopback port chosen at session start, passed to that player's Steam as `-master_ipc_name_override 127.0.0.1:<port>` and to its games as `steam_master_ipc_name_override`. Without it, every player's Steam and games share Steam's fixed port `57343`, so games reach the desktop's (or another player's) Steam and crash in `steamclient.so` within seconds.
+
 ## Gamescope positioning
 
 Gamescope positioning uses host-visible scripts and waits for KWin to confirm the requested frame geometry before reporting success.
