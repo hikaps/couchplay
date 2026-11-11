@@ -65,6 +65,21 @@
   </screenshots>
   
   <releases>
+    <release version="0.6.1" date="2026-11-10">
+      <description>
+        <p>Bug-fix release. Reinstall the privileged helper after updating: several fixes live in it.</p>
+        <ul>
+          <li>Session operations no longer ask for a password on an active local session; the prompt could open behind the game windows and the session could not be stopped</li>
+          <li>Fix "Couldn't set up Steam data" for players who have not run Steam yet: library sharing is skipped for them</li>
+          <li>Fix the Flatpak failing to start with "Failed to register name"</li>
+          <li>Fix sessions on desktops whose Wayland socket is not wayland-0 (for example Bazzite)</li>
+          <li>Report each monitor's physical resolution instead of Qt's scaled size</li>
+          <li>Fix creating a player when useradd cannot resolve the input group</li>
+          <li>Load the PulseAudio TCP module at runtime instead of restarting pipewire-pulse</li>
+          <li>Check GitHub for new stable releases, with Update Now for the Flatpak and a helper version warning in Settings</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-11-09">
       <description>
         <p>Feature release: Moonlight streaming, per-player display placement and controller assignment from player cards. Reinstall the privileged helper after updating: its D-Bus API changed.</p>
