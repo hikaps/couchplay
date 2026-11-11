@@ -71,6 +71,7 @@
         <ul>
           <li>Session operations no longer ask for a password on an active local session; the prompt could open behind the game windows and the session could not be stopped</li>
           <li>Fix "Couldn't set up Steam data" for players who have not run Steam yet: library sharing is skipped for them</li>
+          <li>Fix "Share game library with players": Steam dropped the shared libraries, so games showed "Install"</li>
           <li>Fix the Flatpak failing to start with "Failed to register name"</li>
           <li>Fix sessions on desktops whose Wayland socket is not wayland-0 (for example Bazzite)</li>
           <li>Report each monitor's physical resolution instead of Qt's scaled size</li>
