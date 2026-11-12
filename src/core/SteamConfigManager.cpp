@@ -9,6 +9,7 @@
 #include "Logging.h"
 #include "UserLookup.h"
 #include "../../helper/DirectoryPlan.h"
+#include "../../helper/SteamCompatToolMapping.h"
 #include <QDataStream>
 #include <QDebug>
 #include <QDir>
@@ -1143,6 +1144,7 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
         }
 
         QList<SteamLibraryFolder> targetLibraries;
+        QSet<QString> sharedAppIds;
         bool anyFailure = false;
 
         for (int i = 0; i < m_libraries.size(); ++i) {
@@ -1160,6 +1162,12 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
                 sourceSteamAppsDir.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files);
 
             for (const QString &manifest : manifests) {
+                const QString appId = manifest.mid(12).chopped(4); // appmanifest_<id>.acf
+                bool numeric = false;
+                appId.toUInt(&numeric);
+                if (numeric) {
+                    sharedAppIds.insert(appId);
+                }
                 QString manifestPath = sourceSteamApps + QLatin1Char('/') + manifest;
                 QFile manifestFile(manifestPath);
                 if (manifestFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -1200,6 +1208,8 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
             }
         }
 
+        mirrorCompatToolMapping(username, sharedAppIds);
+
         if (!anyFailure) {
             qCDebug(couchplaySteam) << "finalizeDataDir: Shared" << m_libraries.size() << "libraries to" << username;
         }
@@ -1207,4 +1217,33 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
     }
 
     return true;
+}
+
+void SteamConfigManager::mirrorCompatToolMapping(const QString &username, const QSet<QString> &sharedAppIds)
+{
+    // A shared game must keep the desktop's Proton/native choice for the player: with any other
+    // tool, the player's Steam swaps the game's platform depots in the shared library and
+    // re-downloads it, and the next session's manifest copy undoes that again (#145)
+    QFile hostConfig(m_steamPaths.configDir + QStringLiteral("/config.vdf"));
+    if (!hostConfig.open(QIODevice::ReadOnly)) {
+        qCWarning(couchplaySteam) << "mirrorCompatToolMapping: Cannot read" << hostConfig.fileName();
+        return;
+    }
+    const auto hostMapping = SteamCompatToolMapping::read(hostConfig.readAll());
+    if (!hostMapping) {
+        // Without the desktop's mapping, removing player entries could drop their only working tool
+        qCWarning(couchplaySteam) << "mirrorCompatToolMapping: Cannot parse" << hostConfig.fileName();
+        return;
+    }
+
+    SteamCompatToolMapping::Changes changes;
+    for (const QString &appId : sharedAppIds) {
+        const auto tool = hostMapping->constFind(appId);
+        changes.insert(appId, tool != hostMapping->cend() ? std::optional(*tool) : std::nullopt);
+    }
+    if (!changes.isEmpty()
+        && !m_helperClient->setUserCompatToolMapping(username, SteamCompatToolMapping::toVariantMap(changes))) {
+        qCWarning(couchplaySteam) << "mirrorCompatToolMapping: Shared games may use a different compatibility tool for"
+                                  << username;
+    }
 }

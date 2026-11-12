@@ -32,6 +32,10 @@ int replaceTreeContents(int srcDirFd, int stagingDirFd, int targetParentFd, cons
                         const QString &scratchName, uid_t uid, gid_t gid);
 int removeCopyScratchAt(int parentFd, const QString &scratchName);
 int writeFileAt(int parentFd, const QString &name, const QByteArray &content, uid_t uid, gid_t gid, mode_t mode = 0644);
+// Regular, non-symlink file below parentFd; -EFBIG beyond maxSize. Fills fileStat when given.
+int readFileAt(int parentFd, const QString &name, qsizetype maxSize, QByteArray &content, struct stat *fileStat = nullptr);
+// Atomically replaces name below parentFd: writes a sibling scratch file, then renames it over name
+int replaceFileAt(int parentFd, const QString &name, const QByteArray &content, uid_t uid, gid_t gid, mode_t mode);
 int applyReadExecuteAcl(int objectFd, uid_t targetUid);
 int applyReadExecuteAclTree(int directoryFd, uid_t targetUid);
 

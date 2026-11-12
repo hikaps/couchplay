@@ -1005,6 +1005,13 @@ private Q_SLOTS:
     void testCopyFileToUserRejectsSymlinkedSourceComponent();
     void testCopyFileToUserRejectsSymlinkedSourceLeaf();
 
+    // Steam compatibility tool mapping
+    void testSetUserCompatToolMappingRewritesOnlyMapping();
+    void testSetUserCompatToolMappingRejectsSymlinkedConfig();
+    void testSetUserCompatToolMappingLeavesUnparseableConfig();
+    void testSetUserCompatToolMappingRejectsInvalidEntries();
+    void testSetUserCompatToolMappingRejectsUnmanagedUser();
+
     // Copy directory tests
     void testCopyDirectoryToUserAbsoluteTarget();
     void testCopyDirectoryToUserTraversalTarget();
@@ -2106,6 +2113,158 @@ void TestCouchPlayHelper::testCopyFileToUserRejectsSymlinkedSourceLeaf()
     QVERIFY(!reply.isValid());
     QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
     QVERIFY(!QFileInfo::exists(targetPath));
+}
+
+namespace
+{
+const QByteArray kPlayerSteamConfig = QByteArrayLiteral(
+    "\"InstallConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n"
+    "\t\t\t\t\"CompatToolMapping\"\n\t\t\t\t{\n"
+    "\t\t\t\t\t\"49520\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"name\"\t\t\"\"\n\t\t\t\t\t\t\"config\"\t\t\"\"\n"
+    "\t\t\t\t\t\t\"priority\"\t\t\"250\"\n\t\t\t\t\t}\n"
+    "\t\t\t\t}\n"
+    "\t\t\t\t\"ConnectCache\"\n\t\t\t\t{\n\t\t\t\t\t\"7a1b\"\t\t\"secret-token\"\n\t\t\t\t}\n"
+    "\t\t\t}\n\t\t}\n\t}\n}\n");
+
+// Creates <home>/.local/share/Steam/config and returns the config.vdf path inside it
+QString createPlayerSteamConfigDir(const QString &home)
+{
+    const QString configDir = QDir(home).filePath(QStringLiteral(".local/share/Steam/config"));
+    return QDir().mkpath(configDir) ? QDir(configDir).filePath(QStringLiteral("config.vdf")) : QString();
+}
+
+QByteArray readAll(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+bool writeAll(const QString &path, const QByteArray &content)
+{
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(content) == content.size();
+}
+
+QVariantMap borderlandsOnProton()
+{
+    return {{QStringLiteral("49520"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("250")}},
+            {QStringLiteral("345180"), QStringList()}};
+}
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRewritesOnlyMapping()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    QVERIFY(writeAll(configPath, kPlayerSteamConfig));
+    QVERIFY(QFile::setPermissions(configPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+    QVERIFY(reply.value());
+    const QByteArray updated = readAll(configPath);
+    QVERIFY(updated.contains("\t\t\t\t\t\t\"name\"\t\t\"proton_9\"\n"));
+    QVERIFY(updated.contains("\"7a1b\"\t\t\"secret-token\""));
+    struct stat updatedStat{};
+    QVERIFY(::stat(configPath.toLocal8Bit().constData(), &updatedStat) == 0);
+    QCOMPARE(updatedStat.st_mode & 0777, mode_t(0600));
+    QVERIFY(!QFileInfo::exists(QFileInfo(configPath).dir().filePath(QStringLiteral(".config.vdf.couchplay-tmp"))));
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRejectsSymlinkedConfig()
+{
+    QTemporaryDir homeDir;
+    QTemporaryDir outside;
+    QVERIFY(homeDir.isValid() && outside.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    const QString victim = outside.filePath(QStringLiteral("victim.vdf"));
+    QVERIFY(writeAll(victim, kPlayerSteamConfig));
+    QVERIFY(QFile::link(victim, configPath));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(readAll(victim), kPlayerSteamConfig);
+    QVERIFY(QFileInfo(configPath).isSymLink());
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingLeavesUnparseableConfig()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    const QByteArray truncated = kPlayerSteamConfig.left(kPlayerSteamConfig.size() / 2);
+    QVERIFY(writeAll(configPath, truncated));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::Failed);
+    QCOMPARE(readAll(configPath), truncated);
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRejectsInvalidEntries()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    QVERIFY(writeAll(configPath, kPlayerSteamConfig));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+    const QVariantMap injected{
+        {QStringLiteral("49520"),
+         QStringList{QStringLiteral("proton_9\"\n}\n\"x"), QString(), QStringLiteral("250")}}};
+
+    QDBusReply<bool> reply =
+        m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"), QStringLiteral("player1"), injected);
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(readAll(configPath), kPlayerSteamConfig);
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRejectsUnmanagedUser()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    QVERIFY(writeAll(configPath, kPlayerSteamConfig));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid() + 1);
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::AccessDenied);
+    QCOMPARE(readAll(configPath), kPlayerSteamConfig);
 }
 
 void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
