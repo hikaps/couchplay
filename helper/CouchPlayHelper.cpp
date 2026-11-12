@@ -4872,11 +4872,11 @@ void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
         return;
     }
 
-    if (m_watchedDevices.contains(devicePath)) {
-        return;
-    }
+    // A rebind or reconnect recreates the node under the same path before the old watcher reads ENODEV;
+    // that watcher's fd still points at the removed device, so watch the current node instead
+    stopWatchingDevice(devicePath);
 
-    int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    int fd = m_ops->openInputDevice(devicePath);
     if (fd < 0) {
         qWarning() << "CouchPlayHelper: Failed to open device for chord monitoring:" << devicePath << strerror(errno);
         return;

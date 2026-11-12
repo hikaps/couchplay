@@ -66,6 +66,8 @@ public:
     // Device path validation
     virtual bool statPath(const QString &path, struct stat *buf) = 0;
     virtual bool isCharDevice(mode_t mode) = 0;
+    // Opens an input node read-only and non-blocking for exit-chord monitoring; returns the fd, or -1 with errno set
+    virtual int openInputDevice(const QString &path) = 0;
 
     // Ownership and permissions
     virtual int chown(const QString &path, uid_t owner, gid_t group) = 0;
@@ -131,6 +133,7 @@ public:
 
     bool statPath(const QString &path, struct stat *buf) override;
     bool isCharDevice(mode_t mode) override;
+    int openInputDevice(const QString &path) override;
 
     int chown(const QString &path, uid_t owner, gid_t group) override;
     int chmod(const QString &path, mode_t mode) override;
