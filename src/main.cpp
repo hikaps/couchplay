@@ -14,6 +14,7 @@
 #include <KLocalizedString>
 
 #include "couchplay-version.h"
+#include "couchplay-buildinfo.h"
 
 #include "core/AudioManager.h"
 #include "core/DeviceManager.h"
@@ -79,7 +80,7 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationName(QStringLiteral("hikaps"));
     QApplication::setOrganizationDomain(QStringLiteral("github.com"));
     QApplication::setApplicationName(QStringLiteral("CouchPlay"));
-    QApplication::setApplicationVersion(QStringLiteral(COUCHPLAY_VERSION_STRING));
+    QApplication::setApplicationVersion(QStringLiteral(COUCHPLAY_DISPLAY_VERSION));
     QApplication::setDesktopFileName(QStringLiteral("io.github.hikaps.couchplay"));
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.hikaps.couchplay")));
 
