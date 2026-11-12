@@ -18,6 +18,7 @@
 #include "UserLookup.h"
 #include "WindowManager.h"
 #include "VirtualDisplayManager.h"
+#include "MonitorManager.h"
 
 #include <QAction>
 #include <QDBusConnection>
@@ -377,6 +378,14 @@ void SessionRunner::setSettingsManager(SettingsManager *manager)
     }
 }
 
+void SessionRunner::setMonitorManager(MonitorManager *manager)
+{
+    if (m_monitorManager != manager) {
+        m_monitorManager = manager;
+        Q_EMIT monitorManagerChanged();
+    }
+}
+
 void SessionRunner::setSkipPairingCheck(bool skip)
 {
     if (m_skipPairingCheck != skip) {
@@ -636,20 +645,29 @@ void SessionRunner::continueStartAfterDisplays()
         }
     }
 
+    if (m_monitorManager) {
+        // A launch right after startup can beat the first scale query
+        m_monitorManager->waitForHostScales();
+    }
     // Players on the main screen split it; dedicated-monitor players fill their screen.
     m_layouts = QList<QRect>(instanceCount);
+    m_layoutOutputs = QStringList(instanceCount);
+    QScreen *sharedScreen = mainScreen(profile);
     const QList<QRect> mainLayouts = calculateLayout(profile.layout,
                                                      mainIndices.size(),
-                                                     mainScreenGeometry(profile),
+                                                     sharedScreen ? sharedScreen->geometry() : QRect(0, 0, 1920, 1080),
                                                      profile.gridSubLayout);
     for (int n = 0; n < mainIndices.size(); ++n) {
         m_layouts[mainIndices[n]] = mainLayouts.value(n);
+        m_layoutOutputs[mainIndices[n]] = sharedScreen ? sharedScreen->name() : QString();
     }
     for (int i = 0; i < instanceCount; ++i) {
         if (m_virtualRects.contains(i)) {
             m_layouts[i] = m_virtualRects.value(i);
+            m_layoutOutputs[i] = m_virtualOutputNames.value(i);
         } else if (QScreen *screen = screenByConnector(InstanceConfig::monitorConnector(profile.instances[i].display))) {
             m_layouts[i] = screen->geometry();
+            m_layoutOutputs[i] = screen->name();
         }
     }
 
@@ -682,13 +700,18 @@ void SessionRunner::continueStartAfterDisplays()
         config[QStringLiteral("privateTemporaryDirectories")] = instConfig.privateTemporaryDirectories;
         {
             const QRect &rect = m_layouts[i];
+            // KWin places windows in logical pixels, while gamescope sizes its window (-W/-H) in physical pixels
+            // of a fractionally scaled output; rendering (-w/-h) at the logical size would be stretched blurry.
+            const qreal scale = m_monitorManager ? m_monitorManager->scaleFor(m_layoutOutputs.value(i)) : 1.0;
+            const QSize physical(qRound(rect.width() * scale), qRound(rect.height() * scale));
             // Gamescope renders internally at -w/-h and scales to the window (-W/-H); an override lets a player
             // render below the window size, e.g. 720p in a 1080p region.
             const QSize render = parseRenderResolution(instConfig.renderResolution);
-            config[QStringLiteral("internalWidth")] = render.isValid() ? render.width() : rect.width();
-            config[QStringLiteral("internalHeight")] = render.isValid() ? render.height() : rect.height();
+            config[QStringLiteral("internalWidth")] = render.isValid() ? render.width() : physical.width();
+            config[QStringLiteral("internalHeight")] = render.isValid() ? render.height() : physical.height();
             config[QStringLiteral("outputWidth")] = rect.width();
             config[QStringLiteral("outputHeight")] = rect.height();
+            config[QStringLiteral("outputScale")] = scale;
             config[QStringLiteral("positionX")] = rect.x();
             config[QStringLiteral("positionY")] = rect.y();
             const QString output = m_virtualOutputNames.value(
@@ -990,6 +1013,7 @@ void SessionRunner::cleanupInstances()
 
     m_pendingInstanceConfigs.clear();
     m_layouts.clear();
+    m_layoutOutputs.clear();
     teardownStreamingInstances();
     m_streamingInstances.clear();
     m_nextInstanceToStart = 0;
@@ -1465,17 +1489,10 @@ QScreen *SessionRunner::screenByConnector(const QString &connector)
     return nullptr;
 }
 
-QRect SessionRunner::mainScreenGeometry(const SessionProfile &profile)
+QScreen *SessionRunner::mainScreen(const SessionProfile &profile)
 {
     QScreen *screen = screenByConnector(profile.mainScreen);
-    if (!screen) {
-        screen = QGuiApplication::primaryScreen();
-    }
-    if (screen) {
-        return screen->geometry();
-    }
-
-    return QRect(0, 0, 1920, 1080);
+    return screen ? screen : QGuiApplication::primaryScreen();
 }
 
 QString SessionRunner::validateDisplays(const SessionProfile &profile)

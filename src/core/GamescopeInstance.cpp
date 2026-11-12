@@ -208,10 +208,12 @@ QStringList GamescopeInstance::buildGamescopeArgs(const QVariantMap &config)
     args << QStringLiteral("-w") << QString::number(internalW);
     args << QStringLiteral("-h") << QString::number(internalH);
 
+    // outputWidth/outputHeight are the logical window size; gamescope takes its window size in physical pixels
+    const qreal outputScale = config.value(QStringLiteral("outputScale"), 1.0).toReal();
     const int outputW = config.value(QStringLiteral("outputWidth"), 960).toInt();
     const int outputH = config.value(QStringLiteral("outputHeight"), 1080).toInt();
-    args << QStringLiteral("-W") << QString::number(outputW);
-    args << QStringLiteral("-H") << QString::number(outputH);
+    args << QStringLiteral("-W") << QString::number(qRound(outputW * outputScale));
+    args << QStringLiteral("-H") << QString::number(qRound(outputH * outputScale));
 
     int refreshRate = config.value(QStringLiteral("refreshRate"), 60).toInt();
     if (refreshRate > 0) {
