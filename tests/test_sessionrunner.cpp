@@ -318,6 +318,7 @@ private Q_SLOTS:
     void testPreHookUsesCapturedApplicationRevision();
     void testReadinessAdvancesSequentialStartup();
     void testPhysicalInstanceAudioDeviceRoutesOnlyThatPlayer();
+    void testSteamInstancesGetPrivateIpcAddress();
     void testPreparationFailureAbortsStartup();
     void testCancelWhilePreparing();
     void testStopFailureRetainsPreparingInstanceForRetry();
@@ -2710,6 +2711,63 @@ void TestSessionRunner::testPhysicalInstanceAudioDeviceRoutesOnlyThatPlayer()
     QCOMPARE(sinkOf(m_helperClient->launchEnvironments.at(1)),
              QStringLiteral("alsa_output.usb-soundbar.analog-stereo"));
     m_runner->stop();
+}
+
+void TestSessionRunner::testSteamInstancesGetPrivateIpcAddress()
+{
+    // Launcher detection matches the executable's basename; the command must also resolve
+    QTemporaryDir bin;
+    QVERIFY(bin.isValid());
+    const QString steamStub = bin.filePath(QStringLiteral("steam"));
+    QVERIFY(QFile::copy(QStringLiteral("/usr/bin/true"), steamStub));
+    const QString steamPreset =
+        m_presetManager->addCustomPreset(QStringLiteral("Steam IPC"), steamStub + QStringLiteral(" -bigpicture"));
+    // No Steam install here; the IPC port follows the launcher, not the integration check
+    QVERIFY(m_presetManager->setRequiredIntegrations(steamPreset, {}));
+    const QString otherPreset = m_presetManager->addCustomPreset(QStringLiteral("Other"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, steamPreset);
+    }
+
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QSignalSpy stoppedSpy(m_runner, &SessionRunner::sessionStopped);
+    QVERIFY2(m_runner->start(), errorSpy.isEmpty() ? "" : qPrintable(errorSpy.constLast().constFirst().toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 2, 3000);
+
+    const QString envPrefix = QStringLiteral("steam_master_ipc_name_override=");
+    auto envAddress = [&](const QStringList &environment) {
+        for (const QString &entry : environment) {
+            if (entry.startsWith(envPrefix)) return entry.mid(envPrefix.size());
+        }
+        return QString();
+    };
+    QSet<QString> addresses;
+    for (int i = 0; i < 2; ++i) {
+        const QStringList command = m_helperClient->launchCommands.at(i);
+        const qsizetype flag = command.indexOf(QStringLiteral("-master_ipc_name_override"));
+        QVERIFY(flag > 0 && flag + 1 < command.size());
+        const QString address = command.at(flag + 1);
+        QVERIFY2(address.startsWith(QStringLiteral("127.0.0.1:")), qPrintable(address));
+        QVERIFY(address != QStringLiteral("127.0.0.1:57343"));
+        // The player's games must target the same Steam the player's client listens on
+        QCOMPARE(envAddress(m_helperClient->launchEnvironments.at(i)), address);
+        addresses.insert(address);
+    }
+    QCOMPARE(addresses.size(), 2);
+    m_runner->stop();
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 3000);
+
+    // Non-Steam launchers keep their command and environment untouched
+    m_sessionManager->setInstancePreset(1, otherPreset);
+    QVERIFY2(m_runner->start(), errorSpy.isEmpty() ? "" : qPrintable(errorSpy.constLast().constFirst().toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(m_helperClient->launchCommands.size(), 4, 3000);
+    QCOMPARE(m_helperClient->launchCommands.at(3), QStringList{QStringLiteral("/usr/bin/true")});
+    QVERIFY(envAddress(m_helperClient->launchEnvironments.at(3)).isEmpty());
+    QVERIFY(!envAddress(m_helperClient->launchEnvironments.at(2)).isEmpty());
+    m_runner->stop();
+    QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 2, 3000);
 }
 
 void TestSessionRunner::testParseRenderResolution()
