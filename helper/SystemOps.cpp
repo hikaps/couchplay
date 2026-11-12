@@ -378,8 +378,14 @@ bool RealSystemOps::checkAuthorization(const QString &action, const QString &cal
 #ifdef HAVE_POLKITQT
     PolkitQt1::Authority *authority = PolkitQt1::Authority::instance();
     if (authority->hasError()) {
-        qWarning() << "Polkit authority error:" << authority->lastError() << "- denying action:" << action;
-        return false;
+        // polkit-qt keeps a failed check's error and refuses every later check until it is cleared (for example after
+        // one caller left before its check ran), so an earlier failure must not deny this request. Without an
+        // authority object, though, no check can run.
+        if (authority->lastError() == PolkitQt1::Authority::E_GetAuthority) {
+            qWarning() << "Polkit authority unavailable:" << authority->errorDetails() << "- denying action:" << action;
+            return false;
+        }
+        authority->clearError();
     }
 
     PolkitQt1::Authority::Result result =
@@ -388,8 +394,8 @@ bool RealSystemOps::checkAuthorization(const QString &action, const QString &cal
                                           PolkitQt1::Authority::AllowUserInteraction);
 
     if (result == PolkitQt1::Authority::Unknown) {
-        qWarning() << "Polkit returned Unknown (daemon unavailable?) for action:" << action
-                   << "caller:" << callerBusName;
+        qWarning() << "Polkit check failed for action:" << action << "caller:" << callerBusName << "-"
+                   << authority->lastError() << authority->errorDetails();
         return false;
     }
     if (result != PolkitQt1::Authority::Yes) {
