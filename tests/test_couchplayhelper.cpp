@@ -853,7 +853,7 @@ private:
     QByteArray m_standardError;
 };
 
-// Scripted `machinectl shell <user>@ <command...>` serving a fake pactl for the compositor user.
+// Scripted `setpriv … -- /usr/bin/env -i … <command...>` serving a fake pactl for the compositor user.
 struct FakePactl {
     explicit FakePactl(MockSystemOps *ops)
         : m_ops(ops)
@@ -879,18 +879,18 @@ struct FakePactl {
     QStringList loadedModules; // "<id>\tmodule-native-protocol-tcp\t<args>" lines of `list short modules`
     bool portServedWithoutModule = false; // e.g. pipewire-pulse drop-in; makes the PULSE_SERVER probe succeed
     bool loadSucceeds = true;
-    QList<QStringList> calls; // commands run in the user's session (after "shell --quiet <user>@")
+    QList<QStringList> calls; // commands run as the user (after the env assignments)
 
 private:
     int handle(const QString &program, const QStringList &args, QByteArray *out)
     {
-        if (program != QLatin1String("machinectl")) {
+        if (program != QLatin1String("setpriv")) {
             return 0;
         }
-        const QStringList command = args.mid(3);
+        const QStringList command = args.mid(args.indexOf(QStringLiteral("PATH=/usr/bin:/bin")) + 1);
         calls.append(command);
         const QString pactl = QStringLiteral("/usr/bin/pactl");
-        if (command.value(0) == QLatin1String("/usr/bin/env")) {
+        if (command.value(0).startsWith(QLatin1String("PULSE_SERVER="))) {
             return portServedWithoutModule ? 0 : 1;
         }
         if (command.value(0) != pactl) {
@@ -3166,6 +3166,10 @@ void TestCouchPlayHelper::testPulseTcpListenerLoadsModuleWhenAbsent()
     for (const MockSystemOps::ProcessInvocation &invocation : m_ops->m_processInvocations) {
         QVERIFY(!invocation.args.contains(QStringLiteral("restart")));
         QVERIFY(!invocation.args.contains(QStringLiteral("systemctl")));
+        // pactl never runs as root: privileges drop to the compositor user and its runtime directory
+        QCOMPARE(invocation.command, QStringLiteral("setpriv"));
+        QVERIFY(invocation.args.contains(QStringLiteral("--reuid=1000")));
+        QVERIFY(invocation.args.contains(QStringLiteral("XDG_RUNTIME_DIR=/run/user/1000")));
     }
     QVERIFY(m_ops->m_removedFiles.isEmpty());
 }

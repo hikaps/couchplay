@@ -396,7 +396,7 @@ private:
     bool isValidDevicePath(const QString &path);
     bool validateUserAndAuth(const QString &username, const QString &action);
     bool runCommand(const QString &program, const QStringList &args, int timeoutMs = 10000);
-    bool runAsUser(const QString &username,
+    bool runAsUser(const struct passwd &pw,
                    const QStringList &command,
                    QByteArray *standardOutput = nullptr,
                    QString *standardError = nullptr);
