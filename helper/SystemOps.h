@@ -7,10 +7,12 @@
 #include <QDBusConnection>
 #include <QDBusObjectPath>
 #include "DirectoryPlan.h"
+#include <QHash>
 #include <QDir>
 #include <QFileInfo>
 #include <QIODevice>
 #include <QObject>
+#include <QSet>
 #include <QProcess>
 #include <QString>
 #include <QStringList>
@@ -80,6 +82,9 @@ public:
     // Directory listing
     virtual QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) = 0;
 
+    // Input devices (sysfs names such as "input103") created through /dev/uinput by processes of the given users
+    virtual QHash<QString, uid_t> uinputDeviceCreators(const QSet<uid_t> &uids) = 0;
+
     // Process signaling
     virtual bool killProcess(pid_t pid, int signal) = 0;
 
@@ -138,6 +143,7 @@ public:
     QByteArray readAllStandardOutput(QProcess *process) override;
 
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override;
+    QHash<QString, uid_t> uinputDeviceCreators(const QSet<uid_t> &uids) override;
 
     bool killProcess(pid_t pid, int signal) override;
 

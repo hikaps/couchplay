@@ -271,16 +271,7 @@ CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     loadAndReconcileState();
     setupUinputAccess();
 
-    // Populate initial known event numbers
-    QDir dir(QStringLiteral("/dev/input"));
-    QStringList eventFiles = dir.entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
-    static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            m_knownEventNumbers.insert(match.captured(1).toInt());
-        }
-    }
+    m_knownEventInputs = currentEventInputs();
 
     // Set up directory watcher on /dev/input
     m_inputWatcher = new QFileSystemWatcher(this);
@@ -293,15 +284,13 @@ CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     connect(m_inputDebounceTimer, &QTimer::timeout, this, &CouchPlayHelper::onInputDebounceTimeout);
 
     // Watch any virtual controllers already present at startup
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            int eventNumber = match.captured(1).toInt();
-            if (isVirtualDevice(eventNumber)) {
-                QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
-                qDebug() << "CouchPlayHelper: Pre-existing virtual device found at startup, watching:" << devicePath;
-                startWatchingDevice(devicePath);
-            }
+    for (auto it = m_knownEventInputs.constBegin(); it != m_knownEventInputs.constEnd(); ++it) {
+        bool isNumber = false;
+        const int eventNumber = it.key().mid(5).toInt(&isNumber); // "eventN"
+        if (isNumber && isVirtualDevice(eventNumber)) {
+            QString devicePath = QStringLiteral("/dev/input/%1").arg(it.key());
+            qDebug() << "CouchPlayHelper: Pre-existing virtual device found at startup, watching:" << devicePath;
+            startWatchingDevice(devicePath);
         }
     }
 }
@@ -681,6 +670,7 @@ int CouchPlayHelper::resetAllDevicesInternal()
         }
     }
     m_reboundNodes.clear();
+    m_sessionVirtualDevices.clear();
 
     saveState();
 
@@ -5186,35 +5176,110 @@ void CouchPlayHelper::onInputDebounceTimeout()
     checkForNewVirtualDevices();
 }
 
+// Maps each /dev/input/eventN name to its sysfs input device ("input171"). A device that is removed and recreated
+// within the debounce window (Steam does this) may keep its event number but always gets a new input name.
+QHash<QString, QString> CouchPlayHelper::currentEventInputs() const
+{
+    QHash<QString, QString> inputs;
+    const QStringList eventFiles =
+        QDir(QStringLiteral("/dev/input")).entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
+    for (const QString &eventFile : eventFiles) {
+        const QString inputDir =
+            QFileInfo(QStringLiteral("/sys/class/input/%1/device").arg(eventFile)).canonicalFilePath();
+        inputs.insert(eventFile, QFileInfo(inputDir).fileName());
+    }
+    return inputs;
+}
+
 void CouchPlayHelper::checkForNewVirtualDevices()
 {
-    QDir dir(QStringLiteral("/dev/input"));
-    QStringList eventFiles = dir.entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
-    static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
+    const QHash<QString, QString> previous = std::exchange(m_knownEventInputs, currentEventInputs());
 
-    QSet<int> activeEventNumbers;
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            activeEventNumbers.insert(match.captured(1).toInt());
+    // Virtual pads handed to players disappear when their Steam exits; stop tracking them
+    bool pruned = false;
+    for (qsizetype i = m_sessionVirtualDevices.size() - 1; i >= 0; --i) {
+        const QString path = m_sessionVirtualDevices.at(i);
+        if (!QFileInfo::exists(path)) {
+            m_modifiedDevices.removeAll(path);
+            m_sessionVirtualDevices.removeAt(i);
+            pruned = true;
         }
     }
-    m_knownEventNumbers.intersect(activeEventNumbers);
+    if (pruned) {
+        saveState();
+    }
 
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            int eventNumber = match.captured(1).toInt();
-            if (!m_knownEventNumbers.contains(eventNumber)) {
-                m_knownEventNumbers.insert(eventNumber);
+    static const QRegularExpression eventRegex(QStringLiteral("^event(\\d+)$"));
+    QHash<QString, QStringList> newVirtualNodesByInput;
+    for (auto it = m_knownEventInputs.constBegin(); it != m_knownEventInputs.constEnd(); ++it) {
+        const QString &eventFile = it.key();
+        const QString &inputName = it.value();
+        const QRegularExpressionMatch match = eventRegex.match(eventFile);
+        if (inputName.isEmpty() || previous.value(eventFile) == inputName || !match.hasMatch()
+            || !isVirtualDevice(match.captured(1).toInt())) {
+            continue;
+        }
+        const QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
+        qDebug() << "CouchPlayHelper: New virtual device detected, monitoring:" << devicePath;
+        startWatchingDevice(devicePath);
 
-                if (isVirtualDevice(eventNumber)) {
-                    QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
-                    qDebug() << "CouchPlayHelper: New virtual device detected, monitoring:" << devicePath;
-                    startWatchingDevice(devicePath);
-                }
+        QStringList nodes{devicePath};
+        const QString inputDir = QStringLiteral("/sys/class/input/%1").arg(inputName);
+        for (const QString &js : QDir(inputDir).entryList({QStringLiteral("js*")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
+            nodes.append(QStringLiteral("/dev/input/") + js);
+        }
+        newVirtualNodesByInput.insert(inputName, nodes);
+    }
+    assignSessionVirtualDevices(newVirtualNodesByInput);
+}
+
+// With Steam Input on, a player's Steam re-emits their pad as a uinput virtual pad and games read only that one.
+// udev gives new input nodes to the seat user, so hand each virtual pad to the player whose processes created it.
+void CouchPlayHelper::assignSessionVirtualDevices(const QHash<QString, QStringList> &nodesByInput)
+{
+    if (nodesByInput.isEmpty() || m_usernameToUnitName.isEmpty()) {
+        return;
+    }
+    QHash<uid_t, gid_t> sessionUsers;
+    for (auto it = m_usernameToUnitName.constBegin(); it != m_usernameToUnitName.constEnd(); ++it) {
+        if (const struct passwd *pw = m_ops->getpwnam(it.key().toLocal8Bit().constData())) {
+            sessionUsers.insert(pw->pw_uid, pw->pw_gid);
+        }
+    }
+    const QSet<uid_t> uids(sessionUsers.keyBegin(), sessionUsers.keyEnd());
+    const QHash<QString, uid_t> creators = m_ops->uinputDeviceCreators(uids);
+
+    bool settled = false;
+    bool changed = false;
+    for (auto it = nodesByInput.constBegin(); it != nodesByInput.constEnd(); ++it) {
+        const auto creator = creators.constFind(it.key());
+        if (creator == creators.constEnd() || !sessionUsers.contains(creator.value())) {
+            continue;
+        }
+        if (!settled) {
+            // Let udev finish applying the seat ACLs first, or they would land after ours
+            runCommand(QStringLiteral("udevadm"), {QStringLiteral("settle"), QStringLiteral("--timeout=3")});
+            settled = true;
+        }
+        const uid_t uid = creator.value();
+        for (const QString &node : it.value()) {
+            if (m_ops->chown(node, uid, sessionUsers.value(uid)) != 0 || m_ops->chmod(node, 0600) != 0) {
+                qWarning() << "CouchPlayHelper: Could not give virtual device" << node << "to UID" << uid << ":"
+                           << strerror(errno);
+                continue;
+            }
+            runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), node});
+            qInfo() << "CouchPlayHelper: Gave virtual device" << node << "(" << it.key() << ") to UID" << uid;
+            // Track the event node for reset; joystick nodes go away with it
+            if (node.startsWith(QLatin1String("/dev/input/event")) && !m_modifiedDevices.contains(node)) {
+                m_modifiedDevices.append(node);
+                m_sessionVirtualDevices.append(node);
+                changed = true;
             }
         }
+    }
+    if (changed) {
+        saveState();
     }
 }
 

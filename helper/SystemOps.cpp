@@ -20,8 +20,20 @@
 static constexpr off_t MAX_SECURE_COPY_BYTES = 64 * 1024 * 1024;
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
+#include <dirent.h>
+#include <linux/uinput.h>
+#include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+#ifndef SYS_pidfd_getfd
+#define SYS_pidfd_getfd 438
+#endif
 
 RealSystemOps::RealSystemOps(QObject *parent)
     : QObject(parent)
@@ -275,6 +287,71 @@ QStringList RealSystemOps::entryList(const QString &path, const QStringList &nam
 {
     QDir dir(path);
     return dir.entryList(nameFilters, filters);
+}
+
+QHash<QString, uid_t> RealSystemOps::uinputDeviceCreators(const QSet<uid_t> &uids)
+{
+    QHash<QString, uid_t> creators;
+    struct stat uinputStat;
+    if (uids.isEmpty() || ::stat("/dev/uinput", &uinputStat) != 0) {
+        return creators;
+    }
+    auto isUinput = [&uinputStat](const struct stat &st) {
+        return S_ISCHR(st.st_mode) && st.st_rdev == uinputStat.st_rdev;
+    };
+    auto ownerOf = [](const QByteArray &procPath, uid_t *uid) {
+        struct stat st;
+        if (::stat(procPath.constData(), &st) != 0) return false;
+        *uid = st.st_uid;
+        return true;
+    };
+
+    DIR *proc = ::opendir("/proc");
+    if (!proc) {
+        return creators;
+    }
+    while (const struct dirent *process = ::readdir(proc)) {
+        char *end = nullptr;
+        const long pid = std::strtol(process->d_name, &end, 10);
+        uid_t uid = 0;
+        const QByteArray procPath = QByteArrayLiteral("/proc/") + process->d_name;
+        if (pid <= 0 || *end != '\0' || !ownerOf(procPath, &uid) || !uids.contains(uid)) continue;
+
+        const QByteArray fdDirPath = procPath + "/fd";
+        DIR *fdDir = ::opendir(fdDirPath.constData());
+        if (!fdDir) continue;
+        int pidfd = -1;
+        while (const struct dirent *fdEntry = ::readdir(fdDir)) {
+            const long fd = std::strtol(fdEntry->d_name, &end, 10);
+            struct stat target;
+            // stat follows the fd link to the open file: only /dev/uinput openers can own a virtual device
+            if (fdEntry->d_name[0] == '.' || *end != '\0'
+                || ::stat(QByteArray(fdDirPath + '/' + fdEntry->d_name).constData(), &target) != 0
+                || !isUinput(target)) {
+                continue;
+            }
+            if (pidfd < 0) {
+                pidfd = static_cast<int>(::syscall(SYS_pidfd_open, static_cast<pid_t>(pid), 0));
+                uid_t current = 0;
+                // The PID could have been reused since the uid check
+                if (pidfd < 0 || !ownerOf(procPath, &current) || current != uid) break;
+            }
+            // The fd may have been closed or reused since the stat; check the duplicate before asking it
+            const int copy = static_cast<int>(::syscall(SYS_pidfd_getfd, pidfd, static_cast<int>(fd), 0));
+            if (copy < 0) continue;
+            struct stat copyStat;
+            char sysname[64] = {};
+            if (::fstat(copy, &copyStat) == 0 && isUinput(copyStat)
+                && ::ioctl(copy, UI_GET_SYSNAME(sizeof(sysname) - 1), sysname) >= 0) {
+                creators.insert(QString::fromLatin1(sysname), uid);
+            }
+            ::close(copy);
+        }
+        if (pidfd >= 0) ::close(pidfd);
+        ::closedir(fdDir);
+    }
+    ::closedir(proc);
+    return creators;
 }
 
 bool RealSystemOps::killProcess(pid_t pid, int signal)

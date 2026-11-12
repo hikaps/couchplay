@@ -65,6 +65,10 @@ A chown does not revoke handles other users already hold, so the desktop's Steam
 - Session reset removes the rule and rebinds again, returning the nodes to the seat user.
 - Other nodes (virtual devices, keyboards and mice without `hidraw`) are only chowned.
 
+## Steam virtual pads
+
+With Steam Input on, each player's Steam re-creates their pad as a uinput device, and games read only that device. udev gives new input nodes to the seat user, so the player could not open their own virtual pad. When the `/dev/input` watcher sees a new virtual device during a session, the helper looks up which process holds the `/dev/uinput` fd that created it (`pidfd_getfd` plus `UI_GET_SYSNAME`). If that process belongs to a session player, the helper gives the event and joystick nodes to the player (mode 0600, ACLs cleared). Virtual pads created by the desktop user's Steam are left alone. Event nodes are tracked with the other modified devices and reset when the session stops.
+
 ## Cross-user audio (PulseAudio TCP listener)
 
 Secondary players reach the compositor user's PipeWire through `tcp:127.0.0.1:4713`. `SetupRuntimeAccess` makes sure that listener exists without restarting the user's `pipewire-pulse`, so the desktop user's running audio streams are not interrupted:

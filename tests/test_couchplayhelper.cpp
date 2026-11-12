@@ -450,6 +450,8 @@ public:
         m_processExitCode = 0;
         m_processExitCodes.clear();
         m_chownResult = 0;
+        m_chowns.clear();
+        m_uinputCreators.clear();
         m_chmodResult = 0;
         m_processArgs.clear();
         m_processInvocations.clear();
@@ -488,6 +490,13 @@ public:
     std::function<int(const QString &, const QStringList &, QByteArray *)> m_processHandler;
     QStringList m_removedFiles;
     QMap<QString, QStringList> m_entryLists;
+    struct ChownCall {
+        QString path;
+        uid_t owner;
+        gid_t group;
+    };
+    QList<ChownCall> m_chowns;
+    QHash<QString, uid_t> m_uinputCreators; // sysfs input name -> creating uid
     QStringList m_directoryQueries;
     QStringList m_canonicalQueries;
     QStringList m_statQueries;
@@ -680,10 +689,19 @@ public:
 
     int chown(const QString &path, uid_t owner, gid_t group) override
     {
-        Q_UNUSED(path)
-        Q_UNUSED(owner)
-        Q_UNUSED(group)
+        m_chowns.append({path, owner, group});
         return m_chownResult;
+    }
+
+    QHash<QString, uid_t> uinputDeviceCreators(const QSet<uid_t> &uids) override
+    {
+        QHash<QString, uid_t> result;
+        for (auto it = m_uinputCreators.constBegin(); it != m_uinputCreators.constEnd(); ++it) {
+            if (uids.contains(it.value())) {
+                result.insert(it.key(), it.value());
+            }
+        }
+        return result;
     }
 
     int chmod(const QString &path, mode_t mode) override
@@ -1033,6 +1051,8 @@ private Q_SLOTS:
     void testRuntimeAccessUsesActualWaylandSocket();
     void testRemoveRuntimeAccessAuthorizationDenied();
     void testRemoveRuntimeAccessUserNotFound();
+
+    void testVirtualPadGoesToCreatingPlayer();
 
     // PulseAudio TCP listener (runtime module load/unload, no pipewire-pulse restart)
     void testPulseTcpListenerLoadsModuleWhenAbsent();
@@ -3172,6 +3192,42 @@ static const QStringList kLoadPulseTcpCommand = {QStringLiteral("/usr/bin/pactl"
                                                   QStringLiteral("port=4713"),
                                                   QStringLiteral("listen=127.0.0.1"),
                                                   QStringLiteral("auth-anonymous=1")};
+
+void TestCouchPlayHelper::testVirtualPadGoesToCreatingPlayer()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1002, QStringLiteral("/home/player1"));
+    m_helper->m_usernameToUnitName.clear();
+    m_helper->m_usernameToUnitName.insert(QStringLiteral("player1"), QStringLiteral("couchplay-player1.service"));
+    m_helper->m_modifiedDevices.clear();
+    m_helper->m_sessionVirtualDevices.clear();
+    m_ops->m_uinputCreators.insert(QStringLiteral("input160"), 1001); // player1's Steam
+    m_ops->m_uinputCreators.insert(QStringLiteral("input161"), 1000); // host Steam, not in the session
+
+    QHash<QString, QStringList> nodes;
+    nodes.insert(QStringLiteral("input160"), {QStringLiteral("/dev/input/event27"), QStringLiteral("/dev/input/js4")});
+    nodes.insert(QStringLiteral("input161"), {QStringLiteral("/dev/input/event28")});
+    nodes.insert(QStringLiteral("input162"), {QStringLiteral("/dev/input/event29")}); // creator unknown
+    m_helper->assignSessionVirtualDevices(nodes);
+
+    QCOMPARE(m_ops->m_chowns.size(), 2);
+    for (const auto &call : m_ops->m_chowns) {
+        QVERIFY(call.path == QStringLiteral("/dev/input/event27") || call.path == QStringLiteral("/dev/input/js4"));
+        QCOMPARE(call.owner, uid_t(1001));
+        QCOMPARE(call.group, gid_t(1002));
+    }
+    QCOMPARE(m_helper->m_modifiedDevices, QStringList{QStringLiteral("/dev/input/event27")});
+
+    // Stopping the session hands the node back to root:input
+    m_ops->m_chowns.clear();
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    m_helper->resetAllDevicesInternal();
+    QCOMPARE(m_ops->m_chowns.size(), 1);
+    QCOMPARE(m_ops->m_chowns.first().owner, uid_t(0));
+    QVERIFY(m_helper->m_modifiedDevices.isEmpty());
+    QVERIFY(m_helper->m_sessionVirtualDevices.isEmpty());
+    m_helper->m_usernameToUnitName.clear();
+}
 
 void TestCouchPlayHelper::testPulseTcpListenerLoadsModuleWhenAbsent()
 {

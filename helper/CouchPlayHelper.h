@@ -545,11 +545,14 @@ private:
 
     QFileSystemWatcher *m_inputWatcher = nullptr;
     QTimer *m_inputDebounceTimer = nullptr;
-    QSet<int> m_knownEventNumbers;
+    QHash<QString, QString> m_knownEventInputs; // "eventN" -> sysfs input name
 
     void onInputDirectoryChanged();
     void onInputDebounceTimeout();
+    QHash<QString, QString> currentEventInputs() const;
     void checkForNewVirtualDevices();
+    void assignSessionVirtualDevices(const QHash<QString, QStringList> &nodesByInput);
+    QStringList m_sessionVirtualDevices; // player-owned virtual pad event nodes, also in m_modifiedDevices
     bool isVirtualDevice(int eventNumber);
     QString getDeviceName(int eventNumber) const;
 };
