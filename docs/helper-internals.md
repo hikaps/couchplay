@@ -59,7 +59,7 @@ ACL shares on read-only filesystems are accepted only when the player already ha
 
 Secondary players reach the compositor user's PipeWire through `tcp:127.0.0.1:4713`. `SetupRuntimeAccess` makes sure that listener exists without restarting the user's `pipewire-pulse`, so the desktop user's running audio streams are not interrupted:
 
-- The helper runs `pactl` as the compositor user through `machinectl shell <user>@ /usr/bin/pactl …` (structured argv, no shell).
+- The helper runs `pactl` as the compositor user through `setpriv --reuid … --init-groups -- /usr/bin/env -i HOME=… XDG_RUNTIME_DIR=/run/user/<uid> /usr/bin/pactl …` (structured argv, no shell). `machinectl shell` is not used because it does not return the command's exit status.
 - If `pactl list short modules` already shows a `module-native-protocol-tcp` with `port=4713`, or the port already answers (for example a `pipewire-pulse` drop-in), nothing is loaded.
 - Otherwise it runs `pactl load-module module-native-protocol-tcp port=4713 listen=127.0.0.1 auth-anonymous=1`. The compositor UID is remembered as helper-loaded.
 - When the last instance of that compositor goes away (or `RemoveRuntimeAccess`/helper shutdown runs), only a helper-loaded module with exactly those arguments is removed with `pactl unload-module`. Pre-existing modules and drop-ins are never touched.

@@ -1263,7 +1263,7 @@ struct PulseTcpModule {
     QString args;
 };
 
-// Parses `pactl list short modules` ("<id>\t<name>\t<args>"). machinectl allocates a PTY, so lines may end in CRLF.
+// Parses `pactl list short modules` ("<id>\t<name>\t<args>"); tolerates CRLF line endings and trailing tabs.
 QList<PulseTcpModule> parsePulseTcpModules(const QByteArray &output)
 {
     QList<PulseTcpModule> modules;
@@ -1280,18 +1280,26 @@ QList<PulseTcpModule> parsePulseTcpModules(const QByteArray &output)
 
 } // namespace
 
-bool CouchPlayHelper::runAsUser(const QString &username,
+bool CouchPlayHelper::runAsUser(const struct passwd &pw,
                                 const QStringList &command,
                                 QByteArray *standardOutput,
                                 QString *standardError)
 {
-    // machinectl shell starts the command in a logind session of the user (PAM sets XDG_RUNTIME_DIR),
-    // so the user's PipeWire/PulseAudio socket is reachable. Arguments are passed as argv, never via a shell.
-    QStringList args{QStringLiteral("shell"), QStringLiteral("--quiet"), username + QStringLiteral("@")};
+    // Drop to the user and point at their runtime directory so their PipeWire/PulseAudio socket is reachable.
+    // Unlike `machinectl shell`, this returns the command's real exit status. Arguments are argv, never a shell.
+    QStringList args{QStringLiteral("--reuid=%1").arg(pw.pw_uid),
+                     QStringLiteral("--regid=%1").arg(pw.pw_gid),
+                     QStringLiteral("--init-groups"),
+                     QStringLiteral("--"),
+                     QStringLiteral("/usr/bin/env"),
+                     QStringLiteral("-i"),
+                     QStringLiteral("HOME=%1").arg(QString::fromLocal8Bit(pw.pw_dir)),
+                     QStringLiteral("XDG_RUNTIME_DIR=/run/user/%1").arg(pw.pw_uid),
+                     QStringLiteral("PATH=/usr/bin:/bin")};
     args += command;
 
     QProcess *proc = m_ops->createProcess();
-    m_ops->startProcess(proc, QStringLiteral("machinectl"), args);
+    m_ops->startProcess(proc, QStringLiteral("setpriv"), args);
     const bool finished = m_ops->waitForFinished(proc, 10000);
     const bool success = finished && m_ops->processExitCode(proc) == 0;
     if (standardOutput) {
@@ -1312,13 +1320,14 @@ bool CouchPlayHelper::setupPulseTcpListener(uint compositorUid)
         return false;
     }
 
-    const QString username = QString::fromLocal8Bit(pw->pw_name);
+    const struct passwd &user = *pw;
+    const QString username = QString::fromLocal8Bit(user.pw_name);
     const QString pactl = QStringLiteral("/usr/bin/pactl");
     const QString portArg = QStringLiteral("port=%1").arg(PULSE_TCP_PORT);
 
     QByteArray modulesOutput;
     QString error;
-    if (!runAsUser(username, {pactl, QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("modules")},
+    if (!runAsUser(user, {pactl, QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("modules")},
                    &modulesOutput, &error)) {
         qWarning() << "Failed to list PulseAudio modules for" << username << ":" << error;
         return false;
@@ -1332,18 +1341,15 @@ bool CouchPlayHelper::setupPulseTcpListener(uint compositorUid)
     }
 
     // A pipewire-pulse drop-in (e.g. the one written by CouchPlay 0.6.0) serves the port without a loaded module
-    if (runAsUser(username,
-                  {QStringLiteral("/usr/bin/env"),
-                   QStringLiteral("PULSE_SERVER=tcp:127.0.0.1:%1").arg(PULSE_TCP_PORT),
-                   pactl,
-                   QStringLiteral("info")})) {
+    if (runAsUser(user,
+                  {QStringLiteral("PULSE_SERVER=tcp:127.0.0.1:%1").arg(PULSE_TCP_PORT), pactl, QStringLiteral("info")})) {
         return true;
     }
 
     qInfo() << "Loading PulseAudio TCP listener module for UID" << compositorUid;
     QStringList loadCommand{pactl, QStringLiteral("load-module"), pulseTcpModuleName()};
     loadCommand += pulseTcpModuleArgs().split(QLatin1Char(' '));
-    if (!runAsUser(username, loadCommand, nullptr, &error)) {
+    if (!runAsUser(user, loadCommand, nullptr, &error)) {
         qWarning() << "Failed to load" << pulseTcpModuleName() << "for" << username << ":" << error;
         return false;
     }
@@ -1374,10 +1380,11 @@ void CouchPlayHelper::removePulseTcpListener(uint compositorUid)
         return; // Never unload a module this helper did not load
     }
 
-    const QString username = QString::fromLocal8Bit(pw->pw_name);
+    const struct passwd &user = *pw;
+    const QString username = QString::fromLocal8Bit(user.pw_name);
     QByteArray modulesOutput;
     QString error;
-    if (!runAsUser(username,
+    if (!runAsUser(user,
                    {QStringLiteral("/usr/bin/pactl"), QStringLiteral("list"), QStringLiteral("short"),
                     QStringLiteral("modules")},
                    &modulesOutput, &error)) {
@@ -1390,7 +1397,7 @@ void CouchPlayHelper::removePulseTcpListener(uint compositorUid)
             continue;
         }
         qInfo() << "Unloading PulseAudio TCP listener module" << module.id << "for UID" << compositorUid;
-        if (!runAsUser(username,
+        if (!runAsUser(user,
                        {QStringLiteral("/usr/bin/pactl"), QStringLiteral("unload-module"), module.id}, nullptr,
                        &error)) {
             qWarning() << "Failed to unload PulseAudio module" << module.id << "for" << username << ":" << error;
