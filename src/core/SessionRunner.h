@@ -248,6 +248,8 @@ Q_SIGNALS:
     void monitorManagerChanged();
     void skipPairingCheckChanged();
     void errorOccurred(const QString &message);
+    // Library sharing was skipped for a player whose Steam has never run; it applies from their next session.
+    void librarySharingDeferred(const QString &username);
     void activeChanged();
     void sessionStartFailed(const QString &message);
     void sessionStarted();

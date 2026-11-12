@@ -161,6 +161,10 @@ Kirigami.ApplicationWindow {
         onErrorOccurred: (message) => {
             applicationWindow().showPassiveNotification(message, "long")
         }
+        onLibrarySharingDeferred: (username) => {
+            applicationWindow().showPassiveNotification(
+                i18nc("@info", "Game library sharing for %1 starts next session: sign in to Steam now, then restart the session.", username), "long")
+        }
         onSessionStarted: {
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Session started with %1 instances", runningInstanceCount))

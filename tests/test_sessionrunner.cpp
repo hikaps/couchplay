@@ -1230,9 +1230,12 @@ void TestSessionRunner::testSetupDataDirectoriesLibrarySharingSkipsUnbootstrappe
     }));
     QVERIFY(m_presetManager->setRequiredIntegrations(QStringLiteral("steam"), {QStringLiteral("steam")}));
     m_runner->m_startingSnapshot.shareSteamLibraries = true;
+    QSignalSpy deferredSpy(m_runner, &SessionRunner::librarySharingDeferred);
 
     // The player who never ran Steam must not abort the session or get mounts; the other player still shares.
     QVERIFY(m_runner->setupSessionResources());
+    QCOMPARE(deferredSpy.count(), 1);
+    QCOMPARE(deferredSpy.at(0).at(0).toString(), QStringLiteral("player2"));
     QVERIFY(!m_runner->m_instanceDirectoryPreparations.value(0).isEmpty());
     QVERIFY(m_runner->m_instanceDirectoryPreparations.value(1).isEmpty());
     QVERIFY(m_runner->m_steamSharedUsers.contains(QStringLiteral("player1")));

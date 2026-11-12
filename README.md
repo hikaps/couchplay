@@ -138,6 +138,7 @@ Under **Settings**:
 - **Hide KDE panels** — auto-hide Plasma panels during sessions.
 - **Scaling and filter modes** — per-instance rendering options.
 - **Steam and Heroic shortcut sync** — keep launch shortcuts in sync across users.
+- **Share game library with players** — players can play the source account's installed Steam games without downloading them again. A new player's Steam installs itself and signs in during their first session, so sharing starts from that player's next session.
 - **Steam shortcut source account** — which Steam account supplies shortcuts and game choices. Chosen automatically only if there is exactly one; the Add to Steam account is set separately.
 - **Sunshine executable** — override the auto-detected Sunshine path.
 
