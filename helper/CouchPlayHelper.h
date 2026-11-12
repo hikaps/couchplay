@@ -383,11 +383,12 @@ Q_SIGNALS:
 
 private:
     struct HidDeviceInfo {
-        QString driverPath; // e.g. /sys/bus/hid/drivers/microsoft
-        QString deviceId;   // e.g. 0003:045E:028E.0001
+        QString driverPath; // e.g. /sys/bus/hid/drivers/microsoft or /sys/bus/usb/drivers/xpad
+        QString deviceId;   // e.g. 0003:045E:028E.0001, or a USB interface such as 1-5.2:1.0
     };
     HidDeviceInfo findHidDevice(const QString &devicePath) const;
     QString findHidrawPathForDeviceId(const QString &deviceId) const;
+    QString findJoystickEventPath(const HidDeviceInfo &device) const;
     QString getTempUdevRulePath(const QString &deviceId) const;
     bool writeTempUdevRule(const HidDeviceInfo &hid, const QString &username);
     bool removeTempUdevRule(const QString &deviceId);
