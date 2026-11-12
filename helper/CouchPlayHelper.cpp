@@ -7,6 +7,7 @@
 #include "HomePathMapping.h"
 #include "PolkitActions.h"
 #include "SecureFs.h"
+#include "SteamCompatToolMapping.h"
 #include "SystemOps.h"
 
 #include <QCryptographicHash>
@@ -3644,6 +3645,82 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
         return false;
     }
 
+    return true;
+}
+
+bool CouchPlayHelper::SetUserCompatToolMapping(const QString &username, const QVariantMap &entries)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+    if (getUserUid(username) != callerUid() && !IsInCouchPlayGroup(username)) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Target user is not a CouchPlay-managed user"));
+        return false;
+    }
+    const auto changes = SteamCompatToolMapping::fromVariantMap(entries);
+    if (!changes) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid compatibility tool mapping"));
+        return false;
+    }
+
+    const uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+    const QString userHome = QString::fromLocal8Bit(pw->pw_dir);
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (steamRoot.isEmpty() || !steamRoot.startsWith(userHome + QLatin1Char('/'))) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam is not set up for '%1'").arg(username));
+        return false;
+    }
+    QStringList configParts = steamRoot.mid(userHome.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    configParts << QStringLiteral("config");
+
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const int homeFd = SecureFs::openBaseDir(canonicalHome.isEmpty() ? userHome : canonicalHome);
+    if (homeFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+    const int configFd = SecureFs::openDirBelow(homeFd, configParts, false, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (configFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam config directory not found for '%1'").arg(username));
+        return false;
+    }
+    const auto closeConfig = qScopeGuard([configFd] { ::close(configFd); });
+
+    const QString configName = QStringLiteral("config.vdf");
+    constexpr qsizetype maxConfigSize = 16 * 1024 * 1024;
+    QByteArray original;
+    struct stat configStat{};
+    const int readResult = SecureFs::readFileAt(configFd, configName, maxConfigSize, original, &configStat);
+    if (readResult != 0 || configStat.st_uid != userUid) {
+        qWarning() << "SetUserCompatToolMapping: Cannot use config.vdf of" << username << ":"
+                   << (readResult != 0 ? strerror(-readResult) : "not owned by the user");
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not read Steam config of '%1'").arg(username));
+        return false;
+    }
+
+    const auto updated = SteamCompatToolMapping::apply(original, *changes);
+    if (!updated) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Unrecognized Steam config of '%1'").arg(username));
+        return false;
+    }
+    if (*updated == original) {
+        return true;
+    }
+
+    const int writeResult =
+        SecureFs::replaceFileAt(configFd, configName, *updated, userUid, pw->pw_gid, configStat.st_mode & 0777);
+    if (writeResult != 0) {
+        qWarning() << "SetUserCompatToolMapping: Failed to write config.vdf of" << username << ":"
+                   << strerror(-writeResult);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to write Steam config of '%1'").arg(username));
+        return false;
+    }
     return true;
 }
 

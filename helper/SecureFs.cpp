@@ -1031,6 +1031,107 @@ int writeFileAt(int parentFd, const QString &name, const QByteArray &content, ui
     return 0;
 }
 
+int readFileAt(int parentFd, const QString &name, qsizetype maxSize, QByteArray &content, struct stat *fileStat)
+{
+    if (name.isEmpty() || name == QStringLiteral(".") || name == QStringLiteral("..")
+        || name.contains(QLatin1Char('/'))) {
+        return -EINVAL;
+    }
+
+    const int fileFd = ::openat(parentFd, name.toUtf8().constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (fileFd < 0) {
+        return -errno;
+    }
+    struct stat st{};
+    if (::fstat(fileFd, &st) != 0) {
+        const int error = errno;
+        ::close(fileFd);
+        return -error;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        ::close(fileFd);
+        return -EINVAL;
+    }
+    if (st.st_size > maxSize) {
+        ::close(fileFd);
+        return -EFBIG;
+    }
+
+    QByteArray buffer;
+    char chunk[65536];
+    while (true) {
+        const ssize_t got = ::read(fileFd, chunk, sizeof(chunk));
+        if (got < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            const int error = errno;
+            ::close(fileFd);
+            return -error;
+        }
+        if (got == 0) {
+            break;
+        }
+        if (buffer.size() + got > maxSize) {
+            ::close(fileFd);
+            return -EFBIG;
+        }
+        buffer.append(chunk, got);
+    }
+    ::close(fileFd);
+
+    content = buffer;
+    if (fileStat) {
+        *fileStat = st;
+    }
+    return 0;
+}
+
+int replaceFileAt(int parentFd, const QString &name, const QByteArray &content, uid_t uid, gid_t gid, mode_t mode)
+{
+    if (name.isEmpty() || name == QStringLiteral(".") || name == QStringLiteral("..")
+        || name.contains(QLatin1Char('/'))) {
+        return -EINVAL;
+    }
+
+    const QByteArray scratch = (QLatin1Char('.') + name + QStringLiteral(".couchplay-tmp")).toUtf8();
+    // Remove a stale scratch, then create it exclusively: an existing entry the user
+    // planted there (e.g. a hard link) must never be written to or chowned
+    if (::unlinkat(parentFd, scratch.constData(), 0) != 0 && errno != ENOENT) {
+        return -errno;
+    }
+    const int fileFd =
+        ::openat(parentFd, scratch.constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fileFd < 0) {
+        return -errno;
+    }
+    const auto fail = [&](int error) {
+        ::close(fileFd);
+        ::unlinkat(parentFd, scratch.constData(), 0);
+        return -error;
+    };
+
+    qsizetype offset = 0;
+    while (offset < content.size()) {
+        const ssize_t written = ::write(fileFd, content.constData() + offset, content.size() - offset);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return fail(errno);
+        }
+        offset += written;
+    }
+    if (::fchown(fileFd, uid, gid) != 0 || ::fchmod(fileFd, mode) != 0 || ::fsync(fileFd) != 0) {
+        return fail(errno);
+    }
+    if (::renameat(parentFd, scratch.constData(), parentFd, name.toUtf8().constData()) != 0) {
+        return fail(errno);
+    }
+    ::close(fileFd);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // FD-anchored mounting
 // ---------------------------------------------------------------------------

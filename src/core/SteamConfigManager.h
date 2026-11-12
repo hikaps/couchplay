@@ -6,6 +6,7 @@
 #include <QObject>
 #include <qqmlintegration.h>
 #include <QString>
+#include <QSet>
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
@@ -211,6 +212,7 @@ private:
     QList<SteamGame> parseInstalledGames() const;
     QString generateLibraryFoldersVdf(const QList<SteamLibraryFolder> &libraries);
     SteamPaths getTargetSteamPaths(const QString &username) const;
+    void mirrorCompatToolMapping(const QString &username, const QSet<QString> &sharedAppIds);
     void detectSteamPathsInternal(bool allowAutomaticSelection);
 
     CouchPlayHelperClient *m_helperClient = nullptr;

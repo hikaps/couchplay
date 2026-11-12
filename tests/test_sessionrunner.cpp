@@ -264,6 +264,11 @@ public:
         return true;
     }
 
+    bool setUserCompatToolMapping(const QString &, const QVariantMap &) override
+    {
+        return true;
+    }
+
 
     bool isInCouchPlayGroup(const QString &username) override
     {

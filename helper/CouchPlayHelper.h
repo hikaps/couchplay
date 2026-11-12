@@ -362,6 +362,19 @@ public Q_SLOTS:
      */
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
+    /**
+     * Set or remove per-game compatibility tool entries in a user's Steam config/config.vdf
+     *
+     * Players sharing the desktop's library must run each shared game with the desktop's
+     * Proton/native choice, or their Steam swaps the game's platform depots and re-downloads it.
+     * Only the CompatToolMapping section changes; the rest of the file stays byte-identical.
+     *
+     * @param username Target user whose Steam config is updated
+     * @param entries App ID -> QStringList{name, config, priority}, or an empty list to remove
+     * @return true when the config holds the requested entries
+     */
+    bool SetUserCompatToolMapping(const QString &username, const QVariantMap &entries);
+
 Q_SIGNALS:
     /**
      * Emitted when an owned transient unit exits unexpectedly.

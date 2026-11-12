@@ -531,6 +531,26 @@ bool CouchPlayHelperClient::writeFileToUser(const QByteArray &content,
     return result;
 }
 
+bool CouchPlayHelperClient::setUserCompatToolMapping(const QString &username, const QVariantMap &entries)
+{
+    if (!m_available) {
+        qCWarning(couchplayHelper) << "setUserCompatToolMapping: Helper not available";
+        return false;
+    }
+
+    QDBusMessage msg = QDBusMessage::createMethodCall(SERVICE_NAME, OBJECT_PATH, INTERFACE_NAME,
+                                                      QStringLiteral("SetUserCompatToolMapping"));
+    msg << username << entries;
+    const QDBusMessage replyMsg = QDBusConnection::systemBus().call(msg, QDBus::Block, 30000);
+
+    if (replyMsg.type() != QDBusMessage::ReplyMessage) {
+        qCWarning(couchplayHelper) << "setUserCompatToolMapping failed for" << username << ":"
+                                   << replyMsg.errorName() << replyMsg.errorMessage();
+        return false;
+    }
+    return replyMsg.arguments().value(0).toBool();
+}
+
 
 bool CouchPlayHelperClient::copyDirectoryToUser(const QString &username,
                                                  const QString &sourceDir,

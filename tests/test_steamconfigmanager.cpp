@@ -73,6 +73,7 @@ public:
     QString targetSteamRoot;
     QStringList parentAclPaths;
     QList<QPair<QString, QByteArray>> writtenFiles;
+    QList<QPair<QString, QVariantMap>> compatMappings;
 
     QVariantMap getUserInfo(const QString &) override
     {
@@ -94,6 +95,11 @@ public:
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
         if (file.write(content) != content.size()) return false;
         writtenFiles.append({targetPath, content});
+        return true;
+    }
+    bool setUserCompatToolMapping(const QString &username, const QVariantMap &entries) override
+    {
+        compatMappings.append({username, entries});
         return true;
     }
 };
@@ -184,6 +190,69 @@ private Q_SLOTS:
         }
         QVERIFY(sourceSentinel.open(QIODevice::ReadOnly));
         QCOMPARE(sourceSentinel.readAll(), QByteArray("source remains private\n"));
+    }
+
+    void testFinalizeMirrorsDesktopCompatToolsForSharedGames()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString steamRoot = home.path() + QStringLiteral("/.steam/steam");
+        const QString externalLibrary = home.path() + QStringLiteral("/external library");
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/steamapps")));
+        QVERIFY(QDir().mkpath(externalLibrary + QStringLiteral("/steamapps")));
+        const auto writeFile = [](const QString &path, const QByteArray &content) {
+            QFile file(path);
+            return file.open(QIODevice::WriteOnly) && file.write(content) == content.size();
+        };
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/config/libraryfolders.vdf"),
+                          "\"libraryfolders\"\n{\n  \"0\"\n  {\n    \"path\"\t\"" + steamRoot.toUtf8()
+                              + "\"\n  }\n  \"1\"\n  {\n    \"path\"\t\"" + externalLibrary.toUtf8()
+                              + "\"\n  }\n}\n"));
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/steamapps/appmanifest_49520.acf"), "\"AppState\"\n{\n}\n"));
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/steamapps/appmanifest_345180.acf"), "\"AppState\"\n{\n}\n"));
+        QVERIFY(writeFile(externalLibrary + QStringLiteral("/steamapps/appmanifest_220.acf"), "\"AppState\"\n{\n}\n"));
+        // The global default ("0") and games outside the shared libraries are never mirrored
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/config/config.vdf"),
+                          "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n"
+                          "\"CompatToolMapping\"\n{\n"
+                          "\"0\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"
+                          "\"49520\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
+                          "\"999\"\n{\n\"name\" \"proton_8\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
+                          "}\n}\n}\n}\n}\n"));
+
+        SteamPlanHelper helper;
+        helper.targetHome = home.path() + QStringLiteral("/player-home");
+        helper.targetSteamRoot = helper.targetHome + QStringLiteral("/.steam/steam");
+        SteamConfigManager manager;
+        manager.setHelperClient(&helper);
+        manager.setShareLibraryEnabled(true);
+        QVERIFY(manager.isSteamDetected());
+        DataDirectory marker;
+        marker.path = steamRoot;
+        marker.mode = QStringLiteral("overlay");
+        QVariantList preparations;
+        QVERIFY(manager.prepareDataDir(marker, QStringLiteral("player"), preparations));
+
+        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+
+        QCOMPARE(helper.compatMappings.size(), 1);
+        QCOMPARE(helper.compatMappings.at(0).first, QStringLiteral("player"));
+        const QVariantMap expected{
+            {QStringLiteral("49520"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("250")}},
+            {QStringLiteral("345180"), QStringList()},
+            {QStringLiteral("220"), QStringList()}};
+        QCOMPARE(helper.compatMappings.at(0).second, expected);
+
+        // An unreadable desktop mapping must not turn into removals for the player
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/config/config.vdf"), "\"InstallConfigStore\"\n{\n"));
+        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        QCOMPARE(helper.compatMappings.size(), 1);
     }
 
     void testCleanupDoesNotCreateSteamDirectoryForUnbootstrappedPlayer()
