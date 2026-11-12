@@ -441,6 +441,7 @@ public:
         m_canonical.clear();
         m_directoryQueries.clear();
         m_canonicalQueries.clear();
+        m_writes.clear();
         m_statQueries.clear();
         m_authorized = true;
         m_connectionUid = 1000;
@@ -502,6 +503,7 @@ public:
     QList<int> m_inputDeviceFds; // handed out in order by openInputDevice; the helper closes the ones it takes
     QStringList m_directoryQueries;
     QStringList m_canonicalQueries;
+    QList<QPair<QString, QByteArray>> m_writes;
     QStringList m_statQueries;
     bool realAccessProbe = false;
     QString m_transientServiceName;
@@ -670,8 +672,7 @@ public:
 
     bool writeFile(const QString &path, const QByteArray &content) override
     {
-        Q_UNUSED(path)
-        Q_UNUSED(content)
+        m_writes.append({path, content});
         return true;
     }
 
@@ -1050,6 +1051,7 @@ private Q_SLOTS:
     void testResetDeviceOwnerChmodFails();
     void testResetAllDevicesEmpty();
     void testResetAllDevicesSuccess();
+    void testResetRebindsModeSwitchedPadThroughCurrentDriver();
     void testResetAllDevicesPartialFailure();
     void testChangeDeviceOwnerBatchEmpty();
     void testChangeDeviceOwnerBatchAllSuccess();
@@ -2974,6 +2976,33 @@ void TestCouchPlayHelper::testResetAllDevicesSuccess()
 
     QVERIFY(resetReply.isValid());
     QCOMPARE(resetReply.value(), 2);
+}
+
+void TestCouchPlayHelper::testResetRebindsModeSwitchedPadThroughCurrentDriver()
+{
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    // Assigned while xpad drove the interface; a USB mode switch then rebound the same interface ID to usbhid,
+    // whose nodes the player's udev rule also matched
+    const QString interfaceId = QStringLiteral("1-5.2:1.0");
+    m_helper->m_modifiedHidDevices = {QStringLiteral("hid|%1|/sys/bus/usb/drivers/xpad|couch2").arg(interfaceId)};
+    m_ops->setCanonicalMapping(QStringLiteral("/sys/bus/usb/devices/%1/driver").arg(interfaceId),
+                               QStringLiteral("/sys/bus/usb/drivers/usbhid"));
+
+    QDBusReply<int> reply = m_dbusInterface->call(QStringLiteral("ResetAllDevices"));
+    QVERIFY(reply.isValid());
+
+    QList<QPair<QString, QByteArray>> sysfsWrites;
+    for (const auto &write : m_ops->m_writes) {
+        if (write.first.startsWith(QLatin1String("/sys/"))) {
+            sysfsWrites.append(write);
+        }
+    }
+    const QList<QPair<QString, QByteArray>> expected = {
+        {QStringLiteral("/sys/bus/usb/drivers/usbhid/unbind"), interfaceId.toLatin1()},
+        {QStringLiteral("/sys/bus/usb/drivers/usbhid/bind"), interfaceId.toLatin1()},
+    };
+    QCOMPARE(sysfsWrites, expected);
 }
 
 void TestCouchPlayHelper::testResetAllDevicesPartialFailure()
