@@ -31,6 +31,8 @@ jobs:
         if: github.ref == 'refs/heads/develop'
         run: |
           sed -i 's|"branch": "main"|"branch": "develop"|' io.github.hikaps.couchplay.json
+          # Tell beta builds apart from the release they are based on (shown in Settings and --version)
+          sed -i "s|\"-DBUILD_TESTING=OFF\"|\"-DBUILD_TESTING=OFF\",\n                \"-DCOUCHPLAY_BUILD_ID=beta-$(git rev-parse --short HEAD)\"|" io.github.hikaps.couchplay.json
 
       - name: Install flatpak-builder
         run: |

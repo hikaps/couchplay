@@ -788,7 +788,7 @@ Kirigami.ScrollablePage {
                             return i18nc("@info", "Checking…")
                         }
                         if (s === UpdateChecker.UpToDate) {
-                            return i18nc("@info", "Up to date (%1)", root.updateChecker.currentVersion)
+                            return i18nc("@info", "Up to date (%1)", root.updateChecker.displayVersion)
                         }
                         if (s === UpdateChecker.UpdateAvailable) {
                             return i18nc("@info", "Update available: %1", root.updateChecker.latestVersion)
@@ -809,7 +809,7 @@ Kirigami.ScrollablePage {
 
             Controls.Label {
                 Kirigami.FormData.label: i18nc("@label", "Installed version")
-                text: root.updateChecker?.currentVersion ?? ""
+                text: root.updateChecker?.displayVersion ?? ""
             }
 
             Controls.Label {

@@ -27,6 +27,21 @@ ecm_setup_version(${PROJECT_VERSION}
     VERSION_HEADER ${CMAKE_CURRENT_BINARY_DIR}/couchplay-version.h
 )
 
+# Optional build identifier (e.g. beta-<commit>) shown next to the version so
+# pre-release users can tell which build they run; version comparisons keep
+# using the plain project version
+set(COUCHPLAY_BUILD_ID "" CACHE STRING "Build identifier shown next to the version, e.g. beta-1a2b3c4")
+if(COUCHPLAY_BUILD_ID STREQUAL "")
+    set(COUCHPLAY_DISPLAY_VERSION "${PROJECT_VERSION}")
+elseif(COUCHPLAY_BUILD_ID MATCHES "^[A-Za-z0-9._+-]+$")
+    set(COUCHPLAY_DISPLAY_VERSION "${PROJECT_VERSION} (${COUCHPLAY_BUILD_ID})")
+else()
+    message(FATAL_ERROR "COUCHPLAY_BUILD_ID may only contain letters, digits, '.', '_', '+' and '-'")
+endif()
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/couchplay-buildinfo.h
+    CONTENT "#pragma once\n#define COUCHPLAY_DISPLAY_VERSION \"@COUCHPLAY_DISPLAY_VERSION@\"\n"
+    @ONLY)
+
 # Find Qt6
 find_package(Qt6 6.5 REQUIRED COMPONENTS
     Core

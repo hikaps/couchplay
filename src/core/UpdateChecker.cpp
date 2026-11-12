@@ -22,6 +22,7 @@
 
 #include "HostProcess.h"
 #include "couchplay-version.h"
+#include "couchplay-buildinfo.h"
 
 namespace
 {
@@ -346,6 +347,11 @@ UpdateChecker::State UpdateChecker::state() const
 QString UpdateChecker::currentVersion() const
 {
     return QStringLiteral(COUCHPLAY_VERSION_STRING);
+}
+
+QString UpdateChecker::displayVersion() const
+{
+    return QStringLiteral(COUCHPLAY_DISPLAY_VERSION);
 }
 
 QString UpdateChecker::latestVersion() const
