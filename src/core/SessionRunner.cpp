@@ -1370,6 +1370,7 @@ bool SessionRunner::setupSessionResources()
                     || m_steamConfigManager->getTargetSteamUserId(username).isEmpty()) {
                     qCInfo(couchplaySteam) << "Skipping Steam library sharing for" << username
                                            << "- Steam has not been run for this user yet";
+                    Q_EMIT librarySharingDeferred(username);
                     continue;
                 }
                 DataDirectory steamMarker = dir;
