@@ -30,6 +30,7 @@
 #include <sys/wait.h>
 #include <grp.h>
 #include <fcntl.h>
+#include <linux/input.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <QTimer>
@@ -452,6 +453,7 @@ public:
         m_chownResult = 0;
         m_chowns.clear();
         m_uinputCreators.clear();
+        m_inputDeviceFds.clear();
         m_chmodResult = 0;
         m_processArgs.clear();
         m_processInvocations.clear();
@@ -497,6 +499,7 @@ public:
     };
     QList<ChownCall> m_chowns;
     QHash<QString, uid_t> m_uinputCreators; // sysfs input name -> creating uid
+    QList<int> m_inputDeviceFds; // handed out in order by openInputDevice; the helper closes the ones it takes
     QStringList m_directoryQueries;
     QStringList m_canonicalQueries;
     QStringList m_statQueries;
@@ -685,6 +688,16 @@ public:
     {
         Q_UNUSED(mode)
         return true;
+    }
+
+    int openInputDevice(const QString &path) override
+    {
+        Q_UNUSED(path)
+        if (m_inputDeviceFds.isEmpty()) {
+            errno = ENOENT;
+            return -1;
+        }
+        return m_inputDeviceFds.takeFirst();
     }
 
     int chown(const QString &path, uid_t owner, gid_t group) override
@@ -1053,6 +1066,7 @@ private Q_SLOTS:
     void testRemoveRuntimeAccessUserNotFound();
 
     void testVirtualPadGoesToCreatingPlayer();
+    void testExitChordFollowsRecreatedNode();
 
     // PulseAudio TCP listener (runtime module load/unload, no pipewire-pulse restart)
     void testPulseTcpListenerLoadsModuleWhenAbsent();
@@ -3227,6 +3241,42 @@ void TestCouchPlayHelper::testVirtualPadGoesToCreatingPlayer()
     QVERIFY(m_helper->m_modifiedDevices.isEmpty());
     QVERIFY(m_helper->m_sessionVirtualDevices.isEmpty());
     m_helper->m_usernameToUnitName.clear();
+}
+
+void TestCouchPlayHelper::testExitChordFollowsRecreatedNode()
+{
+    m_ops->clear();
+    m_helper->stopWatchingAllDevices();
+    // Pipes stand in for two incarnations of the same /dev/input node
+    int oldNode[2];
+    int newNode[2];
+    QCOMPARE(::pipe2(oldNode, O_NONBLOCK | O_CLOEXEC), 0);
+    QCOMPARE(::pipe2(newNode, O_NONBLOCK | O_CLOEXEC), 0);
+    m_ops->m_inputDeviceFds = {oldNode[0], newNode[0]};
+    auto cleanup = qScopeGuard([&] {
+        m_helper->stopWatchingAllDevices();
+        for (int fd : std::as_const(m_ops->m_inputDeviceFds)) {
+            ::close(fd);
+        }
+        m_ops->m_inputDeviceFds.clear();
+        ::close(oldNode[1]);
+        ::close(newNode[1]);
+    });
+    const QString path = QStringLiteral("/dev/input/event26");
+
+    m_helper->startWatchingDevice(path);
+    // A rebind or reconnect recreates the node under the same name before the old watcher reads ENODEV
+    m_helper->startWatchingDevice(path);
+
+    QSignalSpy exitSpy(m_helper, &CouchPlayHelper::exitChordTriggered);
+    for (const quint16 code : {quint16(BTN_SELECT), quint16(BTN_START)}) {
+        input_event event{};
+        event.type = EV_KEY;
+        event.code = code;
+        event.value = 1;
+        QCOMPARE(::write(newNode[1], &event, sizeof(event)), ssize_t(sizeof(event)));
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(exitSpy.count(), 1, 4000);
 }
 
 void TestCouchPlayHelper::testPulseTcpListenerLoadsModuleWhenAbsent()

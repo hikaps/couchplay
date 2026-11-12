@@ -243,6 +243,11 @@ bool RealSystemOps::isCharDevice(mode_t mode)
     return S_ISCHR(mode);
 }
 
+int RealSystemOps::openInputDevice(const QString &path)
+{
+    return ::open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+}
+
 int RealSystemOps::chown(const QString &path, uid_t owner, gid_t group)
 {
     return ::chown(path.toLocal8Bit().constData(), owner, group);
