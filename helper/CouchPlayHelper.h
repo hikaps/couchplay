@@ -388,7 +388,7 @@ private:
     };
     HidDeviceInfo findHidDevice(const QString &devicePath) const;
     QString findHidrawPathForDeviceId(const QString &deviceId) const;
-    QString findJoystickEventPath(const HidDeviceInfo &device) const;
+    QStringList gamepadNodePaths(const HidDeviceInfo &device) const;
     QString getTempUdevRulePath(const QString &deviceId) const;
     bool writeTempUdevRule(const HidDeviceInfo &hid, const QString &username);
     bool removeTempUdevRule(const QString &deviceId);
@@ -456,6 +456,8 @@ private:
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;
+    // Input nodes renumbered by a rebind this session: the path callers saw -> the current node
+    QHash<QString, QString> m_reboundNodes;
 
 
     // Track launched transient units

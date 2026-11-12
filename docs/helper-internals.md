@@ -61,7 +61,7 @@ A chown does not revoke handles other users already hold, so the desktop's Steam
 
 - **HID controllers** are rebound through their `hidraw` node.
 - **USB gamepads driven directly by an interface driver** such as `xpad` (Xbox 360-protocol pads) have no `hidraw` node. Their event node resolves to the USB interface (for example `1-5.2:1.0`), which is rebound instead. Only joystick nodes on a USB interface qualify, never hubs or whole devices.
-- After the rebind the helper resolves the recreated node and watches it for the exit chord.
+- After the rebind the helper resolves the recreated node and watches it for the exit chord. The event and joystick nodes may come back with new numbers, and another device can take an old number. For the rest of the session, ownership and reset requests for the old paths therefore go to the recreated nodes, since the GUI still lists the paths it saw before the rebind.
 - Session reset removes the rule and rebinds again, returning the nodes to the seat user.
 - Other nodes (virtual devices, keyboards and mice without `hidraw`) are only chowned.
 

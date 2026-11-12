@@ -1011,6 +1011,7 @@ private Q_SLOTS:
     void testChangeDeviceOwnerChownFails();
     void testChangeDeviceOwnerChmodFails();
     void testResetDeviceOwnerSuccess();
+    void testDeviceOwnerFollowsNodeRenumberedByRebind();
     void testResetDeviceOwnerInvalidPathNotUnderDevInput();
     void testResetDeviceOwnerInvalidPathTraversal();
     void testResetDeviceOwnerAuthorizationDenied();
@@ -2817,6 +2818,28 @@ void TestCouchPlayHelper::testResetDeviceOwnerSuccess()
 
     QVERIFY(reply.isValid());
     QVERIFY(reply.value());
+}
+
+void TestCouchPlayHelper::testDeviceOwnerFollowsNodeRenumberedByRebind()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1000, 1000);
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    m_ops->setFileExists(QStringLiteral("/dev/input/js6"), true); // js4 is gone after the rebind
+    m_helper->m_modifiedDevices.clear();
+    m_helper->m_reboundNodes.insert(QStringLiteral("/dev/input/js4"), QStringLiteral("/dev/input/js6"));
+
+    QDBusReply<bool> reply =
+        m_dbusInterface->call(QStringLiteral("ChangeDeviceOwner"), QStringLiteral("/dev/input/js4"), 1000u);
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+    QCOMPARE(m_helper->m_modifiedDevices, QStringList{QStringLiteral("/dev/input/js6")});
+
+    reply = m_dbusInterface->call(QStringLiteral("ResetDeviceOwner"), QStringLiteral("/dev/input/js4"));
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+    QVERIFY(m_helper->m_modifiedDevices.isEmpty());
+    QVERIFY(m_helper->m_reboundNodes.isEmpty());
 }
 
 void TestCouchPlayHelper::testResetDeviceOwnerInvalidPathNotUnderDevInput()

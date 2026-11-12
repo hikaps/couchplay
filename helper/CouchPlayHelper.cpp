@@ -355,10 +355,12 @@ CouchPlayHelper::~CouchPlayHelper()
     removeUinputAccess();
 }
 
-bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
+bool CouchPlayHelper::ChangeDeviceOwner(const QString &requestedPath, uint uid)
 {
+    // A rebind earlier in this session may have renumbered (or removed) the node the caller listed
+    const QString devicePath = m_reboundNodes.value(requestedPath, requestedPath);
     if (!isValidDevicePath(devicePath)) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(devicePath));
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(requestedPath));
         return false;
     }
 
@@ -419,6 +421,7 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
             runCommand(QStringLiteral("udevadm"), {QStringLiteral("control"), QStringLiteral("--reload-rules")});
 
             // 3. Unbind the driver to force active openers (like Steam) to close their FDs
+            const QStringList nodesBeforeRebind = gamepadNodePaths(hid);
             QString driverPath = hid.driverPath;
             QString unbindPath = driverPath + QStringLiteral("/unbind");
             qDebug() << "CouchPlayHelper: Unbinding device" << devId << "from driver" << driverPath;
@@ -439,9 +442,19 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
             // After rebind, the node may have received a new number. Re-resolve the actual current path
             // from sysfs using the stable device ID: the hidraw node, or the gamepad's event node when the
             // device has no hidraw node (USB interface drivers such as xpad).
+            const QStringList nodesAfterRebind = gamepadNodePaths(hid);
+            for (const QString &node : nodesAfterRebind) {
+                m_reboundNodes.remove(node);
+            }
+            // Callers list the event and joystick nodes they saw before the rebind; map the old ones
+            for (qsizetype i = 0; i < qMin(nodesBeforeRebind.size(), nodesAfterRebind.size()); ++i) {
+                if (nodesBeforeRebind.at(i) != nodesAfterRebind.at(i)) {
+                    m_reboundNodes.insert(nodesBeforeRebind.at(i), nodesAfterRebind.at(i));
+                }
+            }
             QString resolvedDevicePath = findHidrawPathForDeviceId(devId);
             if (resolvedDevicePath.isEmpty() && devicePath.startsWith(QStringLiteral("/dev/input/event"))) {
-                resolvedDevicePath = findJoystickEventPath(hid);
+                resolvedDevicePath = nodesAfterRebind.value(0);
             }
             if (resolvedDevicePath.isEmpty()) {
                 qWarning() << "CouchPlayHelper: Could not resolve post-rebind path for" << devId
@@ -512,10 +525,11 @@ int CouchPlayHelper::ChangeDeviceOwnerBatch(const QStringList &devicePaths, uint
     return successCount;
 }
 
-bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
+bool CouchPlayHelper::ResetDeviceOwner(const QString &requestedPath)
 {
+    const QString devicePath = m_reboundNodes.value(requestedPath, requestedPath);
     if (!isValidDevicePath(devicePath)) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(devicePath));
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(requestedPath));
         return false;
     }
 
@@ -578,6 +592,7 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
 
     stopWatchingDevice(devicePath);
     m_modifiedDevices.removeAll(devicePath);
+    m_reboundNodes.remove(requestedPath);
     saveState();
     return true;
 }
@@ -665,6 +680,7 @@ int CouchPlayHelper::resetAllDevicesInternal()
             m_modifiedDevices.removeAll(path);
         }
     }
+    m_reboundNodes.clear();
 
     saveState();
 
@@ -4088,8 +4104,8 @@ QString CouchPlayHelper::findHidrawPathForDeviceId(const QString &deviceId) cons
     return {};
 }
 
-// Find the gamepad's current /dev/input/eventN below a bound device, or an empty string.
-QString CouchPlayHelper::findJoystickEventPath(const HidDeviceInfo &device) const
+// The gamepad's current event node followed by its joystick nodes, below a bound device, or an empty list.
+QStringList CouchPlayHelper::gamepadNodePaths(const HidDeviceInfo &device) const
 {
     // The driver directory links every device bound to it
     const QString inputRoot =
@@ -4098,8 +4114,13 @@ QString CouchPlayHelper::findJoystickEventPath(const HidDeviceInfo &device) cons
     for (const QString &inputDevice : inputDevices) {
         const QDir dir(inputRoot + QLatin1Char('/') + inputDevice);
         const QStringList events = dir.entryList({QStringLiteral("event*")}, QDir::Dirs);
-        if (!events.isEmpty() && !dir.entryList({QStringLiteral("js*")}, QDir::Dirs).isEmpty()) {
-            return QStringLiteral("/dev/input/") + events.first();
+        const QStringList joysticks = dir.entryList({QStringLiteral("js*")}, QDir::Dirs);
+        if (!events.isEmpty() && !joysticks.isEmpty()) {
+            QStringList nodes{QStringLiteral("/dev/input/") + events.first()};
+            for (const QString &js : joysticks) {
+                nodes.append(QStringLiteral("/dev/input/") + js);
+            }
+            return nodes;
         }
     }
     return {};
