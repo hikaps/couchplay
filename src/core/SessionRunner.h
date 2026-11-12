@@ -31,6 +31,7 @@ class GamescopeInstance;
 class DeviceManager;
 class SessionManager;
 class SettingsManager;
+class MonitorManager;
 class StreamManager;
 class VirtualDisplayManager;
 class WindowManager;
@@ -65,6 +66,7 @@ class SessionRunner : public QObject
                    heroicConfigManagerChanged)
     Q_PROPERTY(
         SettingsManager *settingsManager READ settingsManager WRITE setSettingsManager NOTIFY settingsManagerChanged)
+    Q_PROPERTY(MonitorManager *monitorManager READ monitorManager WRITE setMonitorManager NOTIFY monitorManagerChanged)
     Q_PROPERTY(StreamManager *streamManager READ streamManager CONSTANT)
     Q_PROPERTY(bool skipPairingCheck READ skipPairingCheck WRITE setSkipPairingCheck NOTIFY skipPairingCheckChanged)
 
@@ -173,6 +175,13 @@ public:
     }
     void setSettingsManager(SettingsManager *manager);
 
+    /** Source of each output's real scale; without it gamescope gets logical sizes. */
+    MonitorManager *monitorManager() const
+    {
+        return m_monitorManager;
+    }
+    void setMonitorManager(MonitorManager *manager);
+
     /** When true, start() does not require a paired Moonlight client for streaming players (--skip-pairing-check). */
     bool skipPairingCheck() const
     {
@@ -236,6 +245,7 @@ Q_SIGNALS:
     void steamConfigManagerChanged();
     void heroicConfigManagerChanged();
     void settingsManagerChanged();
+    void monitorManagerChanged();
     void skipPairingCheckChanged();
     void errorOccurred(const QString &message);
     void activeChanged();
@@ -270,7 +280,8 @@ private:
     void restoreDeviceOwnership();
     bool setupSessionResources();
     void teardownSharingState();
-    static QRect mainScreenGeometry(const SessionProfile &profile);
+    /** The screen the main-screen players split: the profile's choice, else the primary screen. */
+    static QScreen *mainScreen(const SessionProfile &profile);
     void positionInstanceWindow(GamescopeInstance *instance);
     void setupGlobalShortcut();
     void inhibitScreenSaver();
@@ -316,6 +327,7 @@ private:
     SteamConfigManager *m_steamConfigManager = nullptr;
     HeroicConfigManager *m_heroicConfigManager = nullptr;
     SettingsManager *m_settingsManager = nullptr;
+    MonitorManager *m_monitorManager = nullptr;
     WindowManager *m_windowManager = nullptr;
     StreamManager *m_streamManager = nullptr;
     VirtualDisplayManager *m_virtualDisplays = nullptr;
@@ -347,7 +359,8 @@ private:
     // Sequential instance launching state
     int m_nextInstanceToStart = 0;
     QList<QVariantMap> m_pendingInstanceConfigs;
-    QList<QRect> m_layouts;
+    QList<QRect> m_layouts; // logical
+    QStringList m_layoutOutputs; // output each layout lies on
     QMap<int, StreamingInstanceInfo> m_streamingInstances;
 
     // Moonlight gamepad attribution (Sunshine uhid devices -> streaming player)
