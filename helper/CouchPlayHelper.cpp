@@ -636,6 +636,17 @@ int CouchPlayHelper::resetAllDevicesInternal()
 
         QString devId = parts.at(1);
         QString driverPath = parts.at(2);
+        // A pad that switched USB mode mid-session keeps its interface ID but is bound to another driver (xpad ->
+        // usbhid), and the player's rule matched that driver's nodes too. Rebinding through the recorded driver
+        // fails then, leaving those nodes player-owned; rebind through the driver bound now instead.
+        const QString busRoot = driverPath.section(QLatin1Char('/'), 0, -3);
+        const QString currentDriver =
+            m_ops->canonicalFilePath(busRoot + QStringLiteral("/devices/") + devId + QStringLiteral("/driver"));
+        if (busRoot.startsWith(QLatin1String("/sys/bus/"))
+            && currentDriver.startsWith(busRoot + QStringLiteral("/drivers/")) && currentDriver != driverPath) {
+            qDebug() << "CouchPlayHelper: Reset -" << devId << "is now bound to" << currentDriver;
+            driverPath = currentDriver;
+        }
 
         if (removeTempUdevRule(devId)) {
             needUdevReload = true;
