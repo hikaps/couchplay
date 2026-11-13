@@ -1219,6 +1219,27 @@ bool SteamConfigManager::finalizeDataDir(const DataDirectory &dir, const QString
     return true;
 }
 
+// Names of the tools in <steamRoot>/compatibilitytools.d. They live in the desktop user's home,
+// so a player's Steam cannot select them
+static QSet<QString> hostCustomToolNames(const QString &steamRoot)
+{
+    static const QRegularExpression toolKey(QStringLiteral("\"([^\"]+)\"\\s*(?://[^\\n]*)?\\s*\\{"));
+    QSet<QString> names;
+    const QDir toolsDir(steamRoot + QStringLiteral("/compatibilitytools.d"));
+    for (const QString &entry : toolsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        names.insert(entry);
+        QFile descriptor(toolsDir.filePath(entry + QStringLiteral("/compatibilitytool.vdf")));
+        if (!descriptor.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        const QString text = QString::fromUtf8(descriptor.readAll());
+        for (auto match = toolKey.globalMatch(text); match.hasNext();) {
+            names.insert(match.next().captured(1));
+        }
+    }
+    return names;
+}
+
 void SteamConfigManager::mirrorCompatToolMapping(const QString &username, const QSet<QString> &sharedAppIds)
 {
     // A shared game must keep the desktop's Proton/native choice for the player: with any other
@@ -1236,10 +1257,21 @@ void SteamConfigManager::mirrorCompatToolMapping(const QString &username, const 
         return;
     }
 
+    const QSet<QString> hostOnlyTools = hostCustomToolNames(m_steamPaths.steamRoot);
     SteamCompatToolMapping::Changes changes;
     for (const QString &appId : sharedAppIds) {
         const auto tool = hostMapping->constFind(appId);
-        changes.insert(appId, tool != hostMapping->cend() ? std::optional(*tool) : std::nullopt);
+        if (tool == hostMapping->cend()) {
+            changes.insert(appId, std::nullopt);
+        } else if (hostOnlyTools.contains(tool->name)) {
+            // The player has no such tool; an entry naming it makes Steam run the game without a
+            // compatibility layer (empty dropdown). Drop it, including one an earlier session mirrored
+            qCWarning(couchplaySteam) << "mirrorCompatToolMapping: Not mirroring" << tool->name << "for app" << appId
+                                      << "- it is installed only for the desktop user";
+            changes.insert(appId, std::nullopt);
+        } else {
+            changes.insert(appId, *tool);
+        }
     }
     if (!changes.isEmpty()
         && !m_helperClient->setUserCompatToolMapping(username, SteamCompatToolMapping::toVariantMap(changes))) {

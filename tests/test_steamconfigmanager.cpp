@@ -217,6 +217,8 @@ private Q_SLOTS:
         QVERIFY(writeFile(steamRoot + QStringLiteral("/steamapps/appmanifest_49520.acf"), "\"AppState\"\n{\n}\n"));
         QVERIFY(writeFile(steamRoot + QStringLiteral("/steamapps/appmanifest_345180.acf"), "\"AppState\"\n{\n}\n"));
         QVERIFY(writeFile(externalLibrary + QStringLiteral("/steamapps/appmanifest_220.acf"), "\"AppState\"\n{\n}\n"));
+        // A tool installed only in the desktop user's compatibilitytools.d does not exist for players
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/compatibilitytools.d/GE-Proton9-1")));
         // The global default ("0") and games outside the shared libraries are never mirrored
         QVERIFY(writeFile(steamRoot + QStringLiteral("/config/config.vdf"),
                           "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n"
@@ -224,6 +226,7 @@ private Q_SLOTS:
                           "\"0\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"
                           "\"49520\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
                           "\"999\"\n{\n\"name\" \"proton_8\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
+                          "\"345180\"\n{\n\"name\" \"GE-Proton9-1\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
                           "}\n}\n}\n}\n}\n"));
 
         SteamPlanHelper helper;
