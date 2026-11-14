@@ -38,7 +38,6 @@ Kirigami.ScrollablePage {
     readonly property var activePresetManager: root.presetManager ?? internalPresetManager
 
     readonly property bool hidePanels: settingsManager?.hidePanels ?? true
-    readonly property bool killSteam: settingsManager?.killSteam ?? true
     readonly property bool restoreSession: settingsManager?.restoreSession ?? false
     readonly property string scalingMode: settingsManager?.scalingMode ?? "fit"
     readonly property string filterMode: settingsManager?.filterMode ?? "linear"
@@ -78,20 +77,6 @@ Kirigami.ScrollablePage {
                 onToggled: if (root.settingsManager) root.settingsManager.hidePanels = checked
 
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Automatically hide Plasma panels when a session starts")
-                Controls.ToolTip.visible: hovered
-                Controls.ToolTip.delay: 1000
-            }
-
-            Controls.CheckBox {
-                id: killSteamOption
-                objectName: "checkKillSteam"
-                Kirigami.FormData.label: i18nc("@option:check", "Close Steam before starting")
-                Accessible.role: Accessible.CheckBox
-                Accessible.name: Kirigami.FormData.label
-                checked: root.killSteam
-                onToggled: if (root.settingsManager) root.settingsManager.killSteam = checked
-
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Prevents conflicts by closing existing Steam instances before session start")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }

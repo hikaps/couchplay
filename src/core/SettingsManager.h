@@ -21,7 +21,6 @@ class SettingsManager : public QObject
 
     // General settings
     Q_PROPERTY(bool hidePanels READ hidePanels WRITE setHidePanels NOTIFY hidePanelsChanged)
-    Q_PROPERTY(bool killSteam READ killSteam WRITE setKillSteam NOTIFY killSteamChanged)
     Q_PROPERTY(bool restoreSession READ restoreSession WRITE setRestoreSession NOTIFY restoreSessionChanged)
     Q_PROPERTY(bool checkForUpdatesAutomatically READ checkForUpdatesAutomatically WRITE setCheckForUpdatesAutomatically NOTIFY checkForUpdatesAutomaticallyChanged)
 
@@ -46,12 +45,6 @@ public:
         return m_hidePanels;
     }
     void setHidePanels(bool value);
-
-    bool killSteam() const
-    {
-        return m_killSteam;
-    }
-    void setKillSteam(bool value);
 
     bool restoreSession() const
     {
@@ -113,7 +106,6 @@ public:
 
 Q_SIGNALS:
     void hidePanelsChanged();
-    void killSteamChanged();
     void restoreSessionChanged();
     void checkForUpdatesAutomaticallyChanged();
     void scalingModeChanged();
@@ -128,7 +120,6 @@ private:
 
     // General settings
     bool m_hidePanels = true;
-    bool m_killSteam = true;
     bool m_restoreSession = false;
     bool m_checkForUpdatesAutomatically = true;
 
