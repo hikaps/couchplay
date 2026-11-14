@@ -9,6 +9,8 @@ add_library(couchplay_core STATIC
     core/Logging.h
     ../helper/DirectoryPlan.cpp
     ../helper/DirectoryPlan.h
+    ../helper/SteamCompatToolMapping.cpp
+    ../helper/SteamCompatToolMapping.h
 )
 
 # Link libraries for core library

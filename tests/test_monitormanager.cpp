@@ -26,6 +26,7 @@ private Q_SLOTS:
     void testRefreshEmitsSignal();
     void testDisplayStringFormat();
     void testSizeIsPhysicalPixels();
+    void testParseKScreenScales();
 
 private:
     MonitorManager *m_manager = nullptr;
@@ -164,7 +165,7 @@ void TestMonitorManager::testDisplayStringFormat()
 }
 
 // Registered with QT_SCALE_FACTOR=2.5 (tests/CMakeLists.txt): Qt's logical size is then 2.5x smaller than the
-// panel, and the reported size must still be the physical one.
+// panel, and the reported size must be the physical one the session renders at.
 void TestMonitorManager::testSizeIsPhysicalPixels()
 {
     if (!m_hasDisplay) {
@@ -176,11 +177,27 @@ void TestMonitorManager::testSizeIsPhysicalPixels()
     QCOMPARE(monitors.size(), screens.size());
     for (int i = 0; i < screens.size(); ++i) {
         const QVariantMap monitor = monitors.at(i).toMap();
-        QCOMPARE(monitor[QStringLiteral("width")].toInt(),
-                 qRound(screens.at(i)->size().width() * screens.at(i)->devicePixelRatio()));
-        QCOMPARE(monitor[QStringLiteral("height")].toInt(),
-                 qRound(screens.at(i)->size().height() * screens.at(i)->devicePixelRatio()));
+        const qreal scale = m_manager->scaleFor(screens.at(i)->name());
+        QVERIFY(scale > 1.0);
+        QCOMPARE(monitor[QStringLiteral("width")].toInt(), qRound(screens.at(i)->size().width() * scale));
+        QCOMPARE(monitor[QStringLiteral("height")].toInt(), qRound(screens.at(i)->size().height() * scale));
     }
+}
+
+// kscreen-doctor knows the real fractional scale that QScreen rounds up; outputs it cannot use are skipped.
+void TestMonitorManager::testParseKScreenScales()
+{
+    const QByteArray json = R"({"outputs": [
+        {"name": "DP-1", "connected": true, "scale": 1.5, "size": {"width": 1920, "height": 1080}},
+        {"name": "HDMI-A-1", "connected": false, "scale": 2},
+        {"name": "DP-2", "connected": true, "scale": 0},
+        {"name": "", "connected": true, "scale": 1.25}
+    ], "screen": {}})";
+
+    const QHash<QString, qreal> scales = MonitorManager::parseKScreenScales(json);
+    QCOMPARE(scales.size(), 1);
+    QCOMPARE(scales.value(QStringLiteral("DP-1")), 1.5);
+    QVERIFY(MonitorManager::parseKScreenScales("not json").isEmpty());
 }
 
 QTEST_MAIN(TestMonitorManager)

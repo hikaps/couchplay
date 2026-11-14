@@ -7,6 +7,7 @@
 #include "HomePathMapping.h"
 #include "PolkitActions.h"
 #include "SecureFs.h"
+#include "SteamCompatToolMapping.h"
 #include "SystemOps.h"
 
 #include <QCryptographicHash>
@@ -271,16 +272,7 @@ CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     loadAndReconcileState();
     setupUinputAccess();
 
-    // Populate initial known event numbers
-    QDir dir(QStringLiteral("/dev/input"));
-    QStringList eventFiles = dir.entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
-    static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            m_knownEventNumbers.insert(match.captured(1).toInt());
-        }
-    }
+    m_knownEventInputs = currentEventInputs();
 
     // Set up directory watcher on /dev/input
     m_inputWatcher = new QFileSystemWatcher(this);
@@ -293,15 +285,13 @@ CouchPlayHelper::CouchPlayHelper(SystemOps *ops, QObject *parent)
     connect(m_inputDebounceTimer, &QTimer::timeout, this, &CouchPlayHelper::onInputDebounceTimeout);
 
     // Watch any virtual controllers already present at startup
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            int eventNumber = match.captured(1).toInt();
-            if (isVirtualDevice(eventNumber)) {
-                QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
-                qDebug() << "CouchPlayHelper: Pre-existing virtual device found at startup, watching:" << devicePath;
-                startWatchingDevice(devicePath);
-            }
+    for (auto it = m_knownEventInputs.constBegin(); it != m_knownEventInputs.constEnd(); ++it) {
+        bool isNumber = false;
+        const int eventNumber = it.key().mid(5).toInt(&isNumber); // "eventN"
+        if (isNumber && isVirtualDevice(eventNumber)) {
+            QString devicePath = QStringLiteral("/dev/input/%1").arg(it.key());
+            qDebug() << "CouchPlayHelper: Pre-existing virtual device found at startup, watching:" << devicePath;
+            startWatchingDevice(devicePath);
         }
     }
 }
@@ -355,10 +345,12 @@ CouchPlayHelper::~CouchPlayHelper()
     removeUinputAccess();
 }
 
-bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
+bool CouchPlayHelper::ChangeDeviceOwner(const QString &requestedPath, uint uid)
 {
+    // A rebind earlier in this session may have renumbered (or removed) the node the caller listed
+    const QString devicePath = m_reboundNodes.value(requestedPath, requestedPath);
     if (!isValidDevicePath(devicePath)) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(devicePath));
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(requestedPath));
         return false;
     }
 
@@ -419,6 +411,7 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
             runCommand(QStringLiteral("udevadm"), {QStringLiteral("control"), QStringLiteral("--reload-rules")});
 
             // 3. Unbind the driver to force active openers (like Steam) to close their FDs
+            const QStringList nodesBeforeRebind = gamepadNodePaths(hid);
             QString driverPath = hid.driverPath;
             QString unbindPath = driverPath + QStringLiteral("/unbind");
             qDebug() << "CouchPlayHelper: Unbinding device" << devId << "from driver" << driverPath;
@@ -436,16 +429,30 @@ bool CouchPlayHelper::ChangeDeviceOwner(const QString &devicePath, uint uid)
             // Wait for udev to finish processing the device creation and logind to apply ACLs
             runCommand(QStringLiteral("udevadm"), {QStringLiteral("settle")});
 
-            // After rebind, the hidraw node may have received a new /dev/hidrawN number.
-            // Re-resolve the actual current path from sysfs using the stable device ID.
+            // After rebind, the node may have received a new number. Re-resolve the actual current path
+            // from sysfs using the stable device ID: the hidraw node, or the gamepad's event node when the
+            // device has no hidraw node (USB interface drivers such as xpad).
+            const QStringList nodesAfterRebind = gamepadNodePaths(hid);
+            for (const QString &node : nodesAfterRebind) {
+                m_reboundNodes.remove(node);
+            }
+            // Callers list the event and joystick nodes they saw before the rebind; map the old ones
+            for (qsizetype i = 0; i < qMin(nodesBeforeRebind.size(), nodesAfterRebind.size()); ++i) {
+                if (nodesBeforeRebind.at(i) != nodesAfterRebind.at(i)) {
+                    m_reboundNodes.insert(nodesBeforeRebind.at(i), nodesAfterRebind.at(i));
+                }
+            }
             QString resolvedDevicePath = findHidrawPathForDeviceId(devId);
+            if (resolvedDevicePath.isEmpty() && devicePath.startsWith(QStringLiteral("/dev/input/event"))) {
+                resolvedDevicePath = nodesAfterRebind.value(0);
+            }
             if (resolvedDevicePath.isEmpty()) {
-                qWarning() << "CouchPlayHelper: Could not resolve post-rebind hidraw path for" << devId
+                qWarning() << "CouchPlayHelper: Could not resolve post-rebind path for" << devId
                            << "-- falling back to original path" << devicePath;
                 resolvedDevicePath = devicePath;
             } else if (resolvedDevicePath != devicePath) {
-                qDebug() << "CouchPlayHelper: Post-rebind hidraw path changed from" << devicePath
-                         << "to" << resolvedDevicePath;
+                qDebug() << "CouchPlayHelper: Post-rebind path changed from" << devicePath << "to"
+                         << resolvedDevicePath;
                 // Update tracking so cleanup removes the right node
                 m_modifiedDevices.removeAll(devicePath);
             }
@@ -508,10 +515,11 @@ int CouchPlayHelper::ChangeDeviceOwnerBatch(const QStringList &devicePaths, uint
     return successCount;
 }
 
-bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
+bool CouchPlayHelper::ResetDeviceOwner(const QString &requestedPath)
 {
+    const QString devicePath = m_reboundNodes.value(requestedPath, requestedPath);
     if (!isValidDevicePath(devicePath)) {
-        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(devicePath));
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid device path: %1").arg(requestedPath));
         return false;
     }
 
@@ -574,6 +582,7 @@ bool CouchPlayHelper::ResetDeviceOwner(const QString &devicePath)
 
     stopWatchingDevice(devicePath);
     m_modifiedDevices.removeAll(devicePath);
+    m_reboundNodes.remove(requestedPath);
     saveState();
     return true;
 }
@@ -627,6 +636,17 @@ int CouchPlayHelper::resetAllDevicesInternal()
 
         QString devId = parts.at(1);
         QString driverPath = parts.at(2);
+        // A pad that switched USB mode mid-session keeps its interface ID but is bound to another driver (xpad ->
+        // usbhid), and the player's rule matched that driver's nodes too. Rebinding through the recorded driver
+        // fails then, leaving those nodes player-owned; rebind through the driver bound now instead.
+        const QString busRoot = driverPath.section(QLatin1Char('/'), 0, -3);
+        const QString currentDriver =
+            m_ops->canonicalFilePath(busRoot + QStringLiteral("/devices/") + devId + QStringLiteral("/driver"));
+        if (busRoot.startsWith(QLatin1String("/sys/bus/"))
+            && currentDriver.startsWith(busRoot + QStringLiteral("/drivers/")) && currentDriver != driverPath) {
+            qDebug() << "CouchPlayHelper: Reset -" << devId << "is now bound to" << currentDriver;
+            driverPath = currentDriver;
+        }
 
         if (removeTempUdevRule(devId)) {
             needUdevReload = true;
@@ -661,6 +681,8 @@ int CouchPlayHelper::resetAllDevicesInternal()
             m_modifiedDevices.removeAll(path);
         }
     }
+    m_reboundNodes.clear();
+    m_sessionVirtualDevices.clear();
 
     saveState();
 
@@ -1263,7 +1285,7 @@ struct PulseTcpModule {
     QString args;
 };
 
-// Parses `pactl list short modules` ("<id>\t<name>\t<args>"). machinectl allocates a PTY, so lines may end in CRLF.
+// Parses `pactl list short modules` ("<id>\t<name>\t<args>"); tolerates CRLF line endings and trailing tabs.
 QList<PulseTcpModule> parsePulseTcpModules(const QByteArray &output)
 {
     QList<PulseTcpModule> modules;
@@ -1280,18 +1302,26 @@ QList<PulseTcpModule> parsePulseTcpModules(const QByteArray &output)
 
 } // namespace
 
-bool CouchPlayHelper::runAsUser(const QString &username,
+bool CouchPlayHelper::runAsUser(const struct passwd &pw,
                                 const QStringList &command,
                                 QByteArray *standardOutput,
                                 QString *standardError)
 {
-    // machinectl shell starts the command in a logind session of the user (PAM sets XDG_RUNTIME_DIR),
-    // so the user's PipeWire/PulseAudio socket is reachable. Arguments are passed as argv, never via a shell.
-    QStringList args{QStringLiteral("shell"), QStringLiteral("--quiet"), username + QStringLiteral("@")};
+    // Drop to the user and point at their runtime directory so their PipeWire/PulseAudio socket is reachable.
+    // Unlike `machinectl shell`, this returns the command's real exit status. Arguments are argv, never a shell.
+    QStringList args{QStringLiteral("--reuid=%1").arg(pw.pw_uid),
+                     QStringLiteral("--regid=%1").arg(pw.pw_gid),
+                     QStringLiteral("--init-groups"),
+                     QStringLiteral("--"),
+                     QStringLiteral("/usr/bin/env"),
+                     QStringLiteral("-i"),
+                     QStringLiteral("HOME=%1").arg(QString::fromLocal8Bit(pw.pw_dir)),
+                     QStringLiteral("XDG_RUNTIME_DIR=/run/user/%1").arg(pw.pw_uid),
+                     QStringLiteral("PATH=/usr/bin:/bin")};
     args += command;
 
     QProcess *proc = m_ops->createProcess();
-    m_ops->startProcess(proc, QStringLiteral("machinectl"), args);
+    m_ops->startProcess(proc, QStringLiteral("setpriv"), args);
     const bool finished = m_ops->waitForFinished(proc, 10000);
     const bool success = finished && m_ops->processExitCode(proc) == 0;
     if (standardOutput) {
@@ -1312,13 +1342,14 @@ bool CouchPlayHelper::setupPulseTcpListener(uint compositorUid)
         return false;
     }
 
-    const QString username = QString::fromLocal8Bit(pw->pw_name);
+    const struct passwd &user = *pw;
+    const QString username = QString::fromLocal8Bit(user.pw_name);
     const QString pactl = QStringLiteral("/usr/bin/pactl");
     const QString portArg = QStringLiteral("port=%1").arg(PULSE_TCP_PORT);
 
     QByteArray modulesOutput;
     QString error;
-    if (!runAsUser(username, {pactl, QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("modules")},
+    if (!runAsUser(user, {pactl, QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("modules")},
                    &modulesOutput, &error)) {
         qWarning() << "Failed to list PulseAudio modules for" << username << ":" << error;
         return false;
@@ -1332,18 +1363,15 @@ bool CouchPlayHelper::setupPulseTcpListener(uint compositorUid)
     }
 
     // A pipewire-pulse drop-in (e.g. the one written by CouchPlay 0.6.0) serves the port without a loaded module
-    if (runAsUser(username,
-                  {QStringLiteral("/usr/bin/env"),
-                   QStringLiteral("PULSE_SERVER=tcp:127.0.0.1:%1").arg(PULSE_TCP_PORT),
-                   pactl,
-                   QStringLiteral("info")})) {
+    if (runAsUser(user,
+                  {QStringLiteral("PULSE_SERVER=tcp:127.0.0.1:%1").arg(PULSE_TCP_PORT), pactl, QStringLiteral("info")})) {
         return true;
     }
 
     qInfo() << "Loading PulseAudio TCP listener module for UID" << compositorUid;
     QStringList loadCommand{pactl, QStringLiteral("load-module"), pulseTcpModuleName()};
     loadCommand += pulseTcpModuleArgs().split(QLatin1Char(' '));
-    if (!runAsUser(username, loadCommand, nullptr, &error)) {
+    if (!runAsUser(user, loadCommand, nullptr, &error)) {
         qWarning() << "Failed to load" << pulseTcpModuleName() << "for" << username << ":" << error;
         return false;
     }
@@ -1374,10 +1402,11 @@ void CouchPlayHelper::removePulseTcpListener(uint compositorUid)
         return; // Never unload a module this helper did not load
     }
 
-    const QString username = QString::fromLocal8Bit(pw->pw_name);
+    const struct passwd &user = *pw;
+    const QString username = QString::fromLocal8Bit(user.pw_name);
     QByteArray modulesOutput;
     QString error;
-    if (!runAsUser(username,
+    if (!runAsUser(user,
                    {QStringLiteral("/usr/bin/pactl"), QStringLiteral("list"), QStringLiteral("short"),
                     QStringLiteral("modules")},
                    &modulesOutput, &error)) {
@@ -1390,7 +1419,7 @@ void CouchPlayHelper::removePulseTcpListener(uint compositorUid)
             continue;
         }
         qInfo() << "Unloading PulseAudio TCP listener module" << module.id << "for UID" << compositorUid;
-        if (!runAsUser(username,
+        if (!runAsUser(user,
                        {QStringLiteral("/usr/bin/pactl"), QStringLiteral("unload-module"), module.id}, nullptr,
                        &error)) {
             qWarning() << "Failed to unload PulseAudio module" << module.id << "for" << username << ":" << error;
@@ -3630,6 +3659,82 @@ bool CouchPlayHelper::WriteFileToUser(const QByteArray &content, const QString &
     return true;
 }
 
+bool CouchPlayHelper::SetUserCompatToolMapping(const QString &username, const QVariantMap &entries)
+{
+    if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
+        return false;
+    }
+    if (getUserUid(username) != callerUid() && !IsInCouchPlayGroup(username)) {
+        sendErrorReply(QDBusError::AccessDenied, QStringLiteral("Target user is not a CouchPlay-managed user"));
+        return false;
+    }
+    const auto changes = SteamCompatToolMapping::fromVariantMap(entries);
+    if (!changes) {
+        sendErrorReply(QDBusError::InvalidArgs, QStringLiteral("Invalid compatibility tool mapping"));
+        return false;
+    }
+
+    const uint userUid = getUserUid(username);
+    struct passwd *pw = m_ops->getpwuid(userUid);
+    if (!pw) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not get user info for '%1'").arg(username));
+        return false;
+    }
+    const QString userHome = QString::fromLocal8Bit(pw->pw_dir);
+    const QString steamRoot = GetUserSteamRoot(username);
+    if (steamRoot.isEmpty() || !steamRoot.startsWith(userHome + QLatin1Char('/'))) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam is not set up for '%1'").arg(username));
+        return false;
+    }
+    QStringList configParts = steamRoot.mid(userHome.length()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    configParts << QStringLiteral("config");
+
+    const QString canonicalHome = m_ops->canonicalFilePath(userHome);
+    const int homeFd = SecureFs::openBaseDir(canonicalHome.isEmpty() ? userHome : canonicalHome);
+    if (homeFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not open user home directory"));
+        return false;
+    }
+    const int configFd = SecureFs::openDirBelow(homeFd, configParts, false, userUid, pw->pw_gid);
+    ::close(homeFd);
+    if (configFd < 0) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Steam config directory not found for '%1'").arg(username));
+        return false;
+    }
+    const auto closeConfig = qScopeGuard([configFd] { ::close(configFd); });
+
+    const QString configName = QStringLiteral("config.vdf");
+    constexpr qsizetype maxConfigSize = 16 * 1024 * 1024;
+    QByteArray original;
+    struct stat configStat{};
+    const int readResult = SecureFs::readFileAt(configFd, configName, maxConfigSize, original, &configStat);
+    if (readResult != 0 || configStat.st_uid != userUid) {
+        qWarning() << "SetUserCompatToolMapping: Cannot use config.vdf of" << username << ":"
+                   << (readResult != 0 ? strerror(-readResult) : "not owned by the user");
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Could not read Steam config of '%1'").arg(username));
+        return false;
+    }
+
+    const auto updated = SteamCompatToolMapping::apply(original, *changes);
+    if (!updated) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Unrecognized Steam config of '%1'").arg(username));
+        return false;
+    }
+    if (*updated == original) {
+        return true;
+    }
+
+    const int writeResult =
+        SecureFs::replaceFileAt(configFd, configName, *updated, userUid, pw->pw_gid, configStat.st_mode & 0777);
+    if (writeResult != 0) {
+        qWarning() << "SetUserCompatToolMapping: Failed to write config.vdf of" << username << ":"
+                   << strerror(-writeResult);
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to write Steam config of '%1'").arg(username));
+        return false;
+    }
+    return true;
+}
+
 bool CouchPlayHelper::CreateUserDirectory(const QString &path, const QString &username)
 {
     if (!validateUserAndAuth(username, ACTION_MANAGE_MOUNTS)) {
@@ -4016,11 +4121,23 @@ CouchPlayHelper::HidDeviceInfo CouchPlayHelper::findHidDevice(const QString &dev
     QString sysfsPath;
 
     if (name.startsWith(QStringLiteral("event"))) {
-        sysfsPath = QStringLiteral("/sys/class/input/%1/device").arg(name);
-        sysfsPath = QFileInfo(sysfsPath).canonicalFilePath();
-        if (!sysfsPath.isEmpty()) {
-            sysfsPath = QFileInfo(sysfsPath + QStringLiteral("/..")).canonicalFilePath();
+        // eventN/device is inputN, which sits in an "input" directory under the device that owns it. HID
+        // gamepads are rebound through their hidraw node instead. Gamepads driven directly by a USB
+        // interface driver (xpad) have no hidraw node, so only rebinding their interface closes handles
+        // other users opened before the session, such as the desktop's Steam.
+        const QString inputDevice =
+            QFileInfo(QStringLiteral("/sys/class/input/%1/device").arg(name)).canonicalFilePath();
+        if (inputDevice.isEmpty() || QDir(inputDevice).entryList({QStringLiteral("js*")}, QDir::Dirs).isEmpty()) {
+            return {};
         }
+        const QString owner = QFileInfo(inputDevice + QStringLiteral("/../..")).canonicalFilePath();
+        const bool isUsbInterface = QFileInfo(owner + QStringLiteral("/subsystem")).canonicalFilePath()
+                == QStringLiteral("/sys/bus/usb")
+            && QFileInfo(owner).fileName().contains(QLatin1Char(':'));
+        if (!isUsbInterface) {
+            return {};
+        }
+        sysfsPath = owner;
     } else if (name.startsWith(QStringLiteral("hidraw"))) {
         sysfsPath = QStringLiteral("/sys/class/hidraw/%1/device").arg(name);
         sysfsPath = QFileInfo(sysfsPath).canonicalFilePath();
@@ -4067,6 +4184,28 @@ QString CouchPlayHelper::findHidrawPathForDeviceId(const QString &deviceId) cons
         QString foundId = QFileInfo(resolved).fileName();
         if (foundId == deviceId) {
             return QStringLiteral("/dev/%1").arg(entry);
+        }
+    }
+    return {};
+}
+
+// The gamepad's current event node followed by its joystick nodes, below a bound device, or an empty list.
+QStringList CouchPlayHelper::gamepadNodePaths(const HidDeviceInfo &device) const
+{
+    // The driver directory links every device bound to it
+    const QString inputRoot =
+        QFileInfo(device.driverPath + QLatin1Char('/') + device.deviceId).canonicalFilePath() + QStringLiteral("/input");
+    const QStringList inputDevices = QDir(inputRoot).entryList({QStringLiteral("input*")}, QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &inputDevice : inputDevices) {
+        const QDir dir(inputRoot + QLatin1Char('/') + inputDevice);
+        const QStringList events = dir.entryList({QStringLiteral("event*")}, QDir::Dirs);
+        const QStringList joysticks = dir.entryList({QStringLiteral("js*")}, QDir::Dirs);
+        if (!events.isEmpty() && !joysticks.isEmpty()) {
+            QStringList nodes{QStringLiteral("/dev/input/") + events.first()};
+            for (const QString &js : joysticks) {
+                nodes.append(QStringLiteral("/dev/input/") + js);
+            }
+            return nodes;
         }
     }
     return {};
@@ -4821,11 +4960,11 @@ void CouchPlayHelper::startWatchingDevice(const QString &devicePath)
         return;
     }
 
-    if (m_watchedDevices.contains(devicePath)) {
-        return;
-    }
+    // A rebind or reconnect recreates the node under the same path before the old watcher reads ENODEV;
+    // that watcher's fd still points at the removed device, so watch the current node instead
+    stopWatchingDevice(devicePath);
 
-    int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    int fd = m_ops->openInputDevice(devicePath);
     if (fd < 0) {
         qWarning() << "CouchPlayHelper: Failed to open device for chord monitoring:" << devicePath << strerror(errno);
         return;
@@ -5125,35 +5264,110 @@ void CouchPlayHelper::onInputDebounceTimeout()
     checkForNewVirtualDevices();
 }
 
+// Maps each /dev/input/eventN name to its sysfs input device ("input171"). A device that is removed and recreated
+// within the debounce window (Steam does this) may keep its event number but always gets a new input name.
+QHash<QString, QString> CouchPlayHelper::currentEventInputs() const
+{
+    QHash<QString, QString> inputs;
+    const QStringList eventFiles =
+        QDir(QStringLiteral("/dev/input")).entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
+    for (const QString &eventFile : eventFiles) {
+        const QString inputDir =
+            QFileInfo(QStringLiteral("/sys/class/input/%1/device").arg(eventFile)).canonicalFilePath();
+        inputs.insert(eventFile, QFileInfo(inputDir).fileName());
+    }
+    return inputs;
+}
+
 void CouchPlayHelper::checkForNewVirtualDevices()
 {
-    QDir dir(QStringLiteral("/dev/input"));
-    QStringList eventFiles = dir.entryList({QStringLiteral("event*")}, QDir::Files | QDir::System);
-    static const QRegularExpression eventRegex(QStringLiteral("event(\\d+)"));
+    const QHash<QString, QString> previous = std::exchange(m_knownEventInputs, currentEventInputs());
 
-    QSet<int> activeEventNumbers;
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            activeEventNumbers.insert(match.captured(1).toInt());
+    // Virtual pads handed to players disappear when their Steam exits; stop tracking them
+    bool pruned = false;
+    for (qsizetype i = m_sessionVirtualDevices.size() - 1; i >= 0; --i) {
+        const QString path = m_sessionVirtualDevices.at(i);
+        if (!QFileInfo::exists(path)) {
+            m_modifiedDevices.removeAll(path);
+            m_sessionVirtualDevices.removeAt(i);
+            pruned = true;
         }
     }
-    m_knownEventNumbers.intersect(activeEventNumbers);
+    if (pruned) {
+        saveState();
+    }
 
-    for (const QString &eventFile : eventFiles) {
-        QRegularExpressionMatch match = eventRegex.match(eventFile);
-        if (match.hasMatch()) {
-            int eventNumber = match.captured(1).toInt();
-            if (!m_knownEventNumbers.contains(eventNumber)) {
-                m_knownEventNumbers.insert(eventNumber);
+    static const QRegularExpression eventRegex(QStringLiteral("^event(\\d+)$"));
+    QHash<QString, QStringList> newVirtualNodesByInput;
+    for (auto it = m_knownEventInputs.constBegin(); it != m_knownEventInputs.constEnd(); ++it) {
+        const QString &eventFile = it.key();
+        const QString &inputName = it.value();
+        const QRegularExpressionMatch match = eventRegex.match(eventFile);
+        if (inputName.isEmpty() || previous.value(eventFile) == inputName || !match.hasMatch()
+            || !isVirtualDevice(match.captured(1).toInt())) {
+            continue;
+        }
+        const QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
+        qDebug() << "CouchPlayHelper: New virtual device detected, monitoring:" << devicePath;
+        startWatchingDevice(devicePath);
 
-                if (isVirtualDevice(eventNumber)) {
-                    QString devicePath = QStringLiteral("/dev/input/%1").arg(eventFile);
-                    qDebug() << "CouchPlayHelper: New virtual device detected, monitoring:" << devicePath;
-                    startWatchingDevice(devicePath);
-                }
+        QStringList nodes{devicePath};
+        const QString inputDir = QStringLiteral("/sys/class/input/%1").arg(inputName);
+        for (const QString &js : QDir(inputDir).entryList({QStringLiteral("js*")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
+            nodes.append(QStringLiteral("/dev/input/") + js);
+        }
+        newVirtualNodesByInput.insert(inputName, nodes);
+    }
+    assignSessionVirtualDevices(newVirtualNodesByInput);
+}
+
+// With Steam Input on, a player's Steam re-emits their pad as a uinput virtual pad and games read only that one.
+// udev gives new input nodes to the seat user, so hand each virtual pad to the player whose processes created it.
+void CouchPlayHelper::assignSessionVirtualDevices(const QHash<QString, QStringList> &nodesByInput)
+{
+    if (nodesByInput.isEmpty() || m_usernameToUnitName.isEmpty()) {
+        return;
+    }
+    QHash<uid_t, gid_t> sessionUsers;
+    for (auto it = m_usernameToUnitName.constBegin(); it != m_usernameToUnitName.constEnd(); ++it) {
+        if (const struct passwd *pw = m_ops->getpwnam(it.key().toLocal8Bit().constData())) {
+            sessionUsers.insert(pw->pw_uid, pw->pw_gid);
+        }
+    }
+    const QSet<uid_t> uids(sessionUsers.keyBegin(), sessionUsers.keyEnd());
+    const QHash<QString, uid_t> creators = m_ops->uinputDeviceCreators(uids);
+
+    bool settled = false;
+    bool changed = false;
+    for (auto it = nodesByInput.constBegin(); it != nodesByInput.constEnd(); ++it) {
+        const auto creator = creators.constFind(it.key());
+        if (creator == creators.constEnd() || !sessionUsers.contains(creator.value())) {
+            continue;
+        }
+        if (!settled) {
+            // Let udev finish applying the seat ACLs first, or they would land after ours
+            runCommand(QStringLiteral("udevadm"), {QStringLiteral("settle"), QStringLiteral("--timeout=3")});
+            settled = true;
+        }
+        const uid_t uid = creator.value();
+        for (const QString &node : it.value()) {
+            if (m_ops->chown(node, uid, sessionUsers.value(uid)) != 0 || m_ops->chmod(node, 0600) != 0) {
+                qWarning() << "CouchPlayHelper: Could not give virtual device" << node << "to UID" << uid << ":"
+                           << strerror(errno);
+                continue;
+            }
+            runCommand(QStringLiteral("setfacl"), {QStringLiteral("-b"), node});
+            qInfo() << "CouchPlayHelper: Gave virtual device" << node << "(" << it.key() << ") to UID" << uid;
+            // Track the event node for reset; joystick nodes go away with it
+            if (node.startsWith(QLatin1String("/dev/input/event")) && !m_modifiedDevices.contains(node)) {
+                m_modifiedDevices.append(node);
+                m_sessionVirtualDevices.append(node);
+                changed = true;
             }
         }
+    }
+    if (changed) {
+        saveState();
     }
 }
 

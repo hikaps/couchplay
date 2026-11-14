@@ -362,6 +362,19 @@ public Q_SLOTS:
      */
     bool WriteFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
+    /**
+     * Set or remove per-game compatibility tool entries in a user's Steam config/config.vdf
+     *
+     * Players sharing the desktop's library must run each shared game with the desktop's
+     * Proton/native choice, or their Steam swaps the game's platform depots and re-downloads it.
+     * Only the CompatToolMapping section changes; the rest of the file stays byte-identical.
+     *
+     * @param username Target user whose Steam config is updated
+     * @param entries App ID -> QStringList{name, config, priority}, or an empty list to remove
+     * @return true when the config holds the requested entries
+     */
+    bool SetUserCompatToolMapping(const QString &username, const QVariantMap &entries);
+
 Q_SIGNALS:
     /**
      * Emitted when an owned transient unit exits unexpectedly.
@@ -383,11 +396,12 @@ Q_SIGNALS:
 
 private:
     struct HidDeviceInfo {
-        QString driverPath; // e.g. /sys/bus/hid/drivers/microsoft
-        QString deviceId;   // e.g. 0003:045E:028E.0001
+        QString driverPath; // e.g. /sys/bus/hid/drivers/microsoft or /sys/bus/usb/drivers/xpad
+        QString deviceId;   // e.g. 0003:045E:028E.0001, or a USB interface such as 1-5.2:1.0
     };
     HidDeviceInfo findHidDevice(const QString &devicePath) const;
     QString findHidrawPathForDeviceId(const QString &deviceId) const;
+    QStringList gamepadNodePaths(const HidDeviceInfo &device) const;
     QString getTempUdevRulePath(const QString &deviceId) const;
     bool writeTempUdevRule(const HidDeviceInfo &hid, const QString &username);
     bool removeTempUdevRule(const QString &deviceId);
@@ -396,7 +410,7 @@ private:
     bool isValidDevicePath(const QString &path);
     bool validateUserAndAuth(const QString &username, const QString &action);
     bool runCommand(const QString &program, const QStringList &args, int timeoutMs = 10000);
-    bool runAsUser(const QString &username,
+    bool runAsUser(const struct passwd &pw,
                    const QStringList &command,
                    QByteArray *standardOutput = nullptr,
                    QString *standardError = nullptr);
@@ -455,6 +469,8 @@ private:
 
     QStringList m_modifiedDevices;
     QStringList m_modifiedHidDevices;
+    // Input nodes renumbered by a rebind this session: the path callers saw -> the current node
+    QHash<QString, QString> m_reboundNodes;
 
 
     // Track launched transient units
@@ -542,11 +558,14 @@ private:
 
     QFileSystemWatcher *m_inputWatcher = nullptr;
     QTimer *m_inputDebounceTimer = nullptr;
-    QSet<int> m_knownEventNumbers;
+    QHash<QString, QString> m_knownEventInputs; // "eventN" -> sysfs input name
 
     void onInputDirectoryChanged();
     void onInputDebounceTimeout();
+    QHash<QString, QString> currentEventInputs() const;
     void checkForNewVirtualDevices();
+    void assignSessionVirtualDevices(const QHash<QString, QStringList> &nodesByInput);
+    QStringList m_sessionVirtualDevices; // player-owned virtual pad event nodes, also in m_modifiedDevices
     bool isVirtualDevice(int eventNumber);
     QString getDeviceName(int eventNumber) const;
 };

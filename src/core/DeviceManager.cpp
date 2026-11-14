@@ -1176,6 +1176,7 @@ void DeviceManager::checkPendingDevices()
             // Device reconnected! Assign it
             if (assignDevice(eventNumber, instanceIndex)) {
                 qDebug() << "DeviceManager: Auto-restored device" << name << "to instance" << instanceIndex;
+                Q_EMIT deviceReconnected(stableId, eventNumber, instanceIndex);
                 Q_EMIT deviceAutoRestored(name, instanceIndex);
                 changed = true;
             } else {

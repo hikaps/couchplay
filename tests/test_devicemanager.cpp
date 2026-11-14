@@ -80,6 +80,7 @@ private Q_SLOTS:
     void testCaptureWithoutCandidates();
     void testUnassignDevice();
     void testAutoAssignSkipsInstances();
+    void testPendingDeviceReconnectEmitsReconnected();
 
 private:
     DeviceManager *m_deviceManager = nullptr;
@@ -1462,6 +1463,55 @@ void TestDeviceManager::testAutoAssignSkipsInstances()
     QVERIFY(manager.getDevicesForInstance(0).isEmpty());
     QCOMPARE(manager.getDevicesForInstance(1), (QList<int>{30}));
     QCOMPARE(manager.getDevicesForInstance(2), (QList<int>{31}));
+
+    qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
+}
+
+void TestDeviceManager::testPendingDeviceReconnectEmitsReconnected()
+{
+    // A pad missing when the profile is restored (e.g. an idle wireless pad) joins the pending list.
+    // When it shows up later the running session must hear about it to hand it to its player.
+    QTemporaryFile file;
+    QVERIFY(file.open());
+    const auto writePad = [&file](bool includeSecond) {
+        QVERIFY(file.resize(0));
+        QTextStream out(&file);
+        out << "I: Bus=0003 Vendor=045e Product=028e Version=0110\n";
+        out << "N: Name=\"Pad One\"\n";
+        out << "P: Phys=usb-0000:00:01.0-1/input0\n";
+        out << "H: Handlers=event30 js0\n\n";
+        if (includeSecond) {
+            out << "I: Bus=0003 Vendor=045e Product=028e Version=0110\n";
+            out << "N: Name=\"Pad Two\"\n";
+            out << "P: Phys=usb-0000:00:01.0-2/input0\n";
+            out << "H: Handlers=event31 js1\n\n";
+        }
+        out.flush();
+        file.flush();
+    };
+    writePad(false);
+    qputenv("COUCHPLAY_MOCK_DEVICES_FILE", file.fileName().toLocal8Bit());
+
+    DeviceManager manager;
+    manager.setInstanceCount(2);
+    manager.refresh();
+    const QString padTwoId = QStringLiteral("045e:028e:usb-0000:00:01.0-2/input0");
+    manager.restoreAssignmentsFromStableIds(1, {padTwoId}, {QStringLiteral("Pad Two")});
+    QCOMPARE(manager.pendingDevicesAsVariant().size(), 1);
+
+    QSignalSpy reconnected(&manager, &DeviceManager::deviceReconnected);
+    writePad(true);
+    manager.onDebounceTimeout();
+
+    QCOMPARE(reconnected.count(), 1);
+    QCOMPARE(reconnected.first().at(0).toString(), padTwoId);
+    QCOMPARE(reconnected.first().at(1).toInt(), 31);
+    QCOMPARE(reconnected.first().at(2).toInt(), 1);
+    QVERIFY(manager.pendingDevicesAsVariant().isEmpty());
+
+    // Later refreshes of an already-restored pad do not announce it again
+    manager.onDebounceTimeout();
+    QCOMPARE(reconnected.count(), 1);
 
     qunsetenv("COUCHPLAY_MOCK_DEVICES_FILE");
 }

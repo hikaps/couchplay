@@ -44,6 +44,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/PresetManager.h
     ../helper/DirectoryPlan.cpp
     ../helper/DirectoryPlan.h
+    ../helper/SteamCompatToolMapping.cpp
+    ../helper/SteamCompatToolMapping.h
     ../src/core/HeroicConfigManager.cpp
     ../src/core/HeroicConfigManager.h
     ../src/core/SteamConfigManager.cpp
@@ -93,6 +95,8 @@ set(HELPER_TEST_SOURCES
     ../helper/SecureFs.h
     ../helper/SystemOps.cpp
     ../helper/SystemOps.h
+    ../helper/SteamCompatToolMapping.cpp
+    ../helper/SteamCompatToolMapping.h
 )
 
 # Function to create a test executable
@@ -202,6 +206,7 @@ target_compile_definitions(test_sunshine_api PRIVATE TEST_DATA_DIR="${CMAKE_CURR
 add_couchplay_test(test_sunshine_config)
 add_couchplay_test(test_usermanager)
 add_couchplay_test(test_couchplayhelperclient)
+add_couchplay_test(test_steamcompattoolmapping)
 add_couchplay_test(test_updatechecker)
 add_couchplay_test(test_virtualdisplaymanager)
 

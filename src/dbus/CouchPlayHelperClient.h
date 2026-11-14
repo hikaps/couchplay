@@ -211,6 +211,17 @@ public:
      */
     Q_INVOKABLE virtual bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &username);
 
+    /**
+     * @brief Set or remove per-game compatibility tool entries in a user's Steam config.vdf
+     *
+     * Best effort: failures (including helpers predating this method) are logged, not reported
+     * through errorOccurred, because a session can still run without the mapping.
+     * @param username Target user
+     * @param entries App ID -> QStringList{name, config, priority}, or an empty list to remove
+     * @return true if the user's config now holds the requested entries
+     */
+    virtual bool setUserCompatToolMapping(const QString &username, const QVariantMap &entries);
+
 
     /**
      * @brief Copy a directory tree to a user's home with proper ownership

@@ -7,10 +7,12 @@
 #include <QDBusConnection>
 #include <QDBusObjectPath>
 #include "DirectoryPlan.h"
+#include <QHash>
 #include <QDir>
 #include <QFileInfo>
 #include <QIODevice>
 #include <QObject>
+#include <QSet>
 #include <QProcess>
 #include <QString>
 #include <QStringList>
@@ -64,6 +66,8 @@ public:
     // Device path validation
     virtual bool statPath(const QString &path, struct stat *buf) = 0;
     virtual bool isCharDevice(mode_t mode) = 0;
+    // Opens an input node read-only and non-blocking for exit-chord monitoring; returns the fd, or -1 with errno set
+    virtual int openInputDevice(const QString &path) = 0;
 
     // Ownership and permissions
     virtual int chown(const QString &path, uid_t owner, gid_t group) = 0;
@@ -79,6 +83,9 @@ public:
 
     // Directory listing
     virtual QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) = 0;
+
+    // Input devices (sysfs names such as "input103") created through /dev/uinput by processes of the given users
+    virtual QHash<QString, uid_t> uinputDeviceCreators(const QSet<uid_t> &uids) = 0;
 
     // Process signaling
     virtual bool killProcess(pid_t pid, int signal) = 0;
@@ -126,6 +133,7 @@ public:
 
     bool statPath(const QString &path, struct stat *buf) override;
     bool isCharDevice(mode_t mode) override;
+    int openInputDevice(const QString &path) override;
 
     int chown(const QString &path, uid_t owner, gid_t group) override;
     int chmod(const QString &path, mode_t mode) override;
@@ -138,6 +146,7 @@ public:
     QByteArray readAllStandardOutput(QProcess *process) override;
 
     QStringList entryList(const QString &path, const QStringList &nameFilters, QDir::Filters filters) override;
+    QHash<QString, uid_t> uinputDeviceCreators(const QSet<uid_t> &uids) override;
 
     bool killProcess(pid_t pid, int signal) override;
 

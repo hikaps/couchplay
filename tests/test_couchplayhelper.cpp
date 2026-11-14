@@ -30,6 +30,7 @@
 #include <sys/wait.h>
 #include <grp.h>
 #include <fcntl.h>
+#include <linux/input.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <QTimer>
@@ -440,6 +441,7 @@ public:
         m_canonical.clear();
         m_directoryQueries.clear();
         m_canonicalQueries.clear();
+        m_writes.clear();
         m_statQueries.clear();
         m_authorized = true;
         m_connectionUid = 1000;
@@ -450,6 +452,9 @@ public:
         m_processExitCode = 0;
         m_processExitCodes.clear();
         m_chownResult = 0;
+        m_chowns.clear();
+        m_uinputCreators.clear();
+        m_inputDeviceFds.clear();
         m_chmodResult = 0;
         m_processArgs.clear();
         m_processInvocations.clear();
@@ -488,8 +493,17 @@ public:
     std::function<int(const QString &, const QStringList &, QByteArray *)> m_processHandler;
     QStringList m_removedFiles;
     QMap<QString, QStringList> m_entryLists;
+    struct ChownCall {
+        QString path;
+        uid_t owner;
+        gid_t group;
+    };
+    QList<ChownCall> m_chowns;
+    QHash<QString, uid_t> m_uinputCreators; // sysfs input name -> creating uid
+    QList<int> m_inputDeviceFds; // handed out in order by openInputDevice; the helper closes the ones it takes
     QStringList m_directoryQueries;
     QStringList m_canonicalQueries;
+    QList<QPair<QString, QByteArray>> m_writes;
     QStringList m_statQueries;
     bool realAccessProbe = false;
     QString m_transientServiceName;
@@ -658,8 +672,7 @@ public:
 
     bool writeFile(const QString &path, const QByteArray &content) override
     {
-        Q_UNUSED(path)
-        Q_UNUSED(content)
+        m_writes.append({path, content});
         return true;
     }
 
@@ -678,12 +691,31 @@ public:
         return true;
     }
 
-    int chown(const QString &path, uid_t owner, gid_t group) override
+    int openInputDevice(const QString &path) override
     {
         Q_UNUSED(path)
-        Q_UNUSED(owner)
-        Q_UNUSED(group)
+        if (m_inputDeviceFds.isEmpty()) {
+            errno = ENOENT;
+            return -1;
+        }
+        return m_inputDeviceFds.takeFirst();
+    }
+
+    int chown(const QString &path, uid_t owner, gid_t group) override
+    {
+        m_chowns.append({path, owner, group});
         return m_chownResult;
+    }
+
+    QHash<QString, uid_t> uinputDeviceCreators(const QSet<uid_t> &uids) override
+    {
+        QHash<QString, uid_t> result;
+        for (auto it = m_uinputCreators.constBegin(); it != m_uinputCreators.constEnd(); ++it) {
+            if (uids.contains(it.value())) {
+                result.insert(it.key(), it.value());
+            }
+        }
+        return result;
     }
 
     int chmod(const QString &path, mode_t mode) override
@@ -853,7 +885,7 @@ private:
     QByteArray m_standardError;
 };
 
-// Scripted `machinectl shell <user>@ <command...>` serving a fake pactl for the compositor user.
+// Scripted `setpriv … -- /usr/bin/env -i … <command...>` serving a fake pactl for the compositor user.
 struct FakePactl {
     explicit FakePactl(MockSystemOps *ops)
         : m_ops(ops)
@@ -879,18 +911,18 @@ struct FakePactl {
     QStringList loadedModules; // "<id>\tmodule-native-protocol-tcp\t<args>" lines of `list short modules`
     bool portServedWithoutModule = false; // e.g. pipewire-pulse drop-in; makes the PULSE_SERVER probe succeed
     bool loadSucceeds = true;
-    QList<QStringList> calls; // commands run in the user's session (after "shell --quiet <user>@")
+    QList<QStringList> calls; // commands run as the user (after the env assignments)
 
 private:
     int handle(const QString &program, const QStringList &args, QByteArray *out)
     {
-        if (program != QLatin1String("machinectl")) {
+        if (program != QLatin1String("setpriv")) {
             return 0;
         }
-        const QStringList command = args.mid(3);
+        const QStringList command = args.mid(args.indexOf(QStringLiteral("PATH=/usr/bin:/bin")) + 1);
         calls.append(command);
         const QString pactl = QStringLiteral("/usr/bin/pactl");
-        if (command.value(0) == QLatin1String("/usr/bin/env")) {
+        if (command.value(0).startsWith(QLatin1String("PULSE_SERVER="))) {
             return portServedWithoutModule ? 0 : 1;
         }
         if (command.value(0) != pactl) {
@@ -974,6 +1006,13 @@ private Q_SLOTS:
     void testCopyFileToUserRejectsSymlinkedSourceComponent();
     void testCopyFileToUserRejectsSymlinkedSourceLeaf();
 
+    // Steam compatibility tool mapping
+    void testSetUserCompatToolMappingRewritesOnlyMapping();
+    void testSetUserCompatToolMappingRejectsSymlinkedConfig();
+    void testSetUserCompatToolMappingLeavesUnparseableConfig();
+    void testSetUserCompatToolMappingRejectsInvalidEntries();
+    void testSetUserCompatToolMappingRejectsUnmanagedUser();
+
     // Copy directory tests
     void testCopyDirectoryToUserAbsoluteTarget();
     void testCopyDirectoryToUserTraversalTarget();
@@ -1011,6 +1050,7 @@ private Q_SLOTS:
     void testChangeDeviceOwnerChownFails();
     void testChangeDeviceOwnerChmodFails();
     void testResetDeviceOwnerSuccess();
+    void testDeviceOwnerFollowsNodeRenumberedByRebind();
     void testResetDeviceOwnerInvalidPathNotUnderDevInput();
     void testResetDeviceOwnerInvalidPathTraversal();
     void testResetDeviceOwnerAuthorizationDenied();
@@ -1018,6 +1058,7 @@ private Q_SLOTS:
     void testResetDeviceOwnerChmodFails();
     void testResetAllDevicesEmpty();
     void testResetAllDevicesSuccess();
+    void testResetRebindsModeSwitchedPadThroughCurrentDriver();
     void testResetAllDevicesPartialFailure();
     void testChangeDeviceOwnerBatchEmpty();
     void testChangeDeviceOwnerBatchAllSuccess();
@@ -1032,6 +1073,9 @@ private Q_SLOTS:
     void testRuntimeAccessUsesActualWaylandSocket();
     void testRemoveRuntimeAccessAuthorizationDenied();
     void testRemoveRuntimeAccessUserNotFound();
+
+    void testVirtualPadGoesToCreatingPlayer();
+    void testExitChordFollowsRecreatedNode();
 
     // PulseAudio TCP listener (runtime module load/unload, no pipewire-pulse restart)
     void testPulseTcpListenerLoadsModuleWhenAbsent();
@@ -2073,6 +2117,158 @@ void TestCouchPlayHelper::testCopyFileToUserRejectsSymlinkedSourceLeaf()
     QVERIFY(!QFileInfo::exists(targetPath));
 }
 
+namespace
+{
+const QByteArray kPlayerSteamConfig = QByteArrayLiteral(
+    "\"InstallConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n"
+    "\t\t\t\t\"CompatToolMapping\"\n\t\t\t\t{\n"
+    "\t\t\t\t\t\"49520\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"name\"\t\t\"\"\n\t\t\t\t\t\t\"config\"\t\t\"\"\n"
+    "\t\t\t\t\t\t\"priority\"\t\t\"250\"\n\t\t\t\t\t}\n"
+    "\t\t\t\t}\n"
+    "\t\t\t\t\"ConnectCache\"\n\t\t\t\t{\n\t\t\t\t\t\"7a1b\"\t\t\"secret-token\"\n\t\t\t\t}\n"
+    "\t\t\t}\n\t\t}\n\t}\n}\n");
+
+// Creates <home>/.local/share/Steam/config and returns the config.vdf path inside it
+QString createPlayerSteamConfigDir(const QString &home)
+{
+    const QString configDir = QDir(home).filePath(QStringLiteral(".local/share/Steam/config"));
+    return QDir().mkpath(configDir) ? QDir(configDir).filePath(QStringLiteral("config.vdf")) : QString();
+}
+
+QByteArray readAll(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+bool writeAll(const QString &path, const QByteArray &content)
+{
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(content) == content.size();
+}
+
+QVariantMap borderlandsOnProton()
+{
+    return {{QStringLiteral("49520"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("250")}},
+            {QStringLiteral("345180"), QStringList()}};
+}
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRewritesOnlyMapping()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    QVERIFY(writeAll(configPath, kPlayerSteamConfig));
+    QVERIFY(QFile::setPermissions(configPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+    QVERIFY(reply.value());
+    const QByteArray updated = readAll(configPath);
+    QVERIFY(updated.contains("\t\t\t\t\t\t\"name\"\t\t\"proton_9\"\n"));
+    QVERIFY(updated.contains("\"7a1b\"\t\t\"secret-token\""));
+    struct stat updatedStat{};
+    QVERIFY(::stat(configPath.toLocal8Bit().constData(), &updatedStat) == 0);
+    QCOMPARE(updatedStat.st_mode & 0777, mode_t(0600));
+    QVERIFY(!QFileInfo::exists(QFileInfo(configPath).dir().filePath(QStringLiteral(".config.vdf.couchplay-tmp"))));
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRejectsSymlinkedConfig()
+{
+    QTemporaryDir homeDir;
+    QTemporaryDir outside;
+    QVERIFY(homeDir.isValid() && outside.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    const QString victim = outside.filePath(QStringLiteral("victim.vdf"));
+    QVERIFY(writeAll(victim, kPlayerSteamConfig));
+    QVERIFY(QFile::link(victim, configPath));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(readAll(victim), kPlayerSteamConfig);
+    QVERIFY(QFileInfo(configPath).isSymLink());
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingLeavesUnparseableConfig()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    const QByteArray truncated = kPlayerSteamConfig.left(kPlayerSteamConfig.size() / 2);
+    QVERIFY(writeAll(configPath, truncated));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::Failed);
+    QCOMPARE(readAll(configPath), truncated);
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRejectsInvalidEntries()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    QVERIFY(writeAll(configPath, kPlayerSteamConfig));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid());
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+    const QVariantMap injected{
+        {QStringLiteral("49520"),
+         QStringList{QStringLiteral("proton_9\"\n}\n\"x"), QString(), QStringLiteral("250")}}};
+
+    QDBusReply<bool> reply =
+        m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"), QStringLiteral("player1"), injected);
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::InvalidArgs);
+    QCOMPARE(readAll(configPath), kPlayerSteamConfig);
+}
+
+void TestCouchPlayHelper::testSetUserCompatToolMappingRejectsUnmanagedUser()
+{
+    QTemporaryDir homeDir;
+    QVERIFY(homeDir.isValid());
+    const QString home = QFileInfo(homeDir.path()).canonicalFilePath();
+    const QString configPath = createPlayerSteamConfigDir(home);
+    QVERIFY(writeAll(configPath, kPlayerSteamConfig));
+    m_ops->clear();
+    m_ops->setConnectionUid(getuid() + 1);
+    m_ops->setGroupExists(QStringLiteral("couchplay"), true, 1001, {});
+    m_ops->setUserExists(QStringLiteral("player1"), true, getuid(), getgid(), home);
+    m_ops->setFileExists(home + QStringLiteral("/.local/share/Steam"), true);
+
+    QDBusReply<bool> reply = m_dbusInterface->call(QStringLiteral("SetUserCompatToolMapping"),
+                                                   QStringLiteral("player1"), borderlandsOnProton());
+
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::AccessDenied);
+    QCOMPARE(readAll(configPath), kPlayerSteamConfig);
+}
+
 void TestCouchPlayHelper::testMirrorDirectoryContentsSuccess()
 {
     QTemporaryDir homeDir;
@@ -2819,6 +3015,28 @@ void TestCouchPlayHelper::testResetDeviceOwnerSuccess()
     QVERIFY(reply.value());
 }
 
+void TestCouchPlayHelper::testDeviceOwnerFollowsNodeRenumberedByRebind()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("testuser"), true, 1000, 1000);
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    m_ops->setFileExists(QStringLiteral("/dev/input/js6"), true); // js4 is gone after the rebind
+    m_helper->m_modifiedDevices.clear();
+    m_helper->m_reboundNodes.insert(QStringLiteral("/dev/input/js4"), QStringLiteral("/dev/input/js6"));
+
+    QDBusReply<bool> reply =
+        m_dbusInterface->call(QStringLiteral("ChangeDeviceOwner"), QStringLiteral("/dev/input/js4"), 1000u);
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+    QCOMPARE(m_helper->m_modifiedDevices, QStringList{QStringLiteral("/dev/input/js6")});
+
+    reply = m_dbusInterface->call(QStringLiteral("ResetDeviceOwner"), QStringLiteral("/dev/input/js4"));
+    QVERIFY(reply.isValid());
+    QVERIFY(reply.value());
+    QVERIFY(m_helper->m_modifiedDevices.isEmpty());
+    QVERIFY(m_helper->m_reboundNodes.isEmpty());
+}
+
 void TestCouchPlayHelper::testResetDeviceOwnerInvalidPathNotUnderDevInput()
 {
     m_ops->clear();
@@ -2917,6 +3135,33 @@ void TestCouchPlayHelper::testResetAllDevicesSuccess()
 
     QVERIFY(resetReply.isValid());
     QCOMPARE(resetReply.value(), 2);
+}
+
+void TestCouchPlayHelper::testResetRebindsModeSwitchedPadThroughCurrentDriver()
+{
+    m_ops->clear();
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    // Assigned while xpad drove the interface; a USB mode switch then rebound the same interface ID to usbhid,
+    // whose nodes the player's udev rule also matched
+    const QString interfaceId = QStringLiteral("1-5.2:1.0");
+    m_helper->m_modifiedHidDevices = {QStringLiteral("hid|%1|/sys/bus/usb/drivers/xpad|couch2").arg(interfaceId)};
+    m_ops->setCanonicalMapping(QStringLiteral("/sys/bus/usb/devices/%1/driver").arg(interfaceId),
+                               QStringLiteral("/sys/bus/usb/drivers/usbhid"));
+
+    QDBusReply<int> reply = m_dbusInterface->call(QStringLiteral("ResetAllDevices"));
+    QVERIFY(reply.isValid());
+
+    QList<QPair<QString, QByteArray>> sysfsWrites;
+    for (const auto &write : m_ops->m_writes) {
+        if (write.first.startsWith(QLatin1String("/sys/"))) {
+            sysfsWrites.append(write);
+        }
+    }
+    const QList<QPair<QString, QByteArray>> expected = {
+        {QStringLiteral("/sys/bus/usb/drivers/usbhid/unbind"), interfaceId.toLatin1()},
+        {QStringLiteral("/sys/bus/usb/drivers/usbhid/bind"), interfaceId.toLatin1()},
+    };
+    QCOMPARE(sysfsWrites, expected);
 }
 
 void TestCouchPlayHelper::testResetAllDevicesPartialFailure()
@@ -3150,6 +3395,78 @@ static const QStringList kLoadPulseTcpCommand = {QStringLiteral("/usr/bin/pactl"
                                                   QStringLiteral("listen=127.0.0.1"),
                                                   QStringLiteral("auth-anonymous=1")};
 
+void TestCouchPlayHelper::testVirtualPadGoesToCreatingPlayer()
+{
+    m_ops->clear();
+    m_ops->setUserExists(QStringLiteral("player1"), true, 1001, 1002, QStringLiteral("/home/player1"));
+    m_helper->m_usernameToUnitName.clear();
+    m_helper->m_usernameToUnitName.insert(QStringLiteral("player1"), QStringLiteral("couchplay-player1.service"));
+    m_helper->m_modifiedDevices.clear();
+    m_helper->m_sessionVirtualDevices.clear();
+    m_ops->m_uinputCreators.insert(QStringLiteral("input160"), 1001); // player1's Steam
+    m_ops->m_uinputCreators.insert(QStringLiteral("input161"), 1000); // host Steam, not in the session
+
+    QHash<QString, QStringList> nodes;
+    nodes.insert(QStringLiteral("input160"), {QStringLiteral("/dev/input/event27"), QStringLiteral("/dev/input/js4")});
+    nodes.insert(QStringLiteral("input161"), {QStringLiteral("/dev/input/event28")});
+    nodes.insert(QStringLiteral("input162"), {QStringLiteral("/dev/input/event29")}); // creator unknown
+    m_helper->assignSessionVirtualDevices(nodes);
+
+    QCOMPARE(m_ops->m_chowns.size(), 2);
+    for (const auto &call : m_ops->m_chowns) {
+        QVERIFY(call.path == QStringLiteral("/dev/input/event27") || call.path == QStringLiteral("/dev/input/js4"));
+        QCOMPARE(call.owner, uid_t(1001));
+        QCOMPARE(call.group, gid_t(1002));
+    }
+    QCOMPARE(m_helper->m_modifiedDevices, QStringList{QStringLiteral("/dev/input/event27")});
+
+    // Stopping the session hands the node back to root:input
+    m_ops->m_chowns.clear();
+    m_ops->setGroupExists(QStringLiteral("input"), true, 44, {});
+    m_helper->resetAllDevicesInternal();
+    QCOMPARE(m_ops->m_chowns.size(), 1);
+    QCOMPARE(m_ops->m_chowns.first().owner, uid_t(0));
+    QVERIFY(m_helper->m_modifiedDevices.isEmpty());
+    QVERIFY(m_helper->m_sessionVirtualDevices.isEmpty());
+    m_helper->m_usernameToUnitName.clear();
+}
+
+void TestCouchPlayHelper::testExitChordFollowsRecreatedNode()
+{
+    m_ops->clear();
+    m_helper->stopWatchingAllDevices();
+    // Pipes stand in for two incarnations of the same /dev/input node
+    int oldNode[2];
+    int newNode[2];
+    QCOMPARE(::pipe2(oldNode, O_NONBLOCK | O_CLOEXEC), 0);
+    QCOMPARE(::pipe2(newNode, O_NONBLOCK | O_CLOEXEC), 0);
+    m_ops->m_inputDeviceFds = {oldNode[0], newNode[0]};
+    auto cleanup = qScopeGuard([&] {
+        m_helper->stopWatchingAllDevices();
+        for (int fd : std::as_const(m_ops->m_inputDeviceFds)) {
+            ::close(fd);
+        }
+        m_ops->m_inputDeviceFds.clear();
+        ::close(oldNode[1]);
+        ::close(newNode[1]);
+    });
+    const QString path = QStringLiteral("/dev/input/event26");
+
+    m_helper->startWatchingDevice(path);
+    // A rebind or reconnect recreates the node under the same name before the old watcher reads ENODEV
+    m_helper->startWatchingDevice(path);
+
+    QSignalSpy exitSpy(m_helper, &CouchPlayHelper::exitChordTriggered);
+    for (const quint16 code : {quint16(BTN_SELECT), quint16(BTN_START)}) {
+        input_event event{};
+        event.type = EV_KEY;
+        event.code = code;
+        event.value = 1;
+        QCOMPARE(::write(newNode[1], &event, sizeof(event)), ssize_t(sizeof(event)));
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(exitSpy.count(), 1, 4000);
+}
+
 void TestCouchPlayHelper::testPulseTcpListenerLoadsModuleWhenAbsent()
 {
     m_ops->clear();
@@ -3166,6 +3483,10 @@ void TestCouchPlayHelper::testPulseTcpListenerLoadsModuleWhenAbsent()
     for (const MockSystemOps::ProcessInvocation &invocation : m_ops->m_processInvocations) {
         QVERIFY(!invocation.args.contains(QStringLiteral("restart")));
         QVERIFY(!invocation.args.contains(QStringLiteral("systemctl")));
+        // pactl never runs as root: privileges drop to the compositor user and its runtime directory
+        QCOMPARE(invocation.command, QStringLiteral("setpriv"));
+        QVERIFY(invocation.args.contains(QStringLiteral("--reuid=1000")));
+        QVERIFY(invocation.args.contains(QStringLiteral("XDG_RUNTIME_DIR=/run/user/1000")));
     }
     QVERIFY(m_ops->m_removedFiles.isEmpty());
 }

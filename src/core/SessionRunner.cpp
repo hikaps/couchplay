@@ -18,6 +18,7 @@
 #include "UserLookup.h"
 #include "WindowManager.h"
 #include "VirtualDisplayManager.h"
+#include "MonitorManager.h"
 
 #include <QAction>
 #include <QDBusConnection>
@@ -31,6 +32,7 @@
 #include <QScopedValueRollback>
 #include <QSet>
 #include <QFileInfo>
+#include <QTcpServer>
 
 #include <KGlobalAccel>
 #include <KLocalizedString>
@@ -39,7 +41,31 @@
 #include <pwd.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <memory>
+#include <vector>
+
 static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
+
+// Steam's client IPC listens on a fixed loopback port (57343) shared by every
+// user, so a player's games would reach the desktop's (or another player's)
+// Steam and crash in steamclient.so. Each player's Steam gets a free port of
+// its own; every server stays open until all are chosen so no port repeats.
+static QList<quint16> reserveLoopbackPorts(int count)
+{
+    std::vector<std::unique_ptr<QTcpServer>> servers;
+    QList<quint16> ports;
+    for (int i = 0; i < count; ++i) {
+        auto server = std::make_unique<QTcpServer>();
+        if (!server->listen(QHostAddress::LocalHost, 0)) {
+            qCWarning(couchplaySteam) << "Could not reserve a loopback port for Steam IPC:" << server->errorString();
+            return {};
+        }
+        ports.append(server->serverPort());
+        servers.push_back(std::move(server));
+    }
+    return ports;
+}
 
 static bool isUserInCouchPlayGroup(const QString &username)
 {
@@ -352,6 +378,14 @@ void SessionRunner::setSettingsManager(SettingsManager *manager)
     }
 }
 
+void SessionRunner::setMonitorManager(MonitorManager *manager)
+{
+    if (m_monitorManager != manager) {
+        m_monitorManager = manager;
+        Q_EMIT monitorManagerChanged();
+    }
+}
+
 void SessionRunner::setSkipPairingCheck(bool skip)
 {
     if (m_skipPairingCheck != skip) {
@@ -611,20 +645,29 @@ void SessionRunner::continueStartAfterDisplays()
         }
     }
 
+    if (m_monitorManager) {
+        // A launch right after startup can beat the first scale query
+        m_monitorManager->waitForHostScales();
+    }
     // Players on the main screen split it; dedicated-monitor players fill their screen.
     m_layouts = QList<QRect>(instanceCount);
+    m_layoutOutputs = QStringList(instanceCount);
+    QScreen *sharedScreen = mainScreen(profile);
     const QList<QRect> mainLayouts = calculateLayout(profile.layout,
                                                      mainIndices.size(),
-                                                     mainScreenGeometry(profile),
+                                                     sharedScreen ? sharedScreen->geometry() : QRect(0, 0, 1920, 1080),
                                                      profile.gridSubLayout);
     for (int n = 0; n < mainIndices.size(); ++n) {
         m_layouts[mainIndices[n]] = mainLayouts.value(n);
+        m_layoutOutputs[mainIndices[n]] = sharedScreen ? sharedScreen->name() : QString();
     }
     for (int i = 0; i < instanceCount; ++i) {
         if (m_virtualRects.contains(i)) {
             m_layouts[i] = m_virtualRects.value(i);
+            m_layoutOutputs[i] = m_virtualOutputNames.value(i);
         } else if (QScreen *screen = screenByConnector(InstanceConfig::monitorConnector(profile.instances[i].display))) {
             m_layouts[i] = screen->geometry();
+            m_layoutOutputs[i] = screen->name();
         }
     }
 
@@ -638,6 +681,16 @@ void SessionRunner::continueStartAfterDisplays()
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
         return;
     }
+    const QString steamLauncherId = QStringLiteral("steam");
+    const int steamInstanceCount = static_cast<int>(std::count_if(
+        m_startingSnapshot.presets.cbegin(), m_startingSnapshot.presets.cend(),
+        [&](const LaunchPreset &preset) { return preset.launcherId == steamLauncherId; }));
+    const QList<quint16> steamIpcPorts = reserveLoopbackPorts(steamInstanceCount);
+    if (steamIpcPorts.size() != steamInstanceCount) {
+        beginFinalization(true, QStringLiteral("Failed to reserve a Steam IPC port"));
+        return;
+    }
+    qsizetype nextSteamIpcPort = 0;
     m_pendingInstanceConfigs.clear();
     for (int i = 0; i < instanceCount; ++i) {
         const InstanceConfig &instConfig = profile.instances[i];
@@ -647,13 +700,18 @@ void SessionRunner::continueStartAfterDisplays()
         config[QStringLiteral("privateTemporaryDirectories")] = instConfig.privateTemporaryDirectories;
         {
             const QRect &rect = m_layouts[i];
+            // KWin places windows in logical pixels, while gamescope sizes its window (-W/-H) in physical pixels
+            // of a fractionally scaled output; rendering (-w/-h) at the logical size would be stretched blurry.
+            const qreal scale = m_monitorManager ? m_monitorManager->scaleFor(m_layoutOutputs.value(i)) : 1.0;
+            const QSize physical(qRound(rect.width() * scale), qRound(rect.height() * scale));
             // Gamescope renders internally at -w/-h and scales to the window (-W/-H); an override lets a player
             // render below the window size, e.g. 720p in a 1080p region.
             const QSize render = parseRenderResolution(instConfig.renderResolution);
-            config[QStringLiteral("internalWidth")] = render.isValid() ? render.width() : rect.width();
-            config[QStringLiteral("internalHeight")] = render.isValid() ? render.height() : rect.height();
+            config[QStringLiteral("internalWidth")] = render.isValid() ? render.width() : physical.width();
+            config[QStringLiteral("internalHeight")] = render.isValid() ? render.height() : physical.height();
             config[QStringLiteral("outputWidth")] = rect.width();
             config[QStringLiteral("outputHeight")] = rect.height();
+            config[QStringLiteral("outputScale")] = scale;
             config[QStringLiteral("positionX")] = rect.x();
             config[QStringLiteral("positionY")] = rect.y();
             const QString output = m_virtualOutputNames.value(
@@ -683,8 +741,15 @@ void SessionRunner::continueStartAfterDisplays()
         config[QStringLiteral("presetId")] = presetId;
         config[QStringLiteral("launcherId")] = m_startingSnapshot.presets.at(i).launcherId;
         const LaunchCommand &command = m_startingSnapshot.launchCommands.at(i);
-        config[QStringLiteral("gameCommand")] = QVariant::fromValue(
-            QStringList{command.program} + command.arguments);
+        QStringList gameCommand = QStringList{command.program} + command.arguments;
+        if (m_startingSnapshot.presets.at(i).launcherId == steamLauncherId) {
+            // Linux Steam takes the override as address:port; the matching
+            // environment variable (GamescopeInstance) points its games at it.
+            const QString address = QStringLiteral("127.0.0.1:%1").arg(steamIpcPorts.at(nextSteamIpcPort++));
+            gameCommand << QStringLiteral("-master_ipc_name_override") << address;
+            config[QStringLiteral("steamIpcAddress")] = address;
+        }
+        config[QStringLiteral("gameCommand")] = QVariant::fromValue(gameCommand);
         config[QStringLiteral("workingDirectory")] = command.workingDirectory;
 
         if (m_deviceManager) {
@@ -948,6 +1013,7 @@ void SessionRunner::cleanupInstances()
 
     m_pendingInstanceConfigs.clear();
     m_layouts.clear();
+    m_layoutOutputs.clear();
     teardownStreamingInstances();
     m_streamingInstances.clear();
     m_nextInstanceToStart = 0;
@@ -1304,6 +1370,7 @@ bool SessionRunner::setupSessionResources()
                     || m_steamConfigManager->getTargetSteamUserId(username).isEmpty()) {
                     qCInfo(couchplaySteam) << "Skipping Steam library sharing for" << username
                                            << "- Steam has not been run for this user yet";
+                    Q_EMIT librarySharingDeferred(username);
                     continue;
                 }
                 DataDirectory steamMarker = dir;
@@ -1423,17 +1490,10 @@ QScreen *SessionRunner::screenByConnector(const QString &connector)
     return nullptr;
 }
 
-QRect SessionRunner::mainScreenGeometry(const SessionProfile &profile)
+QScreen *SessionRunner::mainScreen(const SessionProfile &profile)
 {
     QScreen *screen = screenByConnector(profile.mainScreen);
-    if (!screen) {
-        screen = QGuiApplication::primaryScreen();
-    }
-    if (screen) {
-        return screen->geometry();
-    }
-
-    return QRect(0, 0, 1920, 1080);
+    return screen ? screen : QGuiApplication::primaryScreen();
 }
 
 QString SessionRunner::validateDisplays(const SessionProfile &profile)

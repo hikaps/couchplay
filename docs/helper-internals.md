@@ -55,11 +55,25 @@ Recursive ACL preparation runs in cancellable instance startup, not a blocking G
 
 ACL shares on read-only filesystems are accepted only when the player already has read/execute access to every object; otherwise preparation fails.
 
+## Controller ownership
+
+A chown does not revoke handles other users already hold, so the desktop's Steam or launchers could keep reading a player's pad (and Steam re-emits it as its own virtual pad). Physical controllers are therefore rebound under a temporary udev rule that gives the new nodes to the player:
+
+- **HID controllers** are rebound through their `hidraw` node.
+- **USB gamepads driven directly by an interface driver** such as `xpad` (Xbox 360-protocol pads) have no `hidraw` node. Their event node resolves to the USB interface (for example `1-5.2:1.0`), which is rebound instead. Only joystick nodes on a USB interface qualify, never hubs or whole devices.
+- After the rebind the helper resolves the recreated node and watches it for the exit chord. The event and joystick nodes may come back with new numbers, and another device can take an old number. For the rest of the session, ownership and reset requests for the old paths therefore go to the recreated nodes, since the GUI still lists the paths it saw before the rebind.
+- Session reset removes the rule and rebinds again, returning the nodes to the seat user.
+- Other nodes (virtual devices, keyboards and mice without `hidraw`) are only chowned.
+
+## Steam virtual pads
+
+With Steam Input on, each player's Steam re-creates their pad as a uinput device, and games read only that device. udev gives new input nodes to the seat user, so the player could not open their own virtual pad. When the `/dev/input` watcher sees a new virtual device during a session, the helper looks up which process holds the `/dev/uinput` fd that created it (`pidfd_getfd` plus `UI_GET_SYSNAME`). If that process belongs to a session player, the helper gives the event and joystick nodes to the player (mode 0600, ACLs cleared). Virtual pads created by the desktop user's Steam are left alone. Event nodes are tracked with the other modified devices and reset when the session stops.
+
 ## Cross-user audio (PulseAudio TCP listener)
 
 Secondary players reach the compositor user's PipeWire through `tcp:127.0.0.1:4713`. `SetupRuntimeAccess` makes sure that listener exists without restarting the user's `pipewire-pulse`, so the desktop user's running audio streams are not interrupted:
 
-- The helper runs `pactl` as the compositor user through `machinectl shell <user>@ /usr/bin/pactl …` (structured argv, no shell).
+- The helper runs `pactl` as the compositor user through `setpriv --reuid … --init-groups -- /usr/bin/env -i HOME=… XDG_RUNTIME_DIR=/run/user/<uid> /usr/bin/pactl …` (structured argv, no shell). `machinectl shell` is not used because it does not return the command's exit status.
 - If `pactl list short modules` already shows a `module-native-protocol-tcp` with `port=4713`, or the port already answers (for example a `pipewire-pulse` drop-in), nothing is loaded.
 - Otherwise it runs `pactl load-module module-native-protocol-tcp port=4713 listen=127.0.0.1 auth-anonymous=1`. The compositor UID is remembered as helper-loaded.
 - When the last instance of that compositor goes away (or `RemoveRuntimeAccess`/helper shutdown runs), only a helper-loaded module with exactly those arguments is removed with `pactl unload-module`. Pre-existing modules and drop-ins are never touched.

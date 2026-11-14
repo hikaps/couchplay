@@ -27,6 +27,7 @@ class UpdateChecker : public QObject
     QML_ELEMENT
     Q_PROPERTY(State state READ state NOTIFY stateChanged)
     Q_PROPERTY(QString currentVersion READ currentVersion CONSTANT)
+    Q_PROPERTY(QString displayVersion READ displayVersion CONSTANT)
     Q_PROPERTY(QString latestVersion READ latestVersion NOTIFY latestVersionChanged)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateAvailableChanged)
     Q_PROPERTY(QString installMethod READ installMethod CONSTANT)
@@ -67,6 +68,8 @@ public:
 
     State state() const;
     QString currentVersion() const;
+    /** currentVersion() plus the build identifier of pre-release builds, for display only. */
+    QString displayVersion() const;
     QString latestVersion() const;
     bool updateAvailable() const;
     QString installMethod() const;

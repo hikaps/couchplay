@@ -14,6 +14,8 @@ add_executable(couchplay-helper
     SecureFs.h
     SystemOps.cpp
     SystemOps.h
+    SteamCompatToolMapping.cpp
+    SteamCompatToolMapping.h
     PolkitActions.h
 )
 

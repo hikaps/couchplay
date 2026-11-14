@@ -82,6 +82,7 @@ private Q_SLOTS:
     // buildGamescopeArgs tests
     void testBuildArgsMinimal();
     void testBuildArgsResolution();
+    void testBuildArgsScaledOutput();
     void testBuildArgsRefreshRate();
     void testBuildArgsScalingMode();
     void testBuildArgsFilterMode();
@@ -190,6 +191,23 @@ void TestGamescopeInstance::testBuildArgsResolution()
     int HIdx = args.indexOf(QStringLiteral("-H"));
     QVERIFY(HIdx >= 0);
     QCOMPARE(args[HIdx + 1], QStringLiteral("720"));
+}
+
+// On a 150% output KWin places a 640x720 logical window, which is 960x1080 physical pixels; gamescope takes its
+// window size in physical pixels, so a logical -W/-H would make the game render and display stretched.
+void TestGamescopeInstance::testBuildArgsScaledOutput()
+{
+    QVariantMap config;
+    config[QStringLiteral("internalWidth")] = 960;
+    config[QStringLiteral("internalHeight")] = 1080;
+    config[QStringLiteral("outputWidth")] = 640;
+    config[QStringLiteral("outputHeight")] = 720;
+    config[QStringLiteral("outputScale")] = 1.5;
+
+    const QStringList args = GamescopeInstance::buildGamescopeArgs(config);
+    QCOMPARE(args.value(args.indexOf(QStringLiteral("-W")) + 1), QStringLiteral("960"));
+    QCOMPARE(args.value(args.indexOf(QStringLiteral("-H")) + 1), QStringLiteral("1080"));
+    QCOMPARE(args.value(args.indexOf(QStringLiteral("-w")) + 1), QStringLiteral("960"));
 }
 
 void TestGamescopeInstance::testBuildArgsRefreshRate()

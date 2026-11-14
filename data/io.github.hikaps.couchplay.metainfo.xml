@@ -65,6 +65,25 @@
   </screenshots>
   
   <releases>
+    <release version="0.6.2" date="2026-11-14">
+      <description>
+        <p>Bug-fix release for split-screen controller and Steam problems. Reinstall the privileged helper after updating: most fixes live in it.</p>
+        <ul>
+          <li>Each player gets a private Steam IPC port, so players no longer disturb each other's Steam (#137)</li>
+          <li>Steam virtual pads go to the player whose Steam created them (#140)</li>
+          <li>A pad that reconnects or changes its event node mid-session goes back to its player (#136, #144)</li>
+          <li>A pad that switches USB mode is restored through its current driver when the session ends (#151)</li>
+          <li>xpad pads are rebound so handles opened earlier are closed (#138)</li>
+          <li>Games shared from the desktop library use the desktop's Proton choice for players; custom compatibility tools only the desktop has are skipped. Needs the updated helper (#153, #156)</li>
+          <li>The stop shortcut works in the Flatpak (#121)</li>
+          <li>Render at the physical resolution on fractionally scaled outputs (#142)</li>
+          <li>One failed Polkit check no longer denies every later request (#141)</li>
+          <li>Load the audio listener and run pactl via setpriv (#139)</li>
+          <li>Say so when library sharing waits for a player's first Steam sign-in (#150)</li>
+          <li>Show the build id next to the version on beta builds (#152)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-11-10">
       <description>
         <p>Bug-fix release. Reinstall the privileged helper after updating: several fixes live in it.</p>
