@@ -1116,6 +1116,8 @@ private Q_SLOTS:
     void testKillInstance_serviceKill();
     void testStopInstance_fallbackToDirectKill();
     void testLaunchInstance_startTransientFailure();
+    void testLaunchInstance_startsPlayerSessionManager();
+    void testLaunchInstance_refusesWhenSessionManagerWontStart();
     void testLaunchInstance_startTransientFailureWhenUnitWasNeverLoaded();
     void testLaunchInstance_preparationFailureReason();
     void testLaunchInstance_collectedUnitPreservesFailureReason();
@@ -4232,6 +4234,10 @@ void TestCouchPlayHelper::testFailedLaunchRetryDoesNotStopReplacement()
     const QString unit = QStringLiteral("couchplay-player1.service");
     m_ops->m_transientStartSucceeds = false;
     m_ops->setProcessExitCodeForCommand(QStringLiteral("systemctl"), 1);
+    m_ops->m_processHandler = [](const QString &, const QStringList &args, QByteArray *) {
+        // The player session manager is up; the failing step is stopping the unit.
+        return args.value(0) == QStringLiteral("start") ? 0 : 1;
+    };
     int failedStops = 0;
     int replacementStops = 0;
     const auto resetStopCallback = qScopeGuard([this] {
@@ -4247,6 +4253,7 @@ void TestCouchPlayHelper::testFailedLaunchRetryDoesNotStopReplacement()
         QTRY_VERIFY_WITH_TIMEOUT(failedStops >= 2, 2000);
     }
     m_ops->setProcessExitCodeForCommand(QStringLiteral("systemctl"), 0);
+    m_ops->m_processHandler = {};
     m_systemdUnit->setActiveState(QStringLiteral("inactive"));
     m_helper->failPendingLaunch(unit, QStringLiteral("old unit is now terminal"));
     QVERIFY(!m_helper->m_pendingLaunches.contains(unit));
@@ -4620,6 +4627,34 @@ void TestCouchPlayHelper::testLaunchInstance_startTransientFailure()
     QVERIFY(!m_helper->m_usernameToUnitName.contains(QStringLiteral("player1")));
     QCOMPARE(m_ops->m_transientServiceName, QStringLiteral("couchplay-player1.service"));
     QVERIFY(!m_ops->m_transientProperties.isEmpty());
+}
+
+void TestCouchPlayHelper::testLaunchInstance_startsPlayerSessionManager()
+{
+    configureLaunchFixture();
+
+    const QDBusReply<qint64> reply = launchPlayer1();
+    QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+    bool started = false;
+    for (const auto &inv : m_ops->m_processInvocations) {
+        started = started
+            || (inv.command == QStringLiteral("systemctl")
+                && inv.args == QStringList{QStringLiteral("start"), QStringLiteral("user@1001.service")});
+    }
+    QVERIFY(started);
+}
+
+void TestCouchPlayHelper::testLaunchInstance_refusesWhenSessionManagerWontStart()
+{
+    configureLaunchFixture();
+    m_ops->setProcessExitCodeForCommand(QStringLiteral("systemctl"), 1);
+
+    const QDBusReply<qint64> reply = launchPlayer1();
+    QVERIFY(!reply.isValid());
+    QCOMPARE(reply.error().type(), QDBusError::Failed);
+    QVERIFY(reply.error().message().contains(QStringLiteral("session manager")));
+    QVERIFY(m_ops->m_launchManifests.isEmpty());
+    QVERIFY(m_ops->m_transientServiceName.isEmpty());
 }
 
 void TestCouchPlayHelper::testLaunchInstance_startTransientFailureWhenUnitWasNeverLoaded()

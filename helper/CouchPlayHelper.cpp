@@ -1844,6 +1844,22 @@ void CouchPlayHelper::startTransientUnit(const QString &username,
 
     const QString userUid = QString::number(targetUid);
     const QString userRuntimeDir = QStringLiteral("/run/user/%1").arg(userUid);
+    // Linger only starts the user manager at boot. If it was stopped later (for example by
+    // `pkill -u player`) the bus socket file survives with nobody listening, so the check
+    // below passes and the game fails without a trace. Starting an active unit is a no-op.
+    QProcess *managerProcess = m_ops->createProcess();
+    m_ops->startProcess(managerProcess,
+                        QStringLiteral("systemctl"),
+                        {QStringLiteral("start"), QStringLiteral("user@%1.service").arg(userUid)});
+    const bool managerStarted =
+        m_ops->waitForFinished(managerProcess, 30000) && m_ops->processExitCode(managerProcess) == 0;
+    const QString managerError = QString::fromLocal8Bit(m_ops->readStandardError(managerProcess)).trimmed();
+    delete managerProcess;
+    if (!managerStarted) {
+        fail(QDBusError::Failed,
+             QStringLiteral("Could not start the session manager for %1: %2").arg(username, managerError));
+        return;
+    }
     if (!m_ops->fileExists(userRuntimeDir) || !m_ops->fileExists(userRuntimeDir + QStringLiteral("/bus"))) {
         fail(QDBusError::Failed, QStringLiteral("Target user session bus is unavailable"));
         return;
