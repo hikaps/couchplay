@@ -1240,6 +1240,30 @@ static QSet<QString> hostCustomToolNames(const QString &steamRoot)
     return names;
 }
 
+// The tool the desktop's Steam picked for each game on its own (priority 85, "Default" in the game's compatibility
+// settings). Steam keeps it only in compat_log.txt, appended at every start, so the newest line per game wins
+static QHash<QString, QString> hostDefaultTools(const QString &steamRoot)
+{
+    // One start logs a few hundred lines; the tail always holds the latest
+    constexpr qint64 tailBytes = 4 * 1024 * 1024;
+    static const QRegularExpression defaultKey(
+        QStringLiteral("Recording non-user mapping for (\\d+) at priority 85 to tool (\\S+)"));
+    QHash<QString, QString> tools;
+    QFile log(steamRoot + QStringLiteral("/logs/compat_log.txt"));
+    if (!log.open(QIODevice::ReadOnly)) {
+        return tools;
+    }
+    if (log.size() > tailBytes) {
+        log.seek(log.size() - tailBytes);
+    }
+    const QString text = QString::fromUtf8(log.readAll());
+    for (auto match = defaultKey.globalMatch(text); match.hasNext();) {
+        const auto found = match.next();
+        tools.insert(found.captured(1), found.captured(2));
+    }
+    return tools;
+}
+
 void SteamConfigManager::mirrorCompatToolMapping(const QString &username, const QSet<QString> &sharedAppIds)
 {
     // A shared game must keep the desktop's Proton/native choice for the player: with any other
@@ -1258,6 +1282,7 @@ void SteamConfigManager::mirrorCompatToolMapping(const QString &username, const 
     }
 
     const QSet<QString> hostOnlyTools = hostCustomToolNames(m_steamPaths.steamRoot);
+    const QHash<QString, QString> hostDefaults = hostDefaultTools(m_steamPaths.steamRoot);
     SteamCompatToolMapping::Changes changes;
     for (const QString &appId : sharedAppIds) {
         // Games without their own entry use the desktop's global default tool ("0"), which Steam
@@ -1267,7 +1292,16 @@ void SteamConfigManager::mirrorCompatToolMapping(const QString &username, const 
             tool = hostMapping->constFind(QStringLiteral("0"));
         }
         if (tool == hostMapping->cend()) {
-            changes.insert(appId, std::nullopt);
+            // With the dropdown on "Default", the desktop's Steam still picks a tool per game (Proton Stable for
+            // many Windows builds) without storing it in config.vdf, while a player's Steam falls back to the Linux
+            // Runtime, which cannot run them. Set the same tool explicitly; a user "0" does not outrank it
+            const QString defaultTool = hostDefaults.value(appId);
+            if (defaultTool.isEmpty() || defaultTool == QLatin1String("native")
+                || hostOnlyTools.contains(defaultTool)) {
+                changes.insert(appId, std::nullopt);
+            } else {
+                changes.insert(appId, SteamCompatToolMapping::Tool{defaultTool, QString(), QStringLiteral("250")});
+            }
         } else if (hostOnlyTools.contains(tool->name)) {
             // The player has no such tool; an entry naming it makes Steam run the game without a
             // compatibility layer (empty dropdown). Drop it, including one an earlier session mirrored
