@@ -2753,14 +2753,11 @@ void TestSessionRunner::testSteamInstancesGetPrivateIpcAddress()
     };
     QSet<QString> addresses;
     for (int i = 0; i < 2; ++i) {
-        const QStringList command = m_helperClient->launchCommands.at(i);
-        const qsizetype flag = command.indexOf(QStringLiteral("-master_ipc_name_override"));
-        QVERIFY(flag > 0 && flag + 1 < command.size());
-        const QString address = command.at(flag + 1);
+        // The flag is forwarded to the game's argv and breaks Halo Infinite; the environment is enough
+        QVERIFY(!m_helperClient->launchCommands.at(i).contains(QStringLiteral("-master_ipc_name_override")));
+        const QString address = envAddress(m_helperClient->launchEnvironments.at(i));
         QVERIFY2(address.startsWith(QStringLiteral("127.0.0.1:")), qPrintable(address));
         QVERIFY(address != QStringLiteral("127.0.0.1:57343"));
-        // The player's games must target the same Steam the player's client listens on
-        QCOMPARE(envAddress(m_helperClient->launchEnvironments.at(i)), address);
         addresses.insert(address);
     }
     QCOMPARE(addresses.size(), 2);
