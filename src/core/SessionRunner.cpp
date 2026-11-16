@@ -1793,6 +1793,12 @@ bool SessionRunner::grantDeviceToInstance(int eventNumber, int instanceIndex)
         qWarning() << "SessionRunner: Invalid instance index" << instanceIndex << "for device" << eventNumber;
         return false;
     }
+    // The pad forwarder maps axes by code, so motion sensors and touchpads of a pad would drive its sticks.
+    if (m_deviceManager
+        && m_deviceManager->getDevice(eventNumber).value(QStringLiteral("type")).toString() != QLatin1String("controller")) {
+        qCDebug(couchplayCore) << "Not attaching non-controller node" << eventNumber << "to a virtual pad";
+        return false;
+    }
 
     PadForwarder *forwarder = m_padForwarders.value(instanceIndex);
     if (!forwarder || !forwarder->isRunning()) {

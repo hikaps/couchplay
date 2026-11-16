@@ -4,6 +4,7 @@
 #include "PlayerStore.h"
 
 #include "HostProcess.h"
+#include "PlayerFiles.h"
 #include "SunshineConfig.h"
 
 #include <QCryptographicHash>
@@ -106,8 +107,8 @@ bool PlayerStore::deletePlayer(const QString &name)
         return false;
     }
 
-    QDir playerDir(rootDir() + QLatin1Char('/') + name);
-    if (playerDir.exists() && !playerDir.removeRecursively()) {
+    const QString playerPath = rootDir() + QLatin1Char('/') + name;
+    if (QFileInfo::exists(playerPath) && !PlayerFiles::removeTree(playerPath)) {
         Q_EMIT errorOccurred(i18n("Could not delete the files of player \"%1\".", name));
         refresh();
         return false;

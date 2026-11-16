@@ -141,6 +141,8 @@ fi
 
 # --- Import homes -------------------------------------------------------------
 
+as_user() { runuser -u "$DESKTOP_USER" -- "$@"; }
+failed=false
 for name in "${PLAYERS[@]+"${PLAYERS[@]}"}"; do
     src="$(home_of "$name")"
     dest="$PLAYERS_ROOT/$name"
@@ -149,25 +151,21 @@ for name in "${PLAYERS[@]+"${PLAYERS[@]}"}"; do
         continue
     fi
     info "Importing '$name' from $src ..."
-    # Create parents owned by the desktop user (install -d only chowns the leaf).
-    parent="$DESKTOP_HOME"
-    rel="${PLAYERS_ROOT#"$DESKTOP_HOME"/}"
-    IFS='/' read -r -a parts <<<"$rel"
-    for part in "${parts[@]}"; do
-        parent="$parent/$part"
-        if [[ ! -d "$parent" ]]; then
-            install -d -m 0700 -o "$DESKTOP_USER" -g "$DESKTOP_GROUP" "$parent"
-        fi
-    done
-    install -d -m 0700 -o "$DESKTOP_USER" -g "$DESKTOP_GROUP" "$dest"
-    install -d -m 0700 -o "$DESKTOP_USER" -g "$DESKTOP_GROUP" "$dest/home"
-    if tar -C "$src" --exclude=./.cache -cf - . | tar -C "$dest/home" -xpf -; then
-        chown -R "$DESKTOP_USER:$DESKTOP_GROUP" "$dest"
+    # Everything is created and extracted as the desktop user, so a symlink planted in the
+    # player store can never make root change or write outside it.
+    as_user install -d -m 0700 "$PLAYERS_ROOT" "$dest" "$dest/home"
+    if tar -C "$src" --exclude=./.cache -cf - . | as_user tar -C "$dest/home" -xpf - --no-same-owner; then
         info "Imported '$name'."
     else
-        warn "Copying '$name' failed; $dest may be incomplete. Delete it and re-run to retry."
+        warn "Copying '$name' failed; removing the partial copy."
+        as_user rm -rf "$dest"
+        failed=true
     fi
 done
+
+if [[ "$failed" == "true" ]]; then
+    die "Some players could not be copied; the helper was NOT removed. Fix the error above and re-run."
+fi
 
 if [[ ${#PLAYERS[@]} -gt 0 ]]; then
     warn "Imported Steam data may contain absolute /home/<name> paths."
@@ -182,23 +180,47 @@ info "Stopping service..."
 systemctl stop couchplay-helper.service 2>/dev/null || true
 systemctl disable couchplay-helper.service 2>/dev/null || true
 
+# --- Remove the SteamOS sysext image (as deployed by install.sh) --------------
+
+info "Removing SteamOS system extension image (if any)..."
+sysext_found=false
+rm_sysext() {
+    if [[ -e "$1" || -L "$1" ]]; then
+        sysext_found=true
+        rm -f "$1"
+    fi
+}
+rm_sysext /var/lib/extensions/couchplay.steamos.raw
+rm_sysext /var/lib/extensions/couchplay.raw
+rm_sysext "$DESKTOP_HOME/.couchplay.steamos.raw"
+rm_sysext "$DESKTOP_HOME/.couchplay.raw"
+if [[ -d "$DESKTOP_HOME/.couchplay-extension" ]]; then
+    sysext_found=true
+    rm -rf "$DESKTOP_HOME/.couchplay-extension"
+fi
+if [[ "$sysext_found" == "true" ]] && command -v systemd-sysext >/dev/null 2>&1; then
+    systemd-sysext refresh || warn "systemd-sysext refresh failed; a reboot will finish the removal."
+fi
+
 info "Removing installed files..."
 # The old installer defaulted to /usr/local; packaged/sysext builds used /usr.
+# Note: couchplay-vdisplay is NOT removed; the new version installs it in the same place.
+# These paths are read-only while the SteamOS sysext is active; it is removed above first.
 for prefix in /usr/local /usr; do
-    rm -f "$prefix/libexec/couchplay-helper"
-    rm -f "$prefix/libexec/couchplay-vdisplay"
-    rm -f "$prefix/share/dbus-1/system-services/io.github.hikaps.CouchPlayHelper.service"
-    rm -f "$prefix/share/pipewire/pipewire-pulse.conf.d/50-couchplay.conf"
-    rm -rf "$prefix/lib/couchplay"
+    rm -f "$prefix/libexec/couchplay-helper" || warn "Could not remove $prefix/libexec/couchplay-helper"
+    rm -f "$prefix/share/dbus-1/system-services/io.github.hikaps.CouchPlayHelper.service" || true
+    rm -f "$prefix/share/pipewire/pipewire-pulse.conf.d/50-couchplay.conf" || true
+    rm -rf "$prefix/lib/couchplay" || true
 done
 rm -f /etc/dbus-1/system.d/io.github.hikaps.CouchPlayHelper.conf
 rm -f /etc/systemd/system/couchplay-helper.service
-rm -f /usr/share/polkit-1/actions/io.github.hikaps.couchplay.policy
+rm -f /usr/share/polkit-1/actions/io.github.hikaps.couchplay.policy || true
 rm -f /etc/polkit-1/actions/io.github.hikaps.couchplay.policy
 for f in /etc/polkit-1/rules.d/*couchplay* /usr/share/polkit-1/rules.d/*couchplay*; do
     [[ -e "$f" ]] && rm -f "$f"
 done
 rm -f /etc/udev/rules.d/99-couchplay-hidraw.rules
+rm -f "$DESKTOP_HOME/.config/pipewire/pipewire-pulse.conf.d/50-couchplay.conf"
 
 if has_systemd; then
     info "Reloading systemd..."
@@ -225,28 +247,6 @@ reload_dbus() {
 reload_dbus || warn "Could not reload D-Bus; changes apply after a reboot."
 if command -v udevadm >/dev/null 2>&1; then
     udevadm control --reload-rules 2>/dev/null || true
-fi
-
-# --- Remove the SteamOS sysext image (as deployed by install.sh) --------------
-
-info "Removing SteamOS system extension image (if any)..."
-sysext_found=false
-rm_sysext() {
-    if [[ -e "$1" || -L "$1" ]]; then
-        sysext_found=true
-        rm -f "$1"
-    fi
-}
-rm_sysext /var/lib/extensions/couchplay.steamos.raw
-rm_sysext /var/lib/extensions/couchplay.raw
-rm_sysext "$DESKTOP_HOME/.couchplay.steamos.raw"
-rm_sysext "$DESKTOP_HOME/.couchplay.raw"
-if [[ -d "$DESKTOP_HOME/.couchplay-extension" ]]; then
-    sysext_found=true
-    rm -rf "$DESKTOP_HOME/.couchplay-extension"
-fi
-if [[ "$sysext_found" == "true" ]] && command -v systemd-sysext >/dev/null 2>&1; then
-    systemd-sysext refresh || warn "systemd-sysext refresh failed; a reboot will finish the removal."
 fi
 
 # --- Follow-ups -----------------------------------------------------------------

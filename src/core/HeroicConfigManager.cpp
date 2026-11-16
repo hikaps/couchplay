@@ -4,6 +4,7 @@
 #include "HeroicConfigManager.h"
 #include "Logging.h"
 #include "PlayerStore.h"
+#include "PlayerFiles.h"
 
 #include <QDebug>
 #include <QDir>
@@ -190,7 +191,8 @@ static bool copyFileInto(const QString &sourcePath, const QString &targetPath)
     const QByteArray data = source.readAll();
     source.close();
 
-    if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) {
+    if (PlayerFiles::hasSymlinkUnder(PlayerStore::rootDir(), targetPath)
+        || !QDir().mkpath(QFileInfo(targetPath).absolutePath())) {
         return false;
     }
     QSaveFile target(targetPath);
@@ -243,7 +245,7 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &player)
     }
     const QString targetDir = targetHome + QStringLiteral("/.local/share/applications");
 
-    if (!QDir().mkpath(targetDir)) {
+    if (PlayerFiles::hasSymlinkUnder(PlayerStore::rootDir(), targetDir) || !QDir().mkpath(targetDir)) {
         qWarning() << "HeroicConfigManager: Failed to create target directory:" << targetDir;
         Q_EMIT syncFailed(player, QStringLiteral("Failed to create target directory"));
         return false;

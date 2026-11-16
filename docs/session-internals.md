@@ -8,7 +8,7 @@ CouchPlay is rootless. A player is a directory (`players/<name>/home`, mode 0700
 
 - private HOME (the player's `home` directory), private `/tmp`, and a private session bus (the host bus socket is masked, so `flatpak-spawn` escapes are blocked);
 - the host network (LAN, local and online play between players work as before) and a private PID namespace (stopping gamescope tears down everything);
-- a fresh `/dev` with only GPU, audio and fuse nodes plus that player's virtual pad; `/dev/uinput` and `hidraw` nodes are not visible.
+- a fresh `/dev` with only GPU, audio and fuse nodes, that player's virtual pad and any keyboards or mice assigned to that player; `/dev/uinput` and `hidraw` nodes are not visible.
 
 Controllers: `couchplay-padfwd` creates one virtual Xbox 360 pad per player and forwards the assigned physical pads to it (with rumble). The virtual pad survives reconnects. It needs a user-writable `/dev/uinput`. `couchplay-vdisplay` and `couchplay-padfwd` run on the host; under Flatpak they run straight from the Flatpak's app path.
 

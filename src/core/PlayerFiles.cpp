@@ -24,6 +24,41 @@ bool fail(QString *error, const QString &message)
 
 namespace PlayerFiles
 {
+bool hasSymlinkUnder(const QString &base, const QString &path)
+{
+    const QString cleanBase = QDir::cleanPath(base);
+    const QString cleanPath = QDir::cleanPath(path);
+    if (cleanPath != cleanBase && !cleanPath.startsWith(cleanBase + QLatin1Char('/'))) {
+        return true;
+    }
+    QString current = cleanBase;
+    const QStringList parts = cleanPath.mid(cleanBase.size()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        current += QLatin1Char('/') + part;
+        if (QFileInfo(current).isSymLink()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool removeTree(const QString &path)
+{
+    const QFileInfo info(path);
+    if (info.isSymLink() || !info.isDir()) {
+        return !info.exists() && !info.isSymLink() ? true : QFile::remove(path);
+    }
+    QFile::setPermissions(path, info.permissions() | QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                    | QFileDevice::ExeOwner);
+    bool ok = true;
+    const QFileInfoList entries =
+        QDir(path).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+    for (const QFileInfo &entry : entries) {
+        ok = removeTree(entry.filePath()) && ok;
+    }
+    return QDir().rmdir(path) && ok;
+}
+
 bool copyTreeContents(const QString &src, const QString &dst, QString *error)
 {
     const QDir srcDir(src);
@@ -52,16 +87,24 @@ bool copyTreeContents(const QString &src, const QString &dst, QString *error)
                 ok = fail(error, QStringLiteral("Could not copy link %1").arg(entry.filePath()));
             }
         } else if (entry.isDir()) {
+            // A symlink already sitting at the destination must not redirect the copy elsewhere.
+            if (QFileInfo(target).isSymLink()) {
+                QFile::remove(target);
+            }
             if (!copyTreeContents(entry.filePath(), target, error)) {
                 ok = false;
             }
-            QFile::setPermissions(target, entry.permissions());
-        } else {
+            // Keep the owner able to read/write/enter so later overlays and removal still work.
+            QFile::setPermissions(target,
+                                  entry.permissions() | QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner);
+        } else if (entry.isFile()) {
             QFile::remove(target);
             if (!QFile::copy(entry.filePath(), target)) {
                 ok = fail(error, QStringLiteral("Could not copy %1").arg(entry.filePath()));
             }
         }
+        // FIFOs, sockets and device nodes are skipped: copying them would block or fail.
     }
     return ok;
 }
@@ -71,8 +114,8 @@ bool replaceTree(const QString &source, const QString &dest, const QString &stag
     const QString fresh = dest + QStringLiteral(".couchplay-new");
     const QString old = dest + QStringLiteral(".couchplay-old");
 
-    QDir(fresh).removeRecursively();
-    QDir(old).removeRecursively();
+    removeTree(fresh);
+    removeTree(old);
     QDir().mkpath(QFileInfo(dest).absolutePath());
 
     bool ok = copyTreeContents(source, fresh, error);
@@ -80,23 +123,23 @@ bool replaceTree(const QString &source, const QString &dest, const QString &stag
         ok = copyTreeContents(stagingDir, fresh, error);
     }
     if (!ok) {
-        QDir(fresh).removeRecursively();
+        removeTree(fresh);
         return false;
     }
 
     const bool hadDest = QFileInfo::exists(dest);
     if (hadDest && !QDir().rename(dest, old)) {
-        QDir(fresh).removeRecursively();
+        removeTree(fresh);
         return fail(error, QStringLiteral("Could not replace %1").arg(dest));
     }
     if (!QDir().rename(fresh, dest)) {
         if (hadDest) {
             QDir().rename(old, dest);
         }
-        QDir(fresh).removeRecursively();
+        removeTree(fresh);
         return fail(error, QStringLiteral("Could not replace %1").arg(dest));
     }
-    QDir(old).removeRecursively();
+    removeTree(old);
     return true;
 }
 

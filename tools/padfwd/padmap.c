@@ -116,9 +116,15 @@ int padmap_translate(uint16_t type, uint16_t code, int32_t value,
             return 0;
         }
         switch (code) {
-        case BTN_TL2:
+        case BTN_TL2: // pads with an analog trigger report both; the axis already carries it
+            if (src_abs[ABS_Z].max != src_abs[ABS_Z].min || src_abs[ABS_BRAKE].max != src_abs[ABS_BRAKE].min) {
+                return 0;
+            }
             return emit(out, 0, EV_ABS, ABS_Z, value ? 255 : 0);
         case BTN_TR2:
+            if (src_abs[ABS_RZ].max != src_abs[ABS_RZ].min || src_abs[ABS_GAS].max != src_abs[ABS_GAS].min) {
+                return 0;
+            }
             return emit(out, 0, EV_ABS, ABS_RZ, value ? 255 : 0);
         case BTN_DPAD_UP:
             return emit(out, 0, EV_ABS, ABS_HAT0Y, value ? -1 : 0);

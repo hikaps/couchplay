@@ -31,6 +31,17 @@ private Q_SLOTS:
         QVERIFY(std::abs(padmap_rescale(128, src, dst)) <= 258);
     }
 
+    void analogTriggerSuppressesDigitalButton()
+    {
+        padmap_range abs[ABS_CNT];
+        clearRanges(abs);
+        abs[ABS_Z] = {0, 255};
+        abs[ABS_GAS] = {0, 255};
+        padmap_event out[2];
+        QCOMPARE(padmap_translate(EV_KEY, BTN_TL2, 1, abs, out), 0);
+        QCOMPARE(padmap_translate(EV_KEY, BTN_TR2, 1, abs, out), 0);
+    }
+
     void rescaleStickToTrigger()
     {
         const padmap_range src{-32767, 32767};

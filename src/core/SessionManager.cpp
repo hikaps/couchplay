@@ -6,6 +6,7 @@
 #include "SessionRunner.h"
 #include "SunshineConfig.h"
 #include "PlayerFiles.h"
+#include "PlayerStore.h"
 
 #include <QDesktopServices>
 #include <QDebug>
@@ -935,7 +936,7 @@ bool SessionManager::hasPlayerDataStagingDirectories(int index) const
     }
 
     const InstanceConfig &inst = m_currentProfile.instances[index];
-    if (inst.player.isEmpty()) {
+    if (inst.player.isEmpty() || !PlayerStore::isValidName(inst.player)) {
         return false;
     }
     const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
@@ -956,7 +957,7 @@ QString SessionManager::playerDataFolderPath(int index)
     }
 
     const InstanceConfig &inst = m_currentProfile.instances[index];
-    if (inst.player.isEmpty()) {
+    if (inst.player.isEmpty() || !PlayerStore::isValidName(inst.player)) {
         return QString();
     }
     const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;

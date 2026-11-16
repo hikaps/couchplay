@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-CouchPlay is a C++20/Qt6/KF6/Kirigami application for split-screen gaming on Linux, primarily KDE Plasma/Wayland. It runs per-player Gamescope instances, assigns controllers and audio, supports native/Flatpak launchers, and optionally streams through Sunshine. It is fully rootless: each player is a directory (private HOME) and its game runs as the desktop user inside a `bwrap` sandbox with a private session bus, network namespace, and one virtual Xbox 360 pad.
+CouchPlay is a C++20/Qt6/KF6/Kirigami application for split-screen gaming on Linux, primarily KDE Plasma/Wayland. It runs per-player Gamescope instances, assigns controllers and audio, supports native/Flatpak launchers, and optionally streams through Sunshine. It is fully rootless: each player is a directory (private HOME) and its game runs as the desktop user inside a `bwrap` sandbox with a private session bus, the shared host network (so LAN and online co-op work), and one virtual Xbox 360 pad.
 
 ## Architecture & Data Flow
 

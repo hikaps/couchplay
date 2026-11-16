@@ -141,6 +141,7 @@ void GamescopeInstance::pollForGamescope()
     }
     if (QDateTime::currentMSecsSinceEpoch() > m_startDeadlineMs) {
         const QString detail = lastLines(m_stderrTail, 20);
+        m_stopping = true; // so onProcessFinished leaves the timeout report to this branch
         m_process.kill();
         m_process.waitForFinished(2000);
         if (!m_launched) {
@@ -158,6 +159,10 @@ void GamescopeInstance::pollForGamescope()
         return;
     }
 
+    if (m_scan) {
+        m_scan->disconnect(this);
+        m_scan.release()->deleteLater();
+    }
     m_scan = std::make_unique<QProcess>();
     HostProcess::configure(*m_scan,
                            QStringLiteral("sh"),
@@ -258,7 +263,11 @@ void GamescopeInstance::resetLaunchState()
     m_stopping = false;
     m_gamescopePid = 0;
     m_pollTimer.stop();
-    m_scan.reset();
+    if (m_scan) {
+        // May run inside the scan's own finished handler (started() -> stop()); delete after it returns.
+        m_scan->disconnect(this);
+        m_scan.release()->deleteLater();
+    }
 }
 
 void GamescopeInstance::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)

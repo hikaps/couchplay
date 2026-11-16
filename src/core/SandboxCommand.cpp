@@ -55,10 +55,12 @@ QStringList buildSandboxArgv(const SandboxSpec &spec)
         }
     }
 
-    // Masking the session bus socket stops sandboxed code from reaching the host (flatpak-spawn --host).
+    // Masking the session bus and the systemd user manager's private socket stops sandboxed code from
+    // reaching the host (flatpak-spawn --host, systemd-run --user).
     if (!spec.runtimeDir.isEmpty()) {
-        argv << QStringLiteral("--ro-bind") << QStringLiteral("/dev/null")
-             << spec.runtimeDir + QStringLiteral("/bus");
+        for (const QString &socket : {QStringLiteral("/bus"), QStringLiteral("/systemd/private")}) {
+            argv << QStringLiteral("--ro-bind") << QStringLiteral("/dev/null") << spec.runtimeDir + socket;
+        }
     }
 
     argv << QStringLiteral("--setenv") << QStringLiteral("HOME") << spec.home;

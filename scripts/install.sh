@@ -117,20 +117,6 @@ check_dependencies() {
         echo "  sudo pacman -S ${missing_deps[*]}"
         exit 1
     fi
-
-    # Check for runtime dependencies (warn but don't fail)
-    if ! command -v gamescope &>/dev/null; then
-        print_warn "gamescope is not installed. CouchPlay requires gamescope to launch game sessions."
-        echo ""
-        echo "On Debian/Ubuntu:"
-        echo "  sudo apt install gamescope"
-        echo ""
-        echo "On Fedora:"
-        echo "  sudo dnf install gamescope"
-        echo ""
-        echo "On Arch Linux:"
-        echo "  sudo pacman -S gamescope"
-    fi
 }
 
 check_architecture() {
@@ -460,6 +446,10 @@ setup_userns_access() {
     bwrap_path="$(command -v bwrap 2>/dev/null || true)"
     [[ -n "$bwrap_path" ]] || return 0
     bwrap_path="$(readlink -f "$bwrap_path")"
+    id -u "$REAL_USER" &>/dev/null || {
+        print_warn "Cannot determine the desktop user; skipping the user-namespace check."
+        return 0
+    }
 
     local probe=(bwrap --unshare-user --uid "$(id -u "$REAL_USER")" --gid "$(id -g "$REAL_USER")" --dev-bind / / true)
     if sudo -u "$REAL_USER" "${probe[@]}" &>/dev/null; then
@@ -476,7 +466,7 @@ setup_userns_access() {
 
     local profile=/etc/apparmor.d/bwrap-couchplay
     print_info "Your system blocks user namespaces for bwrap (AppArmor). Allowing it for $bwrap_path only: $profile"
-    cat > "$profile" <<EOF
+    if ! cat > "$profile" <<EOF
 # Installed by the CouchPlay installer: lets bubblewrap create user namespaces under
 # kernel.apparmor_restrict_unprivileged_userns=1. Remove this file and run
 # 'sudo apparmor_parser -R /etc/apparmor.d/bwrap-couchplay' to undo it.
@@ -488,9 +478,14 @@ profile bwrap-couchplay $bwrap_path flags=(unconfined) {
   include if exists <local/bwrap-couchplay>
 }
 EOF
+    then
+        print_warn "Could not write $profile. See the README troubleshooting section."
+        return 0
+    fi
     if apparmor_parser -r "$profile" && sudo -u "$REAL_USER" "${probe[@]}" &>/dev/null; then
         print_info "bwrap can create user namespaces now."
     else
+        apparmor_parser -R "$profile" &>/dev/null || true
         rm -f "$profile"
         print_warn "Could not enable user namespaces for bwrap automatically. See the README troubleshooting section."
     fi
@@ -515,11 +510,10 @@ check_host_requirements() {
         fi
     done
 
-    if [[ ! -w /dev/uinput ]] && ! sudo -u "$REAL_USER" test -w /dev/uinput 2>/dev/null; then
+    if ! sudo -u "$REAL_USER" test -w /dev/uinput 2>/dev/null; then
         print_warn "/dev/uinput is not writable by $REAL_USER. CouchPlay needs it to create one virtual controller per player."
         echo "         Install your distro's Steam udev rules (e.g. the 'steam-devices' package) or add a udev rule"
         echo "         that grants your user access to /dev/uinput (KERNEL==\"uinput\", TAG+=\"uaccess\")."
-        missing=true
     fi
 
     setup_userns_access
@@ -527,7 +521,7 @@ check_host_requirements() {
     if $missing; then
         echo ""
         echo "Install the missing packages, e.g.:"
-        echo "  Fedora/Bazzite:  sudo dnf install bubblewrap dbus gamescope"
+        echo "  Fedora/Bazzite:  sudo dnf install bubblewrap dbus-daemon gamescope"
         echo "  Arch/CachyOS:    sudo pacman -S bubblewrap dbus gamescope"
         echo "  Debian/Ubuntu:   sudo apt install bubblewrap dbus gamescope"
         echo "  SteamOS:         check 'which bwrap dbus-run-session gamescope'; see the README"

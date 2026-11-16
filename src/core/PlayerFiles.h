@@ -21,6 +21,18 @@ bool copyTreeContents(const QString &src, const QString &dst, QString *error = n
 bool replaceTree(const QString &source, const QString &dest, const QString &stagingDir, QString *error = nullptr);
 
 /**
+ * Delete @p path and everything below it. Symlinks are removed, never followed, and read-only directories are
+ * made owner-writable on the way so they can be emptied.
+ */
+bool removeTree(const QString &path);
+
+/**
+ * True when @p path is not below @p base or any existing component of it below @p base is a symlink.
+ * Used before the host writes into a player's tree, which sandboxed code can fill with symlinks.
+ */
+bool hasSymlinkUnder(const QString &base, const QString &path);
+
+/**
  * Stable directory name for a shared data directory: the path relative to @p home (or without the leading
  * slash when outside it) with '/' → '_', plus a short hash.
  */

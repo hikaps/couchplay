@@ -45,6 +45,10 @@ class TestPlayerFiles : public QObject
 
 private Q_SLOTS:
     void copyTreeCopiesNestedAndHidden();
+    void copyTreeDoesNotWriteThroughDestinationSymlink();
+    void hasSymlinkUnderDetectsLinkedComponents();
+    void removeTreeDoesNotFollowSymlinksAndHandlesReadOnlyDirs();
+    void replaceTreeOverlaysStagingOverReadOnlyDirs();
     void copyTreeMergesOverExisting();
     void copyTreePreservesModes();
     void copyTreeKeepsSymlinksAsLinks();
@@ -120,6 +124,72 @@ void TestPlayerFiles::copyTreePreservesModes()
     QVERIFY(PlayerFiles::copyTreeContents(src, dst));
     QCOMPARE(QFileInfo(dst + QStringLiteral("/run.sh")).permissions(), exec);
     QCOMPARE(QFileInfo(dst + QStringLiteral("/bin")).permissions(), dirPerms);
+}
+
+void TestPlayerFiles::copyTreeDoesNotWriteThroughDestinationSymlink()
+{
+    QTemporaryDir tmp;
+    const QString src = tmp.filePath(QStringLiteral("src"));
+    const QString dst = tmp.filePath(QStringLiteral("dst"));
+    const QString outside = tmp.filePath(QStringLiteral("outside"));
+    QVERIFY(writeFile(outside + QStringLiteral("/slot1"), "host"));
+    QVERIFY(writeFile(src + QStringLiteral("/saves/slot1"), "player"));
+    QVERIFY(QDir().mkpath(dst));
+    QVERIFY(makeLink(outside, dst + QStringLiteral("/saves")));
+
+    QVERIFY(PlayerFiles::copyTreeContents(src, dst));
+    QFile host(outside + QStringLiteral("/slot1"));
+    QVERIFY(host.open(QIODevice::ReadOnly));
+    QCOMPARE(host.readAll(), QByteArray("host"));
+    QVERIFY(!QFileInfo(dst + QStringLiteral("/saves")).isSymLink());
+}
+
+void TestPlayerFiles::hasSymlinkUnderDetectsLinkedComponents()
+{
+    QTemporaryDir tmp;
+    const QString base = tmp.filePath(QStringLiteral("players"));
+    const QString outside = tmp.filePath(QStringLiteral("outside"));
+    QVERIFY(writeFile(base + QStringLiteral("/p/home/real/file"), "x"));
+    QVERIFY(QDir().mkpath(outside));
+    QVERIFY(makeLink(outside, base + QStringLiteral("/p/home/escape")));
+
+    QVERIFY(!PlayerFiles::hasSymlinkUnder(base, base + QStringLiteral("/p/home/real/file")));
+    QVERIFY(!PlayerFiles::hasSymlinkUnder(base, base + QStringLiteral("/p/home/not/yet/created")));
+    QVERIFY(PlayerFiles::hasSymlinkUnder(base, base + QStringLiteral("/p/home/escape/x/y")));
+    QVERIFY(PlayerFiles::hasSymlinkUnder(base, outside + QStringLiteral("/file")));
+}
+
+void TestPlayerFiles::removeTreeDoesNotFollowSymlinksAndHandlesReadOnlyDirs()
+{
+    QTemporaryDir tmp;
+    const QString tree = tmp.filePath(QStringLiteral("tree"));
+    const QString outside = tmp.filePath(QStringLiteral("outside"));
+    QVERIFY(writeFile(outside + QStringLiteral("/keep.txt"), "K"));
+    QVERIFY(writeFile(tree + QStringLiteral("/ro/file"), "x"));
+    QVERIFY(makeLink(outside, tree + QStringLiteral("/link")));
+    QVERIFY(QFile::setPermissions(tree + QStringLiteral("/ro"), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+    QVERIFY(PlayerFiles::removeTree(tree));
+    QVERIFY(!QFileInfo::exists(tree));
+    QVERIFY(QFileInfo::exists(outside + QStringLiteral("/keep.txt")));
+}
+
+void TestPlayerFiles::replaceTreeOverlaysStagingOverReadOnlyDirs()
+{
+    QTemporaryDir tmp;
+    const QString src = tmp.filePath(QStringLiteral("src"));
+    const QString staging = tmp.filePath(QStringLiteral("staging"));
+    const QString dest = tmp.filePath(QStringLiteral("dest"));
+    QVERIFY(writeFile(src + QStringLiteral("/ro/a"), "a"));
+    QVERIFY(QFile::setPermissions(src + QStringLiteral("/ro"), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    QVERIFY(writeFile(staging + QStringLiteral("/ro/b"), "b"));
+
+    QString error;
+    QVERIFY2(PlayerFiles::replaceTree(src, dest, staging, &error), qPrintable(error));
+    QVERIFY2(PlayerFiles::replaceTree(src, dest, staging, &error), qPrintable(error));
+    QVERIFY(QFileInfo::exists(dest + QStringLiteral("/ro/b")));
+    QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".couchplay-old")));
+    QFile::setPermissions(src + QStringLiteral("/ro"), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
 }
 
 void TestPlayerFiles::copyTreeKeepsSymlinksAsLinks()

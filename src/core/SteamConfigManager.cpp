@@ -7,6 +7,7 @@
 #include "PresetManager.h"
 #include "Logging.h"
 #include "PlayerStore.h"
+#include "PlayerFiles.h"
 #include "SteamCompatToolMapping.h"
 #include "SandboxCommand.h"
 #include <QDataStream>
@@ -65,6 +66,11 @@ QString sandboxView(const QString &player, const QString &path)
 // Writes @p data to @p path with QSaveFile, creating missing parent directories
 bool writePlayerFile(const QByteArray &data, const QString &path)
 {
+    // The player's sandbox controls this tree; never write through a symlink it planted.
+    if (PlayerFiles::hasSymlinkUnder(PlayerStore::rootDir(), path)) {
+        qCWarning(couchplaySteam) << "Refusing to write through a symlink:" << path;
+        return false;
+    }
     if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
         return false;
     }

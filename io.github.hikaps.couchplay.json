@@ -32,7 +32,8 @@
         "--filesystem=~/.var/app/com.heroicgameslauncher.hgl/config/heroic:ro",
         "--filesystem=~/.config/heroic:ro",
         "--filesystem=~/.config/legendary:ro",
-        "--filesystem=~/Games/Heroic:ro"
+        "--filesystem=~/Games/Heroic:ro",
+        "--filesystem=host:ro"
     ],
     "modules": [
         {

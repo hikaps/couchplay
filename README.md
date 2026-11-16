@@ -35,7 +35,7 @@
 - 🎮 **Split-screen any game** — launches multiple independent Steam or Heroic instances through Gamescope. No native split-screen support required.
 - 🖥️ **Flexible layouts** — side by side, top and bottom, multi-monitor, or grid (3+ players with 3×1 and 2×2 sub-layouts).
 - 🕹️ **Input isolation** — assign gamepads to players from their cards (**Press a button…** or auto-assign), plus keyboards and mice. Each player sees exactly one virtual Xbox 360 pad.
-- 👤 **Player isolation** — each player gets a private home with their own save data, settings and Steam library, inside a rootless `bwrap` sandbox with its own network and session bus. No root helper or extra Linux accounts.
+- 👤 **Player isolation** — each player gets a private home with their own save data, settings and Steam library, inside a rootless `bwrap` sandbox with its own session bus (the host network is shared, so LAN and online co-op work). No root helper or extra Linux accounts.
 - 🔊 **Audio routing** — per-player PipeWire/PulseAudio sinks.
 - 🌙 **Moonlight streaming** — stream a player through Sunshine from a virtual display or a monitor, with per-player pairing.
 - 🧭 **Per-player display placement** — put each player on the main screen, a specific monitor, or a virtual display.
@@ -196,7 +196,7 @@ CouchPlay is rootless: it needs no helper service, no root and no system changes
 | Tool | Package |
 | --- | --- |
 | `bwrap` | `bubblewrap` |
-| `dbus-run-session` | `dbus` |
+| `dbus-run-session` | `dbus` (`dbus-daemon` on Fedora/Bazzite) |
 | `gamescope` | `gamescope` |
 
 Controllers are forwarded through a virtual pad per player, which needs **`/dev/uinput` to be writable by your user**. Steam's udev rules (the `steam-devices` / `steam-support` package) grant this on most distros. `couchplay-padfwd` and `couchplay-vdisplay` ship inside the Flatpak and run on the host from there, so nothing else is installed. The installer only warns if something is missing.
@@ -208,8 +208,9 @@ Controllers are forwarded through a virtual pad per player, which needs **`/dev/
 Earlier versions used a root helper, temporary Linux accounts, Polkit rules and (on SteamOS) a system extension. To move to the sandbox model, run once from a checkout of this repository:
 
 ```bash
-sudo ./scripts/migrate-from-helper.sh                # dry run: lists the old players and their size
-sudo ./scripts/migrate-from-helper.sh --yes          # import homes and remove the old helper
+sudo ./scripts/migrate-from-helper.sh --flatpak          # dry run: lists the old players and their size
+sudo ./scripts/migrate-from-helper.sh --flatpak --yes    # import homes and remove the old helper
+# Native tarball install instead of the Flatpak: omit --flatpak.
 ```
 
 Options: `--user DESKTOP_USER` (defaults to `$SUDO_USER`), `--flatpak` (import into the Flatpak's data directory instead of `~/.local/share/couchplay/players`), `--yes` (actually do it), `--help`. The script copies each old player's home (without `.cache`) into the player store, removes the helper service, Polkit/D-Bus/PipeWire files and the SteamOS system extension, and leaves the old Linux accounts and `/var/lib/couchplay` for you to delete with the `userdel -r` / `rm -rf` commands it prints.
@@ -227,7 +228,7 @@ CouchPlay checks GitHub for a newer **stable** release when it starts (turn this
 ## Troubleshooting
 
 - **Only the first instance starts, with a window-positioning timeout.** This is a KWin window-discovery problem, not a launcher lock. Details are in [docs/session-internals.md](docs/session-internals.md#gamescope-positioning).
-- **"CouchPlay needs 'bwrap' on the host" (or dbus-run-session, gamescope).** Install the package named in the message: `bubblewrap`, `dbus`, `gamescope`. See [Host requirements](#host-requirements).
+- **"CouchPlay needs 'bwrap' on the host" (or dbus-run-session, gamescope).** Install the package named in the message: `bubblewrap`, `dbus` (`dbus-daemon` on Fedora/Bazzite), `gamescope`. See [Host requirements](#host-requirements).
 - **Ubuntu: bwrap permission denied (`bwrap: setting up uid map: Permission denied`).** Ubuntu 23.10 and newer (including 24.04) set `kernel.apparmor_restrict_unprivileged_userns=1`, which stops `bwrap` from creating the user namespace a player sandbox needs. The [Quick install](#quick-install-recommended) one-liner detects this, adds a narrow AppArmor profile for `bwrap` only and checks that it works. To do it by hand:
 
 ```bash

@@ -239,6 +239,25 @@ static void upload_to_source(struct source *s, int vid)
     }
 }
 
+// Neutral state for every control of the virtual pad, so that a vanished source
+// does not leave buttons or sticks held.
+static void release_all(void)
+{
+    static const uint16_t keys[] = {BTN_A,  BTN_B,      BTN_X,      BTN_Y,      BTN_TL,    BTN_TR,
+                                    BTN_SELECT, BTN_START, BTN_MODE, BTN_THUMBL, BTN_THUMBR};
+    static const uint16_t axes[] = {ABS_X, ABS_Y, ABS_RX, ABS_RY, ABS_Z, ABS_RZ, ABS_HAT0X, ABS_HAT0Y};
+    padmap_event ev[sizeof(keys) / sizeof(keys[0]) + sizeof(axes) / sizeof(axes[0]) + 1];
+    int n = 0;
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+        ev[n++] = (padmap_event){EV_KEY, keys[i], 0};
+    }
+    for (size_t i = 0; i < sizeof(axes) / sizeof(axes[0]); ++i) {
+        ev[n++] = (padmap_event){EV_ABS, axes[i], 0};
+    }
+    ev[n++] = (padmap_event){EV_SYN, SYN_REPORT, 0};
+    send_events(ev, n);
+}
+
 static void close_source(int idx)
 {
     struct source *s = &g_sources[idx];
@@ -246,6 +265,9 @@ static void close_source(int idx)
     close(s->fd);
     g_sources[idx] = g_sources[g_nsources - 1];
     g_nsources--;
+    if (g_nsources == 0 && g_uinput >= 0) {
+        release_all();
+    }
     update_chord();
 }
 
@@ -268,7 +290,12 @@ static void attach_source(const char *path)
         say("error attach %s too-many-sources", path);
         return;
     }
-    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    int writable = 1; // rumble is written back to the source, which needs a writable fd
+    int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0 && (errno == EACCES || errno == EPERM)) {
+        writable = 0;
+        fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    }
     if (fd < 0) {
         say("error attach %s %s", path, strerror(errno));
         return;
@@ -307,7 +334,7 @@ static void attach_source(const char *path)
     unsigned long evbits[(EV_MAX + 8 * sizeof(unsigned long)) / (8 * sizeof(unsigned long))];
     memset(evbits, 0, sizeof(evbits));
     if (ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits) >= 0) {
-        s->has_ff = (evbits[EV_FF / (8 * sizeof(unsigned long))] >> (EV_FF % (8 * sizeof(unsigned long)))) & 1;
+        s->has_ff = writable && ((evbits[EV_FF / (8 * sizeof(unsigned long))] >> (EV_FF % (8 * sizeof(unsigned long)))) & 1);
     }
     g_nsources++;
     for (int i = 0; i < MAX_EFFECTS; ++i) {
@@ -613,7 +640,7 @@ int main(int argc, char **argv)
                 close_source(i);
             }
         }
-        if (fds[0].revents & (POLLIN | POLLHUP)) {
+        if (fds[0].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
             if (pump_stdin(cmd, &cmd_len, &cmd_overflow) < 0) {
                 stdin_open = 0;
             }

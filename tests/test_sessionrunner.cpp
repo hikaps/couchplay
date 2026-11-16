@@ -1288,12 +1288,13 @@ void TestSessionRunner::testSunshineGamepadUniqGroupsDevices()
     Q_EMIT m_runner->m_streamManager->gamepadAnnounced(1);
 
     m_runner->onDeviceAdded(901, pad);
-    // Within 3 s the motion node shares the uniq and follows the first node without a claim.
+    // Within 3 s the motion node shares the uniq and is grouped with the first node without a claim,
+    // but only the controller node is forwarded: motion axes would otherwise drive the virtual pad's sticks.
     m_runner->m_clockOverrideMs = 12999;
     m_runner->onDeviceAdded(902, pad + QStringLiteral(" motion"));
 
     QTRY_VERIFY_WITH_TIMEOUT(attached(2, 901), 2000);
-    QTRY_VERIFY_WITH_TIMEOUT(attached(2, 902), 2000);
+    QVERIFY(!attached(2, 902));
 
     m_runner->m_streamingInstances.clear();
     m_runner->stop();
