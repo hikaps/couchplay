@@ -743,10 +743,10 @@ void SessionRunner::continueStartAfterDisplays()
         const LaunchCommand &command = m_startingSnapshot.launchCommands.at(i);
         QStringList gameCommand = QStringList{command.program} + command.arguments;
         if (m_startingSnapshot.presets.at(i).launcherId == steamLauncherId) {
-            // Linux Steam takes the override as address:port; the matching
-            // environment variable (GamescopeInstance) points its games at it.
+            // Steam and its games read the private address from the environment
+            // (GamescopeInstance). Do not also pass -master_ipc_name_override on
+            // Steam's command line: Halo Infinite crashes at its Xbox sign-in with it.
             const QString address = QStringLiteral("127.0.0.1:%1").arg(steamIpcPorts.at(nextSteamIpcPort++));
-            gameCommand << QStringLiteral("-master_ipc_name_override") << address;
             config[QStringLiteral("steamIpcAddress")] = address;
         }
         config[QStringLiteral("gameCommand")] = QVariant::fromValue(gameCommand);

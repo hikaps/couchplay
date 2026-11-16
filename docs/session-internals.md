@@ -78,7 +78,7 @@ Profiles store the application selection, not a copied directory list. Legacy di
 
 Launch requests support desktop integration (`XDG_CURRENT_DESKTOP`) and per-instance audio routing (`PULSE_SINK`); identity, runtime-directory, and audio-server environment values remain helper-owned. The game inherits the host locale (`LANG`, `LANGUAGE`, `LC_*`).
 
-Each Steam-launcher player gets a private Steam IPC address: a free loopback port chosen at session start, passed to that player's Steam as `-master_ipc_name_override 127.0.0.1:<port>` and to its games as `steam_master_ipc_name_override`. Without it, every player's Steam and games share Steam's fixed port `57343`, so games reach the desktop's (or another player's) Steam and crash in `steamclient.so` within seconds.
+Each Steam-launcher player gets a private Steam IPC address: a free loopback port chosen at session start, set as `steam_master_ipc_name_override=127.0.0.1:<port>` in the environment of that player's Steam and its games. Steam honors the variable for its own listener, so no command-line flag is needed. Without it, every player's Steam and games share Steam's fixed port `57343`, so games reach the desktop's (or another player's) Steam and crash in `steamclient.so` within seconds. CouchPlay deliberately does not pass `-master_ipc_name_override` on Steam's command line: Halo Infinite crashes at its Xbox sign-in ("Getting profile from platform") whenever Steam is started with the flag, even with a matching environment.
 
 ## Gamescope positioning
 
