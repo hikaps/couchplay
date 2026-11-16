@@ -561,6 +561,15 @@ bool InstanceBootstrapIntegrationTest::createFixtureUsers(QString *error)
             m_players[i - 1] = account;
         }
         const QString runtime = QStringLiteral("/run/user/%1").arg(account.uid);
+        if (i > 0) {
+            // The helper starts a player's session manager before every launch, so a
+            // hand-made runtime directory would be mounted over. Use the real manager.
+            if (!runCommand(QStringLiteral("systemctl"),
+                            {QStringLiteral("start"), QStringLiteral("user@%1.service").arg(account.uid)}, error)) {
+                return false;
+            }
+            continue;
+        }
         if (!QDir().mkpath(runtime)) {
             if (error) *error = QStringLiteral("Cannot create fixture user runtime directory");
             return false;
@@ -890,6 +899,10 @@ void InstanceBootstrapIntegrationTest::cleanupTestCase()
     for (qsizetype i = 0; i < usernames.size(); ++i) {
         if (!m_createdUsers.contains(usernames.at(i))) {
             continue;
+        }
+        if (i > 0) {
+            QProcess::execute(QStringLiteral("systemctl"),
+                              {QStringLiteral("stop"), QStringLiteral("user@%1.service").arg(uids.at(i))});
         }
         QProcess::execute(QStringLiteral("userdel"), {usernames.at(i)});
         QFile::remove(declaredHomes.at(i));
