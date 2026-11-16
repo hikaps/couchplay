@@ -1260,7 +1260,12 @@ void SteamConfigManager::mirrorCompatToolMapping(const QString &username, const 
     const QSet<QString> hostOnlyTools = hostCustomToolNames(m_steamPaths.steamRoot);
     SteamCompatToolMapping::Changes changes;
     for (const QString &appId : sharedAppIds) {
-        const auto tool = hostMapping->constFind(appId);
+        // Games without their own entry use the desktop's global default tool ("0"), which Steam
+        // does not apply to a player's account on its own
+        auto tool = hostMapping->constFind(appId);
+        if (tool == hostMapping->cend()) {
+            tool = hostMapping->constFind(QStringLiteral("0"));
+        }
         if (tool == hostMapping->cend()) {
             changes.insert(appId, std::nullopt);
         } else if (hostOnlyTools.contains(tool->name)) {
