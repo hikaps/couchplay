@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 CouchPlay Contributors
 #
-# CouchPlay User-space Non-Root Updater for SteamOS
+# CouchPlay Local Flatpak Updater (SteamOS and other distros)
 #
-# Rebuilds the Flatpak and updates the systemd-sysext raw image from local source.
-# Runs completely in user-space without requiring root.
-# Provides instructions/commands for the user/AI to apply system configurations.
+# Rebuilds and installs the Flatpak from the local source tree.
+# Runs completely in user-space: no root, no sysext, no privileged commands.
 #
 # Usage:
 #   ./scripts/update-nonroot.sh
@@ -24,9 +23,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Determine target directories
-HOME_DIR="${HOME:-/home/deck}"
-RAW_IMAGE_PATH="${HOME_DIR}/.couchplay.steamos.raw"
+# (no host paths needed)
 
 # =============================================================================
 # Output Functions
@@ -63,14 +60,7 @@ check_dependencies() {
         missing_deps+=("flatpak-builder")
     fi
     
-    if ! command -v unsquashfs &>/dev/null; then
-        missing_deps+=("unsquashfs")
-    fi
-    
-    if ! command -v mksquashfs &>/dev/null; then
-        missing_deps+=("mksquashfs")
-    fi
-    
+
     if ! command -v jq &>/dev/null; then
         missing_deps+=("jq")
     fi
@@ -106,50 +96,24 @@ main() {
     }
     trap cleanup EXIT
     
-    # 1. Check local built couchplay-helper binary
-    local build_helper="build/bin/couchplay-helper"
-    if [[ ! -f "$build_helper" ]]; then
-        print_error "Local built helper binary not found at ${build_helper}."
-        print_error "Please run CMake build first: cmake --build build"
-        exit 1
-    fi
-
-    local build_vdisplay="build/bin/couchplay-vdisplay"
-    if [[ ! -f "$build_vdisplay" ]]; then
-        print_error "Local built virtual display binary not found at ${build_vdisplay}."
-        print_error "Please run CMake build first: cmake --build build"
-        exit 1
-    fi
-    
-    # 2. Build & Install Flatpak application locally from directory
+    # Build & install the Flatpak locally from the working tree (bundles couchplay-padfwd / couchplay-vdisplay)
     print_info "Ensuring KDE SDK and Platform 6.10 are installed..."
     flatpak install --user --noninteractive -y flathub org.kde.Sdk/x86_64/6.10 org.kde.Platform/x86_64/6.10
-    
+
     print_info "Rebuilding Flatpak application locally from source..."
-    # Rewrite the couchplay git source to a local dir (jq targets it by URL, leaving polkit/polkit-qt untouched).
+    # Rewrite the couchplay git source to a local dir (jq targets it by URL, leaving other sources untouched).
     local manifest_copy="${TEMP_DIR}/io.github.hikaps.couchplay.json"
     jq '(.. | objects | select(.type? == "git" and ((.url? // "") | test("hikaps/couchplay")))) |= {"type": "dir", "path": "."}' \
         io.github.hikaps.couchplay.json > "$manifest_copy"
-    
+
     flatpak-builder --user --install --force-clean --install-deps-from=flathub "${TEMP_DIR}/build-dir" "$manifest_copy"
     
-    # 3. Build a fresh system extension raw image
-    print_info "Building fresh system extension raw image..."
-    ./scripts/build-sysext.sh "$RAW_IMAGE_PATH" "$build_helper"
-    
-
-    
     echo ""
     print_info "=========================================================="
-    print_info "CouchPlay local user-space files updated successfully!"
+    print_info "CouchPlay Flatpak rebuilt and installed successfully!"
     print_info "=========================================================="
     echo ""
-    echo "To apply the system extension update and reload the helper service,"
-    echo "please run the following commands (requires root/sudo access):"
-    echo ""
-    echo -e "${YELLOW}  sudo systemd-sysext refresh${NC}"
-    echo -e "${YELLOW}  sudo systemctl daemon-reload${NC}"
-    echo -e "${YELLOW}  sudo systemctl restart couchplay-helper.service${NC}"
+    echo "Run it with:  flatpak run io.github.hikaps.couchplay"
     echo ""
 }
 

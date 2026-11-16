@@ -91,7 +91,7 @@ Kirigami.Dialog {
         
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            text: i18nc("@info", "Access original folder (ACL) grants read/traverse access at the source path, not in player HOME. Copy replaces the entire player directory on every launch, discarding player edits and player-only files; Player data staging is applied afterwards. Bind preserves source permissions. Bind and Overlay views are session-only; Overlay retains private edits and requires filesystem ownership-mapping support. Application changes apply to saved profiles on their next launch.")
+            text: i18nc("@info", "Access original folder (read-only) shows the source path unchanged inside the player's sandbox, without copying it. Copy replaces the entire player directory on every launch, discarding player edits and player-only files; Player data staging is applied afterwards. Bind shares the source read-write at the same HOME path. Bind and Overlay views are session-only; Overlay keeps edits private to the player. Application changes apply to saved profiles on their next launch.")
             type: Kirigami.MessageType.Information
             visible: true
         }
@@ -147,7 +147,7 @@ Kirigami.Dialog {
 
                     Controls.ComboBox {
                         model: [
-                            { value: "acl", text: i18nc("@item:inlistbox", "Access original folder (ACL)") },
+                            { value: "acl", text: i18nc("@item:inlistbox", "Access original folder (read-only)") },
                             { value: "copy", text: i18nc("@item:inlistbox", "Copy files") },
                             { value: "overlay", text: i18nc("@item:inlistbox", "Per-user overlay (session)") },
                             { value: "bind", text: i18nc("@item:inlistbox", "Bind at same HOME path (session)") }
@@ -200,7 +200,7 @@ Kirigami.Dialog {
             const resolvedPath = root.presetManager.resolveHostPath(path)
             if (resolvedPath === "") {
                 applicationWindow().showPassiveNotification(
-                    i18nc("@info", "Could not resolve the selected directory for the host helper"), "long")
+                    i18nc("@info", "Could not resolve the selected directory on the host"), "long")
                 return
             }
             path = resolvedPath

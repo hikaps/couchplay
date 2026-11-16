@@ -1,72 +1,70 @@
 # Session internals
 
-Implementation details for how CouchPlay prepares and launches player instances. For everyday usage see the [README](../README.md); for the privileged helper see [helper-internals.md](helper-internals.md).
+Implementation details for how CouchPlay prepares and launches player instances. For everyday usage see the [README](../README.md).
 
-## Helper authorization
+## Sandbox model
 
-Normal session operations use the shared Polkit `manage-session` action. Its policy lets an active local session proceed without a password, because the prompt would open behind the Gamescope windows (for example when stopping a session) and cannot be answered in Game Mode. Callers are still limited to the `wheel` and `games` groups by the D-Bus policy. Remote and inactive sessions still need an administrator, and an administrator can require a password again with a Polkit rules file. Account creation, deletion, and explicit linger changes keep their separate actions, which still ask for a password.
+CouchPlay is rootless. A player is a directory (`players/<name>/home`, mode 0700) under `~/.local/share/couchplay/players` (under Flatpak: `AppDataLocation/players`). Each instance runs as the desktop user inside `bwrap → dbus-run-session → gamescope → game`:
 
-Managed users reload automatically when the helper is attached or becomes available; opening CouchPlay does not require a manual user refresh.
+- private HOME (the player's `home` directory), private `/tmp`, and a private session bus (the host bus socket is masked, so `flatpak-spawn` escapes are blocked);
+- the host network (LAN, local and online play between players work as before) and a private PID namespace (stopping gamescope tears down everything);
+- a fresh `/dev` with only GPU, audio and fuse nodes plus that player's virtual pad; `/dev/uinput` and `hidraw` nodes are not visible.
+
+Controllers: `couchplay-padfwd` creates one virtual Xbox 360 pad per player and forwards the assigned physical pads to it (with rumble). The virtual pad survives reconnects. It needs a user-writable `/dev/uinput`. `couchplay-vdisplay` and `couchplay-padfwd` run on the host; under Flatpak they run straight from the Flatpak's app path.
+
+Host requirements: `bubblewrap`, `dbus` (`dbus-run-session`), `gamescope`. `SessionRunner` refuses to start with a clear message when one is missing. Managed players are listed straight from the player directory; no refresh is needed.
 
 ## Home alias, Heroic and launcher access
 
 **Home alias**
 
-- On immutable hosts such as Bazzite, Heroic configuration and shortcut copies resolve the system `/home` alias before secure copying.
-- Symlinked source files and directories inside the caller's home remain rejected.
+- On immutable hosts such as Bazzite, Heroic configuration and shortcut copies resolve the system `/home` alias before copying.
+- Symlinks are recreated as symlinks and never followed when copying.
 
 **Launcher access**
 
-- The Flatpak shares `~/.local/share/applications` read/write, so newly generated Heroic desktop shortcuts are visible to the host helper. It does not require access to the entire home directory.
+- The Flatpak shares `~/.local/share/applications` read/write, so newly generated Heroic desktop shortcuts are visible on the host. It does not require access to the entire home directory.
 - Launcher availability is checked on the host, not against executable names inside the GUI sandbox.
 
 **Heroic game access**
 
 - Heroic sessions resolve current registered game roots and executable-parent directories.
-- They get bounded directory traversal, without copying account credentials or per-player game settings.
-- On atomic hosts, the helper admits the canonical /var/mnt storage alias only when the system /mnt path proves equivalent.
+- Those under your home are bound read-only; others are already visible. Account credentials and per-player game settings are not copied.
+- On atomic hosts, the canonical /var/mnt storage alias is admitted only when the system /mnt path proves equivalent.
 
 ## Shared application directories
 
-**Native application selection** adds bounded executable and working directories as read-only ACL shares.
+**Native application selection** adds bounded executable and working directories as read-only binds when they lie under your home (anything outside home is already visible in the sandbox).
 
 - Session startup applies the selected application's current shared-directory settings to each player.
 - Host discovery supports Flatpak installations.
 - CouchPlay does not automatically share whole home folders, collection roots, credentials/configuration trees, or Flatpak runtime files.
 - Sensitive home trees and canonical targets are excluded from recursive sharing.
-- Application directories under /opt and /srv are supported without granting access to those roots.
 
 Application directory settings belong to the application, not a saved player profile. Editing them applies to all profiles on their next launch; a running session keeps the values captured when it started.
 
 ## Private temporary directories
 
-Player settings are shown directly in New Session, without a separate Advanced section.
-
-**Private temporary directories** give that player's Gamescope/launcher/game processes separate /tmp and /var/tmp storage.
-
-- The option defaults off and is saved per player in the profile.
-- Temporary files are removed when the instance stops.
-- It does not affect shared-directory settings or auxiliary Sunshine configuration.
-- Install the matching GUI and host helper together; the launch D-Bus contract includes this option.
+`/tmp` is always private per player (a fresh tmpfs inside the sandbox) and discarded when the instance stops. The former per-profile option was removed; old `privateTemporaryDirectories` keys are dropped when a profile is saved.
 
 ## Directory modes
 
 | Mode | Behaviour |
 | --- | --- |
-| **Access original folder (ACL)** | Grants read/traverse permission at the source path; it does not project files into player HOME. |
-| **Copy files** | Replaces the entire mapped player directory on every launch, discarding player edits and player-only files; Player data staging is merged before atomic publication and wins conflicts. A copy is published atomically; failure or cancellation before publication retains the previous directory. |
-| **Bind** | Exposes the source only inside the player's unit namespace and preserves source permissions. |
-| **Overlay** | Provides a persistent private writable layer inside that namespace while leaving the source unchanged. Filesystem/kernel ownership-mapping support is required for Overlay; unsupported sources produce an explicit error recommending Copy files. |
+| **Access original folder (read-only)** (stored as `acl`) | Read-only bind of the source at the same path when it lies under your home; paths outside home are already visible. It does not project files into player HOME. |
+| **Copy files** | Replaces the mapped directory in the player's home on every launch, discarding player edits and player-only files; Player data staging is merged before the swap and wins conflicts. The copy is built next to the target and renamed into place, so a failed copy leaves the previous directory intact. |
+| **Bind** | Read-write bind of the source inside the player's sandbox. |
+| **Overlay** | Persistent private writable layer (`players/<name>/layers/<key>/{upper,work}`) over the source inside the sandbox; the source stays unchanged. Staged Player data is copied into the upper layer before launch. |
 
 ## Player data
 
-**Player data** supports configured Copy/Overlay directories that receive staged files. ACL/bind shares and Steam library sharing do not qualify.
+**Player data** supports configured Copy/Overlay directories that receive staged files. Read-only access, bind shares and Steam library sharing do not qualify.
 
 - The button opens a staging folder for the selected launcher and player, including under Flatpak.
 - Each eligible directory has a generated subfolder: place files there with their relative paths preserved.
 - Session startup applies staged files as part of directory preparation.
 - Loose files at the staging root are ignored.
-- This folder is not the player's Linux home or live /tmp.
+- This folder is not the player's home or live /tmp.
 
 Automation hooks run once before/after the whole session, not before each instance.
 
@@ -76,9 +74,9 @@ Profiles store the application selection, not a copied directory list. Legacy di
 
 ## Launch environment
 
-Launch requests support desktop integration (`XDG_CURRENT_DESKTOP`) and per-instance audio routing (`PULSE_SINK`); identity, runtime-directory, and audio-server environment values remain helper-owned. The game inherits the host locale (`LANG`, `LANGUAGE`, `LC_*`).
+Launch requests support desktop integration (`XDG_CURRENT_DESKTOP`) and per-instance audio routing (`PULSE_SINK`). The game inherits the host locale (`LANG`, `LANGUAGE`, `LC_*`). Each instance's environment also carries `COUCHPLAY_SANDBOX_ID`, a random token used to find the gamescope PID.
 
-Each Steam-launcher player gets a private Steam IPC address: a free loopback port chosen at session start, set as `steam_master_ipc_name_override=127.0.0.1:<port>` in the environment of that player's Steam and its games. Steam honors the variable for its own listener, so no command-line flag is needed. Without it, every player's Steam and games share Steam's fixed port `57343`, so games reach the desktop's (or another player's) Steam and crash in `steamclient.so` within seconds. CouchPlay deliberately does not pass `-master_ipc_name_override` on Steam's command line: Halo Infinite crashes at its Xbox sign-in ("Getting profile from platform") whenever Steam is started with the flag, even with a matching environment.
+Players share the host network, so LAN, direct-IP, local and online lobbies work between them. Steam's fixed IPC port `57343` would collide, so each Steam-launcher player gets a private Steam IPC address: a free loopback port that `SessionRunner` reserves at session start and sets as `steam_master_ipc_name_override=127.0.0.1:<port>` in the environment of that player's Steam and its games. Steam honors the variable for its own listener, so no command-line flag is needed. Without it, every player's Steam and games share port `57343`, so games reach the desktop's (or another player's) Steam and crash in `steamclient.so` within seconds. CouchPlay deliberately does not pass `-master_ipc_name_override` on Steam's command line: Halo Infinite crashes at its Xbox sign-in ("Getting profile from platform") whenever Steam is started with the flag, even with a matching environment. (A running Steam shows the flag in its own `ps` entry because it re-launches itself with it.)
 
 ## Gamescope positioning
 
@@ -92,20 +90,20 @@ If only the first instance starts and CouchPlay reports a window-positioning tim
 
 ## Streaming internals
 
-Streaming runs outside the helper: `couchplay-vdisplay` holds each KWin virtual output and Sunshine runs as the desktop user capturing that output with `capture = kwin`. Both are stopped when the session ends.
+Streaming runs on the host: `couchplay-vdisplay` holds each KWin virtual output and Sunshine runs as the desktop user capturing that output with `capture = kwin`. Both are stopped when the session ends.
 
 ### Moonlight pairing
 
 Pairing steps are in the README: [Streaming a Player to Moonlight](../README.md#streaming-a-player-to-moonlight). Implementation details:
 
-- **Where it lives:** pairing is per gaming user, on the **Users page**. Each user's card shows the address to add in Moonlight (host address and a stable port that CouchPlay remembers for that user), the clients already paired, and "Pair Moonlight client…".
-- **Later sessions:** because pairing is stored per gaming user, the client reconnects to that player's stream.
-- **Deleting a user** also deletes its pairing state.
+- **Where it lives:** pairing is per player, on the **Players page**. Each player's card shows the address to add in Moonlight (host address and a stable port that CouchPlay remembers for that player), the clients already paired, and "Pair Moonlight client…".
+- **Later sessions:** because pairing is stored per player, the client reconnects to that player's stream.
+- **Deleting a player** also deletes its pairing state (the Sunshine state directory).
 - **No session running:** "Pair Moonlight client…" starts a temporary Sunshine on a short-lived virtual display so you can enter the PIN Moonlight displays. Closing the pairing sheet stops it again.
 - **Session running:** pairing runs against that player's live stream once the stream is ready.
 - **Unpair:** "Unpair" next to a client removes it the same way.
-- **Session page:** it only shows each player's pairing status and a "Manage on Users page" link.
-- **Sunshine access:** CouchPlay talks to Sunshine's local web API and trusts only the certificate stored in the user's Sunshine state directory.
+- **Session page:** it only shows each player's pairing status and a "Manage on Players page" link.
+- **Sunshine access:** CouchPlay talks to Sunshine's local web API and trusts only the certificate stored in the player's Sunshine state directory.
 
 ## Add to Steam shortcuts
 
@@ -123,7 +121,7 @@ Pairing steps are in the README: [Streaming a Player to Moonlight](../README.md#
 
 ## Controller exit chord
 
-The Start + Select exit chord works with standard gamepads (Xbox, PlayStation, generic HID) and with the Valve Steam Controller, even when Steam is active and holding the evdev node, since CouchPlay reads Steam Controller input directly from the raw HID (`/dev/hidrawN`) endpoint.
+The Start + Select exit chord is detected by `couchplay-padfwd` on the physical sources attached to a player's virtual pad (held for 2 s). The Valve Steam Controller works through its kernel `hid-steam` evdev gamepad node; raw `/dev/hidraw*` access is not available inside the sandbox.
 
 ## Profile deletion UI
 

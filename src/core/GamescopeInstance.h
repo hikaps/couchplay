@@ -3,20 +3,26 @@
 
 #pragma once
 
+#include "SandboxCommand.h"
+
 #include <QList>
 #include <QObject>
+#include <QProcess>
 #include <qqmlintegration.h>
 #include <QRect>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 #include <QVariantMap>
-#include <QVariantList>
 
-class CouchPlayHelperClient;
-struct InstanceConfig;
+#include <memory>
 
 /**
- * @brief Manages a single gamescope instance
+ * @brief Manages a single gamescope instance running inside a rootless bwrap sandbox
+ *
+ * Launches `bwrap → dbus-run-session → gamescope` as the desktop user (through
+ * HostProcess, so it also works from Flatpak) and finds gamescope's host PID by the
+ * COUCHPLAY_SANDBOX_ID token in its environment.
  */
 class GamescopeInstance : public QObject
 {
@@ -27,17 +33,17 @@ class GamescopeInstance : public QObject
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(qint64 pid READ pid NOTIFY runningChanged)
     Q_PROPERTY(qint64 gamescopePid READ gamescopePid NOTIFY gamescopePidChanged)
-    Q_PROPERTY(QString username READ username NOTIFY configChanged)
+    Q_PROPERTY(QString player READ player NOTIFY configChanged)
     Q_PROPERTY(QRect windowGeometry READ windowGeometry NOTIFY configChanged)
 
 public:
     explicit GamescopeInstance(QObject *parent = nullptr);
     ~GamescopeInstance() override;
 
-    Q_INVOKABLE bool start(const QVariantMap &config, int index, const QVariantList &directoryPreparations);
+    virtual bool start(const QVariantMap &config, int index, const QList<SandboxMount> &mounts);
 
-    Q_INVOKABLE void stop(int timeoutMs = 5000);
-    Q_INVOKABLE void kill();
+    virtual void stop(int timeoutMs = 5000);
+    virtual void kill();
 
     bool isRunning() const;
 
@@ -45,9 +51,10 @@ public:
     {
         return m_index;
     }
+    /** PID of the launcher process (bwrap, or flatpak-spawn); 0 when not launched. */
     qint64 pid() const
     {
-        return m_helperPid;
+        return m_launched ? m_process.processId() : 0;
     }
     qint64 gamescopePid() const
     {
@@ -57,18 +64,18 @@ public:
     {
         return m_status;
     }
-    QString username() const
+    QString player() const
     {
-        return m_username;
+        return m_player;
     }
     QRect windowGeometry() const
     {
         return m_windowGeometry;
     }
-    void setHelperClient(CouchPlayHelperClient *client);
 
     static QStringList buildGamescopeArgs(const QVariantMap &config);
 
+    /** "KEY=VALUE" entries for the sandbox environment. */
     static QStringList buildEnvironment(const QVariantMap &config);
 
 Q_SIGNALS:
@@ -81,23 +88,26 @@ Q_SIGNALS:
     void errorOccurred(const QString &message);
 
 private Q_SLOTS:
-    void onHelperInstanceReady(const QString &username, qint64 pid);
-    void onHelperInstanceStopped(const QString &username, qint64 pid, const QString &reason);
+    void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void pollForGamescope();
 
 private:
     void setStatus(const QString &status);
+    void signalHost(const QString &signal);
+    void finishStop(const QString &status);
+    void resetLaunchState();
 
     int m_index = -1;
     QString m_status;
-    QString m_username;
+    QString m_player;
     QRect m_windowGeometry;
-    qint64 m_helperPid = 0;
-    CouchPlayHelperClient *m_helperClient = nullptr;
+    QProcess m_process;
+    std::unique_ptr<QProcess> m_scan;
+    QTimer m_pollTimer;
+    QString m_token;
+    QByteArray m_stderrTail;
     qint64 m_gamescopePid = 0;
-    QString m_pendingReadyUsername;
-    qint64 m_pendingReadyPid = 0;
-    bool m_launchRequestPending = false;
-    QString m_pendingStoppedUsername;
-    qint64 m_pendingStoppedPid = 0;
-    QString m_pendingStopReason;
+    qint64 m_startDeadlineMs = 0;
+    bool m_launched = false;
+    bool m_stopping = false;
 };

@@ -17,7 +17,6 @@
         "--talk-name=org.freedesktop.Flatpak",
         "--own-name=com.github.CouchPlay",
         "--system-talk-name=org.freedesktop.login1",
-        "--system-talk-name=io.github.hikaps.CouchPlayHelper",
         "--filesystem=~/.local/share/applications:rw",
         "--filesystem=~/.local/share/Steam:ro",
         "--filesystem=~/.local/share/Steam/userdata:rw",
@@ -33,82 +32,9 @@
         "--filesystem=~/.var/app/com.heroicgameslauncher.hgl/config/heroic:ro",
         "--filesystem=~/.config/heroic:ro",
         "--filesystem=~/.config/legendary:ro",
-        "--filesystem=~/Games/Heroic:ro",
-        "--persist=.local/share/couchplay"
+        "--filesystem=~/Games/Heroic:ro"
     ],
     "modules": [
-        {
-            "name": "systemd-pc-stub",
-            "buildsystem": "simple",
-            "build-commands": [
-                "mkdir -p ${FLATPAK_DEST}/lib/pkgconfig",
-                "printf 'Name: systemd\\nDescription: systemd stub for flatpak build\\nVersion: 257\\nsystemdsystemunitdir=/app/lib/systemd/system\\nsysusers_dir=/app/lib/sysusers.d\\n' > ${FLATPAK_DEST}/lib/pkgconfig/systemd.pc"
-            ]
-        },
-        {
-            "name": "polkit",
-            "buildsystem": "meson",
-            "config-opts": [
-                "-Dlibdir=lib",
-                "-Dauthfw=shadow",
-                "-Dsession_tracking=libsystemd-login",
-                "-Djs_engine=duktape",
-                "-Dintrospection=false"
-            ],
-            "sources": [
-                {
-                    "type": "git",
-                    "url": "https://gitlab.freedesktop.org/polkit/polkit.git",
-                    "tag": "124"
-                }
-            ],
-            "cleanup": ["/include", "/lib/pkgconfig", "*.a"]
-        },
-        {
-            "name": "polkit-qt-1",
-            "buildsystem": "cmake-ninja",
-            "config-opts": [
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
-            ],
-            "sources": [
-                {
-                    "type": "git",
-                    "url": "https://github.com/KDE/polkit-qt-1.git",
-                    "commit": "fbb50e964bcb260d3b716195ef80dd100b87951b"
-                }
-            ],
-            "cleanup": [
-                "/lib/pkgconfig",
-                "/include",
-                "*.a",
-                "*.la"
-            ]
-        },
-        {
-            "name": "libacl",
-            "buildsystem": "autotools",
-            "config-opts": ["--disable-static"],
-            "sources": [
-                {
-                    "type": "archive",
-                    "url": "https://download.savannah.nongnu.org/releases/acl/acl-2.3.2.tar.xz",
-                    "sha256": "97203a72cae99ab89a067fe2210c1cbf052bc492b479eca7d226d9830883b0bd"
-                }
-            ]
-        },
-        {
-            "name": "patchelf",
-            "buildsystem": "autotools",
-            "sources": [
-                {
-                    "type": "archive",
-                    "url": "https://github.com/NixOS/patchelf/releases/download/0.19.1/patchelf-0.19.1.tar.gz",
-                    "sha256": "491108728f120ce05b539934b41a750235031a6df8abc6b47e57aff7de15094d"
-                }
-            ],
-            "cleanup": ["*"]
-        },
         {
             "name": "couchplay",
             "buildsystem": "cmake-ninja",
@@ -124,18 +50,11 @@
                 }
             ],
             "post-install": [
-                "install -Dm755 ${FLATPAK_DEST}/lib/libexec/couchplay-helper ${FLATPAK_DEST}/libexec/couchplay-helper",
                 "install -Dm755 ${FLATPAK_DEST}/lib/libexec/couchplay-vdisplay ${FLATPAK_DEST}/libexec/couchplay-vdisplay",
-                "install -Dm755 scripts/install-helper.sh ${FLATPAK_DEST}/share/couchplay/install-helper.sh",
-                "install -Dm644 data/dbus/io.github.hikaps.CouchPlayHelper.conf ${FLATPAK_DEST}/share/couchplay/data/dbus/io.github.hikaps.CouchPlayHelper.conf",
-                "install -Dm644 data/dbus/io.github.hikaps.CouchPlayHelper.service ${FLATPAK_DEST}/share/couchplay/data/dbus/io.github.hikaps.CouchPlayHelper.service",
-                "install -Dm644 data/dbus/couchplay-helper.service ${FLATPAK_DEST}/share/couchplay/data/dbus/couchplay-helper.service",
-                "install -Dm644 data/polkit/io.github.hikaps.couchplay.policy ${FLATPAK_DEST}/share/couchplay/data/polkit/io.github.hikaps.couchplay.policy",
+                "install -Dm755 ${FLATPAK_DEST}/lib/libexec/couchplay-padfwd ${FLATPAK_DEST}/libexec/couchplay-padfwd",
                 "install -Dm644 data/io.github.hikaps.couchplay.desktop ${FLATPAK_DEST}/share/applications/io.github.hikaps.couchplay.desktop",
                 "install -Dm644 data/io.github.hikaps.couchplay.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.hikaps.couchplay.metainfo.xml",
-                "install -Dm644 data/icons/io.github.hikaps.couchplay.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.hikaps.couchplay.png",
-                "chmod +x scripts/bundle-libs.sh",
-                "./scripts/bundle-libs.sh ${FLATPAK_DEST}/libexec/couchplay-helper lib/couchplay"
+                "install -Dm644 data/icons/io.github.hikaps.couchplay.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.hikaps.couchplay.png"
             ],
             "cleanup": [
                 "/lib/pkgconfig",

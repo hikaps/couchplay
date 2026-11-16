@@ -7,10 +7,12 @@ add_library(couchplay_core STATIC
     core/CommandVerifier.h
     core/Logging.cpp
     core/Logging.h
-    ../helper/DirectoryPlan.cpp
-    ../helper/DirectoryPlan.h
-    ../helper/SteamCompatToolMapping.cpp
-    ../helper/SteamCompatToolMapping.h
+    core/PlayerFiles.cpp
+    core/PlayerFiles.h
+    core/SandboxCommand.cpp
+    core/SandboxCommand.h
+    core/SteamCompatToolMapping.cpp
+    core/SteamCompatToolMapping.h
 )
 
 # Link libraries for core library
@@ -36,7 +38,6 @@ target_link_libraries(couchplay_core PUBLIC
 target_include_directories(couchplay_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/dbus
     ${CMAKE_CURRENT_BINARY_DIR}
     ${PROJECT_BINARY_DIR}
 )
@@ -60,7 +61,7 @@ ecm_add_qml_module(couchplay
         qml/pages/SessionSetupPage.qml
         qml/pages/DeviceAssignmentPage.qml
         qml/pages/ProfilesPage.qml
-        qml/pages/UsersPage.qml
+        qml/pages/PlayersPage.qml
         qml/components/GameSelector.qml
         qml/pages/SettingsPage.qml
         qml/components/PresetSelector.qml
@@ -69,7 +70,6 @@ ecm_add_qml_module(couchplay
         qml/components/MoonlightPairingSheet.qml
         qml/components/ActionCard.qml
         qml/components/dialogs/ResetSettingsDialog.qml
-        qml/components/dialogs/InstallHelperDialog.qml
         qml/components/dialogs/EditPresetDialog.qml
         qml/components/dialogs/DeletePresetDialog.qml
         qml/components/dialogs/AddPresetDialog.qml
@@ -93,8 +93,6 @@ target_sources(couchplay PRIVATE
     core/SessionRunner.h
     core/GamescopeInstance.cpp
     core/GamescopeInstance.h
-    core/UserManager.cpp
-    core/UserManager.h
     core/MonitorManager.cpp
     core/MonitorManager.h
     core/AudioManager.cpp
@@ -132,8 +130,10 @@ target_sources(couchplay PRIVATE
     core/StreamAudio.h
     core/UpdateChecker.cpp
     core/UpdateChecker.h
-    dbus/CouchPlayHelperClient.cpp
-    dbus/CouchPlayHelperClient.h
+    core/PlayerStore.cpp
+    core/PlayerStore.h
+    core/PadForwarder.cpp
+    core/PadForwarder.h
 )
 
 # Link against core library

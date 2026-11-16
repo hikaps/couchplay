@@ -39,6 +39,9 @@ public:
     /** Whether @p path is an executable file on the host. */
     static bool hostExecutableExists(const QString &path);
 
+    /** Absolute path of @p name on the host's PATH (e.g. "bwrap"), or an empty string when absent. */
+    static QString hostFindExecutable(const QString &name);
+
     /** Forget cached lookups (tests). */
     static void clearCache();
 };

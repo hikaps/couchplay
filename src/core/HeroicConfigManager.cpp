@@ -2,14 +2,14 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "HeroicConfigManager.h"
-#include "../dbus/CouchPlayHelperClient.h"
 #include "Logging.h"
-#include "UserLookup.h"
+#include "PlayerStore.h"
 
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -113,13 +113,6 @@ void HeroicConfigManager::detectHeroicPaths()
     Q_EMIT heroicPathsChanged();
 }
 
-void HeroicConfigManager::setHelperClient(CouchPlayHelperClient *client)
-{
-    if (m_helperClient != client) {
-        m_helperClient = client;
-        Q_EMIT helperClientChanged();
-    }
-}
 
 void HeroicConfigManager::setSyncShortcutsEnabled(bool enabled)
 {
@@ -187,19 +180,37 @@ int HeroicConfigManager::generateShortcuts()
     return generated;
 }
 
-bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
+// Copies @p sourcePath to @p targetPath with QSaveFile, creating missing parent directories.
+static bool copyFileInto(const QString &sourcePath, const QString &targetPath)
 {
-    qDebug() << "HeroicConfigManager: Syncing shortcuts to" << targetUsername;
-
-    if (!m_helperClient || !m_helperClient->isAvailable()) {
-        qWarning() << "HeroicConfigManager: Helper not available, cannot sync shortcuts";
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Helper not available"));
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly)) {
         return false;
     }
+    const QByteArray data = source.readAll();
+    source.close();
+
+    if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) {
+        return false;
+    }
+    QSaveFile target(targetPath);
+    if (!target.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    if (target.write(data) != data.size()) {
+        target.cancelWriting();
+        return false;
+    }
+    return target.commit();
+}
+
+bool HeroicConfigManager::syncShortcutsToUser(const QString &player)
+{
+    qDebug() << "HeroicConfigManager: Syncing shortcuts to" << player;
 
     if (!m_heroicPaths.valid) {
         qWarning() << "HeroicConfigManager: Heroic not detected, cannot sync shortcuts";
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Heroic not detected"));
+        Q_EMIT syncFailed(player, QStringLiteral("Heroic not detected"));
         return false;
     }
 
@@ -224,24 +235,17 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
         return true;
     }
 
-    const UserIdentity id = resolveUserIdentity(targetUsername, m_helperClient);
-    if (!id.valid) {
-        qWarning() << "HeroicConfigManager: User not found:" << targetUsername;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("User not found"));
+    const QString targetHome = PlayerStore::homeDir(player);
+    if (targetHome.isEmpty()) {
+        qWarning() << "HeroicConfigManager: Invalid player:" << player;
+        Q_EMIT syncFailed(player, QStringLiteral("Invalid player"));
         return false;
     }
-    QString targetHome = id.home;
-    QString targetDir = targetHome + QStringLiteral("/.local/share/applications");
+    const QString targetDir = targetHome + QStringLiteral("/.local/share/applications");
 
-    if (!targetDir.startsWith(targetHome + QLatin1Char('/'))) {
-        qWarning() << "HeroicConfigManager: Target directory" << targetDir << "is not under user's home" << targetHome;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Target path is not under user's home directory"));
-        return false;
-    }
-
-    if (!m_helperClient->createUserDirectory(targetDir, targetUsername)) {
+    if (!QDir().mkpath(targetDir)) {
         qWarning() << "HeroicConfigManager: Failed to create target directory:" << targetDir;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to create target directory"));
+        Q_EMIT syncFailed(player, QStringLiteral("Failed to create target directory"));
         return false;
     }
 
@@ -250,43 +254,37 @@ bool HeroicConfigManager::syncShortcutsToUser(const QString &targetUsername)
         QString sourcePath = sourceDir.absoluteFilePath(filename);
         QString targetPath = targetDir + QLatin1Char('/') + filename;
 
-        qDebug() << "HeroicConfigManager: Copying" << filename << "to" << targetUsername;
+        qDebug() << "HeroicConfigManager: Copying" << filename << "to" << player;
 
-        if (!m_helperClient->copyFileToUser(sourcePath, targetPath, targetUsername)) {
+        if (!copyFileInto(sourcePath, targetPath)) {
             qWarning() << "HeroicConfigManager: Failed to copy" << filename;
             allSucceeded = false;
         }
     }
 
     if (allSucceeded) {
-        Q_EMIT syncCompleted(targetUsername);
+        Q_EMIT syncCompleted(player);
     } else {
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Failed to sync some shortcuts"));
+        Q_EMIT syncFailed(player, QStringLiteral("Failed to sync some shortcuts"));
     }
 
     return allSucceeded;
 }
 
-bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
+bool HeroicConfigManager::syncConfigToUser(const QString &player)
 {
-    qDebug() << "HeroicConfigManager: Syncing library to" << targetUsername;
-
-    if (!m_helperClient || !m_helperClient->isAvailable()) {
-        qWarning() << "HeroicConfigManager: Helper not available, cannot sync config";
-        return false;
-    }
+    qDebug() << "HeroicConfigManager: Syncing library to" << player;
 
     if (!m_heroicPaths.valid) {
         qWarning() << "HeroicConfigManager: Heroic not detected, cannot sync config";
         return false;
     }
 
-    const UserIdentity id = resolveUserIdentity(targetUsername, m_helperClient);
-    if (!id.valid) {
-        qWarning() << "HeroicConfigManager: User not found:" << targetUsername;
+    const QString targetHome = PlayerStore::homeDir(player);
+    if (targetHome.isEmpty()) {
+        qWarning() << "HeroicConfigManager: Invalid player:" << player;
         return false;
     }
-    QString targetHome = id.home;
 
     QString targetHeroicRoot;
     if (m_heroicPaths.isFlatpak) {
@@ -294,23 +292,15 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
     } else {
         targetHeroicRoot = targetHome + QStringLiteral("/.config/heroic");
     }
-
-    if (!targetHeroicRoot.startsWith(targetHome + QLatin1Char('/'))) {
-        qWarning() << "HeroicConfigManager: Target heroic root" << targetHeroicRoot << "is not under user's home"
-                   << targetHome;
-        Q_EMIT syncFailed(targetUsername, QStringLiteral("Target path is not under user's home directory"));
-        return false;
-    }
     bool allSucceeded = true;
 
-    auto copyFile = [this, &targetUsername, &targetHeroicRoot, &allSucceeded](const QString &sourcePath,
-                                                               const QString &relTargetPath) {
+    auto copyFile = [&targetHeroicRoot, &allSucceeded](const QString &sourcePath, const QString &relTargetPath) {
         if (!QFile::exists(sourcePath)) {
             return;
         }
         QString targetPath = targetHeroicRoot + QLatin1Char('/') + relTargetPath;
         qDebug() << "HeroicConfigManager: Copying" << relTargetPath;
-        if (!m_helperClient->copyFileToUser(sourcePath, targetPath, targetUsername)) {
+        if (!copyFileInto(sourcePath, targetPath)) {
             qWarning() << "HeroicConfigManager: Failed to copy" << relTargetPath;
             allSucceeded = false;
         }
@@ -325,7 +315,7 @@ bool HeroicConfigManager::syncConfigToUser(const QString &targetUsername)
     copyFile(m_heroicPaths.gogInstalled, QStringLiteral("gog_store/installed.json"));
     copyFile(m_heroicPaths.nileInstalled, QStringLiteral("nile_config/installed.json"));
 
-    qDebug() << "HeroicConfigManager: Library sync completed for" << targetUsername;
+    qDebug() << "HeroicConfigManager: Library sync completed for" << player;
     return allSucceeded;
 }
 

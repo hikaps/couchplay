@@ -149,7 +149,7 @@ void TestStreamingConfig::testBackwardCompatibilityOldProfile()
     QVERIFY(loaded);
 
     QVariantMap config0 = m_sessionManager->getInstanceConfig(0);
-    QCOMPARE(config0.value(KEY("username")).toString(), QStringLiteral("player1"));
+    QCOMPARE(config0.value(KEY("player")).toString(), QStringLiteral("player1"));
     QCOMPARE(config0.value(KEY("display")).toString(), QStringLiteral("main"));
     QCOMPARE(config0.value(KEY("virtualResolution")).toString(), QStringLiteral("1920x1080"));
     QCOMPARE(config0.value(KEY("streamBitrate")).toInt(), 20000);
@@ -157,7 +157,7 @@ void TestStreamingConfig::testBackwardCompatibilityOldProfile()
     QCOMPARE(config0.value(KEY("sunshinePort")).toInt(), 47989);
 
     QVariantMap config1 = m_sessionManager->getInstanceConfig(1);
-    QCOMPARE(config1.value(KEY("username")).toString(), QStringLiteral("player2"));
+    QCOMPARE(config1.value(KEY("player")).toString(), QStringLiteral("player2"));
     QCOMPARE(config1.value(KEY("display")).toString(), QStringLiteral("main"));
 
     file.remove();

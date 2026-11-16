@@ -66,18 +66,14 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     DBusAddons
 )
 
-# PolkitQt6-1 is required for user management authorization.
-# Without it the helper silently denies all user creation/deletion at runtime.
-find_package(PolkitQt6-1 REQUIRED)
-find_path(LIBACL_INCLUDE_DIR NAMES sys/acl.h REQUIRED)
-find_library(LIBACL_LIBRARY NAMES acl REQUIRED)
 
 # Find QML modules at runtime
 ecm_find_qmlmodule(org.kde.kirigami REQUIRED)
 
 # Add subdirectories
 add_subdirectory(src)
-add_subdirectory(helper)
+add_subdirectory(tools/vdisplay)
+add_subdirectory(tools/padfwd)
 
 # Enable testing
 option(BUILD_TESTING "Build the testing tree." ON)
@@ -100,25 +96,6 @@ install(FILES data/icons/io.github.hikaps.couchplay.png
     DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/512x512/apps
 )
 
-# Install polkit policy
-install(FILES data/polkit/io.github.hikaps.couchplay.policy
-    DESTINATION ${CMAKE_INSTALL_PREFIX}/share/polkit-1/actions
-)
-
-# Install D-Bus service files
-install(FILES data/dbus/io.github.hikaps.CouchPlayHelper.service
-    DESTINATION ${CMAKE_INSTALL_PREFIX}/share/dbus-1/system-services
-)
-
-install(FILES data/dbus/io.github.hikaps.CouchPlayHelper.conf
-    DESTINATION ${CMAKE_INSTALL_PREFIX}/share/dbus-1/system.d
-)
-
-# Install PipeWire PulseAudio config
-install(FILES data/pipewire/50-couchplay.conf
-    DESTINATION ${CMAKE_INSTALL_PREFIX}/share/pipewire/pipewire-pulse.conf.d
-)
-
 # Install Game Mode launcher script
 install(PROGRAMS scripts/couchplay-gamemode.sh
     DESTINATION ${KDE_INSTALL_BINDIR}
@@ -136,8 +113,7 @@ if(CLANG_FORMAT_EXE)
     file(GLOB_RECURSE ALL_CPP_FILES
         ${CMAKE_SOURCE_DIR}/src/*.cpp
         ${CMAKE_SOURCE_DIR}/src/*.h
-        ${CMAKE_SOURCE_DIR}/helper/*.cpp
-        ${CMAKE_SOURCE_DIR}/helper/*.h
+        ${CMAKE_SOURCE_DIR}/tools/*.c
         ${CMAKE_SOURCE_DIR}/tests/*.cpp
     )
     add_custom_target(format
@@ -149,8 +125,7 @@ endif()
 if(CLANG_TIDY_EXE)
     file(GLOB_RECURSE SOURCE_CPP_FILES
         ${CMAKE_SOURCE_DIR}/src/core/*.cpp
-        ${CMAKE_SOURCE_DIR}/src/dbus/*.cpp
-        ${CMAKE_SOURCE_DIR}/helper/*.cpp
+        ${CMAKE_SOURCE_DIR}/tools/*.c
     )
     add_custom_target(tidy
         COMMAND ${CLANG_TIDY_EXE} -p ${CMAKE_BINARY_DIR} ${SOURCE_CPP_FILES}

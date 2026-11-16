@@ -24,7 +24,7 @@
 - [ ] Existing tests pass: `ctest --test-dir build --output-on-failure`
 - [ ] New tests added for new functionality (if applicable)
 - [ ] QML strings use `i18nc()` for user-visible text (if applicable)
-- [ ] D-Bus / Polkit changes documented (if applicable)
+- [ ] Sandbox / host tool (bwrap, padfwd, vdisplay) changes documented (if applicable)
 
 ## Testing
 

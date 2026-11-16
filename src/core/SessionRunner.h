@@ -18,7 +18,9 @@
 #include "LaunchTypes.h"
 #include "SessionManager.h"
 
-#include "../dbus/CouchPlayHelperClient.h"
+#include "PadForwarder.h"
+#include "PlayerStore.h"
+#include "SandboxCommand.h"
 #include "HeroicConfigManager.h"
 #include "SteamConfigManager.h"
 #include "StreamManager.h"
@@ -58,7 +60,7 @@ class SessionRunner : public QObject
     // Dependencies
     Q_PROPERTY(SessionManager *sessionManager READ sessionManager WRITE setSessionManager NOTIFY sessionManagerChanged)
     Q_PROPERTY(DeviceManager *deviceManager READ deviceManager WRITE setDeviceManager NOTIFY deviceManagerChanged)
-    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
+    Q_PROPERTY(PlayerStore *playerStore READ playerStore WRITE setPlayerStore NOTIFY playerStoreChanged)
     Q_PROPERTY(PresetManager *presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
     Q_PROPERTY(SteamConfigManager *steamConfigManager READ steamConfigManager WRITE setSteamConfigManager NOTIFY
                    steamConfigManagerChanged)
@@ -145,11 +147,20 @@ public:
     }
     void setDeviceManager(DeviceManager *manager);
 
-    CouchPlayHelperClient *helperClient() const
+    PlayerStore *playerStore() const
     {
-        return m_helperClient;
+        return m_playerStore;
     }
-    void setHelperClient(CouchPlayHelperClient *client);
+    void setPlayerStore(PlayerStore *store);
+    /** Test seams: replace how sandbox instances are created and how host tools are located. */
+    void setInstanceFactory(std::function<GamescopeInstance *(QObject *)> factory)
+    {
+        m_instanceFactory = std::move(factory);
+    }
+    void setToolFinderForTesting(std::function<QString(const QString &)> finder)
+    {
+        m_toolFinder = std::move(finder);
+    }
 
     PresetManager *presetManager() const
     {
@@ -240,7 +251,7 @@ Q_SIGNALS:
     void instancesChanged();
     void sessionManagerChanged();
     void deviceManagerChanged();
-    void helperClientChanged();
+    void playerStoreChanged();
     void presetManagerChanged();
     void steamConfigManagerChanged();
     void heroicConfigManagerChanged();
@@ -278,8 +289,9 @@ private:
     void finishFinalization();
     void setActive(bool active);
     const SessionProfile &activeProfile() const;
-    bool setupDeviceOwnership();
-    void restoreDeviceOwnership();
+    bool startPadForwarders();
+    void stopPadForwarders();
+    QString missingHostToolError() const;
     bool setupSessionResources();
     void teardownSharingState();
     /** The screen the main-screen players split: the profile's choice, else the primary screen. */
@@ -314,7 +326,7 @@ private:
     void continueStartAfterDisplays();
     void proceedAfterInstanceStarted(GamescopeInstance *instance);
 
-    QMap<int, QVariantList> m_instanceDirectoryPreparations;
+    QMap<int, QList<SandboxMount>> m_instanceMounts;
     uint m_screenSaverCookie = 0;
 
 
@@ -324,7 +336,6 @@ private:
     SessionRuntimeSnapshot m_startingSnapshot;
     bool m_hasStartingProfile = false;
     DeviceManager *m_deviceManager = nullptr;
-    CouchPlayHelperClient *m_helperClient = nullptr;
     PresetManager *m_presetManager = nullptr;
     SteamConfigManager *m_steamConfigManager = nullptr;
     HeroicConfigManager *m_heroicConfigManager = nullptr;
@@ -355,7 +366,11 @@ private:
     bool m_postHookStarted = false;
     QString m_finalizationMessage;
     QProcess *m_hookProcess = nullptr;
-    QStringList m_ownedDevicePaths; // Devices we've taken ownership of
+    QMap<int, PadForwarder *> m_padForwarders; // One virtual pad per instance
+    QMap<int, QStringList> m_directDevices;    // Keyboards/mice bound straight into each sandbox
+    PlayerStore *m_playerStore = nullptr;
+    std::function<GamescopeInstance *(QObject *)> m_instanceFactory;
+    std::function<QString(const QString &)> m_toolFinder;
     QStringList m_positionedWindowIds; // Window IDs we've positioned (for excluding)
 
     // Sequential instance launching state

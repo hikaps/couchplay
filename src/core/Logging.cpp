@@ -8,7 +8,6 @@
 
 Q_LOGGING_CATEGORY(couchplayCore, "couchplay.core", QtWarningMsg)
 Q_LOGGING_CATEGORY(couchplaySteam, "couchplay.steam", QtWarningMsg)
-Q_LOGGING_CATEGORY(couchplayHelper, "couchplay.helper", QtWarningMsg)
 Q_LOGGING_CATEGORY(couchplayGamescope, "couchplay.gamescope", QtWarningMsg)
 Q_LOGGING_CATEGORY(couchplayDevices, "couchplay.devices", QtWarningMsg)
 Q_LOGGING_CATEGORY(couchplaySharing, "couchplay.sharing", QtWarningMsg)

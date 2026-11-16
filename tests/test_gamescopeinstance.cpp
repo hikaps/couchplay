@@ -10,63 +10,7 @@
 #include <QTest>
 #include <QVariant> // Must be before QVariantMap
 #include <QVariantMap>
-#include "CouchPlayHelperClient.h"
 #include "GamescopeInstance.h"
-
-class MockCouchPlayHelperClient : public CouchPlayHelperClient
-{
-    Q_OBJECT
-public:
-    using CouchPlayHelperClient::CouchPlayHelperClient;
-    bool isAvailable() const override { return true; }
-
-    qint64 nextPid = 5000;
-    qint64 lastPid = 0;
-    QString lastUsername;
-    QStringList lastGameCommand;
-    QVariantList lastPreparations;
-    int launchCalls = 0;
-    QList<qint64> stopPids;
-    QList<qint64> killPids;
-    bool readyBeforeReply = true;
-    bool stoppedBeforeReply = false;
-    bool stopSucceeds = true;
-    bool killSucceeds = true;
-    QString earlyStopReason = QStringLiteral("failed");
-
-    qint64 launchInstance(const QString &username,
-                          const QStringList &,
-                          const QStringList &gameCommand,
-                          const QString &,
-                          const QStringList &,
-                          const QStringList &,
-                          bool,
-                          const QVariantList &directoryPreparations) override
-    {
-        ++launchCalls;
-        lastUsername = username;
-        lastGameCommand = gameCommand;
-        lastPreparations = directoryPreparations;
-        lastPid = nextPid++;
-        if (readyBeforeReply) Q_EMIT instanceReady(username, lastPid);
-        if (stoppedBeforeReply) Q_EMIT instanceStopped(username, lastPid, earlyStopReason);
-        return lastPid;
-    }
-
-    bool stopInstance(qint64 pid) override
-    {
-        stopPids.append(pid);
-        if (stopSucceeds) Q_EMIT instanceStopped(lastUsername, pid, QStringLiteral("exited"));
-        return stopSucceeds;
-    }
-
-    bool killInstance(qint64 pid) override
-    {
-        killPids.append(pid);
-        if (killSucceeds) Q_EMIT instanceStopped(lastUsername, pid, QStringLiteral("failed"));
-        return killSucceeds;
-    }
-};
 
 
 class TestGamescopeInstance : public QObject
@@ -94,31 +38,20 @@ private Q_SLOTS:
 
     // buildEnvironment tests
     void testBuildEnvBasic();
+    void testBuildEnvSteamIpcOverride();
     void testBuildEnvCustomPulseServer();
 
     // Instance state and readiness tests
     void testInitialState();
     void testNotRunningWithoutProcess();
-    void testDoubleStartPrevention();
-    void testPreparingUntilMatchingReady();
-    void testReadySignalBeforeLaunchReply();
-    void testPreparationFailureBeforeLaunchReply();
-    void testStopWhilePreparing();
-    void testStopFailureRetainsPreparingPid();
     void testEmptyLaunchCommandRejected();
-
     // Property tests
     void testIndexProperty();
-    void testUsernameProperty();
+    void testPlayerProperty();
     void testWindowGeometryProperty();
-
-    // Structured launch tests
-    void testSteamLaunchMode();
-    void testSteamLaunchModeNoAppId();
 
 private:
     GamescopeInstance *m_instance = nullptr;
-    MockCouchPlayHelperClient *m_helperClient = nullptr;
 };
 
 void TestGamescopeInstance::initTestCase()
@@ -131,17 +64,13 @@ void TestGamescopeInstance::cleanupTestCase()
 
 void TestGamescopeInstance::init()
 {
-    m_helperClient = new MockCouchPlayHelperClient();
     m_instance = new GamescopeInstance();
-    m_instance->setHelperClient(m_helperClient);
 }
 
 void TestGamescopeInstance::cleanup()
 {
     delete m_instance;
     m_instance = nullptr;
-    delete m_helperClient;
-    m_helperClient = nullptr;
 }
 
 // ============ buildGamescopeArgs Tests ============
@@ -353,6 +282,16 @@ void TestGamescopeInstance::testBuildEnvBasic()
     QVERIFY(env.contains(QStringLiteral("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0")));
 }
 
+void TestGamescopeInstance::testBuildEnvSteamIpcOverride()
+{
+    QVariantMap config;
+    QVERIFY(!GamescopeInstance::buildEnvironment(config).join(QLatin1Char(' ')).contains(QStringLiteral("steam_master_ipc")));
+
+    config[QStringLiteral("steamIpcAddress")] = QStringLiteral("127.0.0.1:41234");
+    QVERIFY(GamescopeInstance::buildEnvironment(config).contains(
+        QStringLiteral("steam_master_ipc_name_override=127.0.0.1:41234")));
+}
+
 void TestGamescopeInstance::testBuildEnvCustomPulseServer()
 {
     QVariantMap config;
@@ -384,7 +323,7 @@ void TestGamescopeInstance::testInitialState()
     QCOMPARE(m_instance->index(), -1);
     QCOMPARE(m_instance->pid(), 0);
     QVERIFY(m_instance->status().isEmpty());
-    QVERIFY(m_instance->username().isEmpty());
+    QVERIFY(m_instance->player().isEmpty());
 }
 
 void TestGamescopeInstance::testNotRunningWithoutProcess()
@@ -393,138 +332,15 @@ void TestGamescopeInstance::testNotRunningWithoutProcess()
     QVERIFY(!m_instance->isRunning());
 }
 
-void TestGamescopeInstance::testDoubleStartPrevention()
-{
-    m_helperClient->readyBeforeReply = false;
-    QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    QVERIFY(m_instance->start(config, 0, {}));
-    QCOMPARE(m_instance->pid(), m_helperClient->lastPid);
-    QCOMPARE(m_instance->gamescopePid(), qint64(0));
-    QVERIFY(!m_instance->isRunning());
-
-    QVERIFY(!m_instance->start(config, 1, {}));
-    QCOMPARE(m_helperClient->launchCalls, 1);
-    QCOMPARE(m_instance->index(), 0);
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), m_helperClient->lastPid);
-    QVERIFY(m_instance->isRunning());
-    QVERIFY(!m_instance->start(config, 2, {}));
-    QCOMPARE(m_instance->gamescopePid(), m_helperClient->lastPid);
-    QCOMPARE(m_instance->index(), 0);
-    m_instance->stop();
-}
-
-void TestGamescopeInstance::testPreparingUntilMatchingReady()
-{
-    QVariantMap config;
-    m_helperClient->readyBeforeReply = false;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    const QVariantList preparations{QVariantMap{{QStringLiteral("source"), QStringLiteral("/source")},
-                                                {QStringLiteral("mode"), QStringLiteral("copy")},
-                                                {QStringLiteral("targetAlias"), QStringLiteral(".couchplay/copies/test")},
-                                                {QStringLiteral("stagingPath"), QStringLiteral("/staging")}}};
-    QSignalSpy startedSpy(m_instance, &GamescopeInstance::started);
-    QVERIFY(m_instance->start(config, 0, preparations));
-    const qint64 pid = m_helperClient->lastPid;
-    QCOMPARE(m_helperClient->lastPreparations, preparations);
-    QCOMPARE(m_instance->pid(), pid);
-    QCOMPARE(m_instance->gamescopePid(), qint64(0));
-    QCOMPARE(m_instance->status(), QStringLiteral("Preparing data"));
-    QVERIFY(!m_instance->isRunning());
-
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("other"), pid);
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), pid + 1);
-    QCOMPARE(m_instance->gamescopePid(), qint64(0));
-    QVERIFY(!m_instance->isRunning());
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), pid);
-    Q_EMIT m_helperClient->instanceReady(QStringLiteral("player"), pid);
-    QCOMPARE(m_instance->gamescopePid(), pid);
-    QVERIFY(m_instance->isRunning());
-    QCOMPARE(startedSpy.count(), 1);
-    m_instance->stop();
-}
-
-void TestGamescopeInstance::testReadySignalBeforeLaunchReply()
-{
-    m_helperClient->readyBeforeReply = true;
-    QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    QSignalSpy startedSpy(m_instance, &GamescopeInstance::started);
-    QVERIFY(m_instance->start(config, 0, {}));
-    QCOMPARE(m_instance->pid(), m_helperClient->lastPid);
-    QCOMPARE(m_instance->gamescopePid(), m_helperClient->lastPid);
-    QVERIFY(m_instance->isRunning());
-    QCOMPARE(startedSpy.count(), 1);
-    m_instance->stop();
-}
-
-void TestGamescopeInstance::testPreparationFailureBeforeLaunchReply()
-{
-    m_helperClient->stoppedBeforeReply = true;
-    m_helperClient->readyBeforeReply = false;
-    QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
-    QSignalSpy startedSpy(m_instance, &GamescopeInstance::started);
-    QSignalSpy stoppedSpy(m_instance, &GamescopeInstance::stopped);
-    QVERIFY(m_instance->start(config, 0, {}));
-    QCOMPARE(m_instance->pid(), qint64(0));
-    QCOMPARE(m_instance->gamescopePid(), qint64(0));
-    QVERIFY(!m_instance->isRunning());
-    QCOMPARE(startedSpy.count(), 0);
-    QCOMPARE(stoppedSpy.count(), 1);
-    QCOMPARE(errorSpy.count(), 1);
-    QCOMPARE(errorSpy.first().first().toString(), m_helperClient->earlyStopReason);
-}
-
-void TestGamescopeInstance::testStopWhilePreparing()
-{
-    m_helperClient->readyBeforeReply = false;
-    QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    QSignalSpy stoppedSpy(m_instance, &GamescopeInstance::stopped);
-    QVERIFY(m_instance->start(config, 0, {}));
-    const qint64 preparingPid = m_instance->pid();
-    QVERIFY(preparingPid > 0);
-    QVERIFY(!m_instance->isRunning());
-    m_instance->stop();
-    QCOMPARE(m_helperClient->stopPids, QList<qint64>{preparingPid});
-    QCOMPARE(m_instance->pid(), qint64(0));
-    QCOMPARE(stoppedSpy.count(), 1);
-}
-
-void TestGamescopeInstance::testStopFailureRetainsPreparingPid()
-{
-    m_helperClient->readyBeforeReply = false;
-    m_helperClient->stopSucceeds = false;
-    m_helperClient->killSucceeds = false;
-    QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    QVERIFY(m_instance->start(config, 0, {}));
-    const qint64 preparingPid = m_instance->pid();
-    m_instance->stop();
-    QCOMPARE(m_instance->pid(), preparingPid);
-    QVERIFY(!m_instance->isRunning());
-    m_helperClient->stopSucceeds = true;
-    m_instance->stop();
-    QCOMPARE(m_instance->pid(), qint64(0));
-}
-
 void TestGamescopeInstance::testEmptyLaunchCommandRejected()
 {
     QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
+    config[QStringLiteral("player")] = QStringLiteral("player");
     QSignalSpy errorSpy(m_instance, &GamescopeInstance::errorOccurred);
     QVERIFY(!m_instance->start(config, 0, {}));
-    QCOMPARE(m_helperClient->launchCalls, 0);
     QCOMPARE(errorSpy.count(), 1);
     QCOMPARE(errorSpy.first().first().toString(), QStringLiteral("Launch command is empty"));
+    QVERIFY(!m_instance->isRunning());
 }
 
 // ============ Property Tests ============
@@ -532,70 +348,31 @@ void TestGamescopeInstance::testEmptyLaunchCommandRejected()
 void TestGamescopeInstance::testIndexProperty()
 {
     QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    QVERIFY(m_instance->start(config, 5, {}));
+    QVERIFY(!m_instance->start(config, 5, {}));
     QCOMPARE(m_instance->index(), 5);
-    m_instance->stop();
 }
 
-void TestGamescopeInstance::testUsernameProperty()
+void TestGamescopeInstance::testPlayerProperty()
 {
     QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("testuser");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
-    QVERIFY(m_instance->start(config, 0, {}));
-    QCOMPARE(m_instance->username(), QStringLiteral("testuser"));
-    m_instance->stop();
+    config[QStringLiteral("player")] = QStringLiteral("testuser");
+    QVERIFY(!m_instance->start(config, 0, {}));
+    QCOMPARE(m_instance->player(), QStringLiteral("testuser"));
 }
 
 void TestGamescopeInstance::testWindowGeometryProperty()
 {
     QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("/usr/bin/true")};
     config[QStringLiteral("positionX")] = 100;
     config[QStringLiteral("positionY")] = 200;
     config[QStringLiteral("outputWidth")] = 800;
     config[QStringLiteral("outputHeight")] = 600;
-    QVERIFY(m_instance->start(config, 0, {}));
+    QVERIFY(!m_instance->start(config, 0, {}));
     const QRect geometry = m_instance->windowGeometry();
     QCOMPARE(geometry.x(), 100);
     QCOMPARE(geometry.y(), 200);
     QCOMPARE(geometry.width(), 800);
     QCOMPARE(geometry.height(), 600);
-    m_instance->stop();
-}
-
-// ============ Structured Launch Tests ============
-
-void TestGamescopeInstance::testSteamLaunchMode()
-{
-    m_helperClient->readyBeforeReply = true;
-    QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("launcherId")] = QStringLiteral("steam");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("steam"),
-                                                         QStringLiteral("-bigpicture"),
-                                                         QStringLiteral("-applaunch"),
-                                                         QStringLiteral("1426210")};
-    QVERIFY(m_instance->start(config, 0, {}));
-    QCOMPARE(m_helperClient->lastGameCommand, config.value(QStringLiteral("gameCommand")).toStringList());
-    QVERIFY(m_instance->isRunning());
-    m_instance->stop();
-}
-
-void TestGamescopeInstance::testSteamLaunchModeNoAppId()
-{
-    m_helperClient->readyBeforeReply = true;
-    QVariantMap config;
-    config[QStringLiteral("username")] = QStringLiteral("player");
-    config[QStringLiteral("launcherId")] = QStringLiteral("steam");
-    config[QStringLiteral("gameCommand")] = QStringList{QStringLiteral("steam"), QStringLiteral("-bigpicture")};
-    QVERIFY(m_instance->start(config, 0, {}));
-    QCOMPARE(m_helperClient->lastGameCommand, config.value(QStringLiteral("gameCommand")).toStringList());
-    QVERIFY(m_instance->isRunning());
-    m_instance->stop();
 }
 
 QTEST_MAIN(TestGamescopeInstance)

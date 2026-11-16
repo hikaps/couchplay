@@ -9,8 +9,8 @@
 # #28/#37). The core list lives here; each caller passes only the few extra
 # packages it uniquely needs:
 #   ci:          install-build-deps.sh dbus-daemon
-#   beta/release: install-build-deps.sh tar patchelf
-#   arch-smoke:  install-build-deps.sh patchelf binutils
+#   beta/release: install-build-deps.sh dbus-daemon tar
+#   arch-smoke:  install-build-deps.sh binutils
 #
 # Run on Fedora (provides dnf). Note: the build workflows install git before
 # `actions/checkout` (the bare fedora:41 image lacks it); git is also in the
@@ -24,6 +24,6 @@ dnf install -y \
   kf6-kconfig-devel kf6-kiconthemes-devel kf6-qqc2-desktop-style \
   kf6-kglobalaccel-devel extra-cmake-modules \
   kf6-kdbusaddons-devel \
-  libacl-devel wayland-devel \
-  pipewire-devel polkit-devel polkit-qt6-1-devel \
+  wayland-devel \
+  pipewire-devel \
   "$@"

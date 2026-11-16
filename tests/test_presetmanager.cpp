@@ -20,7 +20,7 @@
 #include <KSharedConfig>
 
 #include "PresetManager.h"
-#include "../helper/DirectoryPlan.h"
+#include "PlayerFiles.h"
 #include "SteamConfigManager.h"
 
 using DocumentPaths = QMap<QString, QByteArray>;
@@ -828,14 +828,14 @@ void TestPresetManager::testStagingSlugInjective()
     // "/"-collapsing alone is not injective: these two paths collapsed to the
     // same name and would bleed staged data into each other's player views
     QString home = QStringLiteral("/home/compositor");
-    QString slugA = DirectoryPlan::dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home);
-    QString slugB = DirectoryPlan::dataDirectoryStagingSlug(QStringLiteral("/mnt/a/b_c"), home);
+    QString slugA = PlayerFiles::dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home);
+    QString slugB = PlayerFiles::dataDirectoryStagingSlug(QStringLiteral("/mnt/a/b_c"), home);
     QVERIFY(slugA.startsWith(QStringLiteral("mnt_a_b_c-")));
     QVERIFY(slugB.startsWith(QStringLiteral("mnt_a_b_c-")));
     QVERIFY(slugA != slugB);
 
     // Stable across calls
-    QCOMPARE(DirectoryPlan::dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home), slugA);
+    QCOMPARE(PlayerFiles::dataDirectoryStagingSlug(QStringLiteral("/mnt/a_b/c"), home), slugA);
 }
 
 void TestPresetManager::testKConfigMigrationLegacySharedDirectories()
