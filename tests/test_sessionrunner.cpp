@@ -283,6 +283,7 @@ private Q_SLOTS:
     void testDeviceReconnectIgnoredDuringPostHook();
     void testDeviceReconnectIgnoredDuringPreHook();
     void testSunshineGamepadClaimsAreFifo();
+    void testSteamInstancesGetPrivateIpcAddress();
     void testSunshineGamepadUniqGroupsDevices();
     void testSunshineGamepadSingleStreamerFallback();
     void testSunshineGamepadClaimExpires();
@@ -1134,6 +1135,43 @@ void TestSessionRunner::testStreamingInstancesGetDistinctSunshinePorts()
     m_runner->stop();
 }
 
+void TestSessionRunner::testSteamInstancesGetPrivateIpcAddress()
+{
+    // Launcher detection matches the executable's basename; the command must also resolve
+    QTemporaryDir bin;
+    QVERIFY(bin.isValid());
+    const QString steamStub = bin.filePath(QStringLiteral("steam"));
+    QVERIFY(QFile::copy(QStringLiteral("/usr/bin/true"), steamStub));
+    const QString steamPreset =
+        m_presetManager->addCustomPreset(QStringLiteral("Steam IPC"), steamStub + QStringLiteral(" -bigpicture"));
+    // No Steam install here; the IPC port follows the launcher, not the integration check
+    QVERIFY(m_presetManager->setRequiredIntegrations(steamPreset, {}));
+    m_sessionManager->setInstanceCount(2);
+    for (int i = 0; i < 2; ++i) {
+        m_sessionManager->setInstanceUser(i, QStringLiteral("player%1").arg(i + 1));
+        m_sessionManager->setInstancePreset(i, steamPreset);
+    }
+
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QVERIFY2(m_runner->start(), errorSpy.isEmpty() ? "" : qPrintable(errorSpy.constLast().constFirst().toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(m_log.configs.size(), 2, 3000);
+
+    // Each Steam player gets its own loopback IPC address through the environment only: the flag is forwarded
+    // to the game's argv and breaks Halo Infinite.
+    QSet<QString> addresses;
+    for (const QVariantMap &config : m_log.configs) {
+        const QString address = config.value(QStringLiteral("steamIpcAddress")).toString();
+        QVERIFY2(address.startsWith(QStringLiteral("127.0.0.1:")), qPrintable(address));
+        QVERIFY(address != QStringLiteral("127.0.0.1:57343"));
+        addresses.insert(address);
+        QVERIFY(!config.value(QStringLiteral("gameCommand"))
+                     .toStringList()
+                     .contains(QStringLiteral("-master_ipc_name_override")));
+    }
+    QCOMPARE(addresses.size(), 2);
+    m_runner->stop();
+}
+
 void TestSessionRunner::testStreamingStartupWaitsForSunshineReady()
 {
     twoPlayerPreset(QStringLiteral("Streaming startup"));
@@ -1157,20 +1195,6 @@ void TestSessionRunner::testStreamingStartupWaitsForSunshineReady()
     Q_EMIT m_runner->m_instances.at(1)->started();
     QTRY_COMPARE_WITH_TIMEOUT(startedSpy.count(), 1, 3000);
     QCOMPARE(failedSpy.count(), 0);
-
-    // Each Steam player gets its own loopback IPC address through the environment only: the flag is forwarded
-    // to the game's argv and breaks Halo Infinite.
-    QSet<QString> addresses;
-    for (const QVariantMap &config : m_log.configs) {
-        const QString address = config.value(QStringLiteral("steamIpcAddress")).toString();
-        QVERIFY2(address.startsWith(QStringLiteral("127.0.0.1:")), qPrintable(address));
-        QVERIFY(address != QStringLiteral("127.0.0.1:57343"));
-        addresses.insert(address);
-        QVERIFY(!config.value(QStringLiteral("gameCommand"))
-                     .toStringList()
-                     .contains(QStringLiteral("-master_ipc_name_override")));
-    }
-    QCOMPARE(addresses.size(), 2);
 
     m_runner->stop();
     QTRY_COMPARE_WITH_TIMEOUT(stoppedSpy.count(), 1, 10000);

@@ -249,16 +249,17 @@ private Q_SLOTS:
         };
         const QByteArray perApp = "\"49520\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n";
 
+        const auto toolOf = [&](const QString &appId) {
+            auto current = readMapping();
+            return current && current->contains(appId) ? current->value(appId) : SteamCompatToolMapping::Tool();
+        };
+
         // Without a global default on the desktop, games without their own entry lose the player's entry
-        helper.compatMappings.clear();
         QVERIFY(setHostMapping(perApp));
-        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
-        QCOMPARE(helper.compatMappings.size(), 1);
-        const QVariantMap perAppOnly{
-            {QStringLiteral("49520"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("250")}},
-            {QStringLiteral("345180"), QStringList()},
-            {QStringLiteral("220"), QStringList()}};
-        QCOMPARE(helper.compatMappings.at(0).second, perAppOnly);
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QCOMPARE(toolOf(QStringLiteral("49520")).name, QStringLiteral("proton_9"));
+        QCOMPARE(toolOf(QStringLiteral("345180")).name, QString());
+        QCOMPARE(toolOf(QStringLiteral("220")).name, QString());
 
         // The tool the desktop's Steam picked on its own (kept only in its compat_log.txt) is set for the player,
         // unless it is "native" or exists only for the desktop user; the newest log line per game wins
@@ -269,35 +270,28 @@ private Q_SLOTS:
                           "[2026-11-02 10:00:00] Recording non-user mapping for 345180 at priority 85 to tool GE-Proton9-1\n"
                           "[2026-11-02 10:00:00] Recording non-user mapping for 49520 at priority 85 to tool native\n"
                           "[2026-11-02 10:00:00] Recording non-user mapping for 999 at priority 75 to tool native\n"));
-        helper.compatMappings.clear();
-        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
-        QCOMPARE(helper.compatMappings.size(), 1);
-        QVariantMap withLoggedDefault = perAppOnly;
-        withLoggedDefault.insert(QStringLiteral("220"),
-                                 QStringList{QStringLiteral("proton-stable"), QString(), QStringLiteral("250")});
-        QCOMPARE(helper.compatMappings.at(0).second, withLoggedDefault);
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QCOMPARE(toolOf(QStringLiteral("220")).name, QStringLiteral("proton-stable"));
+        QCOMPARE(toolOf(QStringLiteral("220")).priority, QStringLiteral("250"));
+        QCOMPARE(toolOf(QStringLiteral("345180")).name, QString());
+        QCOMPARE(toolOf(QStringLiteral("49520")).name, QStringLiteral("proton_9"));
         QVERIFY(QFile::remove(steamRoot + QStringLiteral("/logs/compat_log.txt")));
 
         // A global default that only exists for the desktop user is not mirrored
-        helper.compatMappings.clear();
         QVERIFY(setHostMapping("\"0\"\n{\n\"name\" \"GE-Proton9-1\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"
                                + perApp));
-        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
-        QCOMPARE(helper.compatMappings.size(), 1);
-        QCOMPARE(helper.compatMappings.at(0).second, perAppOnly);
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QCOMPARE(toolOf(QStringLiteral("49520")).name, QStringLiteral("proton_9"));
+        QCOMPARE(toolOf(QStringLiteral("345180")).name, QString());
+        QCOMPARE(toolOf(QStringLiteral("220")).name, QString());
 
         // A global default alone is mirrored to every shared game
-        helper.compatMappings.clear();
         QVERIFY(setHostMapping("\"0\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"));
-        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
-        QCOMPARE(helper.compatMappings.size(), 1);
-        const QStringList defaultTool{QStringLiteral("proton_9"), QString(), QStringLiteral("75")};
-        const QVariantMap onlyDefault{
-            {QStringLiteral("49520"), defaultTool},
-            {QStringLiteral("345180"), defaultTool},
-            {QStringLiteral("220"), defaultTool}};
-        QCOMPARE(helper.compatMappings.at(0).second, onlyDefault);
-        helper.compatMappings.clear();
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        for (const QString &appId : {QStringLiteral("49520"), QStringLiteral("345180"), QStringLiteral("220")}) {
+            QCOMPARE(toolOf(appId).name, QStringLiteral("proton_9"));
+            QCOMPARE(toolOf(appId).priority, QStringLiteral("75"));
+        }
 
         // An unreadable desktop mapping must not turn into removals for the player
         QFile before(playerConfig);
