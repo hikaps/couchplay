@@ -219,7 +219,8 @@ private Q_SLOTS:
         QVERIFY(writeFile(externalLibrary + QStringLiteral("/steamapps/appmanifest_220.acf"), "\"AppState\"\n{\n}\n"));
         // A tool installed only in the desktop user's compatibilitytools.d does not exist for players
         QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/compatibilitytools.d/GE-Proton9-1")));
-        // The global default ("0") and games outside the shared libraries are never mirrored
+        // The global default ("0") applies to shared games without their own entry; games outside the shared
+        // libraries are never mirrored
         QVERIFY(writeFile(steamRoot + QStringLiteral("/config/config.vdf"),
                           "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n"
                           "\"CompatToolMapping\"\n{\n"
@@ -249,13 +250,71 @@ private Q_SLOTS:
         const QVariantMap expected{
             {QStringLiteral("49520"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("250")}},
             {QStringLiteral("345180"), QStringList()},
-            {QStringLiteral("220"), QStringList()}};
+            {QStringLiteral("220"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("75")}}};
         QCOMPARE(helper.compatMappings.at(0).second, expected);
+
+        const auto setHostMapping = [&](const QByteArray &entries) {
+            return writeFile(steamRoot + QStringLiteral("/config/config.vdf"),
+                             "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n"
+                             "\"CompatToolMapping\"\n{\n"
+                                 + entries + "}\n}\n}\n}\n}\n");
+        };
+        const QByteArray perApp = "\"49520\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n";
+
+        // Without a global default on the desktop, games without their own entry lose the player's entry
+        helper.compatMappings.clear();
+        QVERIFY(setHostMapping(perApp));
+        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        QCOMPARE(helper.compatMappings.size(), 1);
+        const QVariantMap perAppOnly{
+            {QStringLiteral("49520"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("250")}},
+            {QStringLiteral("345180"), QStringList()},
+            {QStringLiteral("220"), QStringList()}};
+        QCOMPARE(helper.compatMappings.at(0).second, perAppOnly);
+
+        // The tool the desktop's Steam picked on its own (kept only in its compat_log.txt) is set for the player,
+        // unless it is "native" or exists only for the desktop user; the newest log line per game wins
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/logs")));
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/logs/compat_log.txt"),
+                          "[2026-11-01 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-8.0\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-stable\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 345180 at priority 85 to tool GE-Proton9-1\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 49520 at priority 85 to tool native\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 999 at priority 75 to tool native\n"));
+        helper.compatMappings.clear();
+        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        QCOMPARE(helper.compatMappings.size(), 1);
+        QVariantMap withLoggedDefault = perAppOnly;
+        withLoggedDefault.insert(QStringLiteral("220"),
+                                 QStringList{QStringLiteral("proton-stable"), QString(), QStringLiteral("250")});
+        QCOMPARE(helper.compatMappings.at(0).second, withLoggedDefault);
+        QVERIFY(QFile::remove(steamRoot + QStringLiteral("/logs/compat_log.txt")));
+
+        // A global default that only exists for the desktop user is not mirrored
+        helper.compatMappings.clear();
+        QVERIFY(setHostMapping("\"0\"\n{\n\"name\" \"GE-Proton9-1\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"
+                               + perApp));
+        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        QCOMPARE(helper.compatMappings.size(), 1);
+        QCOMPARE(helper.compatMappings.at(0).second, perAppOnly);
+
+        // A global default alone is mirrored to every shared game
+        helper.compatMappings.clear();
+        QVERIFY(setHostMapping("\"0\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"));
+        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        QCOMPARE(helper.compatMappings.size(), 1);
+        const QStringList defaultTool{QStringLiteral("proton_9"), QString(), QStringLiteral("75")};
+        const QVariantMap onlyDefault{
+            {QStringLiteral("49520"), defaultTool},
+            {QStringLiteral("345180"), defaultTool},
+            {QStringLiteral("220"), defaultTool}};
+        QCOMPARE(helper.compatMappings.at(0).second, onlyDefault);
+        helper.compatMappings.clear();
 
         // An unreadable desktop mapping must not turn into removals for the player
         QVERIFY(writeFile(steamRoot + QStringLiteral("/config/config.vdf"), "\"InstallConfigStore\"\n{\n"));
         QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
-        QCOMPARE(helper.compatMappings.size(), 1);
+        QVERIFY(helper.compatMappings.isEmpty());
     }
 
     void testCleanupDoesNotCreateSteamDirectoryForUnbootstrappedPlayer()
