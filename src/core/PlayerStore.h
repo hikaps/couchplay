@@ -49,6 +49,8 @@ public:
      * are not moved. Fails when the folder cannot be created or its filesystem lacks Linux permissions.
      */
     Q_INVOKABLE bool setStorageDir(const QString &path);
+    /** The real folder behind a folder-picker (document portal) path; any other path is returned unchanged. */
+    Q_INVOKABLE static QString resolveHostPath(const QString &path);
 
     /** `^[a-z_][a-z0-9_-]{0,31}$`; also rules out path traversal. */
     Q_INVOKABLE static bool isValidName(const QString &name);

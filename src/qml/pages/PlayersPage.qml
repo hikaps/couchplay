@@ -4,6 +4,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as Controls
+import QtQuick.Dialogs
 import org.kde.kirigami as Kirigami
 
 import "../components" as Components
@@ -118,6 +119,15 @@ Kirigami.ScrollablePage {
                 }
 
                 Controls.Button {
+                    objectName: "btnBrowseStorageDir"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    icon.name: "document-open-folder"
+                    text: i18nc("@action:button", "Browse…")
+                    onClicked: storageDialog.open()
+                }
+
+                Controls.Button {
                     objectName: "btnResetStorageDir"
                     Accessible.role: Accessible.Button
                     Accessible.name: text
@@ -127,6 +137,23 @@ Kirigami.ScrollablePage {
                         playerStore.setStorageDir("")
                         storageField.text = playerStore.storageDir
                     }
+                }
+            }
+
+            FolderDialog {
+                id: storageDialog
+                objectName: "dialogStorageDir"
+                title: i18nc("@title:window", "Choose the player storage folder")
+                currentFolder: storageField.text.length > 0 ? "file://" + storageField.text : ""
+                onAccepted: storageField.text = root.playerStore.resolveHostPath(
+                    decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, "")))
+            }
+
+            // The stored path can differ from what was typed or picked (portal paths are resolved to real ones)
+            Connections {
+                target: root.playerStore
+                function onStorageDirChanged() {
+                    storageField.text = root.playerStore.storageDir
                 }
             }
         }

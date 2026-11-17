@@ -19,6 +19,46 @@
 #include <KLocalizedString>
 #include <KSharedConfig>
 
+#include <sys/xattr.h>
+
+namespace
+{
+// A Flatpak folder picker returns a document-portal path (/run/user/<uid>/doc/<id>/<name>). It only exists while
+// that portal entry does, sits on a FUSE mount (no overlay layers) and is not the real location, so resolve it to the
+// host path the portal records. Prefer a spelling that exists inside this sandbox too (/var/mnt/x is /mnt/x).
+QString hostPathFromPortal(const QString &path)
+{
+    if (!path.startsWith(QLatin1String("/run/user/")) || !path.contains(QLatin1String("/doc/"))) {
+        return path;
+    }
+    QByteArray value(4096, '\0');
+    const ssize_t length = ::getxattr(QFile::encodeName(path).constData(), "user.document-portal.host-path",
+                                      value.data(), static_cast<size_t>(value.size()));
+    if (length <= 0) {
+        return path;
+    }
+    value.truncate(length);
+    while (value.endsWith('\0')) {
+        value.chop(1);
+    }
+    const QString host = QDir::cleanPath(QString::fromLocal8Bit(value));
+    if (!QDir::isAbsolutePath(host)) {
+        return path;
+    }
+    QStringList candidates{host};
+    if (host.startsWith(QLatin1String("/var/"))) {
+        candidates.append(host.mid(4));
+    }
+    for (const QString &candidate : candidates) {
+        const QFileInfo info(candidate);
+        if (info.isDir() && info.isWritable()) {
+            return candidate;
+        }
+    }
+    return path;
+}
+} // namespace
+
 PlayerStore::PlayerStore(QObject *parent)
     : QObject(parent)
 {
@@ -44,11 +84,17 @@ QString PlayerStore::rootDir()
     return defaultRootDir();
 }
 
+QString PlayerStore::resolveHostPath(const QString &path)
+{
+    return hostPathFromPortal(QDir::cleanPath(path.trimmed()));
+}
+
 bool PlayerStore::setStorageDir(const QString &path)
 {
     QString clean = path.trimmed();
     if (!clean.isEmpty()) {
         clean = QDir::cleanPath(clean);
+        clean = hostPathFromPortal(clean);
         if (!QDir::isAbsolutePath(clean)) {
             Q_EMIT errorOccurred(i18nc("@info", "The storage location must be an absolute path."));
             return false;
