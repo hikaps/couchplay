@@ -101,9 +101,10 @@ main() {
     flatpak install --user --noninteractive -y flathub org.kde.Sdk/x86_64/6.10 org.kde.Platform/x86_64/6.10
 
     print_info "Rebuilding Flatpak application locally from source..."
-    # Rewrite the couchplay git source to a local dir (jq targets it by URL, leaving other sources untouched).
+    # Rewrite the couchplay git source to this checkout (jq targets it by URL, leaving other sources untouched).
+    # The path must be absolute: a relative one resolves against the manifest copy in the temp directory.
     local manifest_copy="${TEMP_DIR}/io.github.hikaps.couchplay.json"
-    jq '(.. | objects | select(.type? == "git" and ((.url? // "") | test("hikaps/couchplay")))) |= {"type": "dir", "path": "."}' \
+    jq --arg src "$PWD" '(.. | objects | select(.type? == "git" and ((.url? // "") | test("hikaps/couchplay")))) |= {"type": "dir", "path": $src}' \
         io.github.hikaps.couchplay.json > "$manifest_copy"
 
     flatpak-builder --user --install --force-clean --install-deps-from=flathub "${TEMP_DIR}/build-dir" "$manifest_copy"

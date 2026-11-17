@@ -11,6 +11,9 @@ unset(CMAKE_REQUIRED_LINK_OPTIONS)
 
 add_executable(couchplay-padfwd couchplay-padfwd.c padmap.c)
 target_compile_options(couchplay-padfwd PRIVATE -Wall -Wextra)
+# Pure C: keep Qt's global AUTOMOC off it. It adds a C++ file that pulls -lstdc++/-lm into the link, which breaks
+# -static where libm.a is missing (Flatpak SDK).
+set_target_properties(couchplay-padfwd PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF LINKER_LANGUAGE C)
 if(COUCHPLAY_PADFWD_CAN_LINK_STATIC)
     target_link_options(couchplay-padfwd PRIVATE -static)
 endif()
