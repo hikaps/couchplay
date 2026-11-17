@@ -71,7 +71,7 @@ void TestStreamingSession::testMixedPhysicalStreamingProfile()
 
     QVariantMap config0;
     config0.insert(KEY("display"), QStringLiteral("main"));
-    config0.insert(KEY("username"), QStringLiteral("player1"));
+    config0.insert(KEY("player"), QStringLiteral("player1"));
     m_sessionManager->setInstanceConfig(0, config0);
 
     QVariantMap config1;
@@ -79,13 +79,13 @@ void TestStreamingSession::testMixedPhysicalStreamingProfile()
     config1.insert(KEY("virtualResolution"), QStringLiteral("1280x720"));
     config1.insert(KEY("streamBitrate"), 10000);
     config1.insert(KEY("streamCodec"), QStringLiteral("hevc"));
-    config1.insert(KEY("username"), QStringLiteral("player2"));
+    config1.insert(KEY("player"), QStringLiteral("player2"));
     m_sessionManager->setInstanceConfig(1, config1);
 
     QVariantMap retrieved0 = m_sessionManager->getInstanceConfig(0);
     QCOMPARE(retrieved0.value(KEY("display")).toString(), QStringLiteral("main"));
     QCOMPARE(retrieved0.value(KEY("streamToMoonlight")).toBool(), false);
-    QCOMPARE(retrieved0.value(KEY("username")).toString(), QStringLiteral("player1"));
+    QCOMPARE(retrieved0.value(KEY("player")).toString(), QStringLiteral("player1"));
 
     QVariantMap retrieved1 = m_sessionManager->getInstanceConfig(1);
     QCOMPARE(retrieved1.value(KEY("display")).toString(), QStringLiteral("virtual"));
@@ -93,7 +93,7 @@ void TestStreamingSession::testMixedPhysicalStreamingProfile()
     QCOMPARE(retrieved1.value(KEY("virtualResolution")).toString(), QStringLiteral("1280x720"));
     QCOMPARE(retrieved1.value(KEY("streamBitrate")).toInt(), 10000);
     QCOMPARE(retrieved1.value(KEY("streamCodec")).toString(), QStringLiteral("hevc"));
-    QCOMPARE(retrieved1.value(KEY("username")).toString(), QStringLiteral("player2"));
+    QCOMPARE(retrieved1.value(KEY("player")).toString(), QStringLiteral("player2"));
 }
 
 void TestStreamingSession::testAllStreamingProfile()
@@ -103,7 +103,7 @@ void TestStreamingSession::testAllStreamingProfile()
     for (int i = 0; i < 3; ++i) {
         QVariantMap config;
         config.insert(KEY("display"), QStringLiteral("virtual"));
-        config.insert(KEY("username"), QStringLiteral("streamer%1").arg(i));
+        config.insert(KEY("player"), QStringLiteral("streamer%1").arg(i));
         config.insert(KEY("streamCodec"), QStringLiteral("hevc"));
         config.insert(KEY("streamBitrate"), 15000);
         m_sessionManager->setInstanceConfig(i, config);
@@ -133,7 +133,7 @@ void TestStreamingSession::testMixedProfileSaveLoad()
 
     QVariantMap config0;
     config0.insert(KEY("display"), QStringLiteral("main"));
-    config0.insert(KEY("username"), QStringLiteral("localplayer"));
+    config0.insert(KEY("player"), QStringLiteral("localplayer"));
     m_sessionManager->setInstanceConfig(0, config0);
 
     QVariantMap config1;
@@ -142,7 +142,7 @@ void TestStreamingSession::testMixedProfileSaveLoad()
     config1.insert(KEY("streamBitrate"), 50000);
     config1.insert(KEY("streamCodec"), QStringLiteral("av1"));
     config1.insert(KEY("sunshinePort"), 48019);
-    config1.insert(KEY("username"), QStringLiteral("remoteplayer"));
+    config1.insert(KEY("player"), QStringLiteral("remoteplayer"));
     m_sessionManager->setInstanceConfig(1, config1);
 
     bool saved = m_sessionManager->saveProfile(QStringLiteral("MixedTest"));
@@ -156,7 +156,7 @@ void TestStreamingSession::testMixedProfileSaveLoad()
 
     QVariantMap loaded0 = m_sessionManager->getInstanceConfig(0);
     QCOMPARE(loaded0.value(KEY("display")).toString(), QStringLiteral("main"));
-    QCOMPARE(loaded0.value(KEY("username")).toString(), QStringLiteral("localplayer"));
+    QCOMPARE(loaded0.value(KEY("player")).toString(), QStringLiteral("localplayer"));
 
     QVariantMap loaded1 = m_sessionManager->getInstanceConfig(1);
     QCOMPARE(loaded1.value(KEY("display")).toString(), QStringLiteral("virtual"));
@@ -164,7 +164,7 @@ void TestStreamingSession::testMixedProfileSaveLoad()
     QCOMPARE(loaded1.value(KEY("streamBitrate")).toInt(), 50000);
     QCOMPARE(loaded1.value(KEY("streamCodec")).toString(), QStringLiteral("av1"));
     QCOMPARE(loaded1.value(KEY("sunshinePort")).toInt(), 48019);
-    QCOMPARE(loaded1.value(KEY("username")).toString(), QStringLiteral("remoteplayer"));
+    QCOMPARE(loaded1.value(KEY("player")).toString(), QStringLiteral("remoteplayer"));
 }
 
 void TestStreamingSession::testStreamingConfigToSunshineConfig()
@@ -179,14 +179,14 @@ void TestStreamingSession::testStreamingConfigToSunshineConfig()
     streamConfig.insert(KEY("streamBitrate"), 25000);
     streamConfig.insert(KEY("streamCodec"), QStringLiteral("hevc"));
     streamConfig.insert(KEY("sunshinePort"), 48019);
-    streamConfig.insert(KEY("username"), QStringLiteral("streamer"));
+    streamConfig.insert(KEY("player"), QStringLiteral("streamer"));
     m_sessionManager->setInstanceConfig(1, streamConfig);
 
     QVariantMap retrieved = m_sessionManager->getInstanceConfig(1);
 
     StreamSpec spec;
     spec.instanceIndex = 1;
-    spec.identityKey = retrieved.value(KEY("username")).toString();
+    spec.identityKey = retrieved.value(KEY("player")).toString();
     spec.outputName = QStringLiteral("Virtual-couchplay-p2");
     spec.port = SunshineConfig::calculatePort(0, retrieved.value(KEY("sunshinePort")).toInt());
     spec.bitrate = retrieved.value(KEY("streamBitrate")).toInt();
@@ -234,7 +234,7 @@ void TestStreamingSession::testStreamConfigValuesPreserved()
     config.insert(KEY("streamBitrate"), 40000);
     config.insert(KEY("streamCodec"), QStringLiteral("av1"));
     config.insert(KEY("sunshinePort"), 48049);
-    config.insert(KEY("username"), QStringLiteral("poweruser"));
+    config.insert(KEY("player"), QStringLiteral("poweruser"));
     m_sessionManager->setInstanceConfig(0, config);
 
     QVariantMap retrieved = m_sessionManager->getInstanceConfig(0);
@@ -243,7 +243,7 @@ void TestStreamingSession::testStreamConfigValuesPreserved()
     QCOMPARE(retrieved.value(KEY("streamBitrate")).toInt(), 40000);
     QCOMPARE(retrieved.value(KEY("streamCodec")).toString(), QStringLiteral("av1"));
     QCOMPARE(retrieved.value(KEY("sunshinePort")).toInt(), 48049);
-    QCOMPARE(retrieved.value(KEY("username")).toString(), QStringLiteral("poweruser"));
+    QCOMPARE(retrieved.value(KEY("player")).toString(), QStringLiteral("poweruser"));
 }
 
 QTEST_MAIN(TestStreamingSession)

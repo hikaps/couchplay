@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "core/HeroicConfigManager.h"
-#include "dbus/CouchPlayHelperClient.h"
+#include "core/PlayerStore.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -12,57 +12,8 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
-#include <pwd.h>
 
-class MockHelperClient : public CouchPlayHelperClient
-{
-    Q_OBJECT
-public:
-    explicit MockHelperClient(QObject *parent = nullptr)
-        : CouchPlayHelperClient(parent)
-    {
-    }
 
-    bool isAvailable() const override
-    {
-        return true;
-    }
-
-    bool createUserDirectory(const QString &path, const QString &username) override
-    {
-        createdDirs.append(qMakePair(path, username));
-        // Actually create it for test verification if needed, or just pretend
-        return QDir().mkpath(path);
-    }
-
-    bool copyFileToUser(const QString &sourcePath, const QString &targetPath, const QString &username) override
-    {
-        Q_UNUSED(username)
-        copiedFiles.append(qMakePair(sourcePath, targetPath));
-        QDir().mkpath(QFileInfo(targetPath).absolutePath());
-        QFile::remove(targetPath);
-        return QFile::copy(sourcePath, targetPath);
-    }
-
-    QVariantMap getUserInfo(const QString &username) override
-    {
-        QVariantMap info;
-        if (!targetHome.isEmpty()) {
-            info.insert(QStringLiteral("uid"), 1234u);
-            info.insert(QStringLiteral("gid"), 1234u);
-            info.insert(QStringLiteral("home"), targetHome);
-        } else if (const struct passwd *pw = getpwnam(username.toLocal8Bit().constData())) {
-            info.insert(QStringLiteral("uid"), static_cast<uint>(pw->pw_uid));
-            info.insert(QStringLiteral("gid"), static_cast<uint>(pw->pw_gid));
-            info.insert(QStringLiteral("home"), QString::fromLocal8Bit(pw->pw_dir));
-        }
-        return info;
-    }
-
-    QString targetHome;
-    QList<QPair<QString, QString>> createdDirs;
-    QList<QPair<QString, QString>> copiedFiles;
-};
 
 class TestHeroicConfigManager : public QObject
 {
@@ -448,9 +399,7 @@ void TestHeroicConfigManager::testExtractGameDirectories()
 void TestHeroicConfigManager::testSyncConfigCopiesCatalogsWithoutPrivateHeroicSettings()
 {
     QTemporaryDir sourceHome;
-    QTemporaryDir targetHome;
     QVERIFY(sourceHome.isValid());
-    QVERIFY(targetHome.isValid());
     qputenv("HOME", sourceHome.path().toLocal8Bit());
 
     createMockHeroicConfig(sourceHome.path(), false);
@@ -467,12 +416,9 @@ void TestHeroicConfigManager::testSyncConfigCopiesCatalogsWithoutPrivateHeroicSe
     authFile.close();
 
     HeroicConfigManager manager;
-    auto *helper = new MockHelperClient(&manager);
-    helper->targetHome = targetHome.path();
-    manager.setHelperClient(helper);
     QVERIFY(manager.syncConfigToUser(QStringLiteral("sync-target")));
 
-    const QString targetRoot = targetHome.path() + QStringLiteral("/.config/heroic");
+    const QString targetRoot = PlayerStore::homeDir(QStringLiteral("sync-target")) + QStringLiteral("/.config/heroic");
     QVERIFY(QFile::exists(targetRoot + QStringLiteral("/sideload_apps/library.json")));
     QVERIFY(QFile::exists(targetRoot + QStringLiteral("/legendaryConfig/legendary/installed.json")));
     QVERIFY(QFile::exists(targetRoot + QStringLiteral("/gog_store/installed.json")));
@@ -490,55 +436,20 @@ void TestHeroicConfigManager::testSyncShortcutsToUser()
     createMockHeroicConfig(homeDir.path(), false);
     createMockShortcuts(homeDir.path());
 
-    // Create a "target user" home directory
-    QTemporaryDir targetUserDir;
-    QVERIFY(targetUserDir.isValid());
-
-    // We can't easily mock getpwnam, so we'll skip the actual getpwnam check in the test
-    // OR we can pass the current user as the target user, but that might overwrite things.
-    // However, the MockHelperClient intercepts the calls, so it's fine.
-    // BUT HeroicConfigManager calls getpwnam.
-    // We can use the current user "notaname" (or whatever `whoami` returns) as the target user.
-    // Or we can just mock `getpwnam`? No, C function mocking is hard.
-    // Let's use the current user's name.
-
-    QString currentUser = QString::fromLocal8Bit(qgetenv("USER"));
-    if (currentUser.isEmpty()) {
-        currentUser = QStringLiteral("notaname"); // Fallback
-    }
-    // syncShortcutsToUser resolves the home dir via getpwnam; skip if the user
-    // isn't a real system user (the CI container lacks the developer's user).
-    if (!getpwnam(currentUser.toLocal8Bit().constData())) {
-        QSKIP("Current user is not a real system user in this environment");
-    }
-
     HeroicConfigManager manager;
     manager.detectHeroicPaths(); // Detect shortcuts dir
 
-    MockHelperClient *mockHelper = new MockHelperClient(&manager);
-    manager.setHelperClient(mockHelper);
+    const QString player = QStringLiteral("shortcut-target");
+    QVERIFY(manager.syncShortcutsToUser(player));
 
-    // Call sync
-    bool result = manager.syncShortcutsToUser(currentUser);
+    // Files are written straight into the player's home directory
+    const QString targetApps = PlayerStore::homeDir(player) + QStringLiteral("/.local/share/applications");
+    QVERIFY(QFile::exists(targetApps + QStringLiteral("/heroic-EpicGame.desktop")));
+    QVERIFY(QFile::exists(targetApps + QStringLiteral("/heroic-GogGame.desktop")));
+    QVERIFY(!QFile::exists(targetApps + QStringLiteral("/firefox.desktop")));
 
-    // Since getpwnam will return the REAL home directory of the current user,
-    // and our mock HOME env var only affects Qt/app logic, not getpwnam,
-    // HeroicConfigManager will try to sync to the REAL user's home.
-    // BUT MockHelperClient intercepts copyFileToUser.
-    // So `targetPath` passed to `copyFileToUser` will be real home + /.local/share/applications/heroic-....
-
-    QVERIFY(result);
-    QCOMPARE(mockHelper->copiedFiles.count(), 2);
-
-    QStringList copiedSources;
-    for (const auto &pair : mockHelper->copiedFiles) {
-        copiedSources << pair.first;
-    }
-
-    QString appsDir = homeDir.path() + QStringLiteral("/.local/share/applications");
-    QVERIFY(copiedSources.contains(appsDir + QStringLiteral("/heroic-EpicGame.desktop")));
-    QVERIFY(copiedSources.contains(appsDir + QStringLiteral("/heroic-GogGame.desktop")));
-    QVERIFY(!copiedSources.contains(appsDir + QStringLiteral("/firefox.desktop")));
+    // Invalid player names never resolve to a directory
+    QVERIFY(!manager.syncShortcutsToUser(QStringLiteral("../escape")));
 }
 
 // Disabled: methods not implemented in HeroicConfigManager

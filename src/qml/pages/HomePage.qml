@@ -17,10 +17,6 @@ Kirigami.ScrollablePage {
     required property var sessionManager
     required property var sessionRunner
     required property var deviceManager
-    required property var helperClient
-
-    // Computed properties
-    property bool helperAvailable: helperClient?.available ?? false
     property bool hasControllers: deviceManager && deviceManager.controllers.length > 0
 
     Component.onCompleted: {
@@ -316,34 +312,6 @@ Kirigami.ScrollablePage {
                         ? i18ncp("@info", "%1 detected", "%1 detected", deviceManager.controllers.length)
                         : i18nc("@info", "Unknown")
                     color: root.hasControllers ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                }
-            }
-
-            RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Helper Service:")
-                spacing: Kirigami.Units.smallSpacing
-
-                Kirigami.Icon {
-                    source: root.helperAvailable ? "emblem-ok-symbolic" : "emblem-warning-symbolic"
-                    color: root.helperAvailable ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                }
-
-                Controls.Label {
-                    text: root.helperAvailable ? i18nc("@info", "Connected") : i18nc("@info", "Not configured")
-                    color: root.helperAvailable ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                }
-
-                Controls.Button {
-                    objectName: "btnSetup"
-                    Accessible.role: Accessible.Button
-                    Accessible.name: i18nc("@action:button", "Setup")
-                    Accessible.onPressAction: clicked()
-                    visible: !root.helperAvailable
-                    text: i18nc("@action:button", "Setup")
-                    flat: true
-                    onClicked: applicationWindow().pushSettingsPage()
                 }
             }
         }

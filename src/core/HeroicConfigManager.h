@@ -8,8 +8,7 @@
 #include <qqmlintegration.h>
 #include <QString>
 #include <QStringList>
-
-#include "../dbus/CouchPlayHelperClient.h"
+#include <QVariantList>
 
 /**
  * HeroicPaths - Detected Heroic installation paths
@@ -72,7 +71,7 @@ Q_DECLARE_METATYPE(HeroicGame)
  *
  * Handles detection of Heroic installation (native or Flatpak),
  * parsing of game configurations from Epic (Legendary), GOG, and Amazon (Nile),
- * and extraction of paths for ACL setup.
+ * and extraction of game paths for player sandboxes.
  */
 class HeroicConfigManager : public QObject
 {
@@ -84,7 +83,6 @@ class HeroicConfigManager : public QObject
     Q_PROPERTY(bool isFlatpak READ isFlatpak NOTIFY heroicPathsChanged)
     Q_PROPERTY(int gameCount READ gameCount NOTIFY gamesLoaded)
     Q_PROPERTY(QString heroicCommand READ heroicCommand NOTIFY heroicPathsChanged)
-    Q_PROPERTY(CouchPlayHelperClient *helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
     Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY
                    syncShortcutsEnabledChanged)
 public:
@@ -100,14 +98,6 @@ public:
     }
     void setSyncShortcutsEnabled(bool enabled);
 
-    /**
-     * Set the helper client for privileged file operations
-     */
-    void setHelperClient(CouchPlayHelperClient *client);
-    CouchPlayHelperClient *helperClient() const
-    {
-        return m_helperClient;
-    }
     /**
      * @brief Detect Heroic installation paths
      * Checks for native installation and Flatpak
@@ -180,7 +170,7 @@ public:
 
     /**
      * @brief Extract unique game installation directories
-     * Used for setting ACLs on game folders
+     * Used for sharing game folders with players
      * @return List of unique directory paths
      */
     Q_INVOKABLE QStringList extractGameDirectories() const;
@@ -218,7 +208,6 @@ public:
 Q_SIGNALS:
     void heroicPathsChanged();
     void gamesLoaded();
-    void helperClientChanged();
     void syncShortcutsEnabledChanged();
     void syncCompleted(const QString &username);
     void syncFailed(const QString &username, const QString &error);
@@ -235,7 +224,6 @@ private:
      */
     void loadHeroicConfig();
 
-    CouchPlayHelperClient *m_helperClient = nullptr;
     HeroicPaths m_heroicPaths;
     QList<HeroicGame> m_games;
     QString m_userHome;

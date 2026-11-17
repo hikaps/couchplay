@@ -1,5 +1,0 @@
-[D-BUS Service]
-Name=io.github.hikaps.CouchPlayHelper
-Exec=/usr/local/libexec/couchplay-helper
-User=root
-SystemdService=couchplay-helper.service

@@ -27,7 +27,6 @@ Q_DECLARE_LOGGING_CATEGORY(couchplayCore)
 Q_DECLARE_LOGGING_CATEGORY(couchplaySteam)
 
 // D-Bus helper client communication
-Q_DECLARE_LOGGING_CATEGORY(couchplayHelper)
 
 // Gamescope instance management
 Q_DECLARE_LOGGING_CATEGORY(couchplayGamescope)

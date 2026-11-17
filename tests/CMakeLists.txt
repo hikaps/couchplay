@@ -12,7 +12,6 @@ set(TEST_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/dbus
     ${CMAKE_CURRENT_BINARY_DIR}
     ${PROJECT_BINARY_DIR}
 )
@@ -32,8 +31,6 @@ set(TEST_MANAGER_SOURCES
     ../src/core/SignalBridge.h
     ../src/core/GamescopeInstance.cpp
     ../src/core/GamescopeInstance.h
-    ../src/core/UserManager.cpp
-    ../src/core/UserManager.h
     ../src/core/MonitorManager.cpp
     ../src/core/MonitorManager.h
     ../src/core/AudioManager.cpp
@@ -42,10 +39,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/WindowManager.h
     ../src/core/PresetManager.cpp
     ../src/core/PresetManager.h
-    ../helper/DirectoryPlan.cpp
-    ../helper/DirectoryPlan.h
-    ../helper/SteamCompatToolMapping.cpp
-    ../helper/SteamCompatToolMapping.h
+    ../src/core/SteamCompatToolMapping.cpp
+    ../src/core/SteamCompatToolMapping.h
     ../src/core/HeroicConfigManager.cpp
     ../src/core/HeroicConfigManager.h
     ../src/core/SteamConfigManager.cpp
@@ -79,25 +74,16 @@ set(TEST_MANAGER_SOURCES
     ../src/core/StreamAudio.h
     ../src/core/UpdateChecker.cpp
     ../src/core/UpdateChecker.h
-    ../src/dbus/CouchPlayHelperClient.cpp
-    ../src/dbus/CouchPlayHelperClient.h
+    ../src/core/PlayerStore.cpp
+    ../src/core/PlayerStore.h
+    ../src/core/PlayerFiles.cpp
+    ../src/core/PlayerFiles.h
+    ../src/core/SandboxCommand.cpp
+    ../src/core/SandboxCommand.h
+    ../src/core/PadForwarder.cpp
+    ../src/core/PadForwarder.h
 )
 
-# CouchPlayHelper sources for helper tests
-set(HELPER_TEST_SOURCES
-    ../helper/CouchPlayHelper.cpp
-    ../helper/CouchPlayHelper.h
-    ../helper/DirectoryPlan.h
-    ../helper/DirectoryPlan.cpp
-    ../helper/InstanceBootstrap.cpp
-    ../helper/InstanceBootstrap.h
-    ../helper/SecureFs.cpp
-    ../helper/SecureFs.h
-    ../helper/SystemOps.cpp
-    ../helper/SystemOps.h
-    ../helper/SteamCompatToolMapping.cpp
-    ../helper/SteamCompatToolMapping.h
-)
 
 # Function to create a test executable
 function(add_couchplay_test TEST_NAME)
@@ -137,40 +123,6 @@ function(add_couchplay_test TEST_NAME)
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endfunction()
 
-# Function to create helper test executable (needs helper sources)
-function(add_helper_test TEST_NAME)
-    add_executable(${TEST_NAME}
-        ${TEST_NAME}.cpp
-        ${HELPER_TEST_SOURCES}
-    )
-
-    target_link_libraries(${TEST_NAME} PRIVATE
-        Qt6::Core
-        Qt6::DBus
-        Qt6::Test
-        ${LIBACL_LIBRARY}
-    )
-
-    if(PolkitQt6-1_FOUND)
-        target_link_libraries(${TEST_NAME} PRIVATE PolkitQt6-1::Core)
-        target_compile_definitions(${TEST_NAME} PRIVATE HAVE_POLKITQT)
-    endif()
-
-    target_include_directories(${TEST_NAME} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../helper
-        ${LIBACL_INCLUDE_DIR}
-    )
-
-    # Enable automoc for QtTest
-    set_target_properties(${TEST_NAME} PROPERTIES
-        AUTOMOC ON
-        AUTORCC ON
-    )
-
-    # Register with CTest
-    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
-endfunction()
 
 
 add_couchplay_test(test_commandlineoptions)
@@ -193,9 +145,6 @@ add_couchplay_test(test_presetmanager_integration)
 add_couchplay_test(test_scanapplications)
 add_couchplay_test(test_sessionmanager)
 add_couchplay_test(test_sessionrunner)
-target_sources(test_sessionrunner PRIVATE ../helper/SecureFs.cpp)
-target_include_directories(test_sessionrunner PRIVATE ${LIBACL_INCLUDE_DIR})
-target_link_libraries(test_sessionrunner PRIVATE ${LIBACL_LIBRARY})
 add_couchplay_test(test_streamaudio)
 add_couchplay_test(test_streaming_config)
 add_couchplay_test(test_streaming_session)
@@ -204,23 +153,19 @@ add_couchplay_test(test_streammanager)
 add_couchplay_test(test_sunshine_api)
 target_compile_definitions(test_sunshine_api PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 add_couchplay_test(test_sunshine_config)
-add_couchplay_test(test_usermanager)
-add_couchplay_test(test_couchplayhelperclient)
 add_couchplay_test(test_steamcompattoolmapping)
 add_couchplay_test(test_updatechecker)
 add_couchplay_test(test_virtualdisplaymanager)
+add_couchplay_test(test_sandboxcommand)
+add_couchplay_test(test_playerstore)
+add_couchplay_test(test_playerfiles)
 
-# Add helper tests
-add_helper_test(test_couchplayhelper)
-option(COUCHPLAY_PRIVILEGED_TESTS "Build tests requiring a disposable privileged systemd host" OFF)
-if(COUCHPLAY_PRIVILEGED_TESTS)
-    add_helper_test(test_instance_bootstrap_integration)
-    add_executable(namespace_gamescope_probe namespace_gamescope_probe.cpp)
-    target_link_libraries(namespace_gamescope_probe PRIVATE Qt6::Core)
-    add_dependencies(test_instance_bootstrap_integration namespace_gamescope_probe)
-    set_tests_properties(test_instance_bootstrap_integration PROPERTIES
-        LABELS "privileged"
-        RUN_SERIAL TRUE
-        TIMEOUT 900
-    )
-endif()
+# couchplay-padfwd's pure translation/chord logic (C), tested without uinput
+add_executable(test_padmap
+    test_padmap.cpp
+    ../tools/padfwd/padmap.c
+)
+target_link_libraries(test_padmap PRIVATE Qt6::Core Qt6::Test)
+target_include_directories(test_padmap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../tools/padfwd)
+set_target_properties(test_padmap PROPERTIES AUTOMOC ON)
+add_test(NAME test_padmap COMMAND test_padmap)

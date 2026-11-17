@@ -8,11 +8,11 @@ QML/Kirigami UI layer: 17 files (~4.3K lines), 6 pages, 5 components, 5 dialogs.
 
 ## STRUCTURE
 
-**Pages (pages/):** HomePage (325 lines), SessionSetupPage (968 lines), DeviceAssignmentPage (479 lines), UsersPage (404 lines), SettingsPage (729 lines), ProfilesPage (256 lines)
+**Pages (pages/):** HomePage, SessionSetupPage, DeviceAssignmentPage, PlayersPage (player list, add/delete, Moonlight pairing), SettingsPage, ProfilesPage
 
 **Components (components/):** SelectableCard (selection state + hover), ActionCard (CTA with badge), InfoCard (header + content slot), PresetSelector (ComboBox with icons), CollapsibleSection (animated toggle)
 
-**Dialogs (components/dialogs/):** AddPresetDialog (search/filter ListView), EditPresetDialog (ListModel + FolderDialog), DeletePresetDialog, ResetSettingsDialog, InstallHelperDialog
+**Dialogs (components/dialogs/):** AddPresetDialog (search/filter ListView), EditPresetDialog (ListModel + FolderDialog), DeletePresetDialog, ResetSettingsDialog
 
 ## WHERE TO LOOK
 
@@ -59,7 +59,7 @@ QML/Kirigami UI layer: 17 files (~4.3K lines), 6 pages, 5 components, 5 dialogs.
 
 **Page Components:** Main.qml defines pages as Components to defer instantiation (memory optimization).
 
-**Null Safety:** `property bool helperAvailable: helperClient?.available ?? false` uses optional chaining.
+**Null Safety:** `property bool hasControllers: deviceManager && deviceManager.controllers.length > 0` guards optional objects; `playerStore?.players ?? []` uses optional chaining.
 
 **Lazy Managers:** SettingsPage creates internal PresetManager if not provided (enables standalone testing).
 

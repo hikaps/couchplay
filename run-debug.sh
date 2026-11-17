@@ -8,7 +8,7 @@
 #   ./run-debug.sh              # Enable all couchplay.* debug logs
 #   ./run-debug.sh --all        # Enable ALL Qt debug logs (very verbose)
 #   ./run-debug.sh --steam      # Enable only Steam-related logs
-#   ./run-debug.sh --helper     # Enable only D-Bus helper logs
+#   ./run-debug.sh --devices    # Enable only device/controller logs
 
 set -e
 
@@ -36,10 +36,10 @@ case "${1:-}" in
         LOGGING_RULES="couchplay.steam=true"
         echo "Enabling Steam config logs only"
         ;;
-    --helper)
-        # D-Bus helper communication only
-        LOGGING_RULES="couchplay.helper=true"
-        echo "Enabling D-Bus helper logs only"
+    --devices)
+        # Device / controller handling only
+        LOGGING_RULES="couchplay.devices=true"
+        echo "Enabling device logs only"
         ;;
     --core)
         # Core session management only
@@ -61,7 +61,7 @@ case "${1:-}" in
         ;;
     *)
         echo "Unknown option: $1"
-        echo "Usage: $0 [--all|--steam|--helper|--core|--gamescope|--sharing]"
+        echo "Usage: $0 [--all|--steam|--devices|--core|--gamescope|--sharing]"
         exit 1
         ;;
 esac

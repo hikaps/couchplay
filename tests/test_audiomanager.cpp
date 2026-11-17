@@ -25,11 +25,7 @@ private Q_SLOTS:
     void testConstructionDefaults();
     void testPipeWireDetection();
     void testPulseAudioFallback();
-    void testMultiUserConfiguredRequiresAcl();
-    void testConfigurationChangedSignal();
     void testAudioServerChangedSignal();
-    void testCheckSocketAclNonexistent();
-    void testCheckSocketAclWithFakeSocket();
     void testParseSinksSkipsCouchPlayNullSinks();
     void testParseSinksRejectsInvalidInput();
 
@@ -62,9 +58,6 @@ void TestAudioManager::cleanup()
 void TestAudioManager::testConstructionDefaults()
 {
     m_manager = new AudioManager();
-
-    // No pipewire-0 socket in the isolated test runtime directory
-    QVERIFY(!m_manager->isMultiUserConfigured());
 
     const QString server = m_manager->audioServer();
     QVERIFY2(server == QStringLiteral("pipewire") || server == QStringLiteral("pulseaudio"),
@@ -102,51 +95,6 @@ void TestAudioManager::testPulseAudioFallback()
     QCOMPARE(m_manager->audioServer(), QStringLiteral("pulseaudio"));
 }
 
-void TestAudioManager::testMultiUserConfiguredRequiresAcl()
-{
-    const QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    QDir().mkpath(runtimeDir);
-    const QString socketPath = runtimeDir + QStringLiteral("/pipewire-0");
-    {
-        QFile f(socketPath);
-        QVERIFY(f.open(QIODevice::WriteOnly));
-        f.close();
-    }
-
-    m_manager = new AudioManager();
-
-    // Even though pipewire-0 exists, multiUserConfigured should be false
-    // because the test environment lacks the couchplay group ACL on the socket.
-    // This verifies that mere file existence is insufficient (Issue #1/#2).
-    QVERIFY(!m_manager->isMultiUserConfigured());
-
-    QFile::remove(socketPath);
-}
-
-void TestAudioManager::testConfigurationChangedSignal()
-{
-    const QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    QDir().mkpath(runtimeDir);
-    const QString socketPath = runtimeDir + QStringLiteral("/pipewire-0");
-    {
-        QFile f(socketPath);
-        QVERIFY(f.open(QIODevice::WriteOnly));
-        f.close();
-    }
-
-    m_manager = new AudioManager();
-
-    QSignalSpy spy(m_manager, &AudioManager::configurationChanged);
-    QVERIFY(spy.isValid());
-
-    m_manager->checkConfiguration();
-    QCOMPARE(spy.count(), 0);
-
-    QFile::remove(socketPath);
-    m_manager->checkConfiguration();
-    QCOMPARE(spy.count(), 0);
-}
-
 void TestAudioManager::testAudioServerChangedSignal()
 {
     const QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
@@ -171,35 +119,6 @@ void TestAudioManager::testAudioServerChangedSignal()
     QCOMPARE(spy.count(), 1);
 
     QFile::remove(socketPath);
-}
-
-void TestAudioManager::testCheckSocketAclNonexistent()
-{
-    m_manager = new AudioManager();
-
-    const QString fakePath = QStringLiteral("/tmp/couchplay-test-nonexistent-socket-39847");
-    QVERIFY(!QFile::exists(fakePath));
-
-    QVERIFY(!m_manager->checkSocketAcl(fakePath));
-}
-
-void TestAudioManager::testCheckSocketAclWithFakeSocket()
-{
-    m_manager = new AudioManager();
-
-    QTemporaryDir tempDir;
-    QVERIFY(tempDir.isValid());
-    const QString fakeSocket = tempDir.path() + QStringLiteral("/pipewire-0");
-    {
-        QFile f(fakeSocket);
-        QVERIFY2(f.open(QIODevice::WriteOnly), "Failed to create fake socket file");
-        f.write("test");
-        f.close();
-    }
-
-    const bool result = m_manager->checkSocketAcl(fakeSocket);
-
-    QVERIFY(!result);
 }
 
 void TestAudioManager::testParseSinksSkipsCouchPlayNullSinks()

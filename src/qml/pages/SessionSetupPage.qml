@@ -18,14 +18,14 @@ Kirigami.ScrollablePage {
     required property var sessionRunner
     required property var deviceManager
     required property var monitorManager
-    required property var userManager
+    required property var playerStore
     required property var presetManager
     required property var steamConfigManager
     required property var heroicConfigManager
     required property var audioManager
 
-    // Asks the application to show the Users page, where Moonlight clients are paired
-    signal openUsersRequested()
+    // Asks the application to show the Players page, where Moonlight clients are paired
+    signal openPlayersRequested()
 
     property int instanceCount: sessionManager ? sessionManager.instanceCount : 2
     property string layoutMode: sessionManager ? sessionManager.currentLayout : "horizontal"
@@ -70,16 +70,17 @@ Kirigami.ScrollablePage {
         }
     }
 
-    // Get available users for a specific instance
-    function getAvailableUsers(forIndex) {
+    // Get available players for a specific instance
+    function getAvailablePlayers(forIndex) {
         // Reference instancesRevision to create binding dependency
         void(root.instancesRevision)
-        if (!root.userManager || !root.sessionManager) return []
-        let allUsers = root.userManager.users
+        if (!root.playerStore || !root.sessionManager) return []
         let assignedToOthers = root.sessionManager.getAssignedUsers(forIndex)
-        let filtered = allUsers.filter(user => !user.isCurrent && !assignedToOthers.includes(user.username))
-        // Prepend a "None" entry so users can deselect their choice
-        return [{ username: "" }].concat(filtered)
+        let available = root.playerStore.players
+            .filter(name => !assignedToOthers.includes(name))
+            .map(name => ({ player: name }))
+        // Prepend a "None" entry (empty = desktop user)
+        return [{ player: "" }].concat(available)
     }
 
     // Connector of the effective main screen: the saved one if connected, else the primary monitor.
@@ -495,14 +496,14 @@ Kirigami.ScrollablePage {
                 property bool streamsToMoonlight: displayValue === "virtual" || (displayValue !== "main" && streamToMoonlightValue)
 
                 readonly property var streamManager: root.sessionRunner ? root.sessionRunner.streamManager : null
-                readonly property string cardUsername: {
+                readonly property string cardPlayer: {
                     void(cardRevision)
                     if (!cardSessionManager) return ""
-                    return cardSessionManager.getInstanceConfig(instanceCard.index)?.username ?? ""
+                    return cardSessionManager.getInstanceConfig(instanceCard.index)?.player ?? ""
                 }
 
                 // Paired Moonlight clients of this player's gaming user
-                readonly property int pairedCount: root.sessionRunner ? root.sessionRunner.pairedClientCount(cardUsername) : 0
+                readonly property int pairedCount: root.sessionRunner ? root.sessionRunner.pairedClientCount(cardPlayer) : 0
 
 
 
@@ -524,7 +525,7 @@ Kirigami.ScrollablePage {
                 
                 
                 // Pre-translated strings to avoid i18nc scoping issues inside FormLayout
-                readonly property string labelUser: i18nc("@label", "User:")
+                readonly property string labelUser: i18nc("@label", "Player:")
                 readonly property string labelLauncher: i18nc("@label", "Launcher:")
                 readonly property string labelDisplay: i18nc("@label", "Display:")
                 readonly property string optionMainScreen: i18nc("@item:inlistbox", "Main screen")
@@ -537,7 +538,7 @@ Kirigami.ScrollablePage {
                 readonly property string labelStreamStatus: i18nc("@label", "Stream:")
                 readonly property string labelPairing: i18nc("@label", "Pairing:")
                 readonly property string textNotPaired: i18nc("@info:status", "Moonlight: not paired yet")
-                readonly property string textManageMoonlight: i18nc("@action:button", "Manage on Users page")
+                readonly property string textManageMoonlight: i18nc("@action:button", "Manage on Players page")
                 readonly property string labelBitrate: i18nc("@label", "Bitrate:")
                 readonly property string labelCodec: i18nc("@label", "Video Codec:")
                 readonly property string labelResolution: i18nc("@label", "Window Size:")
@@ -553,8 +554,6 @@ Kirigami.ScrollablePage {
                 readonly property string tooltipPlayerData: i18nc("@info:tooltip", "Open a folder where you can place per-player files (e.g. configs). They are copied into this player's copy of the shared directories at session start.")
 
 
-                readonly property string labelPrivateTemporaryDirectories: i18nc("@option:check", "Private temporary directories")
-                readonly property string tooltipPrivateTemporaryDirectories: i18nc("@info:tooltip", "Use private /tmp and /var/tmp directories for this instance. They are removed when the instance stops and are not part of the shared-data snapshot.")
 
                 readonly property string labelControllers: i18nc("@label", "Controllers:")
                 readonly property string textPressToAssign: i18nc("@action:button", "Press a button…")
@@ -606,16 +605,16 @@ Kirigami.ScrollablePage {
                             Kirigami.FormData.label: instanceCard.labelUser
                             Layout.fillWidth: true
 
-                            model: root.getAvailableUsers(instanceCard.index)
-                            textRole: "username"
-                            valueRole: "username"
+                            model: root.getAvailablePlayers(instanceCard.index)
+                            textRole: "player"
+                            valueRole: "player"
 
                             onModelChanged: {
                                 let config = root.sessionManager?.getInstanceConfig(instanceCard.index)
-                                let currentUsername = config?.username ?? ""
-                                if (currentUsername && model) {
+                                let currentPlayer = config?.player ?? ""
+                                if (currentPlayer && model) {
                                     for (let i = 0; i < model.length; i++) {
-                                        if (model[i].username === currentUsername) {
+                                        if (model[i].player === currentPlayer) {
                                             currentIndex = i
                                             return
                                         }
@@ -625,8 +624,8 @@ Kirigami.ScrollablePage {
                             }
 
                             displayText: count === 0
-                                ? i18nc("@info", "No users available")
-                                : (currentIndex >= 0 ? currentText : i18nc("@info", "Select a user..."))
+                                ? i18nc("@info", "No players available")
+                                : (currentIndex >= 0 ? currentText : i18nc("@info", "Select a player..."))
 
                             onActivated: {
                                 if (root.sessionManager && currentValue) {
@@ -637,7 +636,7 @@ Kirigami.ScrollablePage {
 
                         Controls.Label {
                             visible: userCombo.currentIndex < 0 && userCombo.count > 0
-                            text: i18nc("@info:status", "Please select a user for this instance")
+                            text: i18nc("@info:status", "Please select a player for this instance")
                             color: Kirigami.Theme.neutralTextColor
                             font.italic: true
                             wrapMode: Text.WordWrap
@@ -1070,7 +1069,7 @@ Kirigami.ScrollablePage {
                                 text: instanceCard.textManageMoonlight
                                 icon.name: "user-properties"
                                 flat: true
-                                onClicked: root.openUsersRequested()
+                                onClicked: root.openPlayersRequested()
                             }
                         }
 
@@ -1180,29 +1179,6 @@ Kirigami.ScrollablePage {
                                     onClicked: applicationWindow().pushDeviceAssignmentPage()
                                 }
                             }
-                        }
-
-                        Controls.CheckBox {
-                            objectName: "checkPrivateTemporaryDirectories"
-                            Kirigami.FormData.label: instanceCard.labelPrivateTemporaryDirectories
-                            Accessible.role: Accessible.CheckBox
-                            Accessible.name: instanceCard.labelPrivateTemporaryDirectories
-                            checked: {
-                                void(instanceCard.cardRevision)
-                                return instanceCard.cardSessionManager
-                                    ? instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).privateTemporaryDirectories
-                                    : false
-                            }
-                            onClicked: {
-                                if (instanceCard.cardSessionManager) {
-                                    let config = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index)
-                                    config.privateTemporaryDirectories = checked
-                                    instanceCard.cardSessionManager.setInstanceConfig(instanceCard.index, config)
-                                }
-                            }
-                            Controls.ToolTip.text: instanceCard.tooltipPrivateTemporaryDirectories
-                            Controls.ToolTip.visible: hovered
-                            Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
                         }
 
                         Controls.SpinBox {

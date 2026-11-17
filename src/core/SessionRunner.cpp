@@ -2,9 +2,7 @@
 // SPDX-FileCopyrightText: 2025 CouchPlay Contributors
 
 #include "SessionRunner.h"
-#include "../../helper/HomePathMapping.h"
-#include "../../helper/DirectoryPlan.h"
-#include "../dbus/CouchPlayHelperClient.h"
+#include "HomePathMapping.h"
 #include "DeviceManager.h"
 #include "GamescopeInstance.h"
 #include "HostProcess.h"
@@ -15,7 +13,8 @@
 #include "SteamConfigManager.h"
 #include "StreamManager.h"
 #include "SunshineConfig.h"
-#include "UserLookup.h"
+#include "PlayerFiles.h"
+#include "PlayerStore.h"
 #include "WindowManager.h"
 #include "VirtualDisplayManager.h"
 #include "MonitorManager.h"
@@ -37,20 +36,17 @@
 #include <KGlobalAccel>
 #include <KLocalizedString>
 
-#include <grp.h>
-#include <pwd.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <memory>
 #include <vector>
 
-static const QString COUCHPLAY_GROUP = QStringLiteral("couchplay");
-
-// Steam's client IPC listens on a fixed loopback port (57343) shared by every
-// user, so a player's games would reach the desktop's (or another player's)
-// Steam and crash in steamclient.so. Each player's Steam gets a free port of
-// its own; every server stays open until all are chosen so no port repeats.
+// Players share the host's network, and Steam's client IPC listens on one fixed
+// loopback port (57343). Without an override each player's games would reach the
+// desktop's (or another player's) Steam and crash in steamclient.so. Each
+// player's Steam gets a free port of its own; every server stays open until all
+// are chosen so no port repeats.
 static QList<quint16> reserveLoopbackPorts(int count)
 {
     std::vector<std::unique_ptr<QTcpServer>> servers;
@@ -65,28 +61,6 @@ static QList<quint16> reserveLoopbackPorts(int count)
         servers.push_back(std::move(server));
     }
     return ports;
-}
-
-static bool isUserInCouchPlayGroup(const QString &username)
-{
-    struct group *grp = getgrnam(COUCHPLAY_GROUP.toLocal8Bit().constData());
-    if (!grp) {
-        return false;
-    }
-
-    for (char **member = grp->gr_mem; *member != nullptr; ++member) {
-        if (username == QString::fromLocal8Bit(*member)) {
-            return true;
-        }
-    }
-
-    // Primary group check: getgrnam(3) only returns supplementary members in gr_mem
-    struct passwd *pw = getpwnam(username.toLocal8Bit().constData());
-    if (pw && pw->pw_gid == grp->gr_gid) {
-        return true;
-    }
-
-    return false;
 }
 
 SessionRunner::SessionRunner(QObject *parent)
@@ -203,7 +177,7 @@ int SessionRunner::streamingInstanceForUser(const QString &username) const
     }
     const QList<InstanceConfig> &instances = activeProfile().instances;
     for (auto it = m_streamingInstances.constBegin(); it != m_streamingInstances.constEnd(); ++it) {
-        if (it.key() >= 0 && it.key() < instances.size() && instances[it.key()].username == username) {
+        if (it.key() >= 0 && it.key() < instances.size() && instances[it.key()].player == username) {
             return it.key();
         }
     }
@@ -332,17 +306,11 @@ void SessionRunner::setDeviceManager(DeviceManager *manager)
     }
 }
 
-void SessionRunner::setHelperClient(CouchPlayHelperClient *client)
+void SessionRunner::setPlayerStore(PlayerStore *store)
 {
-    if (m_helperClient != client) {
-        if (m_helperClient) {
-            disconnect(m_helperClient, &CouchPlayHelperClient::exitChordTriggered, this, &SessionRunner::stop);
-        }
-        m_helperClient = client;
-        if (m_helperClient) {
-            connect(m_helperClient, &CouchPlayHelperClient::exitChordTriggered, this, &SessionRunner::stop);
-        }
-        Q_EMIT helperClientChanged();
+    if (m_playerStore != store) {
+        m_playerStore = store;
+        Q_EMIT playerStoreChanged();
     }
 }
 
@@ -473,42 +441,32 @@ bool SessionRunner::start()
     }
 
 
-    QSet<QString> usedUsers;
+    QSet<QString> usedPlayers;
     for (int i = 0; i < instanceCount; ++i) {
-        const QString &username = profile.instances[i].username;
-        if (username.isEmpty()) {
+        const QString &player = profile.instances[i].player;
+        if (player.isEmpty()) {
             continue;
         }
-        if (usedUsers.contains(username)) {
+        if (usedPlayers.contains(player)) {
             Q_EMIT errorOccurred(
-                QStringLiteral("User '%1' is assigned to multiple instances. Each instance needs a unique user.")
-                    .arg(username));
+                QStringLiteral("Player '%1' is assigned to multiple instances. Each instance needs a unique player.")
+                    .arg(player));
             setStatus(QStringLiteral("Error"));
             return false;
         }
-        usedUsers.insert(username);
+        usedPlayers.insert(player);
+        if (!m_playerStore || !m_playerStore->exists(player)) {
+            Q_EMIT errorOccurred(QStringLiteral("Player \"%1\" does not exist").arg(player));
+            setStatus(QStringLiteral("Error"));
+            return false;
+        }
     }
 
-    QString compositorUser = qEnvironmentVariable("USER");
-    if (compositorUser.isEmpty()) {
-        struct passwd *compositorPw = getpwuid(getuid());
-        compositorUser = compositorPw ? QString::fromLocal8Bit(compositorPw->pw_name) : QString();
-    }
-    for (int i = 0; i < instanceCount; ++i) {
-        const QString &username = profile.instances[i].username;
-        if (username.isEmpty() || username == compositorUser) {
-            continue;
-        }
-        const bool inGroup = (m_helperClient && m_helperClient->isAvailable())
-            ? m_helperClient->isInCouchPlayGroup(username)
-            : isUserInCouchPlayGroup(username);
-        if (!inGroup) {
-            Q_EMIT errorOccurred(QStringLiteral("User '%1' is not a CouchPlay managed user. Please create the user via "
-                                                "CouchPlay or add them to the 'couchplay' group.")
-                                     .arg(username));
-            setStatus(QStringLiteral("Error"));
-            return false;
-        }
+    const QString toolError = missingHostToolError();
+    if (!toolError.isEmpty()) {
+        Q_EMIT errorOccurred(toolError);
+        setStatus(QStringLiteral("Error"));
+        return false;
     }
 
     bool steamRequired = false;
@@ -625,12 +583,6 @@ void SessionRunner::continueStartAfterDisplays()
 
     m_streamingInstances.clear();
     if (!streamingIndices.isEmpty()) {
-        // The helper restarts pipewire-pulse when it first opens cross-user audio access, which drops every
-        // sink loaded before it. Do that now so the sinks created below survive until the game starts.
-        if (!m_helperClient || !m_helperClient->setupRuntimeAccess()) {
-            beginFinalization(true, QStringLiteral("Could not set up audio access for streaming"));
-            return;
-        }
         QString audioError;
         if (!m_streamAudio.prepare(streamingIndices, &audioError)) {
             beginFinalization(true, audioError);
@@ -671,11 +623,10 @@ void SessionRunner::continueStartAfterDisplays()
         }
     }
 
-    if (!setupDeviceOwnership()) {
-        beginFinalization(true, QStringLiteral("Failed to set up device ownership"));
+    if (!startPadForwarders()) {
+        beginFinalization(true, QStringLiteral("Failed to set up controllers"));
         return;
     }
-
 
     if (!setupSessionResources()) {
         beginFinalization(true, QStringLiteral("Failed to set up data directories"));
@@ -696,8 +647,10 @@ void SessionRunner::continueStartAfterDisplays()
         const InstanceConfig &instConfig = profile.instances[i];
         const bool isStreaming = m_streamingInstances.contains(i);
         QVariantMap config;
-        config[QStringLiteral("username")] = instConfig.username;
-        config[QStringLiteral("privateTemporaryDirectories")] = instConfig.privateTemporaryDirectories;
+        config[QStringLiteral("player")] = instConfig.player;
+        if (!instConfig.player.isEmpty()) {
+            config[QStringLiteral("playerHome")] = PlayerStore::homeDir(instConfig.player);
+        }
         {
             const QRect &rect = m_layouts[i];
             // KWin places windows in logical pixels, while gamescope sizes its window (-W/-H) in physical pixels
@@ -724,9 +677,9 @@ void SessionRunner::continueStartAfterDisplays()
                 config[QStringLiteral("streamBitrate")] = instConfig.streamBitrate;
                 config[QStringLiteral("streamCodec")] = instConfig.streamCodec;
                 config[QStringLiteral("sunshinePort")] =
-                    SunshineConfig::preferredPort(instConfig.username, i, instConfig.sunshinePort);
+                    SunshineConfig::preferredPort(instConfig.player, i, instConfig.sunshinePort);
             } else if (!instConfig.audioDevice.isEmpty()) {
-                // Players reach the host's PipeWire-Pulse over TCP, so a host sink name is valid for them.
+                // Players share the host's PipeWire-Pulse socket, so a host sink name is valid for them.
                 config[QStringLiteral("sink")] = instConfig.audioDevice;
             } else if (m_streamAudio.isActive() && !m_streamAudio.defaultSink().isEmpty()) {
                 // Sunshine switches the host default sink while streaming; keep local players on the original.
@@ -752,17 +705,10 @@ void SessionRunner::continueStartAfterDisplays()
         config[QStringLiteral("gameCommand")] = QVariant::fromValue(gameCommand);
         config[QStringLiteral("workingDirectory")] = command.workingDirectory;
 
-        if (m_deviceManager) {
-            QVariantList pathList;
-            for (const QString &path : m_deviceManager->getDevicePathsForInstance(i)) {
-                pathList.append(path);
-            }
-            config[QStringLiteral("devicePaths")] = pathList;
+        if (PadForwarder *forwarder = m_padForwarders.value(i)) {
+            config[QStringLiteral("padNode")] = forwarder->node();
         }
-        // Directory preparations carry their own sources. Shared roots admit
-        // only the selected command's working directory, not every data source.
-        config[QStringLiteral("sharedRoots")] = command.workingDirectory.isEmpty()
-            ? QStringList{} : QStringList{command.workingDirectory};
+        config[QStringLiteral("directDevices")] = m_directDevices.value(i);
         m_pendingInstanceConfigs.append(config);
     }
 
@@ -852,7 +798,7 @@ void SessionRunner::continueFinalizationAfterStopping()
     }
 
     m_finalizationCleanupStarted = true;
-    restoreDeviceOwnership();
+    stopPadForwarders();
     teardownSharingState();
     teardownStreamingInstances();
     cleanupInstances();
@@ -879,6 +825,7 @@ void SessionRunner::finishFinalization()
     Q_EMIT runningChanged();
     Q_EMIT instancesChanged();
     if (startupFailure) {
+        qWarning() << "SessionRunner: startup failed:" << message;
         if (!message.isEmpty()) {
             Q_EMIT errorOccurred(message);
         }
@@ -953,7 +900,7 @@ QVariantList SessionRunner::instancesAsVariant() const
         map[QStringLiteral("running")] = instance->isRunning();
         map[QStringLiteral("status")] = instance->status();
         map[QStringLiteral("pid")] = instance->pid();
-        map[QStringLiteral("username")] = instance->username();
+        map[QStringLiteral("player")] = instance->player();
 
         QRect geom = instance->windowGeometry();
         map[QStringLiteral("x")] = geom.x();
@@ -980,8 +927,7 @@ void SessionRunner::startNextInstance()
     int index = m_nextInstanceToStart;
     const QVariantMap &config = m_pendingInstanceConfigs[index];
 
-    auto *instance = new GamescopeInstance(this);
-    instance->setHelperClient(m_helperClient);
+    auto *instance = m_instanceFactory ? m_instanceFactory(this) : new GamescopeInstance(this);
     connect(instance, &GamescopeInstance::started, this, &SessionRunner::onInstanceStarted);
     connect(instance, &GamescopeInstance::stopped, this, &SessionRunner::onInstanceStopped);
     connect(instance, &GamescopeInstance::errorOccurred, this, &SessionRunner::onInstanceError);
@@ -989,7 +935,7 @@ void SessionRunner::startNextInstance()
     m_instances.append(instance);
 
     m_launchErrorReported = false;
-    if (!instance->start(config, index, m_instanceDirectoryPreparations.value(index))) {
+    if (!instance->start(config, index, m_instanceMounts.value(index))) {
         qWarning() << "Failed to start instance" << index;
         if (!m_launchErrorReported) {
             beginFinalization(true, QStringLiteral("Failed to start instance %1").arg(index + 1));
@@ -1017,138 +963,106 @@ void SessionRunner::cleanupInstances()
     teardownStreamingInstances();
     m_streamingInstances.clear();
     m_nextInstanceToStart = 0;
-    m_instanceDirectoryPreparations.clear();
+    m_instanceMounts.clear();
 }
 
 
-bool SessionRunner::setupDeviceOwnership()
+QString SessionRunner::missingHostToolError() const
 {
-    if (!m_deviceManager || !m_helperClient) {
-        return true;
+    struct Tool {
+        const char *program;
+        const char *package;
+    };
+    static const Tool tools[] = {
+        {"bwrap", "bubblewrap"},
+        {"dbus-run-session", "dbus"},
+        {"gamescope", "gamescope"},
+    };
+    for (const Tool &tool : tools) {
+        const QString name = QString::fromLatin1(tool.program);
+        const QString found = m_toolFinder ? m_toolFinder(name) : HostProcess::hostFindExecutable(name);
+        if (found.isEmpty()) {
+            return QStringLiteral("CouchPlay needs '%1' on the host (package: %2)")
+                .arg(name, QString::fromLatin1(tool.package));
+        }
     }
+    return {};
+}
 
-    if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, skipping device ownership setup";
-        return true;
-    }
-
-    m_ownedDevicePaths.clear();
-
+bool SessionRunner::startPadForwarders()
+{
+    stopPadForwarders();
     if (!m_sessionManager) {
         return true;
     }
 
     const auto &profile = activeProfile();
-    bool allSucceeded = true;
-
     for (int i = 0; i < profile.instances.size(); ++i) {
-        const QString &username = profile.instances[i].username;
-        QStringList devicePaths = m_deviceManager->getDevicePathsForInstance(i);
+        // Every instance gets a pad, including streaming ones, so a Moonlight client that joins late has a node.
+        auto *forwarder = new PadForwarder(this);
+        m_padForwarders.insert(i, forwarder);
+        connect(forwarder, &PadForwarder::errorOccurred, this, &SessionRunner::errorOccurred);
+        connect(forwarder, &PadForwarder::chordTriggered, this, &SessionRunner::stop);
+        connect(forwarder, &PadForwarder::sourceLost, this, [i](const QString &path) {
+            qCDebug(couchplayCore) << "Pad source lost for instance" << i << path;
+        });
+        if (!forwarder->start(i)) {
+            return false;
+        }
 
-        if (username.isEmpty()) {
-            for (const QString &path : devicePaths) {
-                if (path.startsWith(QLatin1String("/dev/input/event"))) {
-                    m_helperClient->watchDevice(path);
-                    if (!m_ownedDevicePaths.contains(path)) {
-                        m_ownedDevicePaths.append(path);
-                    }
-                }
-            }
+        if (!m_deviceManager) {
             continue;
         }
-
-
-        const UserIdentity id = resolveUserIdentity(username, m_helperClient);
-        if (!id.valid) {
-            qWarning() << "SessionRunner: User" << username << "not found, skipping device ownership for instance" << i;
-            continue;
-        }
-        int uid = static_cast<int>(id.uid);
-
-
-
-        for (const QString &path : devicePaths) {
-            if (m_helperClient->setDeviceOwner(path, uid)) {
-                if (!m_ownedDevicePaths.contains(path)) {
-                    m_ownedDevicePaths.append(path);
-                }
+        QStringList direct;
+        const QList<int> events = m_deviceManager->getDevicesForInstance(i);
+        for (int eventNumber : events) {
+            const QVariantMap device = m_deviceManager->getDevice(eventNumber);
+            const QString path = device.value(QStringLiteral("path")).toString();
+            if (!path.startsWith(QLatin1String("/dev/input/event"))) {
+                continue;
+            }
+            if (device.value(QStringLiteral("type")).toString() == QLatin1String("controller")) {
+                forwarder->attach(path);
             } else {
-                qWarning() << "SessionRunner: Failed to set ownership of" << path;
-                Q_EMIT errorOccurred(QStringLiteral("Failed to set device ownership for %1").arg(path));
-                allSucceeded = false;
+                direct.append(path);
             }
         }
-
-        QStringList hidrawPaths = m_deviceManager->getHidrawPathsForInstance(i);
-        for (const QString &hidrawPath : hidrawPaths) {
-            if (m_helperClient->setDeviceOwner(hidrawPath, uid)) {
-                if (!m_ownedDevicePaths.contains(hidrawPath)) {
-                    m_ownedDevicePaths.append(hidrawPath);
-                }
-                qDebug() << "SessionRunner: Set hidraw ownership" << hidrawPath << "for user" << username;
-
-            } else {
-                qWarning() << "SessionRunner: Failed to set hidraw ownership" << hidrawPath;
-                allSucceeded = false;
-            }
-        }
+        m_directDevices.insert(i, direct);
     }
-
-    return allSucceeded;
-
+    return true;
 }
 
-void SessionRunner::restoreDeviceOwnership()
+void SessionRunner::stopPadForwarders()
 {
-    if (!m_helperClient || m_ownedDevicePaths.isEmpty()) {
-        return;
+    for (PadForwarder *forwarder : std::as_const(m_padForwarders)) {
+        forwarder->stop();
+        forwarder->deleteLater(); // may be called from the forwarder's own chordTriggered signal
     }
-
-    if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, cannot restore device ownership";
-        m_ownedDevicePaths.clear();
-        return;
-    }
-
-    m_helperClient->restoreAllDevices();
-
-    m_ownedDevicePaths.clear();
+    m_padForwarders.clear();
+    m_directDevices.clear();
 }
 
 bool SessionRunner::setupSessionResources()
 {
-    if (!m_helperClient || !m_sessionManager || !m_presetManager) {
+    if (!m_sessionManager || !m_presetManager) {
         return false;
     }
 
-
-
-    if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available for session resource setup";
-        return false;
-    }
     const bool shareSteamLibraries = m_startingSnapshot.shareSteamLibraries;
     // Arm the sharing-state tracker: teardown must run when the session ends,
     // including when the last game exits on its own
     m_sharedStateActive = true;
     m_steamSharedUsers.clear();
-    m_instanceDirectoryPreparations.clear();
-    // Both paths must come from the host; Flatpak may hide its home symlink.
-    const QVariantMap homeInfo = m_helperClient->getUserHomeInfoByUid(static_cast<uint>(::getuid()));
-    const QString compositorHome = homeInfo.value(QStringLiteral("home")).toString();
-    const QString canonicalCompositorHome = homeInfo.value(QStringLiteral("canonicalHome")).toString();
-    if (compositorHome.isEmpty() || canonicalCompositorHome.isEmpty()) {
-        Q_EMIT errorOccurred(
-            QStringLiteral("Could not determine host home paths; check the CouchPlay helper installation"));
-        return false;
-    }
+    m_instanceMounts.clear();
+    const QString compositorHome = QDir::homePath();
+    const QString canonicalCompositorHome = QFileInfo(compositorHome).canonicalFilePath();
 
     const auto &profile = activeProfile();
     bool allSucceeded = true;
     bool heroicCatalogLoaded = false;
 
     for (int i = 0; i < profile.instances.size(); ++i) {
-        const QString &username = profile.instances[i].username;
+        const QString &username = profile.instances[i].player;
         const QString presetId = profile.instances[i].presetId.isEmpty()
             ? QStringLiteral("steam") : profile.instances[i].presetId;
         if (username.isEmpty()) {
@@ -1164,11 +1078,8 @@ bool SessionRunner::setupSessionResources()
         const bool requiresSteam = requiredIntegrations.contains(QStringLiteral("steam")) || selectedSteamShortcut;
         const bool requiresHeroic = requiredIntegrations.contains(QStringLiteral("heroic"));
 
-
         // Steam shortcut sync: dispatched live at session start (not part of the
         // preset snapshot, so toggling the setting applies to the next session)
-
-
         if (requiresSteam && (!m_steamConfigManager || !m_steamConfigManager->isSteamDetected())) {
             qCWarning(couchplaySteam) << "Required integration is unavailable: steam";
             allSucceeded = false;
@@ -1178,35 +1089,49 @@ bool SessionRunner::setupSessionResources()
         // Steam shortcut game needs the sync, so only that case still fails the launch.
         const bool skipUnbootstrappedSync = requiresSteam && !selectedSteamShortcut && m_steamConfigManager
             && m_steamConfigManager->isSteamDetected() && m_startingSnapshot.syncSteamShortcuts
-            && (!m_helperClient->isSteamBootstrapped(username)
+            && (!m_steamConfigManager->isSteamBootstrapped(username)
                 || m_steamConfigManager->getTargetSteamUserId(username).isEmpty());
         if (skipUnbootstrappedSync) {
             qCInfo(couchplaySteam) << "Skipping Steam shortcut sync for" << username
-                                   << "- Steam has not been run for this user yet";
+                                   << "- Steam has not been run for this player yet";
         }
+
+        // Everything below the player's home that the player's launch needs from the desktop home is bound
+        // read-only at the same path (the player's own home shadows the desktop home inside the sandbox).
+        QList<SandboxMount> mounts;
+        QList<SandboxMount> passthroughMounts;
+        QSet<QString> passthroughPaths;
+        const auto addPassthrough = [&](const QString &path) {
+            const QString cleanPath = QDir::cleanPath(path);
+            if (cleanPath.isEmpty() || !QDir::isAbsolutePath(cleanPath) || passthroughPaths.contains(cleanPath)
+                || !QFileInfo::exists(cleanPath)) {
+                return;
+            }
+            if (mapHomeRelativePath(cleanPath, compositorHome, canonicalCompositorHome).kind != HomePathKind::Relative) {
+                return; // outside the home: already visible in the sandbox
+            }
+            passthroughPaths.insert(cleanPath);
+            passthroughMounts.append(SandboxMount{SandboxMount::RoBind, cleanPath, cleanPath, {}, {}});
+        };
+
         if (requiresSteam && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
             && !skipUnbootstrappedSync && (m_startingSnapshot.syncSteamShortcuts || selectedSteamShortcut)) {
             if (!m_steamConfigManager->sourceAccountAvailable()) {
                 Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
                 return false;
             }
-            qCDebug(couchplaySteam) << "Syncing Steam shortcuts for user" << username;
+            qCDebug(couchplaySteam) << "Syncing Steam shortcuts for player" << username;
             m_steamConfigManager->loadShortcuts();
-            const QStringList shortcutDirs = m_steamConfigManager->extractShortcutDirectories();
-            for (const QString &dir : shortcutDirs) {
-                if (QDir(dir).exists() && !m_helperClient->setPathAclWithParents(dir, username)) {
-                    qCWarning(couchplaySteam) << "Failed to set ACL on shortcut directory" << dir;
-                }
+            for (const QString &dir : m_steamConfigManager->extractShortcutDirectories()) {
+                addPassthrough(dir);
             }
             if (!m_steamConfigManager->syncShortcutsToUser(username)) {
-                qCWarning(couchplaySteam) << "Failed to sync shortcuts to user" << username;
+                qCWarning(couchplaySteam) << "Failed to sync shortcuts to player" << username;
                 allSucceeded = false;
             }
         }
 
-        // Heroic: selective config sync (Flatpak-vs-native aware) plus optional
-        // shortcut sync — replaces the generic whole-directory copy of the
-        // config root, mirroring the pre-refactor setupLauncherAccess behavior
+        // Heroic: selective config sync (Flatpak-vs-native aware) plus optional shortcut sync
         if (requiresHeroic && (!m_heroicConfigManager || !m_heroicConfigManager->isHeroicDetected())) {
             qCWarning(couchplaySteam) << "Required integration is unavailable: heroic";
             allSucceeded = false;
@@ -1217,13 +1142,13 @@ bool SessionRunner::setupSessionResources()
                 m_heroicConfigManager->loadGames();
                 heroicCatalogLoaded = true;
             }
-            qCDebug(couchplaySteam) << "Syncing Heroic config for user" << username;
+            qCDebug(couchplaySteam) << "Syncing Heroic config for player" << username;
             if (!m_heroicConfigManager->syncConfigToUser(username)) {
                 qCWarning(couchplaySteam) << "Failed to sync Heroic config to" << username;
                 allSucceeded = false;
             }
             if (m_startingSnapshot.syncHeroicShortcuts) {
-                qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for user" << username;
+                qCDebug(couchplaySteam) << "Syncing Heroic shortcuts for player" << username;
                 if (!m_heroicConfigManager->syncShortcutsToUser(username)) {
                     qCWarning(couchplaySteam) << "Failed to sync Heroic shortcuts to" << username;
                     allSucceeded = false;
@@ -1231,51 +1156,15 @@ bool SessionRunner::setupSessionResources()
             }
         }
 
-        const QList<DataDirectory> dataDirs = preset.dataDirectories;
-        QVariantList directoryPlans;
-        QSet<QString> plannedAclPaths;
-        const auto isCoveredByConfiguredAcl = [&dataDirs](const QString &path) {
-            for (const DataDirectory &dir : dataDirs) {
-                if (dir.mode != QStringLiteral("acl") || !QDir::isAbsolutePath(dir.path)) {
-                    continue;
-                }
-                const QString aclPath = QDir::cleanPath(dir.path);
-                if (path == aclPath || aclPath == QStringLiteral("/")
-                    || path.startsWith(aclPath + QLatin1Char('/'))) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        const auto appendAclPreparation = [&directoryPlans, &plannedAclPaths](const QString &path) {
-            const QString cleanPath = QDir::cleanPath(path);
-            if (plannedAclPaths.contains(cleanPath)) {
-                return;
-            }
-            plannedAclPaths.insert(cleanPath);
-            directoryPlans.append(DirectoryPreparation{path, QStringLiteral("acl"), {}, {}}.toVariant());
-        };
         if (i < m_startingSnapshot.launchCommands.size()) {
-            const QStringList applicationDirectories =
-                applicationAccessDirectories(m_startingSnapshot.launchCommands.at(i), compositorHome);
-            for (const QString &directory : applicationDirectories) {
-                const QString applicationDirectory = QDir::cleanPath(directory);
-                if (isCoveredByConfiguredAcl(applicationDirectory)) {
-                    continue;
-                }
-
-                if (!m_helperClient->setPathAclWithParents(applicationDirectory, username)) {
-                    qCWarning(couchplaySteam) << "Failed to set ACL for selected application directory"
-                                              << applicationDirectory << "user" << username;
-                    allSucceeded = false;
-                }
-                appendAclPreparation(applicationDirectory);
+            for (const QString &directory :
+                 applicationAccessDirectories(m_startingSnapshot.launchCommands.at(i), compositorHome)) {
+                addPassthrough(directory);
             }
         }
 
-        QSet<QString> gameAccessDirectories;
         if (requiresHeroic && m_heroicConfigManager && m_heroicConfigManager->isHeroicDetected()) {
-            auto addGameAccessDirectory = [&gameAccessDirectories, &compositorHome](const QString &path) {
+            const auto addGameAccessDirectory = [&](const QString &path) {
                 if (path.isEmpty() || !QDir::isAbsolutePath(path) || !QDir(path).exists()) {
                     return;
                 }
@@ -1283,7 +1172,7 @@ bool SessionRunner::setupSessionResources()
                 accessCheck.workingDirectory = path;
                 const QStringList safeDirectories = applicationAccessDirectories(accessCheck, compositorHome);
                 if (!safeDirectories.isEmpty()) {
-                    gameAccessDirectories.insert(safeDirectories.constFirst());
+                    addPassthrough(safeDirectories.constFirst());
                 }
             };
 
@@ -1302,40 +1191,10 @@ bool SessionRunner::setupSessionResources()
                 }
                 addGameAccessDirectory(QFileInfo(executablePath).absolutePath());
             }
-
-            for (const QString &path : gameAccessDirectories) {
-                bool coveredByAclDataDirectory = false;
-                for (const DataDirectory &dir : dataDirs) {
-                    if (dir.mode != QStringLiteral("acl")) {
-                        continue;
-                    }
-                    const QString aclPath = QDir::cleanPath(dir.path);
-                    const bool coveredByAcl = path == aclPath
-                        || (path.startsWith(aclPath + QLatin1Char('/')) && !gameAccessDirectories.contains(aclPath));
-                    if (coveredByAcl) {
-                        coveredByAclDataDirectory = true;
-                        break;
-                    }
-                }
-                if (coveredByAclDataDirectory) {
-                    continue;
-                }
-
-                // Grant traversal to registered game paths; selected data roots are ACLed below.
-                if (!m_helperClient->setPathAclWithParents(path, username)) {
-                    qCWarning(couchplaySteam)
-                        << "Failed to set traversal ACL for Heroic game path" << path << "user" << username;
-                    allSucceeded = false;
-                }
-            }
-        }
-        if (dataDirs.isEmpty()) {
-            m_instanceDirectoryPreparations[i] = directoryPlans;
-            qDebug() << "SessionRunner: No data directories for instance" << i << "user" << username;
-            continue;
         }
 
-        qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for user" << username;
+        const QList<DataDirectory> dataDirs = preset.dataDirectories;
+        qDebug() << "SessionRunner: Setting up" << dataDirs.size() << "data directories for player" << username;
 
         for (const DataDirectory &dir : dataDirs) {
             // Library sharing is opt-in: the steamRoot overlay entry is a
@@ -1366,16 +1225,16 @@ bool SessionRunner::setupSessionResources()
                 // A player whose Steam has never run has no account state to finalize against (no Steam ID), and
                 // Steam creates it on first start. Skip sharing for them instead of failing the whole session; the
                 // next session shares normally.
-                if (!m_helperClient->isSteamBootstrapped(username)
+                if (!m_steamConfigManager->isSteamBootstrapped(username)
                     || m_steamConfigManager->getTargetSteamUserId(username).isEmpty()) {
                     qCInfo(couchplaySteam) << "Skipping Steam library sharing for" << username
-                                           << "- Steam has not been run for this user yet";
+                                           << "- Steam has not been run for this player yet";
                     Q_EMIT librarySharingDeferred(username);
                     continue;
                 }
                 DataDirectory steamMarker = dir;
                 steamMarker.path = m_steamConfigManager->steamPaths().steamRoot;
-                if (!m_steamConfigManager->prepareDataDir(steamMarker, username, directoryPlans)) {
+                if (!m_steamConfigManager->prepareDataDir(steamMarker, username, mounts)) {
                     qCWarning(couchplaySteam) << "Steam library sharing failed for" << dir.path;
                     allSucceeded = false;
                     continue;
@@ -1404,52 +1263,85 @@ bool SessionRunner::setupSessionResources()
             QString targetAlias;
             if (dir.mode == QStringLiteral("copy") && mapping.kind == HomePathKind::External) {
                 targetAlias = QStringLiteral(".couchplay/copies/")
-                    + DirectoryPlan::dataDirectoryStagingSlug(dir.path, compositorHome);
+                    + PlayerFiles::dataDirectoryStagingSlug(dir.path, compositorHome);
             } else if (mapping.kind == HomePathKind::Relative) {
                 targetAlias = mapping.relativePath;
             } else {
                 targetAlias = QStringLiteral(".couchplay/mounts") + QDir::cleanPath(dir.path);
             }
+            const QString source = QDir::cleanPath(dir.path);
+            const QString target = compositorHome + QLatin1Char('/') + targetAlias;
 
             if (dir.mode == QStringLiteral("acl")) {
-                if (!plannedAclPaths.contains(QDir::cleanPath(dir.path))) {
-                    const bool parentsOk = m_helperClient->setPathAclWithParents(dir.path, username);
-                    appendAclPreparation(dir.path);
-                    if (!parentsOk) {
-                        qWarning() << "SessionRunner: Failed to set ACL for" << dir.path << "user" << username;
-                        allSucceeded = false;
-                    }
-                }
+                // "Access original folder": read-only at its own path when it lies below the home.
+                addPassthrough(source);
+                continue;
+            }
+            if (!QFileInfo(source).isDir()) {
+                Q_EMIT errorOccurred(QStringLiteral("Shared directory does not exist: %1").arg(dir.path));
+                allSucceeded = false;
                 continue;
             }
 
             QString stagingPath;
             if (dir.mode == QStringLiteral("copy") || dir.mode == QStringLiteral("overlay")) {
                 const QString stagingDir = playerDataStagingRoot(presetId, username) + QLatin1Char('/')
-                    + DirectoryPlan::dataDirectoryStagingSlug(dir.path, compositorHome);
+                    + PlayerFiles::dataDirectoryStagingSlug(dir.path, compositorHome);
                 if (QDir(stagingDir).exists()) {
-                    // The GUI may use a caller-owned storage alias. Pass the
-                    // resolved directory; the helper still walks it no-follow.
-                    stagingPath = QFileInfo(stagingDir).canonicalFilePath();
-                    if (stagingPath.isEmpty()) {
-                        Q_EMIT errorOccurred(
-                            QStringLiteral("Could not resolve player staging directory: %1").arg(stagingDir));
-                        allSucceeded = false;
-                        continue;
-                    }
+                    stagingPath = stagingDir;
                 }
             }
-            directoryPlans.append(DirectoryPreparation{dir.path, dir.mode, targetAlias, stagingPath}.toVariant());
+
+            QString copyError;
+            if (dir.mode == QStringLiteral("bind")) {
+                mounts.append(SandboxMount{SandboxMount::Bind, source, target, {}, {}});
+            } else if (dir.mode == QStringLiteral("overlay")) {
+                const QString layer = PlayerStore::layerDir(username, source);
+                const QString upper = layer + QStringLiteral("/upper");
+                const QString work = layer + QStringLiteral("/work");
+                if (!QDir().mkpath(upper) || !QDir().mkpath(work)) {
+                    Q_EMIT errorOccurred(QStringLiteral("Could not create overlay storage for %1").arg(dir.path));
+                    allSucceeded = false;
+                    continue;
+                }
+                if (!stagingPath.isEmpty() && !PlayerFiles::copyTreeContents(stagingPath, upper, &copyError)) {
+                    Q_EMIT errorOccurred(QStringLiteral("Could not seed %1: %2").arg(dir.path, copyError));
+                    allSucceeded = false;
+                    continue;
+                }
+                mounts.append(SandboxMount{SandboxMount::Overlay, source, target, upper, work});
+            } else if (dir.mode == QStringLiteral("copy")) {
+                const QString destination = PlayerStore::homeDir(username) + QLatin1Char('/') + targetAlias;
+                // The player can leave a symlink anywhere below its home; replacing through it would write
+                // into the desktop user's real files
+                if (PlayerFiles::hasSymlinkUnder(PlayerStore::homeDir(username), destination)) {
+                    Q_EMIT errorOccurred(QStringLiteral("Not copying %1: a path component in the player's home is a symlink").arg(dir.path));
+                    allSucceeded = false;
+                    continue;
+                }
+                if (!PlayerFiles::replaceTree(source, destination, stagingPath, &copyError)) {
+                    Q_EMIT errorOccurred(QStringLiteral("Could not copy %1: %2").arg(dir.path, copyError));
+                    allSucceeded = false;
+                    continue;
+                }
+                // A read-only passthrough of the same folder (or a parent) must not hide the private copy
+                mounts.append(SandboxMount{SandboxMount::Bind, destination, target, {}, {}});
+            } else {
+                Q_EMIT errorOccurred(QStringLiteral("Unknown data directory mode '%1' for %2").arg(dir.mode, dir.path));
+                allSucceeded = false;
+                continue;
+            }
             if (requiresSteam && m_steamConfigManager
                 && !m_steamConfigManager->finalizeDataDir(dir, username)) {
                 qCWarning(couchplaySteam) << "Steam finalizeDataDir failed for" << dir.path;
                 allSucceeded = false;
             }
         }
-        m_instanceDirectoryPreparations[i] = directoryPlans;
-
+        // Read-only passthroughs first, parents before children, so they never hide a writable bind, overlay or copy
+        std::stable_sort(passthroughMounts.begin(), passthroughMounts.end(),
+                         [](const SandboxMount &a, const SandboxMount &b) { return a.target.size() < b.target.size(); });
+        m_instanceMounts[i] = passthroughMounts + mounts;
     }
-
 
     return allSucceeded;
 }
@@ -1559,14 +1451,14 @@ QString SessionRunner::validatePairing(const SessionProfile &profile,
         const InstanceConfig &instance = profile.instances[i];
         const bool streaming = instance.display != InstanceConfig::DisplayMain
             && (instance.display == InstanceConfig::DisplayVirtual || instance.streamToMoonlight);
-        if (!streaming || instance.username.isEmpty()) {
+        if (!streaming || instance.player.isEmpty()) {
             continue;
         }
-        if (pairedCount(instance.username) == 0) {
+        if (pairedCount(instance.player) == 0) {
             return QStringLiteral("Player %1 (%2) has no paired Moonlight client. "
-                                  "Pair one for %2 on the Users page first.")
+                                  "Pair one for %2 on the Players page first.")
                 .arg(i + 1)
-                .arg(instance.username);
+                .arg(instance.player);
         }
     }
     return {};
@@ -1678,7 +1570,7 @@ void SessionRunner::onInstanceStarted()
         return;
     }
 
-    // The helper's first launch restarts pipewire-pulse, which unloads the stream sinks
+    // Re-verify the stream sinks in case the audio server restarted since startup
     if (!m_streamAudio.ensureSinks()) {
         beginFinalization(true, QStringLiteral("Could not restore the stream audio sinks"));
         return;
@@ -1694,14 +1586,14 @@ void SessionRunner::onInstanceStarted()
         const QVariantMap &config = m_pendingInstanceConfigs.value(idx);
         StreamSpec spec;
         spec.instanceIndex = idx;
-        spec.identityKey = instConfig.username;
+        spec.identityKey = instConfig.player;
         spec.outputName = m_streamingInstances[idx].outputName;
         spec.sinkName = m_streamingInstances[idx].sinkName;
         spec.port = SunshineConfig::allocatePort(config.value(QStringLiteral("sunshinePort"),
                                                               SunshineConfig::BASE_PORT).toInt());
         spec.bitrate = instConfig.streamBitrate;
         spec.codec = instConfig.streamCodec;
-        spec.displayName = QStringLiteral("CouchPlay – Player %1 (%2)").arg(idx + 1).arg(instConfig.username);
+        spec.displayName = QStringLiteral("CouchPlay – Player %1 (%2)").arg(idx + 1).arg(instConfig.player);
         if (spec.port < 0 || !m_streamManager) {
             beginFinalization(true, QStringLiteral("Player %1: no free Sunshine ports").arg(idx + 1));
             return;
@@ -1873,12 +1765,7 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
         return;
     }
 
-    if (!m_helperClient || !m_sessionManager) {
-        return;
-    }
-
-    if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, cannot restore device ownership";
+    if (!m_sessionManager) {
         return;
     }
 
@@ -1888,7 +1775,12 @@ void SessionRunner::onDeviceReconnected(const QString &stableId, int eventNumber
         return;
     }
 
-    qDebug() << "SessionRunner: Device reconnected, restoring ownership (stableId:" << stableId << ")";
+    // Keyboards and mice are bound into the sandbox at launch and cannot be added afterwards.
+    const QVariantMap device = m_deviceManager ? m_deviceManager->getDevice(eventNumber) : QVariantMap();
+    if (device.value(QStringLiteral("type")).toString() != QLatin1String("controller")) {
+        return;
+    }
+    qCDebug(couchplayCore) << "Controller reconnected, re-attaching to its virtual pad (stableId:" << stableId << ")";
     grantDeviceToInstance(eventNumber, instanceIndex);
 }
 
@@ -1905,11 +1797,7 @@ void SessionRunner::resetGamepadAttribution()
 
 bool SessionRunner::grantDeviceToInstance(int eventNumber, int instanceIndex)
 {
-    if (!m_helperClient || !m_sessionManager || !m_hasStartingProfile) {
-        return false;
-    }
-    if (!m_helperClient->isAvailable()) {
-        qWarning() << "SessionRunner: Helper not available, cannot set device ownership";
+    if (!m_sessionManager || !m_hasStartingProfile) {
         return false;
     }
 
@@ -1918,67 +1806,23 @@ bool SessionRunner::grantDeviceToInstance(int eventNumber, int instanceIndex)
         qWarning() << "SessionRunner: Invalid instance index" << instanceIndex << "for device" << eventNumber;
         return false;
     }
-
-    const QString &username = profile.instances[instanceIndex].username;
-    QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
-
-    if (username.isEmpty()) {
-        qDebug() << "SessionRunner: Device in host session, watching:" << devicePath;
-        if (m_helperClient->watchDevice(devicePath)) {
-            if (!m_ownedDevicePaths.contains(devicePath)) {
-                m_ownedDevicePaths.append(devicePath);
-            }
-            return true;
-        }
+    // The pad forwarder maps axes by code, so motion sensors and touchpads of a pad would drive its sticks.
+    if (m_deviceManager
+        && m_deviceManager->getDevice(eventNumber).value(QStringLiteral("type")).toString() != QLatin1String("controller")) {
+        qCDebug(couchplayCore) << "Not attaching non-controller node" << eventNumber << "to a virtual pad";
         return false;
     }
 
-    const UserIdentity id = resolveUserIdentity(username, m_helperClient);
-    if (!id.valid) {
-        qWarning() << "SessionRunner: User" << username << "not found";
+    PadForwarder *forwarder = m_padForwarders.value(instanceIndex);
+    if (!forwarder || !forwarder->isRunning()) {
+        qCWarning(couchplayCore) << "No virtual pad for instance" << instanceIndex << "- cannot attach event" << eventNumber;
         return false;
     }
-    int uid = static_cast<int>(id.uid);
 
-    bool granted = false;
-    // Prevent infinite loop: if the device node is already owned by the target user, udev has already
-    // applied the custom rule and we do not need to trigger another unbind/rebind.
-    QFileInfo fileInfo(devicePath);
-    if (fileInfo.exists() && fileInfo.ownerId() == id.uid) {
-        qDebug() << "SessionRunner: Device" << devicePath << "is already owned by" << username << "(UID:" << uid << "), skipping ownership update";
-        if (devicePath.startsWith(QLatin1String("/dev/input/event"))) {
-            m_helperClient->watchDevice(devicePath);
-        }
-        return true;
-    }
-
-    qDebug() << "SessionRunner: Setting ownership of" << devicePath << "to user" << username;
-    if (m_helperClient->setDeviceOwner(devicePath, uid)) {
-        granted = true;
-        if (!m_ownedDevicePaths.contains(devicePath)) {
-            m_ownedDevicePaths.append(devicePath);
-        }
-        qDebug() << "SessionRunner: Successfully set ownership of" << devicePath;
-    } else {
-        qWarning() << "SessionRunner: Failed to set ownership of" << devicePath;
-        Q_EMIT errorOccurred(QStringLiteral("Failed to restore device ownership for %1").arg(devicePath));
-    }
-
-    QString hidrawPath = m_deviceManager ? m_deviceManager->findHidrawForEvent(eventNumber) : QString();
-    if (!hidrawPath.isEmpty()) {
-        QFileInfo hidrawInfo(hidrawPath);
-        if (hidrawInfo.exists() && hidrawInfo.ownerId() != id.uid) {
-            if (m_helperClient->setDeviceOwner(hidrawPath, uid)) {
-                if (!m_ownedDevicePaths.contains(hidrawPath)) {
-                    m_ownedDevicePaths.append(hidrawPath);
-                }
-                qDebug() << "SessionRunner: Set hidraw ownership:" << hidrawPath;
-            }
-        } else {
-            qDebug() << "SessionRunner: Hidraw" << hidrawPath << "is already owned by" << username << ", skipping ownership update";
-        }
-    }
-    return granted;
+    const QString devicePath = QStringLiteral("/dev/input/event%1").arg(eventNumber);
+    qCDebug(couchplayCore) << "Attaching" << devicePath << "to the virtual pad of instance" << instanceIndex;
+    forwarder->attach(devicePath);
+    return true;
 }
 
 void SessionRunner::onDeviceAdded(int eventNumber, const QString &name)

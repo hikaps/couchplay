@@ -11,7 +11,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
-class CouchPlayHelperClient;
+#include "SandboxCommand.h"
 #include "SteamAccountDiscovery.h"
 struct DataDirectory;
 
@@ -108,11 +108,12 @@ public:
 Q_DECLARE_METATYPE(SteamGame)
 
 /**
- * SteamConfigManager - Manages Steam configuration sharing between users
+ * SteamConfigManager - Manages Steam configuration sharing between the desktop user and players
  *
- * Handles syncing shortcuts from the compositor user to gaming users
- * during sessions. Sets ACLs on directories referenced in shortcuts
- * so gaming users can access them.
+ * Writes shortcuts, library folders and compatibility tool mappings directly into each player's
+ * home directory (PlayerStore::homeDir). Paths written into Steam's config files use the sandbox
+ * view of the player's home, i.e. QDir::homePath(). Host Steam libraries are shared as overlay
+ * mounts returned from prepareDataDir.
  */
 class SteamConfigManager : public QObject
 {
@@ -122,7 +123,6 @@ class SteamConfigManager : public QObject
     Q_PROPERTY(SteamPaths steamPaths READ steamPaths NOTIFY steamPathsChanged)
     Q_PROPERTY(bool steamDetected READ isSteamDetected NOTIFY steamPathsChanged)
     Q_PROPERTY(int shortcutCount READ shortcutCount NOTIFY shortcutsLoaded)
-    Q_PROPERTY(CouchPlayHelperClient* helperClient READ helperClient WRITE setHelperClient NOTIFY helperClientChanged)
     Q_PROPERTY(bool syncShortcutsEnabled READ syncShortcutsEnabled WRITE setSyncShortcutsEnabled NOTIFY syncShortcutsEnabledChanged)
     Q_PROPERTY(bool shareLibraryEnabled READ shareLibraryEnabled WRITE setShareLibraryEnabled NOTIFY shareLibraryEnabledChanged)
     Q_PROPERTY(int libraryCount READ libraryCount NOTIFY librariesLoaded)
@@ -142,12 +142,6 @@ public:
         return m_syncShortcutsEnabled;
     }
     void setSyncShortcutsEnabled(bool enabled);
-
-    void setHelperClient(CouchPlayHelperClient *client);
-    CouchPlayHelperClient *helperClient() const
-    {
-        return m_helperClient;
-    }
 
     SteamPaths steamPaths() const
     {
@@ -179,7 +173,7 @@ public:
 
     Q_INVOKABLE void detectSteamPaths();
     Q_INVOKABLE QString getSteamUserId() const;
-    QString getTargetSteamUserId(const QString &username) const;
+    QString getTargetSteamUserId(const QString &player) const;
     Q_INVOKABLE void loadShortcuts();
     Q_INVOKABLE void loadGames();
     void loadLibraryFolders();
@@ -188,16 +182,17 @@ public:
     Q_INVOKABLE QVariantList gamesAsVariant() const;
     Q_INVOKABLE QStringList extractShortcutDirectories() const;
 
-    bool syncShortcutsToUser(const QString &targetUsername);
-    bool cleanupLibrarySharing(const QString &targetUsername);
-    bool prepareDataDir(const DataDirectory &dir, const QString &username, QVariantList &directoryPreparations);
-    bool finalizeDataDir(const DataDirectory &dir, const QString &username);
+    bool isSteamBootstrapped(const QString &player) const;
+    SteamPaths getTargetSteamPaths(const QString &player) const;
+    bool syncShortcutsToUser(const QString &player);
+    bool cleanupLibrarySharing(const QString &player);
+    bool prepareDataDir(const DataDirectory &dir, const QString &player, QList<SandboxMount> &mounts);
+    bool finalizeDataDir(const DataDirectory &dir, const QString &player);
 
 Q_SIGNALS:
     void steamPathsChanged();
     void shortcutsLoaded();
     void gamesLoaded();
-    void helperClientChanged();
     void syncShortcutsEnabledChanged();
     void shareLibraryEnabledChanged();
     void librariesLoaded();
@@ -211,11 +206,10 @@ private:
     QList<SteamLibraryFolder> parseLibraryFoldersVdf(const QString &path);
     QList<SteamGame> parseInstalledGames() const;
     QString generateLibraryFoldersVdf(const QList<SteamLibraryFolder> &libraries);
-    SteamPaths getTargetSteamPaths(const QString &username) const;
-    void mirrorCompatToolMapping(const QString &username, const QSet<QString> &sharedAppIds);
+    QString findTargetSteamRoot(const QString &player) const;
+    void mirrorCompatToolMapping(const QString &player, const QSet<QString> &sharedAppIds);
     void detectSteamPathsInternal(bool allowAutomaticSelection);
 
-    CouchPlayHelperClient *m_helperClient = nullptr;
     SteamPaths m_steamPaths;
     QList<SteamShortcut> m_shortcuts;
     QList<SteamLibraryFolder> m_libraries;

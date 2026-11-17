@@ -44,10 +44,10 @@ body:
         - Input (device detection, assignment, isolation)
         - Display (Gamescope, resolutions, multi-monitor)
         - Audio (PipeWire, routing)
-        - User management (accounts, permissions)
+        - Player management (players, profiles)
         - UI/UX (Kirigami pages, navigation, settings)
         - Installation / packaging (Flatpak, build system)
-        - D-Bus / privileged helper
+        - Sandbox / host tools (bwrap, padfwd, vdisplay)
         - Other
     validations:
       required: true

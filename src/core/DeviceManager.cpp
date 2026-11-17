@@ -340,7 +340,9 @@ void DeviceManager::parseDevices()
                 resolveHidraw(device);
                 formatSteamControllerName(device);
 
-                if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
+                if (device.name.startsWith(QLatin1String("CouchPlay "))) {
+                    // Our own virtual pads must never be offered as physical devices.
+                } else if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
                     qDebug() << "DeviceManager: Ignoring device" << device.name << "stableId:" << device.stableId;
                 } else {
                     m_devices.append(device);
@@ -432,7 +434,9 @@ void DeviceManager::parseDevices()
         resolveHidraw(device);
         formatSteamControllerName(device);
 
-        if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
+        if (device.name.startsWith(QLatin1String("CouchPlay "))) {
+            // Our own virtual pads must never be offered as physical devices.
+        } else if (m_settingsManager && m_settingsManager->ignoredDevices().contains(device.stableId)) {
             qDebug() << "DeviceManager: Ignoring device" << device.name << "stableId:" << device.stableId;
         } else {
             m_devices.append(device);

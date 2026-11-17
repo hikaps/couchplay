@@ -1,32 +1,35 @@
 # AGENTS.md - Core Module Guidelines
 
 ## OVERVIEW
-Core business logic layer: device management, session orchestration, user/monitor/audio management
+Core business logic layer: device management, session orchestration, player/sandbox/monitor/audio management. Everything runs unprivileged as the desktop user; there is no root helper.
 
 ## STRUCTURE
-**15 Manager Classes:**
-- `SessionRunner` (1310 lines) - Orchestrates multiple GamescopeInstance launches (6-phase startup)
-- `DeviceManager` (998 lines) - Input device detection from /proc/bus/input/devices, hotplug state machine
-- `SteamConfigManager` (987 lines) - VDF parsing, shortcuts syncing
-- `HeroicConfigManager` (616 lines) - Heroic launcher config management (Legendary/GOG/Nile)
-- `PresetManager` (631 lines) - Launch preset profiles, .desktop scanning
-- `SessionManager` (550 lines) - Session profiles, instance configuration
-- `WindowManager` (448 lines) - Window positioning via KWin (QML_SINGLETON)
-- `GamescopeInstance` (337 lines) - Gamescope arg building, delegates execution to D-Bus helper
-- `UserManager` (251 lines) - Linux user creation/management
-- `CommandVerifier` (340 lines) - Static utility: command validation, Flatpak detection, PATH resolution
-- `SettingsManager` (177 lines) - KConfig-based app settings
-- `VirtualDeviceWatcher` (146 lines) - Virtual device monitoring during sessions
-- `AudioManager` (103 lines) - PipeWire/PulseAudio audio routing and socket ACL checks
-- `MonitorManager` (67 lines) - Display detection via QGuiApplication screens
-- `Logging` (14 lines) - 6 scoped logging categories
+**Managers and services:**
+- `SessionRunner` - Orchestrates multiple GamescopeInstance launches (host-tool check → pre-hook → pad forwarders → session resources → displays → instances)
+- `DeviceManager` - Input device detection from /proc/bus/input/devices, hotplug state machine; ignores `CouchPlay ` virtual pads
+- `PlayerStore` - Player directories (`players/<name>/{home,layers}`), name validation, create/delete
+- `SandboxCommand` - Pure builder of the `bwrap → dbus-run-session → gamescope` argv (`SandboxSpec`, `SandboxMount`)
+- `PadForwarder` - Wraps the host `couchplay-padfwd` process (one virtual Xbox 360 pad per player); attach/detach sources, chord/lost signals
+- `PlayerFiles` - `copyTreeContents` / `replaceTree` (symlink-safe copies into player homes)
+- `GamescopeInstance` - Gamescope arg building and launching the sandbox command; finds the gamescope PID by `COUCHPLAY_SANDBOX_ID`
+- `HostProcess` - Runs commands on the host from Flatpak (`flatpak-spawn --host`), `hostFindExecutable`, `hostLibexecPath` (Flatpak app-path tools)
+- `SteamConfigManager` / `HeroicConfigManager` - Launcher config discovery; write VDF/catalog/shortcut files directly into player homes
+- `SteamCompatToolMapping` - Compat-tool mapping edits for Steam `config.vdf`
+- `PresetManager` - Launch preset profiles, .desktop scanning
+- `SessionManager` - Session profiles (KConfig), instance configuration (`InstanceConfig::player`)
+- `WindowManager` - Window positioning via KWin (QML_SINGLETON)
+- `CommandVerifier` - Static utility: command validation, Flatpak detection, PATH resolution
+- `SettingsManager` - KConfig-based app settings
+- `VirtualDeviceWatcher` - Virtual device monitoring during sessions
+- `AudioManager` - PipeWire/PulseAudio audio routing checks
+- `MonitorManager` - Display detection via QGuiApplication screens
+- `StreamManager`, `StreamAudio`, `SunshineConfig`, `PairingSession` - Sunshine streaming per player
 
 **Data Structures:** `InputDevice`, `InstanceConfig`, `SessionProfile`, `SteamPaths`, `SteamShortcut` (Q_GADGET structs)
 
 **Shared Utilities:**
-- `Logging.h/cpp` - 6 scoped logging categories (couchplayCore, couchplaySteam, couchplayHelper, couchplayGamescope, couchplayDevices, couchplaySharing)
+- `Logging.h/cpp` - scoped logging categories (see the file for the current list)
 - `CommandVerifier.h/cpp` - Static utility for command validation (Flatpak detection, PATH resolution, executable checks)
-- `../dbus/CouchPlayHelperClient` - Shared D-Bus client for privileged operations (used by SessionRunner, UserManager, SteamConfigManager, GamescopeInstance)
 
 ## WHERE TO LOOK
 
@@ -34,12 +37,14 @@ Core business logic layer: device management, session orchestration, user/monito
 |------|----------|-------|
 | Device hotplug | `DeviceManager::onInputDirectoryChanged()` | QFileSystemWatcher + debounce |
 | Stable device IDs | `DeviceManager::generateStableId()` | vendorId:productId:physPath |
-| Device reconnection | `SessionRunner::onDeviceReconnected()` | Auto-restores ownership |
+| Device reconnection | `SessionRunner::onDeviceReconnected()` | Re-attaches the source to the player's virtual pad |
 | Layout calculations | `SessionRunner::calculateLayout()` | horizontal/vertical/grid/multi-monitor |
-| Gamescope args | `GamescopeInstance::buildGamescopeArgs()` | Constructs command line |
+| Sandbox argv | `buildSandboxArgv()` in `SandboxCommand.cpp` | Ordering invariants are unit tested |
+| Gamescope args | `GamescopeInstance::buildGamescopeArgs()` | Constructs gamescope command line |
+| Player paths | `PlayerStore::homeDir()` / `layerDir()` | Names validated with `isValidName` |
 | VDF parsing | `SteamConfigManager::parseShortcutsVdf()` | Steam format parser |
-| Profile persistence | `SessionManager::saveProfile()` / `loadProfile()` | JSON in ~/.local/share/couchplay/profiles/ |
-| Audio routing | `AudioManager::checkConfiguration()` | Detects PipeWire/PulseAudio, checks socket ACLs |
+| Profile persistence | `SessionManager::saveProfile()` / `loadProfile()` | KConfig `.conf` files in `AppDataLocation/profiles` (legacy `username` key read as `player`) |
+| Audio routing | `AudioManager::checkConfiguration()` | Detects PipeWire/PulseAudio |
 
 ## CONVENTIONS
 
@@ -49,12 +54,12 @@ Core business logic layer: device management, session orchestration, user/monito
 
 ## ANTI-PATTERNS
 
-- No direct D-Bus: use `CouchPlayHelperClient` in `../dbus/`
-- No privileged ops: all root work in helper/ service
-- No blocking I/O in main thread
-- No hardcoded paths: use QStandardPaths (~/.local/share/couchplay/)
+- No privileged operations and no root helper: everything runs as the desktop user inside the sandbox
+- No unvalidated player names in paths: use `PlayerStore::isValidName`
+- No shell interpolation: pass structured argv through `HostProcess::configure`
+- No blocking I/O in main thread (known synchronous exceptions: host probes, `PadForwarder::start`, `GamescopeInstance::stop`)
+- No hardcoded paths: use QStandardPaths / `PlayerStore`
 - No QML logic: business logic in C++ only
-- No direct process management: GamescopeInstance delegates to D-Bus helper only
 - No circular dependencies: SessionRunner → SessionManager (unidirectional)
 
 ## ARCHITECTURE NOTES
@@ -62,26 +67,26 @@ Core business logic layer: device management, session orchestration, user/monito
 **Dependency Graph:**
 ```
 SessionRunner (orchestrator)
-  ├─> SessionManager, DeviceManager, GamescopeInstance (N)
-  ├─> UserManager, WindowManager
-  ├─> SteamConfigManager, HeroicConfigManager
-  └─> CouchPlayHelperClient (D-Bus, all process execution)
+  ├─> SessionManager, DeviceManager, PlayerStore, WindowManager
+  ├─> GamescopeInstance (N) ──> SandboxCommand (bwrap → dbus-run-session → gamescope)
+  ├─> PadForwarder (N) ──> couchplay-padfwd (host tool)
+  └─> SteamConfigManager, HeroicConfigManager (write into player homes)
 ```
 
-GamescopeInstance no longer manages QProcess directly. All process launch/stop goes through CouchPlayHelperClient → helper/ D-Bus service.
+Test seams: `SessionRunner::setInstanceFactory` (fake `GamescopeInstance`) and `PadForwarder::setProgramOverrideForTesting`.
 
-**Device Assignment Flow:** DeviceManager detects → stableId → user assigns via QML → SessionRunner starts → Helper transfers ownership via D-Bus → hotplug reconnection → auto-restore
+**Device Assignment Flow:** DeviceManager detects → stableId → user assigns via QML → SessionRunner starts a `PadForwarder` per instance → controller event nodes are `attach`ed to the player's virtual pad (non-controller nodes are bound directly into the sandbox) → hotplug reconnection re-attaches.
 
 ## COMPLEXITY HOTSPOTS
 
-**DeviceManager.cpp (~1008 lines):**
-- `onDebounceTimeout()` (lines 72-181): 4-phase hotplug state machine (store old → parse new → detect disconnection → detect reconnection)
-- `parseDevices()` (lines 190-340): Regex-based `/proc/bus/input/devices` parser
+**DeviceManager.cpp:**
+- `onDebounceTimeout()`: 4-phase hotplug state machine (store old → parse new → detect disconnection → detect reconnection)
+- `parseDevices()`: Regex-based `/proc/bus/input/devices` parser
 - `detectDeviceType()`: Ghost device filtering (opens device, queries EVIOCGBIT)
 
-**SessionRunner.cpp (~1229 lines):**
-- `start()` (lines 145-300): 6-phase orchestration (validation → layout → device ownership → mounts → ACLs → instance creation)
-- `setupLauncherAccess()`: Conditional ACL + Steam shortcuts sync
+**SessionRunner.cpp:**
+- `start()`: validation (player exists, host tools present) → layout → pad forwarders → session resources/mounts → displays → instance creation
+- `setupSessionResources()`: per-player Steam/Heroic sync and data-directory modes (`acl` read-only bind, `bind`, `overlay`, `copy`)
 
-**SteamConfigManager.cpp (599 lines):**
+**SteamConfigManager.cpp:**
 - `parseShortcutsVdf()`: Binary VDF parser with type markers (0x00=object, 0x01=string, 0x02=int32)

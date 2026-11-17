@@ -59,8 +59,8 @@ jobs:
 
       - name: Assert sandbox permissions
         run: |
-          grep -q 'io.github.hikaps.CouchPlayHelper=talk' build-dir/metadata \
-            || { echo "::error::helper system-talk-name missing"; exit 1; }
+          grep -qE '^filesystems=' build-dir/metadata \
+            || { echo "::error::filesystems permission missing"; exit 1; }
           grep -qE '^devices=.*all' build-dir/metadata \
             || { echo "::error::--device=all missing"; exit 1; }
           grep -q '^com.github.CouchPlay=own' build-dir/metadata \

@@ -5,6 +5,7 @@
 
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QFile>
 #include <QHash>
 #include <QMutex>
 #include <QMutexLocker>
@@ -26,6 +27,24 @@ QHash<QString, QString> &libexecCache()
 {
     static QHash<QString, QString> cache;
     return cache;
+}
+
+QString flatpakAppPath()
+{
+    QFile info(QStringLiteral("/.flatpak-info"));
+    if (!info.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    bool inInstance = false;
+    while (!info.atEnd()) {
+        const QString line = QString::fromUtf8(info.readLine()).trimmed();
+        if (line.startsWith(QLatin1Char('['))) {
+            inInstance = line == QStringLiteral("[Instance]");
+        } else if (inInstance && line.startsWith(QStringLiteral("app-path="))) {
+            return line.mid(QStringLiteral("app-path=").size());
+        }
+    }
+    return {};
 }
 }
 
@@ -85,6 +104,23 @@ bool HostProcess::hostExecutableExists(const QString &path)
     return probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == 0;
 }
 
+QString HostProcess::hostFindExecutable(const QString &name)
+{
+    QProcess probe;
+    configure(probe, QStringLiteral("sh"), {QStringLiteral("-c"), QStringLiteral("command -v \"$1\""), QStringLiteral("sh"), name});
+    probe.setProcessChannelMode(QProcess::SeparateChannels);
+    probe.start();
+    if (!probe.waitForFinished(5000)) {
+        probe.kill();
+        probe.waitForFinished(500);
+        return {};
+    }
+    if (probe.exitStatus() != QProcess::NormalExit || probe.exitCode() != 0) {
+        return {};
+    }
+    return QString::fromLocal8Bit(probe.readAllStandardOutput()).trimmed();
+}
+
 QString HostProcess::hostLibexecPath(const QString &name)
 {
     {
@@ -97,12 +133,11 @@ QString HostProcess::hostLibexecPath(const QString &name)
 
     QString found;
     if (runningInFlatpak()) {
-        for (const QString &dir : {QStringLiteral("/usr/local/libexec"), QStringLiteral("/usr/libexec")}) {
-            const QString candidate = dir + QLatin1Char('/') + name;
-            if (hostExecutableExists(candidate)) {
-                found = candidate;
-                break;
-            }
+        // The Flatpak's own files are visible on the host, so its tools run from there; nothing is installed.
+        const QString appPath = flatpakAppPath();
+        const QString candidate = appPath + QStringLiteral("/libexec/") + name;
+        if (!appPath.isEmpty() && hostExecutableExists(candidate)) {
+            found = candidate;
         }
     } else {
         const QString appDir = QCoreApplication::applicationDirPath();

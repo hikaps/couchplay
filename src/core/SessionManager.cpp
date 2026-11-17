@@ -5,8 +5,8 @@
 #include "Logging.h"
 #include "SessionRunner.h"
 #include "SunshineConfig.h"
-#include "UserLookup.h"
-#include "../../helper/DirectoryPlan.h"
+#include "PlayerFiles.h"
+#include "PlayerStore.h"
 
 #include <QDesktopServices>
 #include <QDebug>
@@ -74,14 +74,6 @@ void SessionManager::setPresetManager(PresetManager *manager)
     if (m_presetManager != manager) {
         m_presetManager = manager;
         Q_EMIT presetManagerChanged();
-    }
-}
-
-void SessionManager::setHelperClient(CouchPlayHelperClient *client)
-{
-    if (m_helperClient != client) {
-        m_helperClient = client;
-        Q_EMIT helperClientChanged();
     }
 }
 
@@ -211,7 +203,7 @@ bool SessionManager::saveProfile(const QString &name)
         const InstanceConfig &inst = m_currentProfile.instances[i];
         KConfigGroup instGroup = config.group(QStringLiteral("Instance%1").arg(i));
 
-        instGroup.writeEntry("username", inst.username);
+        instGroup.writeEntry("player", inst.player);
         instGroup.writeEntry("internalWidth", inst.internalWidth);
         instGroup.writeEntry("internalHeight", inst.internalHeight);
         instGroup.writeEntry("outputWidth", inst.outputWidth);
@@ -225,7 +217,8 @@ bool SessionManager::saveProfile(const QString &name)
             instGroup.writeEntry("gameSelection", gameSelectionToJson(inst.gameSelection));
         }
         instGroup.writeEntry("presetId", inst.presetId);
-        instGroup.writeEntry("privateTemporaryDirectories", inst.privateTemporaryDirectories);
+        instGroup.deleteEntry("username");
+        instGroup.deleteEntry("privateTemporaryDirectories");
         instGroup.deleteEntry("gameCommand");
         instGroup.deleteEntry("steamAppId");
         instGroup.deleteEntry("overrideGamePath");
@@ -457,7 +450,7 @@ bool SessionManager::loadProfile(const QString &name)
         KConfigGroup instGroup = config.group(QStringLiteral("Instance%1").arg(i));
 
         InstanceConfig inst;
-        inst.username = instGroup.readEntry("username", QString());
+        inst.player = instGroup.readEntry("player", instGroup.readEntry("username", QString()));
         inst.internalWidth = instGroup.readEntry("internalWidth", 1920);
         inst.internalHeight = instGroup.readEntry("internalHeight", 1080);
         inst.outputWidth = instGroup.readEntry("outputWidth", 960);
@@ -466,7 +459,6 @@ bool SessionManager::loadProfile(const QString &name)
         inst.scalingMode = instGroup.readEntry("scalingMode", QStringLiteral("fit"));
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
         inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
-        inst.privateTemporaryDirectories = instGroup.readEntry("privateTemporaryDirectories", false);
         if (instGroup.hasKey("gameSelection")) {
             inst.gameSelection = gameSelectionFromJson(instGroup.readEntry("gameSelection", QString()));
         } else {
@@ -604,6 +596,19 @@ QString SessionManager::duplicateProfile(const QString &sourceName)
 
     KConfig copiedConfig(temporary.fileName(), KConfig::SimpleConfig);
     copiedConfig.group(QStringLiteral("General")).writeEntry("name", destinationName);
+    for (const QString &groupName : copiedConfig.groupList()) {
+        if (!groupName.startsWith(QLatin1String("Instance"))) {
+            continue;
+        }
+        KConfigGroup instGroup = copiedConfig.group(groupName);
+        if (instGroup.hasKey("username")) {
+            if (!instGroup.hasKey("player")) {
+                instGroup.writeEntry("player", instGroup.readEntry("username", QString()));
+            }
+            instGroup.deleteEntry("username");
+        }
+        instGroup.deleteEntry("privateTemporaryDirectories");
+    }
     copiedConfig.sync();
 
     QFile rewritten(temporary.fileName());
@@ -709,7 +714,7 @@ int SessionManager::effectiveSunshinePort(int index) const
         return SunshineConfig::calculatePort(0);
     }
     const InstanceConfig &instance = m_currentProfile.instances[index];
-    return SunshineConfig::preferredPort(instance.username, index, instance.sunshinePort);
+    return SunshineConfig::preferredPort(instance.player, index, instance.sunshinePort);
 }
 
 QVariantList SessionManager::streamingInstanceIndexes() const
@@ -734,7 +739,7 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     }
 
     const InstanceConfig &inst = m_currentProfile.instances[index];
-    map[QStringLiteral("username")] = inst.username;
+    map[QStringLiteral("player")] = inst.player;
     map[QStringLiteral("display")] = inst.display;
     map[QStringLiteral("internalWidth")] = inst.internalWidth;
     map[QStringLiteral("internalHeight")] = inst.internalHeight;
@@ -745,7 +750,6 @@ QVariantMap SessionManager::getInstanceConfig(int index) const
     map[QStringLiteral("filterMode")] = inst.filterMode;
     map[QStringLiteral("gameSelection")] = inst.gameSelectionAsVariant();
     map[QStringLiteral("presetId")] = inst.presetId;
-    map[QStringLiteral("privateTemporaryDirectories")] = inst.privateTemporaryDirectories;
     map[QStringLiteral("streamToMoonlight")] = inst.streamToMoonlight;
     map[QStringLiteral("virtualResolution")] = inst.virtualResolution;
     map[QStringLiteral("renderResolution")] = inst.renderResolution;
@@ -783,8 +787,8 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
 
     InstanceConfig &inst = m_currentProfile.instances[index];
 
-    if (config.contains(QStringLiteral("username")))
-        inst.username = config[QStringLiteral("username")].toString();
+    if (config.contains(QStringLiteral("player")))
+        inst.player = config[QStringLiteral("player")].toString();
     if (config.contains(QStringLiteral("display")))
         inst.display = config[QStringLiteral("display")].toString();
     if (config.contains(QStringLiteral("internalWidth")))
@@ -806,8 +810,6 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
     }
     if (config.contains(QStringLiteral("presetId")))
         inst.presetId = config[QStringLiteral("presetId")].toString();
-    if (config.contains(QStringLiteral("privateTemporaryDirectories")))
-        inst.privateTemporaryDirectories = config[QStringLiteral("privateTemporaryDirectories")].toBool();
     if (config.contains(QStringLiteral("streamToMoonlight")))
         inst.streamToMoonlight = config[QStringLiteral("streamToMoonlight")].toBool();
     if (config.contains(QStringLiteral("virtualResolution")))
@@ -834,7 +836,7 @@ void SessionManager::setInstanceConfig(int index, const QVariantMap &config)
 void SessionManager::setInstanceUser(int index, const QString &username)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        m_currentProfile.instances[index].username = username;
+        m_currentProfile.instances[index].player = username;
         Q_EMIT instancesChanged();
         if (!m_currentProfile.name.isEmpty()) {
             saveProfile(m_currentProfile.name);
@@ -916,7 +918,7 @@ QString playerDataStagingRoot(const QString &presetId, const QString &username)
 {
     // Native installs use the conventional CouchPlay data directory. Flatpak
     // exports XDG_DATA_HOME to its host-visible per-app data directory, so
-    // using AppDataLocation here gives the GUI and the root helper the same
+    // using AppDataLocation here gives the GUI and sandbox tooling the same
     // absolute path and inode.
     QString dataRoot;
     if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
@@ -934,7 +936,7 @@ bool SessionManager::hasPlayerDataStagingDirectories(int index) const
     }
 
     const InstanceConfig &inst = m_currentProfile.instances[index];
-    if (inst.username.isEmpty()) {
+    if (inst.player.isEmpty() || !PlayerStore::isValidName(inst.player)) {
         return false;
     }
     const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
@@ -955,12 +957,12 @@ QString SessionManager::playerDataFolderPath(int index)
     }
 
     const InstanceConfig &inst = m_currentProfile.instances[index];
-    if (inst.username.isEmpty()) {
+    if (inst.player.isEmpty() || !PlayerStore::isValidName(inst.player)) {
         return QString();
     }
     const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
 
-    const QString root = playerDataStagingRoot(presetId, inst.username);
+    const QString root = playerDataStagingRoot(presetId, inst.player);
     if (!QDir().mkpath(root)) {
         qWarning() << "SessionManager: Failed to create player data folder:" << root;
         Q_EMIT errorOccurred(QStringLiteral("Could not create player data folder"));
@@ -973,14 +975,13 @@ QString SessionManager::playerDataFolderPath(int index)
     const LaunchPreset preset = m_presetManager ? m_presetManager->getPreset(presetId) : LaunchPreset{};
     const QString steamMarkerPath = steamRootOverlayMarkerPath(m_presetManager, presetId);
 
-    // Helper-first so the slug matches SessionRunner's target mapping under
-    // Flatpak, where the sandbox resolves the compositor's home differently
-    const QString compositorHome = resolveCompositorHome(m_helperClient);
+    // Slug matches SessionRunner's target mapping (relative to the compositor's home)
+    const QString compositorHome = QDir::homePath();
     for (const DataDirectory &dir : preset.dataDirectories) {
         if (!isPlayerDataStagingDirectory(dir, steamMarkerPath)) {
             continue;
         }
-        QDir().mkpath(root + QLatin1Char('/') + DirectoryPlan::dataDirectoryStagingSlug(dir.path, compositorHome));
+        QDir().mkpath(root + QLatin1Char('/') + PlayerFiles::dataDirectoryStagingSlug(dir.path, compositorHome));
     }
 
     return root;
@@ -1072,7 +1073,7 @@ QStringList SessionManager::getAssignedUsers(int excludeIndex) const
     QStringList assigned;
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
         if (i != excludeIndex) {
-            const QString &user = m_currentProfile.instances[i].username;
+            const QString &user = m_currentProfile.instances[i].player;
             if (!user.isEmpty() && !assigned.contains(user)) {
                 assigned.append(user);
             }

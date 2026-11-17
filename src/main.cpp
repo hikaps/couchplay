@@ -23,8 +23,6 @@
 #include "core/PresetManager.h"
 #include "core/SessionManager.h"
 #include "core/SessionRunner.h"
-#include "core/UserManager.h"
-#include "dbus/CouchPlayHelperClient.h"
 #include "core/CommandLineBridge.h"
 #include "core/CommandLineOptions.h"
 #include "core/SignalBridge.h"
