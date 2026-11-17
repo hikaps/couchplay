@@ -153,6 +153,32 @@ fi
 # --- Import homes -------------------------------------------------------------
 
 as_user() { runuser -u "$DESKTOP_USER" -- "$@"; }
+
+# The old accounts' homes were /home/<name> (or /var/home/<name> on ostree systems). Inside the sandbox the
+# player's home is the desktop user's home, and the old locations are unreadable there: Steam, its runtime and
+# Heroic fail on absolute symlinks and config paths that still point at them. Rewrites them in a copied home.
+# usage: relocate <home copy> <old name> <old home> <new home>
+RELOCATE_HOME='
+set -u
+copy=$1; name=$2; old=$3; new=$4
+prefixes=("$old" "/home/$name" "/var/home/$name")
+while IFS= read -r -d "" link; do
+    target=$(readlink -- "$link")
+    for p in "${prefixes[@]}"; do
+        if [[ $target == "$p" || $target == "$p"/* ]]; then
+            ln -sfn -- "$new${target#"$p"}" "$link"
+            break
+        fi
+    done
+done < <(find "$copy" -xdev -type l \( -lname "/home/$name*" -o -lname "/var/home/$name*" -o -lname "$old*" \) -print0)
+args=()
+for p in "${prefixes[@]}"; do args+=(-e "$p"); done
+grep -rIlZ --exclude-dir=steamapps --exclude-dir=logs --exclude-dir=.couchplay --exclude-dir=depotcache \
+    --exclude-dir=htmlcache --exclude-dir=webhelper --exclude-dir=appcache --exclude="LOG*" --exclude="*.log" \
+    "${args[@]}" "$copy" 2>/dev/null |
+    xargs -0 -r sed -E -i "s#(/var)?/home/$name([^A-Za-z0-9_-]|\$)#$new\\2#g; s#$old([^A-Za-z0-9_-]|\$)#$new\\1#g"
+exit 0
+'
 failed=false
 for name in "${PLAYERS[@]+"${PLAYERS[@]}"}"; do
     src="$(home_of "$name")"
@@ -171,6 +197,7 @@ for name in "${PLAYERS[@]+"${PLAYERS[@]}"}"; do
     as_user rm -rf "$staging"
     as_user install -d -m 0700 "$staging"
     if tar -C "$src" --exclude=./.cache -cf - . | as_user tar -C "$staging" -xpf - --no-same-owner \
+        && as_user bash -c "$RELOCATE_HOME" relocate "$staging" "$name" "$src" "$DESKTOP_HOME" \
         && { [[ ! -d "$dest/home" ]] || as_user rmdir "$dest/home"; } \
         && as_user mv "$staging" "$dest/home"; then
         info "Imported '$name'."
@@ -187,8 +214,8 @@ if [[ "$failed" == "true" ]]; then
 fi
 
 if [[ ${#PLAYERS[@]} -gt 0 ]]; then
-    warn "Imported Steam data may contain absolute /home/<name> paths."
-    warn "If a player's Steam fails to start, delete $PLAYERS_ROOT/<name>/home for a fresh sign-in."
+    info "Absolute paths to the old homes were rewritten to $DESKTOP_HOME (the player's home inside the sandbox)."
+    warn "If a player's Steam still fails to start, delete $PLAYERS_ROOT/<name>/home for a fresh sign-in."
 fi
 
 # --- Remove the helper (everything the old 'install-helper.sh uninstall' did) --
