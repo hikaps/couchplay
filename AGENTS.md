@@ -107,7 +107,6 @@ Run the full suite with a private session bus and isolated runtime directory. Au
 - This is a Linux host integration app, not a Node/Bun/Python application. Fedora uses `dnf`; builds/tests may run in a dev container. **Runtime host requirements:** `bubblewrap` (`bwrap`), `dbus` (`dbus-run-session`), `gamescope`, and a user-writable `/dev/uinput`. Real Gamescope/input/audio/KWin checks require the host display and these tools; offscreen CI cannot substitute for them.
 - Native binaries need compatible host Qt/KF libraries. Prefer the Flatpak GUI on Arch/SteamOS rather than a Fedora-built tarball. Game Mode launch requires `kwin_wayland` in its runtime. The Flatpak manifest uses KDE Platform/SDK 6.10.
 - Host tools `couchplay-vdisplay` and `couchplay-padfwd` (built from `tools/`) install to `${CMAKE_INSTALL_LIBEXECDIR}`; under Flatpak they run on the host straight from the Flatpak app path (`HostProcess::hostLibexecPath`), so nothing is installed on the host. `run-debug.sh` consumes its first argument as the logging selector and forwards subsequent arguments to CouchPlay.
-- **SteamOS rule:** detect `ID=steamos` in `/etc/os-release`; after every new application build, run `./scripts/update-nonroot.sh`. It only rebuilds and reinstalls the local Flatpak; there is no sysext and no privileged command to run.
 - App/Flatpak/QML ID is `io.github.hikaps.couchplay`.
 - PRs target `develop`; stable tags/releases belong to `main`. `beta.yml` publishes from `develop`. Do not mistake reduced beta/release test selections for the full develop CI gate.
 
