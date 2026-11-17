@@ -13,8 +13,11 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QStorageInfo>
 
+#include <KConfigGroup>
 #include <KLocalizedString>
+#include <KSharedConfig>
 
 PlayerStore::PlayerStore(QObject *parent)
     : QObject(parent)
@@ -22,12 +25,63 @@ PlayerStore::PlayerStore(QObject *parent)
     refresh();
 }
 
-QString PlayerStore::rootDir()
+QString PlayerStore::defaultRootDir()
 {
     if (HostProcess::runningInFlatpak()) {
         return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/players");
     }
     return QDir::homePath() + QStringLiteral("/.local/share/couchplay/players");
+}
+
+QString PlayerStore::rootDir()
+{
+    const QString configured = KSharedConfig::openConfig(QStringLiteral("couchplayrc"))
+                                   ->group(QStringLiteral("Players"))
+                                   .readEntry(QStringLiteral("StorageDir"), QString());
+    if (!configured.isEmpty() && QDir::isAbsolutePath(configured)) {
+        return QDir::cleanPath(configured);
+    }
+    return defaultRootDir();
+}
+
+bool PlayerStore::setStorageDir(const QString &path)
+{
+    QString clean = path.trimmed();
+    if (!clean.isEmpty()) {
+        clean = QDir::cleanPath(clean);
+        if (!QDir::isAbsolutePath(clean)) {
+            Q_EMIT errorOccurred(i18nc("@info", "The storage location must be an absolute path."));
+            return false;
+        }
+        if (clean == defaultRootDir()) {
+            clean.clear();
+        }
+    }
+    if (!clean.isEmpty()) {
+        if (!QDir().mkpath(clean) || !QFileInfo(clean).isWritable()) {
+            Q_EMIT errorOccurred(i18nc("@info", "Cannot create or write to %1.", clean));
+            return false;
+        }
+        // Players keep Linux permissions, links and overlay layers here, which these filesystems cannot hold
+        const QString type = QString::fromLatin1(QStorageInfo(clean).fileSystemType());
+        static const QStringList unsuitable{QStringLiteral("vfat"),   QStringLiteral("exfat"),
+                                            QStringLiteral("ntfs"),   QStringLiteral("ntfs3"),
+                                            QStringLiteral("fuseblk"), QStringLiteral("msdos")};
+        if (unsuitable.contains(type)) {
+            Q_EMIT errorOccurred(i18nc("@info", "%1 uses the %2 filesystem, which cannot hold player data. Use a Linux filesystem such as ext4, btrfs or xfs.", clean, type));
+            return false;
+        }
+    }
+    KConfigGroup group = KSharedConfig::openConfig(QStringLiteral("couchplayrc"))->group(QStringLiteral("Players"));
+    if (clean.isEmpty()) {
+        group.deleteEntry(QStringLiteral("StorageDir"));
+    } else {
+        group.writeEntry(QStringLiteral("StorageDir"), clean);
+    }
+    group.sync();
+    Q_EMIT storageDirChanged();
+    refresh();
+    return true;
 }
 
 bool PlayerStore::isValidName(const QString &name)

@@ -22,6 +22,7 @@ private Q_SLOTS:
     void init();
     void cleanup();
 
+    void storageDirRedirectsPlayersAndResets();
     void validNames_data();
     void validNames();
     void rootIsUnderHome();
@@ -101,6 +102,26 @@ void TestPlayerStore::validNames()
 void TestPlayerStore::rootIsUnderHome()
 {
     QCOMPARE(PlayerStore::rootDir(), QDir::homePath() + QStringLiteral("/.local/share/couchplay/players"));
+}
+
+void TestPlayerStore::storageDirRedirectsPlayersAndResets()
+{
+    QTemporaryDir drive;
+    const QString target = drive.filePath(QStringLiteral("big/players"));
+    PlayerStore store;
+    QSignalSpy errors(&store, &PlayerStore::errorOccurred);
+
+    QVERIFY(!store.setStorageDir(QStringLiteral("relative/dir")));
+    QCOMPARE(errors.count(), 1);
+
+    QVERIFY(store.setStorageDir(target));
+    QCOMPARE(PlayerStore::rootDir(), target);
+    QVERIFY(store.createPlayer(QStringLiteral("alice")));
+    QVERIFY(QFileInfo(target + QStringLiteral("/alice/home")).isDir());
+
+    QVERIFY(store.setStorageDir(QString()));
+    QCOMPARE(PlayerStore::rootDir(), PlayerStore::defaultRootDir());
+    QVERIFY(!store.exists(QStringLiteral("alice")));
 }
 
 void TestPlayerStore::createExistsAndList()

@@ -77,6 +77,60 @@ Kirigami.ScrollablePage {
             }
         }
 
+        // Storage location
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing
+
+            Controls.Label {
+                text: i18nc("@label", "Storage location")
+                font.bold: true
+            }
+
+            Controls.Label {
+                text: i18nc("@info", "Player homes can be large. Point this at a folder on a bigger Linux drive (ext4, btrfs or xfs). Existing players are not moved: move their folders there yourself first. Under Flatpak the drive also needs write access: flatpak override --user --filesystem=/path io.github.hikaps.couchplay")
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                opacity: 0.7
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
+
+                Controls.TextField {
+                    id: storageField
+                    objectName: "fieldStorageDir"
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: i18nc("@label", "Storage location")
+                    text: playerStore.storageDir
+                    Layout.fillWidth: true
+                    onAccepted: playerStore.setStorageDir(text)
+                }
+
+                Controls.Button {
+                    objectName: "btnApplyStorageDir"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    text: i18nc("@action:button", "Apply")
+                    enabled: storageField.text !== playerStore.storageDir
+                    onClicked: playerStore.setStorageDir(storageField.text)
+                }
+
+                Controls.Button {
+                    objectName: "btnResetStorageDir"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
+                    text: i18nc("@action:button", "Reset")
+                    enabled: playerStore.storageDir !== playerStore.defaultStorageDir
+                    onClicked: {
+                        playerStore.setStorageDir("")
+                        storageField.text = playerStore.storageDir
+                    }
+                }
+            }
+        }
+
         // Add player
         RowLayout {
             Layout.fillWidth: true

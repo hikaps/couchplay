@@ -22,13 +22,15 @@ die() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<EOF
-Usage: sudo $0 [--user DESKTOP_USER] [--flatpak] [--yes] [--help]
+Usage: sudo $0 [--user DESKTOP_USER] [--flatpak] [--players-dir DIR] [--yes] [--help]
 
 Imports the home directories of old CouchPlay player accounts into the new
 rootless player store and removes the old CouchPlay root helper.
 
   --user USER   Desktop user that runs CouchPlay (default: \$SUDO_USER)
   --flatpak     Use the Flatpak data directory for the player store
+  --players-dir DIR  Import into DIR (for example on a larger drive) instead of the default store;
+                set the same folder in CouchPlay under Players > Storage location
   --yes         Actually import and remove (without it, only a dry run)
   --help        Show this help
 EOF
@@ -40,6 +42,7 @@ has_systemd() {
 
 DESKTOP_USER="${SUDO_USER:-}"
 USE_FLATPAK=false
+PLAYERS_DIR_OVERRIDE=""
 ASSUME_YES=false
 
 while [[ $# -gt 0 ]]; do
@@ -47,6 +50,11 @@ while [[ $# -gt 0 ]]; do
         --user)
             [[ $# -ge 2 ]] || die "--user needs a user name"
             DESKTOP_USER="$2"
+            shift 2
+            ;;
+        --players-dir)
+            [[ $# -ge 2 ]] || die "--players-dir needs a directory"
+            PLAYERS_DIR_OVERRIDE="$2"
             shift 2
             ;;
         --flatpak) USE_FLATPAK=true; shift ;;
@@ -68,7 +76,10 @@ DESKTOP_GROUP="$(getent group "$DESKTOP_GID" | cut -d: -f1 || true)"
 DESKTOP_GROUP="${DESKTOP_GROUP:-$DESKTOP_USER}"
 [[ -d "$DESKTOP_HOME" ]] || die "Home directory of '$DESKTOP_USER' ($DESKTOP_HOME) does not exist."
 
-if [[ "$USE_FLATPAK" == "true" ]]; then
+if [[ -n "$PLAYERS_DIR_OVERRIDE" ]]; then
+    [[ "$PLAYERS_DIR_OVERRIDE" == /* ]] || die "--players-dir needs an absolute path"
+    PLAYERS_ROOT="${PLAYERS_DIR_OVERRIDE%/}"
+elif [[ "$USE_FLATPAK" == "true" ]]; then
     PLAYERS_ROOT="$DESKTOP_HOME/.var/app/$FLATPAK_ID/data/hikaps/CouchPlay/players"
 else
     PLAYERS_ROOT="$DESKTOP_HOME/.local/share/couchplay/players"
