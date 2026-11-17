@@ -74,7 +74,7 @@ class TestSteamConfigManager : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
-    void testPreparationPlansOnlyCommonContentAndCleanupRestoresConfig()
+    void testPreparationSharesGameFilesAndShaderCacheOnlyAndCleanupRestoresConfig()
     {
         QTemporaryDir home;
         QVERIFY(home.isValid());
@@ -87,8 +87,11 @@ private Q_SLOTS:
         const QString externalLibrary = home.path() + QStringLiteral("/external library");
         QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
         const QString primaryCommon = steamRoot + QStringLiteral("/steamapps/common");
+        const QString primaryShaderCache = steamRoot + QStringLiteral("/steamapps/shadercache");
         const QString externalCommon = externalLibrary + QStringLiteral("/steamapps/common");
         QVERIFY(QDir().mkpath(primaryCommon));
+        QVERIFY(QDir().mkpath(primaryShaderCache));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/steamapps/compatdata")));
         QVERIFY(QDir().mkpath(externalCommon));
         QFile sourceSentinel(primaryCommon + QStringLiteral("/source.txt"));
         QVERIFY(sourceSentinel.open(QIODevice::WriteOnly));
@@ -120,19 +123,26 @@ private Q_SLOTS:
         marker.mode = QStringLiteral("overlay");
         QList<SandboxMount> mounts;
         QVERIFY(manager.prepareDataDir(marker, player, mounts));
-        QCOMPARE(mounts.size(), 2);
+        // Primary library: game files + shader cache. External library has no shader cache, so only its game files.
+        // compatdata (saves, settings) is never shared.
+        QCOMPARE(mounts.size(), 3);
         const QString libsRoot = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs");
-        const QStringList sources{primaryCommon, externalCommon};
-        for (int i = 0; i < 2; ++i) {
+        const QStringList sources{primaryCommon, primaryShaderCache, externalCommon};
+        const QStringList targets{libsRoot + QStringLiteral("/0/steamapps/common"),
+                                  libsRoot + QStringLiteral("/0/steamapps/shadercache"),
+                                  libsRoot + QStringLiteral("/1/steamapps/common")};
+        for (int i = 0; i < 3; ++i) {
             const SandboxMount &mount = mounts.at(i);
             QCOMPARE(mount.kind, SandboxMount::Overlay);
             QCOMPARE(mount.source, sources.at(i));
-            QCOMPARE(mount.target, libsRoot + QStringLiteral("/%1/steamapps/common").arg(i));
+            QCOMPARE(mount.target, targets.at(i));
             QCOMPARE(mount.upper, PlayerStore::layerDir(player, sources.at(i)) + QStringLiteral("/upper"));
             QCOMPARE(mount.work, PlayerStore::layerDir(player, sources.at(i)) + QStringLiteral("/work"));
             QVERIFY(QFileInfo(mount.upper).isDir());
             QVERIFY(QFileInfo(mount.work).isDir());
         }
+        for (const SandboxMount &mount : mounts)
+            QVERIFY(!mount.source.contains(QStringLiteral("compatdata")));
 
         QVERIFY(manager.finalizeDataDir(marker, player));
         // Steam loads steamapps/libraryfolders.vdf, so both locations must carry the shared libraries

@@ -1078,19 +1078,26 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
         return false;
     }
 
+    // The game files and the shader cache are shared read-only; each player's writes land in its own layer.
+    // compatdata (Proton prefixes: saves, settings) is deliberately never shared.
+    // The shader cache is skipped for libraries that have none: bwrap fails on a missing overlay source.
+    static const QStringList sharedSubdirs = {QStringLiteral("common"), QStringLiteral("shadercache")};
     for (int i = 0; i < m_libraries.size(); ++i) {
-        SandboxMount mount;
-        mount.kind = SandboxMount::Overlay;
-        mount.source = m_libraries.at(i).path + QStringLiteral("/steamapps/common");
-        mount.target = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs/%1/steamapps/common").arg(i);
-        const QString layer = PlayerStore::layerDir(player, mount.source);
-        mount.upper = layer + QStringLiteral("/upper");
-        mount.work = layer + QStringLiteral("/work");
-        if (!QDir().mkpath(mount.upper) || !QDir().mkpath(mount.work)) {
-            qCWarning(couchplaySteam) << "prepareDataDir: Cannot create overlay layer" << layer;
-            return false;
+        for (const QString &subdir : sharedSubdirs) {
+            SandboxMount mount;
+            mount.kind = SandboxMount::Overlay;
+            mount.source = m_libraries.at(i).path + QStringLiteral("/steamapps/") + subdir;
+            if (subdir != QStringLiteral("common") && !QFileInfo(mount.source).isDir()) continue;
+            mount.target = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs/%1/steamapps/%2").arg(i).arg(subdir);
+            const QString layer = PlayerStore::layerDir(player, mount.source);
+            mount.upper = layer + QStringLiteral("/upper");
+            mount.work = layer + QStringLiteral("/work");
+            if (!QDir().mkpath(mount.upper) || !QDir().mkpath(mount.work)) {
+                qCWarning(couchplaySteam) << "prepareDataDir: Cannot create overlay layer" << layer;
+                return false;
+            }
+            mounts.append(mount);
         }
-        mounts.append(mount);
     }
     return true;
 }
