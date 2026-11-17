@@ -301,6 +301,11 @@ echo
 info "Migration finished."
 echo
 echo "Manual follow-ups (not done automatically, so nothing is lost by mistake):"
+if [[ ${#PLAYERS[@]} -gt 0 ]]; then
+    echo "  # The old helper enabled lingering, so these accounts keep a background session; stop it first:"
+    echo "  sudo loginctl disable-linger ${PLAYERS[*]}"
+    echo "  sudo loginctl terminate-user ${PLAYERS[*]}"
+fi
 for name in "${PLAYERS[@]+"${PLAYERS[@]}"}"; do
     echo "  sudo userdel -r $name"
 done
