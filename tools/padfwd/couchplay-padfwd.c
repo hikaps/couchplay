@@ -217,10 +217,12 @@ static void send_events(const padmap_event *ev, int n)
 
 static void update_chord(void)
 {
+    // Both buttons must be held on the same controller: Start on one pad and Select on another is no chord
     int start = 0, select = 0;
     for (int i = 0; i < g_nsources; ++i) {
-        start |= g_sources[i].start_held;
-        select |= g_sources[i].select_held;
+        if (g_sources[i].start_held && g_sources[i].select_held) {
+            start = select = 1;
+        }
     }
     int64_t t = now_ms();
     padmap_chord_update(&g_chord, BTN_START, start, t);
@@ -265,7 +267,8 @@ static void close_source(int idx)
     close(s->fd);
     g_sources[idx] = g_sources[g_nsources - 1];
     g_nsources--;
-    if (g_nsources == 0 && g_uinput >= 0) {
+    if (g_uinput >= 0) {
+        // A vanished source may have held buttons or deflected sticks; neutral beats stuck
         release_all();
     }
     update_chord();

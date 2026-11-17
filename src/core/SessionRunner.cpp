@@ -1099,6 +1099,7 @@ bool SessionRunner::setupSessionResources()
         // Everything below the player's home that the player's launch needs from the desktop home is bound
         // read-only at the same path (the player's own home shadows the desktop home inside the sandbox).
         QList<SandboxMount> mounts;
+        QList<SandboxMount> passthroughMounts;
         QSet<QString> passthroughPaths;
         const auto addPassthrough = [&](const QString &path) {
             const QString cleanPath = QDir::cleanPath(path);
@@ -1110,7 +1111,7 @@ bool SessionRunner::setupSessionResources()
                 return; // outside the home: already visible in the sandbox
             }
             passthroughPaths.insert(cleanPath);
-            mounts.append(SandboxMount{SandboxMount::RoBind, cleanPath, cleanPath, {}, {}});
+            passthroughMounts.append(SandboxMount{SandboxMount::RoBind, cleanPath, cleanPath, {}, {}});
         };
 
         if (requiresSteam && m_steamConfigManager && m_steamConfigManager->isSteamDetected()
@@ -1311,11 +1312,20 @@ bool SessionRunner::setupSessionResources()
                 mounts.append(SandboxMount{SandboxMount::Overlay, source, target, upper, work});
             } else if (dir.mode == QStringLiteral("copy")) {
                 const QString destination = PlayerStore::homeDir(username) + QLatin1Char('/') + targetAlias;
+                // The player can leave a symlink anywhere below its home; replacing through it would write
+                // into the desktop user's real files
+                if (PlayerFiles::hasSymlinkUnder(PlayerStore::homeDir(username), destination)) {
+                    Q_EMIT errorOccurred(QStringLiteral("Not copying %1: a path component in the player's home is a symlink").arg(dir.path));
+                    allSucceeded = false;
+                    continue;
+                }
                 if (!PlayerFiles::replaceTree(source, destination, stagingPath, &copyError)) {
                     Q_EMIT errorOccurred(QStringLiteral("Could not copy %1: %2").arg(dir.path, copyError));
                     allSucceeded = false;
                     continue;
                 }
+                // A read-only passthrough of the same folder (or a parent) must not hide the private copy
+                mounts.append(SandboxMount{SandboxMount::Bind, destination, target, {}, {}});
             } else {
                 Q_EMIT errorOccurred(QStringLiteral("Unknown data directory mode '%1' for %2").arg(dir.mode, dir.path));
                 allSucceeded = false;
@@ -1327,7 +1337,10 @@ bool SessionRunner::setupSessionResources()
                 allSucceeded = false;
             }
         }
-        m_instanceMounts[i] = mounts;
+        // Read-only passthroughs first, parents before children, so they never hide a writable bind, overlay or copy
+        std::stable_sort(passthroughMounts.begin(), passthroughMounts.end(),
+                         [](const SandboxMount &a, const SandboxMount &b) { return a.target.size() < b.target.size(); });
+        m_instanceMounts[i] = passthroughMounts + mounts;
     }
 
     return allSucceeded;

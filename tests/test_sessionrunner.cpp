@@ -839,8 +839,13 @@ void TestSessionRunner::testDataDirCopyWritesIntoPlayerHome()
     staged.close();
 
     QVERIFY(m_runner->setupSessionResources());
-    QVERIFY(m_runner->m_instanceMounts.value(0).isEmpty());
     const QString dest = PlayerStore::homeDir(QStringLiteral("player1")) + QStringLiteral("/conf");
+    // The private copy is bound over its own path so a read-only passthrough can never hide it
+    const QList<SandboxMount> mounts = m_runner->m_instanceMounts.value(0);
+    QCOMPARE(mounts.size(), 1);
+    QCOMPARE(mounts.constFirst().kind, SandboxMount::Bind);
+    QCOMPARE(mounts.constFirst().source, dest);
+    QCOMPARE(mounts.constFirst().target, QDir::homePath() + QStringLiteral("/conf"));
     QVERIFY(QFile::exists(dest + QStringLiteral("/a.txt")));
     QVERIFY(QFile::exists(dest + QStringLiteral("/staged.txt")));
     QVERIFY(QFileInfo(dest + QStringLiteral("/link")).isSymLink());

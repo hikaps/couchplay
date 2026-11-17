@@ -49,6 +49,7 @@ private Q_SLOTS:
     void hasSymlinkUnderDetectsLinkedComponents();
     void removeTreeDoesNotFollowSymlinksAndHandlesReadOnlyDirs();
     void replaceTreeOverlaysStagingOverReadOnlyDirs();
+    void replaceTreeRestoresInterruptedBackupBeforeFailing();
     void copyTreeMergesOverExisting();
     void copyTreePreservesModes();
     void copyTreeKeepsSymlinksAsLinks();
@@ -190,6 +191,18 @@ void TestPlayerFiles::replaceTreeOverlaysStagingOverReadOnlyDirs()
     QVERIFY(QFileInfo::exists(dest + QStringLiteral("/ro/b")));
     QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".couchplay-old")));
     QFile::setPermissions(src + QStringLiteral("/ro"), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+}
+
+void TestPlayerFiles::replaceTreeRestoresInterruptedBackupBeforeFailing()
+{
+    QTemporaryDir tmp;
+    const QString dest = tmp.filePath(QStringLiteral("dest"));
+    // A previous run died between its two renames: the only copy of the player's data sits in "old"
+    QVERIFY(writeFile(dest + QStringLiteral(".couchplay-old/save.dat"), "player data"));
+
+    QString error;
+    QVERIFY(!PlayerFiles::replaceTree(tmp.filePath(QStringLiteral("missing")), dest, QString(), &error));
+    QCOMPARE(readFile(dest + QStringLiteral("/save.dat")), QByteArray("player data"));
 }
 
 void TestPlayerFiles::copyTreeKeepsSymlinksAsLinks()

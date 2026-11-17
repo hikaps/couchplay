@@ -56,4 +56,5 @@ private:
     QString m_node;
     QString m_pending;
     QString m_startError;
+    bool m_stopping = false;
 };

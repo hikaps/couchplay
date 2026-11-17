@@ -21,7 +21,7 @@ Kirigami.ScrollablePage {
 
     readonly property bool nameValid: playerNameField.text.length > 0
         && playerStore.isValidName(playerNameField.text)
-        && !playerStore.exists(playerNameField.text)
+        && !playerStore.players.includes(playerNameField.text)
 
     function addPlayer() {
         if (nameValid && playerStore.createPlayer(playerNameField.text)) {
@@ -112,7 +112,7 @@ Kirigami.ScrollablePage {
             text: {
                 if (!playerStore.isValidName(playerNameField.text))
                     return i18nc("@info:status", "Invalid name. Use lowercase letters, numbers, underscores and hyphens, starting with a letter or underscore (up to 32 characters).")
-                if (playerStore.exists(playerNameField.text))
+                if (playerStore.players.includes(playerNameField.text))
                     return i18nc("@info:status", "A player with this name already exists.")
                 return i18nc("@info:status", "Name is available.")
             }
@@ -252,9 +252,9 @@ Kirigami.ScrollablePage {
                             Accessible.onPressAction: clicked()
                             icon.name: "edit-delete"
                             text: i18nc("@action:button", "Delete")
-                            enabled: !userCard.userBusy
-                            Controls.ToolTip.visible: hovered && userCard.userBusy
-                            Controls.ToolTip.text: i18nc("@info:tooltip", "Stop this player's pairing or stream before deleting the player")
+                            enabled: !userCard.userBusy && !root.sessionRunner.active
+                            Controls.ToolTip.visible: hovered && !enabled
+                            Controls.ToolTip.text: i18nc("@info:tooltip", "Stop the session and this player's pairing before deleting the player")
                             onClicked: {
                                 root.playerToDelete = userCard.user
                                 deletePlayerDialog.open()

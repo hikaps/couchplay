@@ -163,7 +163,7 @@ Beta build (from `develop`):
 curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
 ```
 
-> Requires Linux x86_64. The same command works on SteamOS. Beta builds include unreleased features and may be unstable.
+> Requires Linux x86_64 and sudo (the installer escalates once to put the Flatpak and host tool dependencies in place). The same command works on SteamOS. Beta builds include unreleased features and may be unstable.
 
 ### Native binary (tarball, Fedora-family only)
 
@@ -191,7 +191,7 @@ build); on Arch/SteamOS it fails to start with a copy-relocation error — use t
 
 ### Host requirements
 
-CouchPlay is rootless: it needs no helper service, no root and no system changes. Each player runs as you inside a `bwrap` sandbox, so the host needs:
+CouchPlay needs no root at run time: no helper service and no system services. Each player runs as you inside a `bwrap` sandbox, so the host needs:
 
 | Tool | Package |
 | --- | --- |

@@ -65,6 +65,10 @@ bool copyTreeContents(const QString &src, const QString &dst, QString *error)
     if (!srcDir.exists()) {
         return fail(error, QStringLiteral("Source folder is missing: %1").arg(src));
     }
+    // entryInfoList() is empty for an unreadable directory, which would read as an empty successful copy
+    if (!QFileInfo(src).isReadable() || !QFileInfo(src).isExecutable()) {
+        return fail(error, QStringLiteral("Source folder is not readable: %1").arg(src));
+    }
     if (!QDir().mkpath(dst)) {
         return fail(error, QStringLiteral("Could not create %1").arg(dst));
     }
@@ -114,6 +118,10 @@ bool replaceTree(const QString &source, const QString &dest, const QString &stag
     const QString fresh = dest + QStringLiteral(".couchplay-new");
     const QString old = dest + QStringLiteral(".couchplay-old");
 
+    // A crash between the two renames below leaves the previous copy only in "old": bring it back first
+    if (!QFileInfo::exists(dest) && QFileInfo(old).isDir()) {
+        QDir().rename(old, dest);
+    }
     removeTree(fresh);
     removeTree(old);
     QDir().mkpath(QFileInfo(dest).absolutePath());

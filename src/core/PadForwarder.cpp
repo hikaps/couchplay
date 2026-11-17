@@ -22,6 +22,14 @@ PadForwarder::PadForwarder(QObject *parent)
 {
     m_process.setProcessChannelMode(QProcess::ForwardedErrorChannel);
     connect(&m_process, &QProcess::readyReadStandardOutput, this, &PadForwarder::drainOutput);
+    connect(&m_process, &QProcess::finished, this, [this]() {
+        // The pad vanishes with the tool: its player has no input until the session is restarted
+        if (!m_stopping && !m_node.isEmpty()) {
+            m_node.clear();
+            Q_EMIT errorOccurred(QStringLiteral("The virtual controller of a player stopped unexpectedly. "
+                                                "Restart the session to get input back."));
+        }
+    });
 }
 
 PadForwarder::~PadForwarder()
@@ -109,6 +117,10 @@ void PadForwarder::handleLine(const QString &line)
             m_startError = message;
         } else {
             qWarning() << "couchplay-padfwd:" << message;
+            if (message.startsWith(QStringLiteral("attach "))) {
+                Q_EMIT errorOccurred(QStringLiteral("A controller could not be attached to its virtual pad (%1)")
+                                         .arg(message.mid(7)));
+            }
         }
     }
 }
@@ -135,10 +147,12 @@ void PadForwarder::stop()
     if (m_process.state() == QProcess::NotRunning) {
         return;
     }
+    m_stopping = true;
     m_process.closeWriteChannel();
     if (!m_process.waitForFinished(2000)) {
         m_process.kill();
         m_process.waitForFinished(1000);
     }
     m_node.clear();
+    m_stopping = false;
 }

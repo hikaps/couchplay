@@ -1299,6 +1299,10 @@ void SteamConfigManager::mirrorCompatToolMapping(const QString &player, const QS
 
     const SteamPaths targetPaths = getTargetSteamPaths(player);
     const QString targetConfigPath = targetPaths.configDir + QStringLiteral("/config.vdf");
+    if (PlayerFiles::hasSymlinkUnder(PlayerStore::rootDir(), targetConfigPath)) {
+        qCWarning(couchplaySteam) << "mirrorCompatToolMapping: Refusing symlinked path" << targetConfigPath;
+        return;
+    }
     QFile targetConfig(targetConfigPath);
     if (!targetConfig.open(QIODevice::ReadOnly)) {
         qCWarning(couchplaySteam) << "mirrorCompatToolMapping: Cannot read" << targetConfigPath

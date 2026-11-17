@@ -93,6 +93,10 @@ bool GamescopeInstance::start(const QVariantMap &config, int index, const QList<
     spec.home = QDir::homePath();
     spec.playerHome = m_player.isEmpty() ? QString() : config.value(QStringLiteral("playerHome")).toString();
     spec.runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    if (spec.runtimeDir.isEmpty()) {
+        // The socket masks need a path; without one the host's session bus would stay reachable
+        spec.runtimeDir = QStringLiteral("/run/user/%1").arg(::getuid());
+    }
     spec.padNode = config.value(QStringLiteral("padNode")).toString();
     spec.directDevices = config.value(QStringLiteral("directDevices")).toStringList();
     const QStringList nvidiaNodes =

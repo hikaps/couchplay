@@ -153,12 +153,20 @@ for name in "${PLAYERS[@]+"${PLAYERS[@]}"}"; do
     info "Importing '$name' from $src ..."
     # Everything is created and extracted as the desktop user, so a symlink planted in the
     # player store can never make root change or write outside it.
-    as_user install -d -m 0700 "$PLAYERS_ROOT" "$dest" "$dest/home"
-    if tar -C "$src" --exclude=./.cache -cf - . | as_user tar -C "$dest/home" -xpf - --no-same-owner; then
+    # Extracted into a staging directory and renamed only after the whole copy succeeded, so an
+    # interrupted run can never leave a half-imported home that the next run would accept.
+    staging="$dest/.home-import"
+    as_user install -d -m 0700 "$PLAYERS_ROOT" "$dest"
+    as_user rm -rf "$staging"
+    as_user install -d -m 0700 "$staging"
+    if tar -C "$src" --exclude=./.cache -cf - . | as_user tar -C "$staging" -xpf - --no-same-owner \
+        && { [[ ! -d "$dest/home" ]] || as_user rmdir "$dest/home"; } \
+        && as_user mv "$staging" "$dest/home"; then
         info "Imported '$name'."
     else
         warn "Copying '$name' failed; removing the partial copy."
-        as_user rm -rf "$dest"
+        # Only the staging directory: an existing layers/ directory is the player's data
+        as_user rm -rf "$staging"
         failed=true
     fi
 done
@@ -258,7 +266,9 @@ echo "Manual follow-ups (not done automatically, so nothing is lost by mistake):
 for name in "${PLAYERS[@]+"${PLAYERS[@]}"}"; do
     echo "  sudo userdel -r $name"
 done
-echo "  sudo rm -rf /var/lib/couchplay"
+echo "  # /var/lib/couchplay holds the old overlay-mode changes (overlays/<player>/); this script does not"
+echo "  # import them. Delete it only after you have checked you do not need them:"
+echo "  # sudo rm -rf /var/lib/couchplay"
 echo
 echo "The new CouchPlay needs these host packages: bubblewrap (bwrap),"
 echo "dbus (dbus-run-session) and gamescope."
