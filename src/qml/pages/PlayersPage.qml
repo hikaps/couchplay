@@ -276,14 +276,16 @@ Kirigami.ScrollablePage {
                     }
                 }
 
-                header: Kirigami.Heading {
-                    text: userCard.user
-                    level: 3
-                    padding: Kirigami.Units.smallSpacing
-                }
-
+                // The heading lives in the content: AbstractCard does not subtract a `header` from the content height,
+                // so the content layout overflowed (and clipped) by the header's height
                 contentItem: ColumnLayout {
                     spacing: Kirigami.Units.smallSpacing
+
+                    Kirigami.Heading {
+                        text: userCard.user
+                        level: 3
+                        Layout.fillWidth: true
+                    }
 
                     RowLayout {
                         spacing: Kirigami.Units.largeSpacing
