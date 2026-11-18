@@ -544,6 +544,16 @@ check_host_requirements() {
     fi
 }
 
+# True when the old 'couchplay' group still has members or accounts using it as their primary group.
+# The migration script leaves an empty group behind, which must not count as an installed helper.
+legacy_group_in_use() {
+    local entry gid
+    entry="$(getent group couchplay)" || return 1
+    [[ -n "${entry##*:}" ]] && return 0
+    gid="$(cut -d: -f3 <<<"$entry")"
+    getent passwd | awk -F: -v gid="$gid" '$4 == gid { f = 1 } END { exit !f }'
+}
+
 check_legacy_helper() {
     # Versions before the rootless release ran players as Linux accounts through a root helper service.
     # If that is still installed, point the user at the migration script (it never runs automatically).
@@ -552,7 +562,7 @@ check_legacy_helper() {
     if [[ -e /etc/systemd/system/couchplay-helper.service ]] \
         || [[ -e /usr/local/libexec/couchplay-helper ]] \
         || [[ -e /usr/libexec/couchplay-helper ]] \
-        || getent group couchplay &>/dev/null; then
+        || legacy_group_in_use; then
         found=true
     fi
     $found || return 0
