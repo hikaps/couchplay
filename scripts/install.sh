@@ -5,12 +5,13 @@
 # CouchPlay One-Liner Installer
 #
 # Downloads and installs CouchPlay from GitHub releases.
-# This script must be run with root privileges.
+# Runs as your own user. Only --tarball (a system-wide install) and, on systems that block user
+# namespaces for bubblewrap, the one AppArmor step ask for sudo.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
-#   sudo ./install.sh --beta
+#   ./install.sh --beta
 #
 # Requirements:
 #   - curl: for downloading files
@@ -22,23 +23,7 @@
 #   bubblewrap (bwrap), dbus (dbus-run-session), gamescope,
 #   and a user-writable /dev/uinput.
 
-# Re-run with sudo if not root (allows piped input to work with visible output)
-if [[ $EUID -ne 0 ]]; then
-    echo "Requesting sudo access to install CouchPlay..."
-    # --beta means a develop build, so re-fetch the installer from develop; otherwise main.
-    # We re-download because piping leaves no script on disk. Forward "$@" so flags
-    # (e.g. --beta) survive the sudo escalation — previously they were silently dropped,
-    # which made the documented --beta one-liner always install stable instead of beta.
-    if [[ " $* " == *" --beta "* ]]; then
-        INSTALLER_BRANCH="develop"
-    else
-        INSTALLER_BRANCH="main"
-    fi
-    TMP_SCRIPT=$(mktemp)
-    curl -fsSL "https://raw.githubusercontent.com/hikaps/couchplay/${INSTALLER_BRANCH}/scripts/install.sh" > "$TMP_SCRIPT"
-    chmod +x "$TMP_SCRIPT"
-    exec sudo "$TMP_SCRIPT" "$@"
-fi
+INSTALLER_ARGS=("$@")
 
 set -e
 # =============================================================================
@@ -81,9 +66,37 @@ print_error() {
 # =============================================================================
 
 
-check_root() {
-    # Already running as root due to sudo re-exec at script start
-    :
+# Only the system-wide tarball install needs root: re-run this installer once under sudo.
+# Piping leaves no script on disk, so it is downloaded again. Flags are forwarded; --beta means a
+# develop build, so the installer is fetched from develop, otherwise from main.
+reexec_with_sudo() {
+    echo "The tarball install writes under ${PREFIX}; requesting sudo access..."
+    local branch="main" tmp_script
+    if [[ " ${INSTALLER_ARGS[*]} " == *" --beta "* ]]; then
+        branch="develop"
+    fi
+    tmp_script=$(mktemp)
+    curl -fsSL "https://raw.githubusercontent.com/hikaps/couchplay/${branch}/scripts/install.sh" > "$tmp_script"
+    chmod +x "$tmp_script"
+    exec sudo "$tmp_script" "${INSTALLER_ARGS[@]}"
+}
+
+# Run a command as the desktop user (a plain call unless the script itself runs as root).
+as_user() {
+    if [[ $EUID -eq 0 ]]; then
+        sudo -u "$REAL_USER" "$@"
+    else
+        "$@"
+    fi
+}
+
+# Run a command as root, asking for sudo only when needed.
+as_root() {
+    if [[ $EUID -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
 }
 
 
@@ -452,21 +465,24 @@ setup_userns_access() {
     }
 
     local probe=(bwrap --unshare-user --uid "$(id -u "$REAL_USER")" --gid "$(id -g "$REAL_USER")" --dev-bind / / true)
-    if sudo -u "$REAL_USER" "${probe[@]}" &>/dev/null; then
+    if as_user "${probe[@]}" &>/dev/null; then
         return 0
     fi
-    [[ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" == "1" ]] || {
+    [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" == "1" ]] || {
         print_warn "bwrap cannot create a user namespace here. CouchPlay needs unprivileged user namespaces; see the README troubleshooting section."
         return 0
     }
-    if ! command -v apparmor_parser &>/dev/null; then
+    local apparmor_parser
+    apparmor_parser="$(command -v apparmor_parser 2>/dev/null || true)"
+    [[ -z "$apparmor_parser" && -x /usr/sbin/apparmor_parser ]] && apparmor_parser=/usr/sbin/apparmor_parser
+    if [[ -z "$apparmor_parser" ]]; then
         print_warn "Your system blocks user namespaces for bwrap (AppArmor) and 'apparmor_parser' is missing. See the README troubleshooting section."
         return 0
     fi
 
     local profile=/etc/apparmor.d/bwrap-couchplay
-    print_info "Your system blocks user namespaces for bwrap (AppArmor). Allowing it for $bwrap_path only: $profile"
-    if ! cat > "$profile" <<EOF
+    print_info "Your system blocks user namespaces for bwrap (AppArmor). Allowing it for $bwrap_path only: $profile (needs sudo)"
+    if ! as_root tee "$profile" >/dev/null <<EOF
 # Installed by the CouchPlay installer: lets bubblewrap create user namespaces under
 # kernel.apparmor_restrict_unprivileged_userns=1. Remove this file and run
 # 'sudo apparmor_parser -R /etc/apparmor.d/bwrap-couchplay' to undo it.
@@ -482,11 +498,11 @@ EOF
         print_warn "Could not write $profile. See the README troubleshooting section."
         return 0
     fi
-    if apparmor_parser -r "$profile" && sudo -u "$REAL_USER" "${probe[@]}" &>/dev/null; then
+    if as_root "$apparmor_parser" -r "$profile" && as_user "${probe[@]}" &>/dev/null; then
         print_info "bwrap can create user namespaces now."
     else
-        apparmor_parser -R "$profile" &>/dev/null || true
-        rm -f "$profile"
+        as_root "$apparmor_parser" -R "$profile" &>/dev/null || true
+        as_root rm -f "$profile"
         print_warn "Could not enable user namespaces for bwrap automatically. See the README troubleshooting section."
     fi
 }
@@ -510,7 +526,7 @@ check_host_requirements() {
         fi
     done
 
-    if ! sudo -u "$REAL_USER" test -w /dev/uinput 2>/dev/null; then
+    if ! as_user test -w /dev/uinput 2>/dev/null; then
         print_warn "/dev/uinput is not writable by $REAL_USER. CouchPlay needs it to create one virtual controller per player."
         echo "         Install your distro's Steam udev rules (e.g. the 'steam-devices' package) or add a udev rule"
         echo "         that grants your user access to /dev/uinput (KERNEL==\"uinput\", TAG+=\"uaccess\")."
@@ -566,8 +582,13 @@ cleanup() {
     fi
 }
 
-# Determine the real user calling the script (for SteamOS home directory persistence)
-REAL_USER="${SUDO_USER:-deck}"
+# The desktop user the sandboxes and Flatpak install belong to. As root (sudo, or the --tarball re-exec)
+# that is the user who ran sudo; otherwise it is whoever runs the script.
+if [[ $EUID -eq 0 ]]; then
+    REAL_USER="${SUDO_USER:-deck}"
+else
+    REAL_USER="$(id -un)"
+fi
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 REAL_HOME="${REAL_HOME:-/home/deck}"
 
@@ -704,15 +725,15 @@ install_flatpak() {
         verify_checksum "$flatpak_file" "$sha_file"
     fi
 
-    # Flatpak runs as the invoking user (never root); --user scopes installs to REAL_USER.
+    # Flatpak always installs for the desktop user (--user); no root is involved.
     print_info "Ensuring Flathub remote + org.kde.Platform 6.10 runtime..."
-    sudo -u "$REAL_USER" flatpak remote-add --user --if-not-exists flathub \
+    as_user flatpak remote-add --user --if-not-exists flathub \
         https://flathub.org/repo/flathub.flatpakrepo || true
-    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y \
+    as_user flatpak install --user --noninteractive -y \
         flathub org.kde.Platform/x86_64/6.10
 
     print_info "Installing CouchPlay Flatpak bundle..."
-    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y "$flatpak_file"
+    as_user flatpak install --user --noninteractive -y "$flatpak_file"
 
     # The Flatpak ships its own couchplay-padfwd / couchplay-vdisplay and runs them from
     # its app path on the host, so nothing else needs to be installed.
@@ -748,11 +769,15 @@ main() {
         esac
     done
 
+    # --tarball writes under ${PREFIX}, so it is the one path that needs root.
+    if $FORCE_TARBALL && [[ $EUID -ne 0 ]]; then
+        reexec_with_sudo
+    fi
+
     print_info "CouchPlay Installer"
     echo ""
     
     # Pre-flight checks
-    check_root
     check_dependencies
     check_architecture
     

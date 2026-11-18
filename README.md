@@ -163,7 +163,7 @@ Beta build (from `develop`):
 curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
 ```
 
-> Requires Linux x86_64 and sudo (the installer escalates once to put the Flatpak and host tool dependencies in place). The same command works on SteamOS. Beta builds include unreleased features and may be unstable.
+> Requires Linux x86_64. The Flatpak install runs as your user and needs no sudo. Only `--tarball` (it writes under `/usr/local`) and, on systems that block user namespaces for bubblewrap, one AppArmor step ask for sudo. The same command works on SteamOS. Beta builds include unreleased features and may be unstable.
 
 ### Native binary (tarball, Fedora-family only)
 
