@@ -807,7 +807,7 @@ main() {
     check_legacy_helper "$BETA" "$FORCE_TARBALL"
 }
 
-# Run main if script is executed (not sourced)
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Run main when executed, including piped from curl (BASH_SOURCE is empty then); not when sourced.
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
