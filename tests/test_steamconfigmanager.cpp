@@ -74,7 +74,7 @@ class TestSteamConfigManager : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
-    void testPreparationPlansOnlyCommonContentAndCleanupRestoresConfig()
+    void testPreparationSharesGameFilesAndShaderCacheOnlyAndCleanupRestoresConfig()
     {
         QTemporaryDir home;
         QVERIFY(home.isValid());
@@ -87,8 +87,11 @@ private Q_SLOTS:
         const QString externalLibrary = home.path() + QStringLiteral("/external library");
         QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
         const QString primaryCommon = steamRoot + QStringLiteral("/steamapps/common");
+        const QString primaryShaderCache = steamRoot + QStringLiteral("/steamapps/shadercache");
         const QString externalCommon = externalLibrary + QStringLiteral("/steamapps/common");
         QVERIFY(QDir().mkpath(primaryCommon));
+        QVERIFY(QDir().mkpath(primaryShaderCache));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/steamapps/compatdata")));
         QVERIFY(QDir().mkpath(externalCommon));
         QFile sourceSentinel(primaryCommon + QStringLiteral("/source.txt"));
         QVERIFY(sourceSentinel.open(QIODevice::WriteOnly));
@@ -120,19 +123,30 @@ private Q_SLOTS:
         marker.mode = QStringLiteral("overlay");
         QList<SandboxMount> mounts;
         QVERIFY(manager.prepareDataDir(marker, player, mounts));
-        QCOMPARE(mounts.size(), 2);
+        // Primary library: game files + shader cache. The external library has no shader cache of its own, so its
+        // cache view is the primary library's cache, written to a layer that belongs to the external library.
+        // compatdata (saves, settings) is never shared.
+        QCOMPARE(mounts.size(), 4);
         const QString libsRoot = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs");
-        const QStringList sources{primaryCommon, externalCommon};
-        for (int i = 0; i < 2; ++i) {
+        const QString externalShaderCache = externalLibrary + QStringLiteral("/steamapps/shadercache");
+        const QStringList sources{primaryCommon, primaryShaderCache, externalCommon, primaryShaderCache};
+        const QStringList layerOwners{primaryCommon, primaryShaderCache, externalCommon, externalShaderCache};
+        const QStringList targets{libsRoot + QStringLiteral("/0/steamapps/common"),
+                                  libsRoot + QStringLiteral("/0/steamapps/shadercache"),
+                                  libsRoot + QStringLiteral("/1/steamapps/common"),
+                                  libsRoot + QStringLiteral("/1/steamapps/shadercache")};
+        for (int i = 0; i < 4; ++i) {
             const SandboxMount &mount = mounts.at(i);
             QCOMPARE(mount.kind, SandboxMount::Overlay);
             QCOMPARE(mount.source, sources.at(i));
-            QCOMPARE(mount.target, libsRoot + QStringLiteral("/%1/steamapps/common").arg(i));
-            QCOMPARE(mount.upper, PlayerStore::layerDir(player, sources.at(i)) + QStringLiteral("/upper"));
-            QCOMPARE(mount.work, PlayerStore::layerDir(player, sources.at(i)) + QStringLiteral("/work"));
+            QCOMPARE(mount.target, targets.at(i));
+            QCOMPARE(mount.upper, PlayerStore::layerDir(player, layerOwners.at(i)) + QStringLiteral("/upper"));
+            QCOMPARE(mount.work, PlayerStore::layerDir(player, layerOwners.at(i)) + QStringLiteral("/work"));
             QVERIFY(QFileInfo(mount.upper).isDir());
             QVERIFY(QFileInfo(mount.work).isDir());
         }
+        for (const SandboxMount &mount : mounts)
+            QVERIFY(!mount.source.contains(QStringLiteral("compatdata")));
 
         QVERIFY(manager.finalizeDataDir(marker, player));
         // Steam loads steamapps/libraryfolders.vdf, so both locations must carry the shared libraries
@@ -156,6 +170,58 @@ private Q_SLOTS:
         }
         QVERIFY(sourceSentinel.open(QIODevice::ReadOnly));
         QCOMPARE(sourceSentinel.readAll(), QByteArray("source remains private\n"));
+    }
+
+    void testOtherLibraryShaderCacheStacksPrimaryCacheBelowItsOwn()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString steamRoot = home.path() + QStringLiteral("/.steam/steam");
+        const QString externalLibrary = home.path() + QStringLiteral("/external");
+        const QString primaryShaderCache = steamRoot + QStringLiteral("/steamapps/shadercache");
+        const QString externalShaderCache = externalLibrary + QStringLiteral("/steamapps/shadercache");
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/steamapps/common")));
+        QVERIFY(QDir().mkpath(primaryShaderCache));
+        QVERIFY(QDir().mkpath(externalLibrary + QStringLiteral("/steamapps/common")));
+        QVERIFY(QDir().mkpath(externalShaderCache));
+
+        QFile libraries(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        QVERIFY(libraries.open(QIODevice::WriteOnly | QIODevice::Text));
+        libraries.write("\"libraryfolders\"\n{\n"
+                        "  \"0\"\n  {\n    \"path\"\t\"" + steamRoot.toUtf8() + "\"\n  }\n"
+                        "  \"1\"\n  {\n    \"path\"\t\"" + externalLibrary.toUtf8() + "\"\n  }\n}\n");
+        libraries.close();
+
+        SteamConfigManager manager;
+        manager.setShareLibraryEnabled(true);
+        QVERIFY(manager.isSteamDetected());
+
+        DataDirectory marker;
+        marker.path = steamRoot;
+        marker.mode = QStringLiteral("overlay");
+        QList<SandboxMount> mounts;
+        QVERIFY(manager.prepareDataDir(marker, QStringLiteral("player"), mounts));
+
+        const QString libsRoot = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs");
+        const SandboxMount *primary = nullptr;
+        const SandboxMount *external = nullptr;
+        for (const SandboxMount &mount : mounts) {
+            if (mount.target == libsRoot + QStringLiteral("/0/steamapps/shadercache")) primary = &mount;
+            if (mount.target == libsRoot + QStringLiteral("/1/steamapps/shadercache")) external = &mount;
+        }
+        QVERIFY(primary && external);
+        // The primary library has nothing below it; the other library sees the primary cache under its own.
+        QCOMPARE(primary->source, primaryShaderCache);
+        QVERIFY(primary->lowerBelow.isEmpty());
+        QCOMPARE(external->source, externalShaderCache);
+        QCOMPARE(external->lowerBelow, QStringList{primaryShaderCache});
+        QCOMPARE(external->upper, PlayerStore::layerDir(QStringLiteral("player"), externalShaderCache) + QStringLiteral("/upper"));
     }
 
     void testFinalizeMirrorsDesktopCompatToolsForSharedGames()

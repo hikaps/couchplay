@@ -1078,19 +1078,44 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
         return false;
     }
 
+    // The game files and the shader cache are shared read-only; each player's writes land in its own layer.
+    // compatdata (Proton prefixes: saves, settings) is deliberately never shared.
+    // Steam keeps a game's shader cache next to the library the game is installed in, but the host's cache for a
+    // game can sit in the primary library (index 0). Every library's cache view therefore stacks the primary
+    // library's cache below its own. Libraries with neither are skipped: bwrap fails on a missing overlay source.
+    const QString primaryCache = m_libraries.at(0).path + QStringLiteral("/steamapps/shadercache");
+    const bool primaryCacheExists = QFileInfo(primaryCache).isDir();
+    static const QStringList sharedSubdirs = {QStringLiteral("common"), QStringLiteral("shadercache")};
     for (int i = 0; i < m_libraries.size(); ++i) {
-        SandboxMount mount;
-        mount.kind = SandboxMount::Overlay;
-        mount.source = m_libraries.at(i).path + QStringLiteral("/steamapps/common");
-        mount.target = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs/%1/steamapps/common").arg(i);
-        const QString layer = PlayerStore::layerDir(player, mount.source);
-        mount.upper = layer + QStringLiteral("/upper");
-        mount.work = layer + QStringLiteral("/work");
-        if (!QDir().mkpath(mount.upper) || !QDir().mkpath(mount.work)) {
-            qCWarning(couchplaySteam) << "prepareDataDir: Cannot create overlay layer" << layer;
-            return false;
+        for (const QString &subdir : sharedSubdirs) {
+            const QString own = m_libraries.at(i).path + QStringLiteral("/steamapps/") + subdir;
+            SandboxMount mount;
+            mount.kind = SandboxMount::Overlay;
+            if (subdir == QStringLiteral("common")) {
+                mount.source = own;
+            } else {
+                const bool ownExists = QFileInfo(own).isDir();
+                const bool stackPrimary = i != 0 && primaryCacheExists;
+                if (ownExists) {
+                    mount.source = own;
+                    if (stackPrimary) mount.lowerBelow << primaryCache;
+                } else if (stackPrimary) {
+                    mount.source = primaryCache;
+                } else {
+                    continue;
+                }
+            }
+            mount.target = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs/%1/steamapps/%2").arg(i).arg(subdir);
+            // The layer belongs to this library's own directory, whichever lower layers are stacked under it.
+            const QString layer = PlayerStore::layerDir(player, own);
+            mount.upper = layer + QStringLiteral("/upper");
+            mount.work = layer + QStringLiteral("/work");
+            if (!QDir().mkpath(mount.upper) || !QDir().mkpath(mount.work)) {
+                qCWarning(couchplaySteam) << "prepareDataDir: Cannot create overlay layer" << layer;
+                return false;
+            }
+            mounts.append(mount);
         }
-        mounts.append(mount);
     }
     return true;
 }
