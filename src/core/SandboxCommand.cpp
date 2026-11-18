@@ -49,6 +49,10 @@ QStringList buildSandboxArgv(const SandboxSpec &spec)
             argv << QStringLiteral("--ro-bind") << mount.source << mount.target;
             break;
         case SandboxMount::Overlay:
+            // bwrap stacks each --overlay-src above the previous one, so the lowest layers come first.
+            for (const QString &lower : mount.lowerBelow) {
+                argv << QStringLiteral("--overlay-src") << lower;
+            }
             argv << QStringLiteral("--overlay-src") << mount.source << QStringLiteral("--overlay") << mount.upper
                  << mount.work << mount.target;
             break;

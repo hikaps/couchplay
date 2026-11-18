@@ -64,6 +64,7 @@ private Q_SLOTS:
     void playerHomeBindAndFlatpakRoBind();
     void noPlayerNoHomeBind();
     void mountKinds();
+    void overlayStacksExtraLowerLayersBelowSource();
     void mountsFollowHomeBindAndPrecedeBusMask();
     void busMask();
     void environment();
@@ -205,6 +206,25 @@ void TestSandboxCommand::mountKinds()
     QVERIFY(b > 0);
     QVERIFY(r > b);
     QVERIFY(o > r);
+}
+
+void TestSandboxCommand::overlayStacksExtraLowerLayersBelowSource()
+{
+    SandboxSpec spec = baseSpec();
+    SandboxMount ov;
+    ov.kind = SandboxMount::Overlay;
+    ov.source = QStringLiteral("/src/top");
+    ov.lowerBelow = {QStringLiteral("/src/bottom")};
+    ov.target = QStringLiteral("/tgt/o");
+    ov.upper = QStringLiteral("/layer/upper");
+    ov.work = QStringLiteral("/layer/work");
+    spec.mounts = {ov};
+
+    // bwrap puts the last --overlay-src on top, so the lower layer must be listed first.
+    const QStringList argv = buildSandboxArgv(spec);
+    QVERIFY(at(argv, "--overlay-src", "/src/bottom", "--overlay-src", "/src/top", "--overlay", "/layer/upper",
+               "/layer/work", "/tgt/o")
+            > 0);
 }
 
 void TestSandboxCommand::mountsFollowHomeBindAndPrecedeBusMask()

@@ -21,6 +21,7 @@ struct SandboxMount {
     QString target;
     QString upper;
     QString work;
+    QStringList lowerBelow; ///< Overlay only: further read-only layers under @c source, lowest first
 };
 
 /** Everything needed to build the `bwrap → dbus-run-session → gamescope` command line. */
