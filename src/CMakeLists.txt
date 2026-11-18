@@ -7,8 +7,6 @@ add_library(couchplay_core STATIC
     core/CommandVerifier.h
     core/Logging.cpp
     core/Logging.h
-    core/HostStatus.cpp
-    core/HostStatus.h
     core/PlayerFiles.cpp
     core/PlayerFiles.h
     core/SandboxCommand.cpp
@@ -134,6 +132,8 @@ target_sources(couchplay PRIVATE
     core/UpdateChecker.h
     core/PlayerStore.cpp
     core/PlayerStore.h
+    core/HostStatus.cpp
+    core/HostStatus.h
     core/PadForwarder.cpp
     core/PadForwarder.h
 )
