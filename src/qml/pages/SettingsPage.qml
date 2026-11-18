@@ -15,10 +15,6 @@ Kirigami.ScrollablePage {
 
     property var sessionRunner: null
 
-    required property var helperClient
-
-    property bool helperAvailable: helperClient?.available ?? false
-
     property var presetManager: null
 
     property var steamConfigManager: null
@@ -38,7 +34,6 @@ Kirigami.ScrollablePage {
     readonly property var activePresetManager: root.presetManager ?? internalPresetManager
 
     readonly property bool hidePanels: settingsManager?.hidePanels ?? true
-    readonly property bool killSteam: settingsManager?.killSteam ?? true
     readonly property bool restoreSession: settingsManager?.restoreSession ?? false
     readonly property string scalingMode: settingsManager?.scalingMode ?? "fit"
     readonly property string filterMode: settingsManager?.filterMode ?? "linear"
@@ -78,20 +73,6 @@ Kirigami.ScrollablePage {
                 onToggled: if (root.settingsManager) root.settingsManager.hidePanels = checked
 
                 Controls.ToolTip.text: i18nc("@info:tooltip", "Automatically hide Plasma panels when a session starts")
-                Controls.ToolTip.visible: hovered
-                Controls.ToolTip.delay: 1000
-            }
-
-            Controls.CheckBox {
-                id: killSteamOption
-                objectName: "checkKillSteam"
-                Kirigami.FormData.label: i18nc("@option:check", "Close Steam before starting")
-                Accessible.role: Accessible.CheckBox
-                Accessible.name: Kirigami.FormData.label
-                checked: root.killSteam
-                onToggled: if (root.settingsManager) root.settingsManager.killSteam = checked
-
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Prevents conflicts by closing existing Steam instances before session start")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }
@@ -553,7 +534,7 @@ Kirigami.ScrollablePage {
                     }
                 }
 
-                Controls.ToolTip.text: i18nc("@info:tooltip", "Copy Heroic game shortcuts (.desktop files) to gaming users at session start. Game directories are shared using filesystem ACLs.")
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Copy Heroic game shortcuts (.desktop files) to players at session start.")
                 Controls.ToolTip.visible: hovered
                 Controls.ToolTip.delay: 1000
             }
@@ -563,7 +544,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             visible: (root.steamConfigManager !== null && root.steamConfigManager.steamDetected) 
                       || (root.heroicConfigManager !== null && root.heroicConfigManager.heroicDetected)
-            text: i18nc("@info", "When sync is enabled, shortcuts are copied to gaming users at session start. When library sharing is enabled, downloaded games are shared via bind mounts. Access to game directories is granted using filesystem ACLs.")
+            text: i18nc("@info", "When sync is enabled, shortcuts are copied to players at session start. When library sharing is enabled, downloaded games are shared with each player through read-only overlays.")
             type: Kirigami.MessageType.Information
         }
 
@@ -596,77 +577,6 @@ Kirigami.ScrollablePage {
                            ? Kirigami.Theme.positiveTextColor
                            : Kirigami.Theme.negativeTextColor
                 }
-            }
-
-            Controls.Label {
-                Kirigami.FormData.label: i18nc("@label", "Multi-user routing")
-                text: {
-                    if (!root.audioManager || root.audioManager.audioServer === "") {
-                        return i18nc("@info", "Not available — no audio server detected")
-                    }
-                    if (root.audioManager.multiUserConfigured) {
-                        return i18nc("@info", "Ready — socket ACLs configured")
-                    }
-                    return i18nc("@info", "Will be configured automatically at session start")
-                }
-                wrapMode: Text.WordWrap
-                opacity: 0.7
-                color: {
-                    if (!root.audioManager || root.audioManager.audioServer === "") {
-                        return Kirigami.Theme.negativeTextColor
-                    }
-                    if (root.audioManager.multiUserConfigured) {
-                        return Kirigami.Theme.positiveTextColor
-                    }
-                    return Kirigami.Theme.textColor
-                }
-            }
-        }
-
-        Kirigami.FormLayout {
-            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
-            wideMode: root.width > Kirigami.Units.gridUnit * 30
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18nc("@title:group", "Privileged Helper")
-            }
-
-            RowLayout {
-                Kirigami.FormData.label: i18nc("@label", "Status")
-                spacing: Kirigami.Units.smallSpacing
-
-                Kirigami.Icon {
-                    source: root.helperAvailable ? "dialog-ok-apply" : "dialog-error"
-                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                }
-
-                Controls.Label {
-                    text: root.helperAvailable ? i18nc("@info", "Connected") : i18nc("@info", "Not installed")
-                    color: root.helperAvailable ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
-                }
-            }
-
-            Controls.Label {
-                objectName: "labelHelperVersion"
-                Kirigami.FormData.label: i18nc("@label", "Version")
-                visible: root.helperAvailable
-                text: root.helperClient?.helperVersion
-                      ? root.helperClient.helperVersion
-                      : i18nc("@info", "Older than 0.6.1 or unknown")
-            }
-
-            Controls.Button {
-                objectName: "btnInstallHelper"
-                Accessible.role: Accessible.Button
-                Accessible.name: text
-                Accessible.onPressAction: clicked()
-                visible: !root.helperAvailable
-                Kirigami.FormData.label: " "
-                text: i18nc("@action:button", "Install Helper...")
-                icon.name: "run-install"
-                onClicked: installHelperDialog.open()
             }
         }
 
@@ -707,45 +617,6 @@ Kirigami.ScrollablePage {
                 wrapMode: Text.WordWrap
                 opacity: 0.7
             }
-        }
-
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            text: i18nc("@info", "The CouchPlay Helper is a privileged system service required for creating users and managing device permissions. It uses PolicyKit for secure authorization.")
-            type: Kirigami.MessageType.Information
-            visible: !root.helperAvailable
-
-            actions: [
-                Kirigami.Action {
-                    objectName: "actionLearnMore"
-                    Accessible.role: Accessible.Button
-                    Accessible.name: i18nc("@action:button", "Learn More")
-                    Accessible.onPressAction: triggered()
-                    icon.name: "help-about"
-                    text: i18nc("@action:button", "Learn More")
-                    onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#2-install-the-helper")
-                }
-            ]
-        }
-
-        Kirigami.InlineMessage {
-            objectName: "messageHelperOutdated"
-            Layout.fillWidth: true
-            visible: root.helperClient?.helperOutdated ?? false
-            type: Kirigami.MessageType.Warning
-            text: i18nc("@info", "The installed helper is older than this version of CouchPlay supports. Stop any running session and reinstall the helper: re-run the install command from the README, or install it from the Flatpak with install-helper.sh.")
-
-            actions: [
-                Kirigami.Action {
-                    objectName: "actionHelperUpdateHelp"
-                    Accessible.role: Accessible.Button
-                    Accessible.name: i18nc("@action:button", "Learn More")
-                    Accessible.onPressAction: triggered()
-                    icon.name: "help-about"
-                    text: i18nc("@action:button", "Learn More")
-                    onTriggered: Qt.openUrlExternally("https://github.com/hikaps/couchplay#updating")
-                }
-            ]
         }
 
         Kirigami.FormLayout {
@@ -902,10 +773,10 @@ Kirigami.ScrollablePage {
             text: {
                 if (!root.updateChecker) return ""
                 if (root.updateChecker.installMethod === "flatpak") {
-                    return i18nc("@info", "Click Update Now to download and install the new release. The helper is separate and is not updated automatically; reinstall it only if the Privileged Helper section says it is outdated.")
+                    return i18nc("@info", "Click Update Now to download and install the new release.")
                 }
                 if (root.updateChecker.installMethod === "steamos") {
-                    return i18nc("@info", "Stop any running session and re-run the install command from the README to update the app and its system extension.")
+                    return i18nc("@info", "Stop any running session and re-run the install command from the README to update the app.")
                 }
                 return i18nc("@info", "Stop any running session and re-run the install command from the README (add --tarball to keep the native binary), or download the release from the releases page.")
             }
@@ -916,7 +787,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             visible: root.updateChecker?.updateNowState === UpdateChecker.UpdateNowSucceeded
             type: Kirigami.MessageType.Positive
-            text: i18nc("@info", "Update installed. Restart CouchPlay to finish updating. The helper is separate and is not updated by this.")
+            text: i18nc("@info", "Update installed. Restart CouchPlay to finish updating.")
         }
 
         Kirigami.InlineMessage {
@@ -1069,10 +940,6 @@ Kirigami.ScrollablePage {
     Dialogs.ResetSettingsDialog {
         id: resetConfirmDialog
         settingsManager: root.settingsManager
-    }
-
-    Dialogs.InstallHelperDialog {
-        id: installHelperDialog
     }
 
     Dialogs.EditPresetDialog {

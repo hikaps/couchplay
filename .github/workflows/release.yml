@@ -26,7 +26,7 @@ jobs:
         run: git config --global --add safe.directory /__w/couchplay/couchplay
 
       - name: Install build dependencies
-        run: ./scripts/install-build-deps.sh dbus-daemon tar patchelf squashfs-tools
+        run: ./scripts/install-build-deps.sh dbus-daemon tar
 
       - name: Verify tag is on main branch
         if: startsWith(github.ref, 'refs/tags/')
@@ -44,7 +44,7 @@ jobs:
         run: cmake --build build --parallel 2
 
       - name: Test
-        run: dbus-run-session -- ctest --test-dir build --output-on-failure -E "test_usermanager|test_couchplayhelper|test_gamescopeinstance|test_presetmanager_integration|test_commandverifier|test_devicemanager|test_heroicconfigmanager"
+        run: dbus-run-session -- ctest --test-dir build --output-on-failure -E "test_gamescopeinstance|test_presetmanager_integration|test_commandverifier|test_devicemanager|test_heroicconfigmanager"
         env:
           QT_QPA_PLATFORM: offscreen
 
@@ -55,15 +55,10 @@ jobs:
 
           # Copy binaries
           cp build/bin/couchplay release-appdir/bin/
-          cp build/bin/couchplay-helper release-appdir/bin/
           cp build/bin/couchplay-vdisplay release-appdir/bin/
-
-          # Bundle the helper's runtime libs + assert the bundle landed (#28/#37).
-          ./scripts/package-helper.sh release-appdir/bin/couchplay-helper
+          cp build/bin/couchplay-padfwd release-appdir/bin/
 
           # Copy scripts
-          cp scripts/install-helper.sh release-appdir/
-          chmod +x release-appdir/install-helper.sh
           cp scripts/couchplay-gamemode.sh release-appdir/
           chmod +x release-appdir/couchplay-gamemode.sh
 
@@ -73,14 +68,9 @@ jobs:
           # Create tarball
           tar -cJf couchplay-x86_64.tar.xz -C release-appdir .
 
-          # Build systemd-sysext raw image
-          chmod +x scripts/build-sysext.sh
-          ./scripts/build-sysext.sh couchplay.steamos.raw build/bin/couchplay-helper
-
       - name: Generate checksum
         run: |
           sha256sum couchplay-x86_64.tar.xz > couchplay-x86_64.sha256
-          sha256sum couchplay.steamos.raw > couchplay.steamos.sha256
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -89,8 +79,6 @@ jobs:
           path: |
             couchplay-x86_64.tar.xz
             couchplay-x86_64.sha256
-            couchplay.steamos.raw
-            couchplay.steamos.sha256
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -99,5 +87,3 @@ jobs:
           files: |
             couchplay-x86_64.tar.xz
             couchplay-x86_64.sha256
-            couchplay.steamos.raw
-            couchplay.steamos.sha256

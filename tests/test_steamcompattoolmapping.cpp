@@ -3,7 +3,7 @@
 
 #include <QTest>
 
-#include "../helper/SteamCompatToolMapping.h"
+#include "../src/core/SteamCompatToolMapping.h"
 
 using SteamCompatToolMapping::Changes;
 using SteamCompatToolMapping::Tool;

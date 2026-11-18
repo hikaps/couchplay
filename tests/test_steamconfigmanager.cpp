@@ -12,8 +12,10 @@
 #include <QTest>
 #include <QVariantMap>
 
-#include "CouchPlayHelperClient.h"
+#include "PlayerStore.h"
 #include "PresetManager.h"
+#include "SandboxCommand.h"
+#include "SteamCompatToolMapping.h"
 #include "SteamConfigManager.h"
 
 namespace {
@@ -65,51 +67,14 @@ private:
     QByteArray m_value;
     bool m_wasSet;
 };
-class SteamPlanHelper final : public CouchPlayHelperClient
-{
-public:
-    bool isAvailable() const override { return true; }
-    QString targetHome;
-    QString targetSteamRoot;
-    QStringList parentAclPaths;
-    QList<QPair<QString, QByteArray>> writtenFiles;
-    QList<QPair<QString, QVariantMap>> compatMappings;
 
-    QVariantMap getUserInfo(const QString &) override
-    {
-        return {{QStringLiteral("uid"), 5555u},
-                {QStringLiteral("gid"), 5555u},
-                {QStringLiteral("home"), targetHome}};
-    }
-    QString getUserSteamRoot(const QString &) override { return targetSteamRoot; }
-    QString getUserSteamId(const QString &) override { return QStringLiteral("76561198000000000"); }
-    bool setPathAclWithParents(const QString &path, const QString &) override
-    {
-        parentAclPaths.append(path);
-        return true;
-    }
-    bool writeFileToUser(const QByteArray &content, const QString &targetPath, const QString &) override
-    {
-        if (!QDir().mkpath(QFileInfo(targetPath).absolutePath())) return false;
-        QFile file(targetPath);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-        if (file.write(content) != content.size()) return false;
-        writtenFiles.append({targetPath, content});
-        return true;
-    }
-    bool setUserCompatToolMapping(const QString &username, const QVariantMap &entries) override
-    {
-        compatMappings.append({username, entries});
-        return true;
-    }
-};
 
 class TestSteamConfigManager : public QObject
 {
     Q_OBJECT
 
 private Q_SLOTS:
-    void testPreparationPlansOnlyCommonContentAndCleanupRestoresConfig()
+    void testPreparationSharesGameFilesAndShaderCacheOnlyAndCleanupRestoresConfig()
     {
         QTemporaryDir home;
         QVERIFY(home.isValid());
@@ -122,8 +87,11 @@ private Q_SLOTS:
         const QString externalLibrary = home.path() + QStringLiteral("/external library");
         QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
         const QString primaryCommon = steamRoot + QStringLiteral("/steamapps/common");
+        const QString primaryShaderCache = steamRoot + QStringLiteral("/steamapps/shadercache");
         const QString externalCommon = externalLibrary + QStringLiteral("/steamapps/common");
         QVERIFY(QDir().mkpath(primaryCommon));
+        QVERIFY(QDir().mkpath(primaryShaderCache));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/steamapps/compatdata")));
         QVERIFY(QDir().mkpath(externalCommon));
         QFile sourceSentinel(primaryCommon + QStringLiteral("/source.txt"));
         QVERIFY(sourceSentinel.open(QIODevice::WriteOnly));
@@ -137,52 +105,64 @@ private Q_SLOTS:
                         "  \"1\"\n  {\n    \"path\"\t\"" + externalLibrary.toUtf8() + "\"\n  }\n}\n");
         libraries.close();
 
-        SteamPlanHelper helper;
-        helper.targetHome = home.path() + QStringLiteral("/player-home");
-        helper.targetSteamRoot = helper.targetHome + QStringLiteral("/.steam/steam");
+        const QString player = QStringLiteral("player");
+        const QString playerHome = PlayerStore::homeDir(player);
+        const QString playerSteam = playerHome + QStringLiteral("/.local/share/Steam");
+        QVERIFY(QDir().mkpath(playerSteam + QStringLiteral("/config")));
+        QVERIFY(QDir().mkpath(playerSteam + QStringLiteral("/userdata/76561198000000000/config")));
+        QFile steamSh(playerSteam + QStringLiteral("/steam.sh"));
+        QVERIFY(steamSh.open(QIODevice::WriteOnly));
+        steamSh.close();
+
         SteamConfigManager manager;
-        manager.setHelperClient(&helper);
         manager.setShareLibraryEnabled(true);
         QVERIFY(manager.isSteamDetected());
 
         DataDirectory marker;
         marker.path = steamRoot;
         marker.mode = QStringLiteral("overlay");
-        QVariantList preparations;
-        QVERIFY(manager.prepareDataDir(marker, QStringLiteral("player"), preparations));
-        QCOMPARE(preparations.size(), 2);
-        const QStringList expectedKeys{QStringLiteral("mode"), QStringLiteral("source"),
-                                       QStringLiteral("stagingPath"), QStringLiteral("targetAlias")};
-        const QVariantMap primary = preparations.at(0).toMap();
-        QCOMPARE(primary.keys(), expectedKeys);
-        QCOMPARE(primary.value(QStringLiteral("source")).toString(), primaryCommon);
-        QCOMPARE(primary.value(QStringLiteral("mode")).toString(), QStringLiteral("overlay"));
-        QCOMPARE(primary.value(QStringLiteral("targetAlias")).toString(),
-                 QStringLiteral(".couchplay/steam-libs/0/steamapps/common"));
-        QVERIFY(primary.value(QStringLiteral("stagingPath")).toString().isEmpty());
-        const QVariantMap external = preparations.at(1).toMap();
-        QCOMPARE(external.value(QStringLiteral("source")).toString(), externalCommon);
-        QCOMPARE(external.value(QStringLiteral("targetAlias")).toString(),
-                 QStringLiteral(".couchplay/steam-libs/1/steamapps/common"));
-        QVERIFY(helper.parentAclPaths.isEmpty());
+        QList<SandboxMount> mounts;
+        QVERIFY(manager.prepareDataDir(marker, player, mounts));
+        // Primary library: game files + shader cache. The external library has no shader cache of its own, so its
+        // cache view is the primary library's cache, written to a layer that belongs to the external library.
+        // compatdata (saves, settings) is never shared.
+        QCOMPARE(mounts.size(), 4);
+        const QString libsRoot = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs");
+        const QString externalShaderCache = externalLibrary + QStringLiteral("/steamapps/shadercache");
+        const QStringList sources{primaryCommon, primaryShaderCache, externalCommon, primaryShaderCache};
+        const QStringList layerOwners{primaryCommon, primaryShaderCache, externalCommon, externalShaderCache};
+        const QStringList targets{libsRoot + QStringLiteral("/0/steamapps/common"),
+                                  libsRoot + QStringLiteral("/0/steamapps/shadercache"),
+                                  libsRoot + QStringLiteral("/1/steamapps/common"),
+                                  libsRoot + QStringLiteral("/1/steamapps/shadercache")};
+        for (int i = 0; i < 4; ++i) {
+            const SandboxMount &mount = mounts.at(i);
+            QCOMPARE(mount.kind, SandboxMount::Overlay);
+            QCOMPARE(mount.source, sources.at(i));
+            QCOMPARE(mount.target, targets.at(i));
+            QCOMPARE(mount.upper, PlayerStore::layerDir(player, layerOwners.at(i)) + QStringLiteral("/upper"));
+            QCOMPARE(mount.work, PlayerStore::layerDir(player, layerOwners.at(i)) + QStringLiteral("/work"));
+            QVERIFY(QFileInfo(mount.upper).isDir());
+            QVERIFY(QFileInfo(mount.work).isDir());
+        }
+        for (const SandboxMount &mount : mounts)
+            QVERIFY(!mount.source.contains(QStringLiteral("compatdata")));
 
-        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        QVERIFY(manager.finalizeDataDir(marker, player));
         // Steam loads steamapps/libraryfolders.vdf, so both locations must carry the shared libraries
-        const QString targetLibraryFolders = helper.targetSteamRoot + QStringLiteral("/config/libraryfolders.vdf");
-        const QString steamappsLibraryFolders = helper.targetSteamRoot + QStringLiteral("/steamapps/libraryfolders.vdf");
-        QCOMPARE(helper.writtenFiles.size(), 2);
-        QCOMPARE(helper.writtenFiles.at(0).first, targetLibraryFolders);
-        QCOMPARE(helper.writtenFiles.at(1).first, steamappsLibraryFolders);
+        const QString targetLibraryFolders = playerSteam + QStringLiteral("/config/libraryfolders.vdf");
+        const QString steamappsLibraryFolders = playerSteam + QStringLiteral("/steamapps/libraryfolders.vdf");
         QVERIFY(QFile::exists(targetLibraryFolders));
         QVERIFY(QFile::exists(steamappsLibraryFolders));
-        QFile shared(steamappsLibraryFolders);
-        QVERIFY(shared.open(QIODevice::ReadOnly));
-        QVERIFY(shared.readAll().contains(".couchplay/steam-libs/1"));
-        shared.close();
-        QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player")));
-        QCOMPARE(helper.writtenFiles.size(), 4);
-        QCOMPARE(helper.writtenFiles.at(2).first, targetLibraryFolders);
-        QCOMPARE(helper.writtenFiles.at(3).first, steamappsLibraryFolders);
+        for (const QString &path : {targetLibraryFolders, steamappsLibraryFolders}) {
+            QFile shared(path);
+            QVERIFY(shared.open(QIODevice::ReadOnly));
+            const QByteArray content = shared.readAll();
+            // Paths are the sandbox view: the real player home never appears in the config
+            QVERIFY(content.contains((libsRoot + QStringLiteral("/1")).toUtf8()));
+            QVERIFY(!content.contains(playerHome.toUtf8()));
+        }
+        QVERIFY(manager.cleanupLibrarySharing(player));
         for (const QString &path : {targetLibraryFolders, steamappsLibraryFolders}) {
             QFile restored(path);
             QVERIFY(restored.open(QIODevice::ReadOnly));
@@ -190,6 +170,58 @@ private Q_SLOTS:
         }
         QVERIFY(sourceSentinel.open(QIODevice::ReadOnly));
         QCOMPARE(sourceSentinel.readAll(), QByteArray("source remains private\n"));
+    }
+
+    void testOtherLibraryShaderCacheStacksPrimaryCacheBelowItsOwn()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString steamRoot = home.path() + QStringLiteral("/.steam/steam");
+        const QString externalLibrary = home.path() + QStringLiteral("/external");
+        const QString primaryShaderCache = steamRoot + QStringLiteral("/steamapps/shadercache");
+        const QString externalShaderCache = externalLibrary + QStringLiteral("/steamapps/shadercache");
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/steamapps/common")));
+        QVERIFY(QDir().mkpath(primaryShaderCache));
+        QVERIFY(QDir().mkpath(externalLibrary + QStringLiteral("/steamapps/common")));
+        QVERIFY(QDir().mkpath(externalShaderCache));
+
+        QFile libraries(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        QVERIFY(libraries.open(QIODevice::WriteOnly | QIODevice::Text));
+        libraries.write("\"libraryfolders\"\n{\n"
+                        "  \"0\"\n  {\n    \"path\"\t\"" + steamRoot.toUtf8() + "\"\n  }\n"
+                        "  \"1\"\n  {\n    \"path\"\t\"" + externalLibrary.toUtf8() + "\"\n  }\n}\n");
+        libraries.close();
+
+        SteamConfigManager manager;
+        manager.setShareLibraryEnabled(true);
+        QVERIFY(manager.isSteamDetected());
+
+        DataDirectory marker;
+        marker.path = steamRoot;
+        marker.mode = QStringLiteral("overlay");
+        QList<SandboxMount> mounts;
+        QVERIFY(manager.prepareDataDir(marker, QStringLiteral("player"), mounts));
+
+        const QString libsRoot = QDir::homePath() + QStringLiteral("/.couchplay/steam-libs");
+        const SandboxMount *primary = nullptr;
+        const SandboxMount *external = nullptr;
+        for (const SandboxMount &mount : mounts) {
+            if (mount.target == libsRoot + QStringLiteral("/0/steamapps/shadercache")) primary = &mount;
+            if (mount.target == libsRoot + QStringLiteral("/1/steamapps/shadercache")) external = &mount;
+        }
+        QVERIFY(primary && external);
+        // The primary library has nothing below it; the other library sees the primary cache under its own.
+        QCOMPARE(primary->source, primaryShaderCache);
+        QVERIFY(primary->lowerBelow.isEmpty());
+        QCOMPARE(external->source, externalShaderCache);
+        QCOMPARE(external->lowerBelow, QStringList{primaryShaderCache});
+        QCOMPARE(external->upper, PlayerStore::layerDir(QStringLiteral("player"), externalShaderCache) + QStringLiteral("/upper"));
     }
 
     void testFinalizeMirrorsDesktopCompatToolsForSharedGames()
@@ -219,7 +251,8 @@ private Q_SLOTS:
         QVERIFY(writeFile(externalLibrary + QStringLiteral("/steamapps/appmanifest_220.acf"), "\"AppState\"\n{\n}\n"));
         // A tool installed only in the desktop user's compatibilitytools.d does not exist for players
         QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/compatibilitytools.d/GE-Proton9-1")));
-        // The global default ("0") and games outside the shared libraries are never mirrored
+        // The global default ("0") applies to shared games without their own entry; games outside the shared
+        // libraries are never mirrored
         QVERIFY(writeFile(steamRoot + QStringLiteral("/config/config.vdf"),
                           "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n"
                           "\"CompatToolMapping\"\n{\n"
@@ -229,33 +262,113 @@ private Q_SLOTS:
                           "\"345180\"\n{\n\"name\" \"GE-Proton9-1\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
                           "}\n}\n}\n}\n}\n"));
 
-        SteamPlanHelper helper;
-        helper.targetHome = home.path() + QStringLiteral("/player-home");
-        helper.targetSteamRoot = helper.targetHome + QStringLiteral("/.steam/steam");
+        const QString player = QStringLiteral("player");
+        const QString playerSteam = PlayerStore::homeDir(player) + QStringLiteral("/.local/share/Steam");
+        QVERIFY(QDir().mkpath(playerSteam + QStringLiteral("/config")));
+        QVERIFY(QDir().mkpath(playerSteam + QStringLiteral("/userdata/76561198000000000/config")));
+        QVERIFY(writeFile(playerSteam + QStringLiteral("/steam.sh"), "#!/bin/sh\n"));
+        // The player already runs 345180 on another tool and has its own unrelated mapping
+        const QString playerConfig = playerSteam + QStringLiteral("/config/config.vdf");
+        QVERIFY(writeFile(playerConfig,
+                          "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n"
+                          "\"CompatToolMapping\"\n{\n"
+                          "\"345180\"\n{\n\"name\" \"proton_8\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
+                          "\"777\"\n{\n\"name\" \"proton_7\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n"
+                          "}\n}\n}\n}\n}\n"));
+
         SteamConfigManager manager;
-        manager.setHelperClient(&helper);
         manager.setShareLibraryEnabled(true);
         QVERIFY(manager.isSteamDetected());
         DataDirectory marker;
         marker.path = steamRoot;
         marker.mode = QStringLiteral("overlay");
-        QVariantList preparations;
-        QVERIFY(manager.prepareDataDir(marker, QStringLiteral("player"), preparations));
+        QList<SandboxMount> mounts;
+        QVERIFY(manager.prepareDataDir(marker, player, mounts));
 
-        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
+        QVERIFY(manager.finalizeDataDir(marker, player));
 
-        QCOMPARE(helper.compatMappings.size(), 1);
-        QCOMPARE(helper.compatMappings.at(0).first, QStringLiteral("player"));
-        const QVariantMap expected{
-            {QStringLiteral("49520"), QStringList{QStringLiteral("proton_9"), QString(), QStringLiteral("250")}},
-            {QStringLiteral("345180"), QStringList()},
-            {QStringLiteral("220"), QStringList()}};
-        QCOMPARE(helper.compatMappings.at(0).second, expected);
+        const auto readMapping = [&]() {
+            QFile file(playerConfig);
+            return file.open(QIODevice::ReadOnly) ? SteamCompatToolMapping::read(file.readAll())
+                                                  : std::optional<QMap<QString, SteamCompatToolMapping::Tool>>();
+        };
+        auto mapping = readMapping();
+        QVERIFY(mapping.has_value());
+        QVERIFY(mapping->contains(QStringLiteral("49520")));
+        QCOMPARE(mapping->value(QStringLiteral("49520")).name, QStringLiteral("proton_9"));
+        QCOMPARE(mapping->value(QStringLiteral("49520")).priority, QStringLiteral("250"));
+        // The desktop-only tool of 345180 is dropped
+        QVERIFY(!mapping->contains(QStringLiteral("345180")));
+        // 220 has no entry of its own and takes the desktop's global default
+        QVERIFY(mapping->contains(QStringLiteral("220")));
+        QCOMPARE(mapping->value(QStringLiteral("220")).name, QStringLiteral("proton_9"));
+        QCOMPARE(mapping->value(QStringLiteral("220")).priority, QStringLiteral("75"));
+        QVERIFY(!mapping->contains(QStringLiteral("0")));
+        QVERIFY(!mapping->contains(QStringLiteral("999")));
+        QVERIFY(mapping->contains(QStringLiteral("777")));
+
+        const auto setHostMapping = [&](const QByteArray &entries) {
+            return writeFile(steamRoot + QStringLiteral("/config/config.vdf"),
+                             "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n"
+                             "\"CompatToolMapping\"\n{\n"
+                                 + entries + "}\n}\n}\n}\n}\n");
+        };
+        const QByteArray perApp = "\"49520\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"250\"\n}\n";
+
+        const auto toolOf = [&](const QString &appId) {
+            auto current = readMapping();
+            return current && current->contains(appId) ? current->value(appId) : SteamCompatToolMapping::Tool();
+        };
+
+        // Without a global default on the desktop, games without their own entry lose the player's entry
+        QVERIFY(setHostMapping(perApp));
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QCOMPARE(toolOf(QStringLiteral("49520")).name, QStringLiteral("proton_9"));
+        QCOMPARE(toolOf(QStringLiteral("345180")).name, QString());
+        QCOMPARE(toolOf(QStringLiteral("220")).name, QString());
+
+        // The tool the desktop's Steam picked on its own (kept only in its compat_log.txt) is set for the player,
+        // unless it is "native" or exists only for the desktop user; the newest log line per game wins
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/logs")));
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/logs/compat_log.txt"),
+                          "[2026-11-01 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-8.0\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-stable\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 345180 at priority 85 to tool GE-Proton9-1\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 49520 at priority 85 to tool native\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 999 at priority 75 to tool native\n"));
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QCOMPARE(toolOf(QStringLiteral("220")).name, QStringLiteral("proton-stable"));
+        QCOMPARE(toolOf(QStringLiteral("220")).priority, QStringLiteral("250"));
+        QCOMPARE(toolOf(QStringLiteral("345180")).name, QString());
+        QCOMPARE(toolOf(QStringLiteral("49520")).name, QStringLiteral("proton_9"));
+        QVERIFY(QFile::remove(steamRoot + QStringLiteral("/logs/compat_log.txt")));
+
+        // A global default that only exists for the desktop user is not mirrored
+        QVERIFY(setHostMapping("\"0\"\n{\n\"name\" \"GE-Proton9-1\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"
+                               + perApp));
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QCOMPARE(toolOf(QStringLiteral("49520")).name, QStringLiteral("proton_9"));
+        QCOMPARE(toolOf(QStringLiteral("345180")).name, QString());
+        QCOMPARE(toolOf(QStringLiteral("220")).name, QString());
+
+        // A global default alone is mirrored to every shared game
+        QVERIFY(setHostMapping("\"0\"\n{\n\"name\" \"proton_9\"\n\"config\" \"\"\n\"priority\" \"75\"\n}\n"));
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        for (const QString &appId : {QStringLiteral("49520"), QStringLiteral("345180"), QStringLiteral("220")}) {
+            QCOMPARE(toolOf(appId).name, QStringLiteral("proton_9"));
+            QCOMPARE(toolOf(appId).priority, QStringLiteral("75"));
+        }
 
         // An unreadable desktop mapping must not turn into removals for the player
+        QFile before(playerConfig);
+        QVERIFY(before.open(QIODevice::ReadOnly));
+        const QByteArray beforeBytes = before.readAll();
+        before.close();
         QVERIFY(writeFile(steamRoot + QStringLiteral("/config/config.vdf"), "\"InstallConfigStore\"\n{\n"));
-        QVERIFY(manager.finalizeDataDir(marker, QStringLiteral("player")));
-        QCOMPARE(helper.compatMappings.size(), 1);
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QFile after(playerConfig);
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        QCOMPARE(after.readAll(), beforeBytes);
     }
 
     void testCleanupDoesNotCreateSteamDirectoryForUnbootstrappedPlayer()
@@ -267,15 +380,82 @@ private Q_SLOTS:
         qputenv("HOME", home.path().toLocal8Bit());
         qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
 
-        SteamPlanHelper helper;
-        helper.targetHome = home.path() + QStringLiteral("/player-home");
-        QVERIFY(QDir().mkpath(helper.targetHome));
+        const QString playerHome = PlayerStore::homeDir(QStringLiteral("player"));
+        QVERIFY(QDir().mkpath(playerHome));
         SteamConfigManager manager;
-        manager.setHelperClient(&helper);
 
         QVERIFY(manager.cleanupLibrarySharing(QStringLiteral("player")));
-        QVERIFY(helper.writtenFiles.isEmpty());
-        QVERIFY(!QFileInfo::exists(helper.targetHome + QStringLiteral("/.steam")));
+        QVERIFY(!QFileInfo::exists(playerHome + QStringLiteral("/.steam")));
+        QVERIFY(!QFileInfo::exists(playerHome + QStringLiteral("/.local/share/Steam")));
+    }
+
+    void testBootstrapDetectionAndSteamIdUseRealPlayerHome()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString player = QStringLiteral("player");
+        const QString playerHome = PlayerStore::homeDir(player);
+        const QString playerSteam = playerHome + QStringLiteral("/.local/share/Steam");
+        SteamConfigManager manager;
+
+        QVERIFY(!manager.isSteamBootstrapped(player));
+        QVERIFY(!manager.isSteamBootstrapped(QStringLiteral("../escape")));
+
+        // userdata alone is not a finished bootstrap
+        QVERIFY(QDir().mkpath(playerSteam + QStringLiteral("/userdata/76561198000000001/config")));
+        QVERIFY(!manager.isSteamBootstrapped(player));
+        QCOMPARE(manager.getTargetSteamUserId(player), QStringLiteral("76561198000000001"));
+
+        QVERIFY(QDir().mkpath(playerSteam + QStringLiteral("/ubuntu12_32")));
+        QFile binary(playerSteam + QStringLiteral("/ubuntu12_32/steam"));
+        QVERIFY(binary.open(QIODevice::WriteOnly));
+        binary.close();
+        QVERIFY(manager.isSteamBootstrapped(player));
+
+        const SteamPaths paths = manager.getTargetSteamPaths(player);
+        QVERIFY(paths.valid);
+        QCOMPARE(paths.steamRoot, playerSteam);
+        QCOMPARE(paths.libraryFoldersVdf, playerSteam + QStringLiteral("/config/libraryfolders.vdf"));
+        QCOMPARE(paths.shortcutsVdf,
+                 playerSteam + QStringLiteral("/userdata/76561198000000001/config/shortcuts.vdf"));
+    }
+
+    void testSyncShortcutsWritesDirectlyIntoPlayerHome()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString desktopSteam = home.path() + QStringLiteral("/.local/share/Steam");
+        QVERIFY(QDir().mkpath(desktopSteam + QStringLiteral("/userdata/123/config")));
+        const QByteArray data = makeShortcutDocument("Direct Copy", 9);
+        QFile source(desktopSteam + QStringLiteral("/userdata/123/config/shortcuts.vdf"));
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        QCOMPARE(source.write(data), qint64(data.size()));
+        source.close();
+
+        const QString player = QStringLiteral("player");
+        const QString playerSteam = PlayerStore::homeDir(player) + QStringLiteral("/.local/share/Steam");
+        QVERIFY(QDir().mkpath(playerSteam + QStringLiteral("/userdata/456/config")));
+        QFile steamSh(playerSteam + QStringLiteral("/steam.sh"));
+        QVERIFY(steamSh.open(QIODevice::WriteOnly));
+        steamSh.close();
+
+        SteamConfigManager manager;
+        QVERIFY(manager.sourceAccountAvailable());
+        QVERIFY(manager.syncShortcutsToUser(player));
+
+        QFile target(playerSteam + QStringLiteral("/userdata/456/config/shortcuts.vdf"));
+        QVERIFY(target.open(QIODevice::ReadOnly));
+        QCOMPARE(target.readAll(), data);
     }
 
     void testLoadGamesMergesNativeAndShortcut()
@@ -453,7 +633,7 @@ private Q_SLOTS:
         expected.sort();
         QCOMPARE(dirs, expected);
 
-        // A system binary, the filesystem root and a relative icon leave nothing to ACL.
+        // A system binary, the filesystem root and a relative icon leave nothing to mount.
         const QByteArray system = makeShortcutDocument("System", 8, "/usr/bin/true", "/", "relative/icon.png");
         QVERIFY(shortcuts.open(QIODevice::WriteOnly | QIODevice::Truncate));
         QCOMPARE(shortcuts.write(system), qint64(system.size()));

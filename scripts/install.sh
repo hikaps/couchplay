@@ -5,36 +5,25 @@
 # CouchPlay One-Liner Installer
 #
 # Downloads and installs CouchPlay from GitHub releases.
-# This script must be run with root privileges.
+# Runs as your own user. Only --tarball (a system-wide install) and, on systems that block user
+# namespaces for bubblewrap, the one AppArmor step ask for sudo.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/main/scripts/install.sh | bash -s -- --beta
-#   sudo ./install.sh --beta
+#   ./install.sh --beta
 #
 # Requirements:
 #   - curl: for downloading files
 #   - tar: for extracting the release tarball
 #   - sha256sum: for verifying checksums
 #   - x86_64 architecture
+#
+# Host requirements for running players (checked after install, warns only):
+#   bubblewrap (bwrap), dbus (dbus-run-session), gamescope,
+#   and a user-writable /dev/uinput.
 
-# Re-run with sudo if not root (allows piped input to work with visible output)
-if [[ $EUID -ne 0 ]]; then
-    echo "Requesting sudo access to install CouchPlay..."
-    # --beta means a develop build, so re-fetch the installer from develop; otherwise main.
-    # We re-download because piping leaves no script on disk. Forward "$@" so flags
-    # (e.g. --beta) survive the sudo escalation — previously they were silently dropped,
-    # which made the documented --beta one-liner always install stable instead of beta.
-    if [[ " $* " == *" --beta "* ]]; then
-        INSTALLER_BRANCH="develop"
-    else
-        INSTALLER_BRANCH="main"
-    fi
-    TMP_SCRIPT=$(mktemp)
-    curl -fsSL "https://raw.githubusercontent.com/hikaps/couchplay/${INSTALLER_BRANCH}/scripts/install.sh" > "$TMP_SCRIPT"
-    chmod +x "$TMP_SCRIPT"
-    exec sudo "$TMP_SCRIPT" "$@"
-fi
+INSTALLER_ARGS=("$@")
 
 set -e
 # =============================================================================
@@ -77,9 +66,37 @@ print_error() {
 # =============================================================================
 
 
-check_root() {
-    # Already running as root due to sudo re-exec at script start
-    :
+# Only the system-wide tarball install needs root: re-run this installer once under sudo.
+# Piping leaves no script on disk, so it is downloaded again. Flags are forwarded; --beta means a
+# develop build, so the installer is fetched from develop, otherwise from main.
+reexec_with_sudo() {
+    echo "The tarball install writes under ${PREFIX}; requesting sudo access..."
+    local branch="main" tmp_script
+    if [[ " ${INSTALLER_ARGS[*]} " == *" --beta "* ]]; then
+        branch="develop"
+    fi
+    tmp_script=$(mktemp)
+    curl -fsSL "https://raw.githubusercontent.com/hikaps/couchplay/${branch}/scripts/install.sh" > "$tmp_script"
+    chmod +x "$tmp_script"
+    exec sudo "$tmp_script" "${INSTALLER_ARGS[@]}"
+}
+
+# Run a command as the desktop user (a plain call unless the script itself runs as root).
+as_user() {
+    if [[ $EUID -eq 0 ]]; then
+        sudo -u "$REAL_USER" "$@"
+    else
+        "$@"
+    fi
+}
+
+# Run a command as root, asking for sudo only when needed.
+as_root() {
+    if [[ $EUID -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
 }
 
 
@@ -113,20 +130,6 @@ check_dependencies() {
         echo "  sudo pacman -S ${missing_deps[*]}"
         exit 1
     fi
-
-    # Check for runtime dependencies (warn but don't fail)
-    if ! command -v gamescope &>/dev/null; then
-        print_warn "gamescope is not installed. CouchPlay requires gamescope to launch game sessions."
-        echo ""
-        echo "On Debian/Ubuntu:"
-        echo "  sudo apt install gamescope"
-        echo ""
-        echo "On Fedora:"
-        echo "  sudo dnf install gamescope"
-        echo ""
-        echo "On Arch Linux:"
-        echo "  sudo pacman -S gamescope"
-    fi
 }
 
 check_architecture() {
@@ -148,41 +151,41 @@ check_architecture() {
 }
 
 check_binary_deps() {
-    # The release tarball does NOT bundle runtime libraries; the helper and GUI link
-    # against system Qt6, KDE Frameworks 6, Polkit and PipeWire. If a required shared
-    # library is missing the helper fails to start with an opaque exit code (e.g. the
-    # "Main process exited" / ERRNO 2 seen on minimal Arch installs). Detect missing
-    # libs up front so the user gets a clear, actionable message instead.
+    # The release tarball does NOT bundle runtime libraries; the binaries link against
+    # system Qt6, KDE Frameworks 6 and PipeWire. If a required shared library is missing
+    # the program fails to start with an opaque error. Detect missing libs up front so
+    # the user gets a clear, actionable message instead.
     local extract_dir="$1"
-    local bin_dir helper missing
+    local bin_dir bin missing
     bin_dir=$(find "$extract_dir" -type d -name "bin" | head -1)
     [[ -z "$bin_dir" ]] && return 0
-    helper="${bin_dir}/couchplay-helper"
-    [[ -x "$helper" ]] || return 0
 
-    if ! missing=$(ldd "$helper" 2>/dev/null | grep -i 'not found'); then
-        return 0
-    fi
-    [[ -z "$missing" ]] && return 0
+    for bin in couchplay couchplay-vdisplay couchplay-padfwd; do
+        [[ -x "${bin_dir}/${bin}" ]] || continue
+        if ! missing=$(ldd "${bin_dir}/${bin}" 2>/dev/null | grep -i 'not found'); then
+            continue
+        fi
+        [[ -z "$missing" ]] && continue
 
-    print_error "The helper binary is missing required shared libraries on this system:"
-    echo ""
-    echo "$missing" | sed -E 's/^[[:space:]]+//; s/[[:space:]]*=>.*//' | sort -u \
-        | while IFS= read -r lib; do [[ -n "$lib" ]] && echo "  $lib"; done
-    echo ""
-    echo "The CouchPlay release does not bundle runtime libraries; it links against"
-    echo "system Qt6, KDE Frameworks 6, Polkit and PipeWire. Install the packages"
-    echo "providing the libraries listed above, then re-run this installer."
-    echo ""
-    echo "On Arch Linux / CachyOS:"
-    echo "  sudo pacman -S qt6-base polkit-qt6 kirigami pipewire"
-    echo ""
-    echo "On Fedora:"
-    echo "  sudo dnf install qt6-qtbase polkit-qt6-1-devel kf6-kirigami pipewire"
-    echo ""
-    echo "On Debian/Ubuntu:"
-    echo "  sudo apt install qt6-base-dev libpolkit-qt6-1-1 kirigami pipewire"
-    exit 1
+        print_error "${bin} is missing required shared libraries on this system:"
+        echo ""
+        echo "$missing" | sed -E 's/^[[:space:]]+//; s/[[:space:]]*=>.*//' | sort -u \
+            | while IFS= read -r lib; do [[ -n "$lib" ]] && echo "  $lib"; done
+        echo ""
+        echo "The CouchPlay release does not bundle runtime libraries; it links against"
+        echo "system Qt6, KDE Frameworks 6 and PipeWire. Install the packages"
+        echo "providing the libraries listed above, then re-run this installer."
+        echo ""
+        echo "On Arch Linux / CachyOS:"
+        echo "  sudo pacman -S qt6-base kirigami pipewire"
+        echo ""
+        echo "On Fedora:"
+        echo "  sudo dnf install qt6-qtbase kf6-kirigami pipewire"
+        echo ""
+        echo "On Debian/Ubuntu:"
+        echo "  sudo apt install qt6-base-dev kirigami pipewire"
+        exit 1
+    done
 }
 
 # =============================================================================
@@ -383,6 +386,21 @@ install_binary() {
         install -Dm755 "${tarball_root}/couchplay-gamemode.sh" "${BIN_DIR}/couchplay-gamemode"
     fi
     
+    # Install the host tools (run on the host by CouchPlay; found via ../libexec or LIBEXEC_DIR)
+    local tool
+    for tool in couchplay-vdisplay couchplay-padfwd; do
+        if [[ -f "${bin_dir}/${tool}" ]]; then
+            print_info "Installing ${tool} to ${LIBEXEC_DIR}"
+            if ! install -Dm755 "${bin_dir}/${tool}" "${LIBEXEC_DIR}/${tool}"; then
+                print_error "Failed to install ${tool}"
+                return 1
+            fi
+        else
+            print_error "${tool} missing from the tarball"
+            return 1
+        fi
+    done
+
     print_info "Binary installed successfully"
     return 0
 }
@@ -433,42 +451,136 @@ install_data() {
     return 0
 }
 
-install_helper() {
-    # Runs the install-helper.sh script from the extracted release directory
-    # This installs the privileged helper service, D-Bus config, and polkit policy
-    local extract_dir="$1"
-    
-    # Find the install-helper.sh script
-    local helper_script
-    helper_script=$(find "$extract_dir" -name "install-helper.sh" -type f | head -1)
-    
-    if [[ -z "$helper_script" ]]; then
-        print_error "Could not find install-helper.sh in extracted tarball"
-        return 1
+setup_userns_access() {
+    # Ubuntu 23.10+ sets kernel.apparmor_restrict_unprivileged_userns=1, which makes bwrap fail with
+    # "setting up uid map: Permission denied". If that happens, allow user namespaces for bwrap only
+    # (a narrow AppArmor profile, not the global sysctl) and verify that it worked.
+    local bwrap_path
+    bwrap_path="$(command -v bwrap 2>/dev/null || true)"
+    [[ -n "$bwrap_path" ]] || return 0
+    bwrap_path="$(readlink -f "$bwrap_path")"
+    id -u "$REAL_USER" &>/dev/null || {
+        print_warn "Cannot determine the desktop user; skipping the user-namespace check."
+        return 0
+    }
+
+    local probe=(bwrap --unshare-user --uid "$(id -u "$REAL_USER")" --gid "$(id -g "$REAL_USER")" --dev-bind / / true)
+    if as_user "${probe[@]}" &>/dev/null; then
+        return 0
     fi
-    
-    local helper_dir
-    helper_dir=$(dirname "$helper_script")
-    
-    print_info "Installing helper service..."
-    
-    # Run the helper installer from its directory
-    # The helper script expects to be run from its own directory
-    local current_dir
-    current_dir=$(pwd)
-    
-    cd "$helper_dir"
-    
-    if ! ./install-helper.sh install; then
-        cd "$current_dir"
-        print_error "Helper installation failed"
-        return 1
+    [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" == "1" ]] || {
+        print_warn "bwrap cannot create a user namespace here. CouchPlay needs unprivileged user namespaces; see the README troubleshooting section."
+        return 0
+    }
+    local apparmor_parser
+    apparmor_parser="$(command -v apparmor_parser 2>/dev/null || true)"
+    [[ -z "$apparmor_parser" && -x /usr/sbin/apparmor_parser ]] && apparmor_parser=/usr/sbin/apparmor_parser
+    if [[ -z "$apparmor_parser" ]]; then
+        print_warn "Your system blocks user namespaces for bwrap (AppArmor) and 'apparmor_parser' is missing. See the README troubleshooting section."
+        return 0
     fi
-    
-    cd "$current_dir"
-    
-    print_info "Helper service installed successfully"
-    return 0
+
+    local profile=/etc/apparmor.d/bwrap-couchplay
+    print_info "Your system blocks user namespaces for bwrap (AppArmor). Allowing it for $bwrap_path only: $profile (needs sudo)"
+    if ! as_root tee "$profile" >/dev/null <<EOF
+# Installed by the CouchPlay installer: lets bubblewrap create user namespaces under
+# kernel.apparmor_restrict_unprivileged_userns=1. Remove this file and run
+# 'sudo apparmor_parser -R /etc/apparmor.d/bwrap-couchplay' to undo it.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap-couchplay $bwrap_path flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap-couchplay>
+}
+EOF
+    then
+        print_warn "Could not write $profile. See the README troubleshooting section."
+        return 0
+    fi
+    if as_root "$apparmor_parser" -r "$profile" && as_user "${probe[@]}" &>/dev/null; then
+        print_info "bwrap can create user namespaces now."
+    else
+        as_root "$apparmor_parser" -R "$profile" &>/dev/null || true
+        as_root rm -f "$profile"
+        print_warn "Could not enable user namespaces for bwrap automatically. See the README troubleshooting section."
+    fi
+}
+
+check_host_requirements() {
+    # Players run in a bubblewrap sandbox on the host. Warn (never fail) about
+    # missing tools so the user knows what to install.
+    local missing=false
+    local -a checks=(
+        "bwrap:bubblewrap"
+        "dbus-run-session:dbus"
+        "gamescope:gamescope"
+    )
+    local entry cmd pkg
+    for entry in "${checks[@]}"; do
+        cmd="${entry%%:*}"
+        pkg="${entry##*:}"
+        if ! command -v "$cmd" &>/dev/null; then
+            print_warn "'$cmd' not found on the host (package: $pkg). CouchPlay needs it to run player sandboxes."
+            missing=true
+        fi
+    done
+
+    if ! as_user test -w /dev/uinput 2>/dev/null; then
+        print_warn "/dev/uinput is not writable by $REAL_USER. CouchPlay needs it to create one virtual controller per player."
+        echo "         Install your distro's Steam udev rules (e.g. the 'steam-devices' package) or add a udev rule"
+        echo "         that grants your user access to /dev/uinput (KERNEL==\"uinput\", TAG+=\"uaccess\")."
+    fi
+
+    setup_userns_access
+
+    if $missing; then
+        echo ""
+        echo "Install the missing packages, e.g.:"
+        echo "  Fedora/Bazzite:  sudo dnf install bubblewrap dbus-daemon gamescope"
+        echo "  Arch/CachyOS:    sudo pacman -S bubblewrap dbus gamescope"
+        echo "  Debian/Ubuntu:   sudo apt install bubblewrap dbus gamescope"
+        echo "  SteamOS:         check 'which bwrap dbus-run-session gamescope'; see the README"
+    fi
+}
+
+# True when the old 'couchplay' group still has members or accounts using it as their primary group.
+# The migration script leaves an empty group behind, which must not count as an installed helper.
+legacy_group_in_use() {
+    local entry gid
+    entry="$(getent group couchplay)" || return 1
+    [[ -n "${entry##*:}" ]] && return 0
+    gid="$(cut -d: -f3 <<<"$entry")"
+    getent passwd | awk -F: -v gid="$gid" '$4 == gid { f = 1 } END { exit !f }'
+}
+
+check_legacy_helper() {
+    # Versions before the rootless release ran players as Linux accounts through a root helper service.
+    # If that is still installed, point the user at the migration script (it never runs automatically).
+    local beta="$1" tarball="$2"
+    local found=false
+    if [[ -e /etc/systemd/system/couchplay-helper.service ]] \
+        || [[ -e /usr/local/libexec/couchplay-helper ]] \
+        || [[ -e /usr/libexec/couchplay-helper ]] \
+        || legacy_group_in_use; then
+        found=true
+    fi
+    $found || return 0
+
+    local branch="main" flatpak_flag=" --flatpak"
+    [[ "$beta" == "true" ]] && branch="develop"
+    [[ "$tarball" == "true" ]] && flatpak_flag=""
+    echo ""
+    print_warn "An older CouchPlay helper (root service and player accounts) is still installed."
+    echo "         This version no longer uses it: players now run in a sandbox as your own user."
+    echo "         Your existing players, their logins and saves are NOT imported automatically."
+    echo "         Run the migration script to copy them over and remove the old helper:"
+    echo ""
+    echo "           curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/${branch}/scripts/migrate-from-helper.sh -o migrate-from-helper.sh"
+    echo "           sudo bash migrate-from-helper.sh --user ${REAL_USER}${flatpak_flag}          # dry run, lists players"
+    echo "           sudo bash migrate-from-helper.sh --user ${REAL_USER}${flatpak_flag} --yes    # do it"
+    echo ""
+    echo "         Details: README, section \"Upgrading from the helper\"."
 }
 
 cleanup() {
@@ -480,123 +592,19 @@ cleanup() {
     fi
 }
 
-# Determine the real user calling the script (for SteamOS home directory persistence)
-REAL_USER="${SUDO_USER:-deck}"
+# The desktop user the sandboxes and Flatpak install belong to. As root (sudo, or the --tarball re-exec)
+# that is the user who ran sudo; otherwise it is whoever runs the script.
+if [[ $EUID -eq 0 ]]; then
+    REAL_USER="${SUDO_USER:-deck}"
+else
+    REAL_USER="$(id -un)"
+fi
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 REAL_HOME="${REAL_HOME:-/home/deck}"
 
 # =============================================================================
 # Installation Pathways
 # =============================================================================
-
-install_sysext() {
-    local BETA="$1"
-    local release_json="$2"
-    local tag_name="$3"
-    
-    print_info "Installing via SteamOS System Extension (sysext)..."
-    
-    # Get asset URLs
-    local raw_url checksum_url flatpak_url
-    raw_url=$(get_asset_url "$release_json" "couchplay\.steamos\.raw")
-    checksum_url=$(get_asset_url "$release_json" "couchplay\.steamos\.sha256")
-    flatpak_url=$(get_asset_url "$release_json" "couchplay\.flatpak")
-    
-    if [[ -z "$raw_url" ]]; then
-        print_error "Could not find couchplay.steamos.raw asset in release"
-        exit 1
-    fi
-    if [[ -z "$checksum_url" ]]; then
-        print_error "Could not find couchplay.steamos.sha256 asset in release"
-        exit 1
-    fi
-    if [[ -z "$flatpak_url" ]]; then
-        print_error "Could not find couchplay.flatpak asset in release"
-        exit 1
-    fi
-    
-    # Setup temporary directory and cleanup trap
-    TEMP_DIR=$(mktemp -d)
-    chmod 755 "$TEMP_DIR"  # real-user flatpak install needs traversal
-    trap cleanup EXIT
-    
-    local raw_file="${TEMP_DIR}/couchplay.steamos.raw"
-    local checksum_file="${TEMP_DIR}/couchplay.steamos.sha256"
-    local flatpak_file="${TEMP_DIR}/couchplay.flatpak"
-    
-    # Download files
-    if ! download_file "$raw_url" "$raw_file"; then
-        exit 1
-    fi
-    if ! download_file "$checksum_url" "$checksum_file"; then
-        exit 1
-    fi
-    if ! download_file "$flatpak_url" "$flatpak_file"; then
-        exit 1
-    fi
-    
-    # Verify checksum
-    verify_checksum "$raw_file" "$checksum_file"
-    
-    # 1. Install Flatpak
-    print_info "Installing Flatpak bundle..."
-    if ! command -v flatpak &>/dev/null; then
-        print_error "flatpak command not found. Please install flatpak first."
-        exit 1
-    fi
-    print_info "Ensuring org.kde.Platform 6.10 is installed..."
-    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y flathub org.kde.Platform/x86_64/6.10
-    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y "$flatpak_file"
-    
-    # Stop existing CouchPlay helper service and systemd-sysext before upgrading
-    print_info "Stopping active CouchPlay services..."
-    systemctl stop couchplay-helper.service || true
-    systemctl stop systemd-sysext || true
-    
-    # Clear out any legacy layout folders or old raw files
-    rm -rf "$REAL_HOME/.couchplay-extension"
-    rm -f "$REAL_HOME/.couchplay.raw"
-    rm -f "$REAL_HOME/.couchplay.steamos.raw"
-    rm -f /var/lib/extensions/couchplay.raw
-    rm -f /var/lib/extensions/couchplay.steamos.raw
-    
-    # Deploy the new pre-built extension
-    print_info "Deploying system extension..."
-    mv "$raw_file" "$REAL_HOME/.couchplay.steamos.raw"
-    chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.couchplay.steamos.raw"
-    
-    mkdir -p /var/lib/extensions
-    ln -s "$REAL_HOME/.couchplay.steamos.raw" /var/lib/extensions/couchplay.steamos.raw
-    
-    # Load and enable the system extension
-    print_info "Merging system extension..."
-    systemctl enable systemd-sysext
-    systemctl restart systemd-sysext
-    
-    # Reload D-Bus configuration to discover the new system service policy
-    print_info "Reloading D-Bus daemon..."
-    systemctl reload dbus
-    
-    # Start the helper daemon
-    print_info "Starting couchplay-helper service..."
-    systemctl daemon-reload
-    systemctl restart couchplay-helper.service
-    
-    # Configure controller hidraw udev rules
-    print_info "Configuring udev rules..."
-    echo 'KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", TAG+="uaccess", TAG+="seat"' | tee /etc/udev/rules.d/99-couchplay-hidraw.rules
-    udevadm control --reload-rules
-    udevadm trigger
-    
-    echo ""
-    print_info "=========================================="
-    print_info "CouchPlay $tag_name installed successfully!"
-    print_info "=========================================="
-    echo ""
-    echo "You can now run CouchPlay from your application launcher or terminal:"
-    echo "  couchplay"
-    echo ""
-}
 
 install_tarball() {
     local BETA="$1"
@@ -654,7 +662,7 @@ install_tarball() {
         exit 1
     fi
 
-    # Verify the helper's runtime libraries are present (the tarball doesn't bundle them).
+    # Verify the runtime libraries are present (the tarball doesn't bundle them).
     check_binary_deps "$extract_dir"
     
     # Install main binary
@@ -669,11 +677,7 @@ install_tarball() {
         exit 1
     fi
 
-    # Install helper service (D-Bus, polkit, etc.)
-    echo ""
-    if ! install_helper "$extract_dir"; then
-        exit 1
-    fi
+    # Host runtime requirements are checked after installation (see check_host_requirements).
     
     # Success!
     echo ""
@@ -731,34 +735,18 @@ install_flatpak() {
         verify_checksum "$flatpak_file" "$sha_file"
     fi
 
-    # Flatpak runs as the invoking user (never root); --user scopes installs to REAL_USER.
+    # Flatpak always installs for the desktop user (--user); no root is involved.
     print_info "Ensuring Flathub remote + org.kde.Platform 6.10 runtime..."
-    sudo -u "$REAL_USER" flatpak remote-add --user --if-not-exists flathub \
+    as_user flatpak remote-add --user --if-not-exists flathub \
         https://flathub.org/repo/flathub.flatpakrepo || true
-    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y \
+    as_user flatpak install --user --noninteractive -y \
         flathub org.kde.Platform/x86_64/6.10
 
     print_info "Installing CouchPlay Flatpak bundle..."
-    sudo -u "$REAL_USER" flatpak install --user --noninteractive -y "$flatpak_file"
+    as_user flatpak install --user --noninteractive -y "$flatpak_file"
 
-    # Export the privileged helper from the Flatpak, then install it system-wide.
-    print_info "Exporting privileged helper from the Flatpak..."
-    local fp_data="$REAL_HOME/.var/app/io.github.hikaps.couchplay/data/couchplay"
-    local real_uid
-    real_uid=$(id -u "$REAL_USER")
-    sudo -u "$REAL_USER" env "XDG_RUNTIME_DIR=/run/user/$real_uid" \
-        flatpak run --command=bash io.github.hikaps.couchplay \
-        -c "/app/share/couchplay/install-helper.sh export"
-    if [[ ! -f "$fp_data/install-helper.sh" ]]; then
-        print_error "Helper export failed: $fp_data/install-helper.sh not found"
-        echo "Retry manually:"
-        echo "  flatpak run --command=bash io.github.hikaps.couchplay -c '/app/share/couchplay/install-helper.sh export'"
-        echo "  sudo $fp_data/install-helper.sh install"
-        exit 1
-    fi
-
-    print_info "Installing privileged helper..."
-    "$fp_data/install-helper.sh" install
+    # The Flatpak ships its own couchplay-padfwd / couchplay-vdisplay and runs them from
+    # its app path on the host, so nothing else needs to be installed.
 
     echo ""
     print_info "=========================================="
@@ -778,25 +766,28 @@ install_flatpak() {
 
 main() {
     local BETA=false
-    local FORCE_SYSEXT=false
     local FORCE_TARBALL=false
     local FORCE_FLATPAK=false
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --beta) BETA=true; shift ;;
-            --sysext) FORCE_SYSEXT=true; shift ;;
-            --tarball) FORCE_TARBALL=true; shift ;;
             --flatpak) FORCE_FLATPAK=true; shift ;;
+            --tarball) FORCE_TARBALL=true; shift ;;
+            --sysext) print_warn "--sysext was removed; installing via Flatpak instead."; shift ;;
             *) shift ;;
         esac
     done
+
+    # --tarball writes under ${PREFIX}, so it is the one path that needs root.
+    if $FORCE_TARBALL && [[ $EUID -ne 0 ]]; then
+        reexec_with_sudo
+    fi
 
     print_info "CouchPlay Installer"
     echo ""
     
     # Pre-flight checks
-    check_root
     check_dependencies
     check_architecture
     
@@ -815,19 +806,18 @@ main() {
     tag_name=$(get_release_tag "$release_json")
     print_info "Latest release: $tag_name"
     
-    # SteamOS uses a sysext; every other distro defaults to the Flatpak. --tarball forces native.
-    if $FORCE_SYSEXT; then
-        install_sysext "$BETA" "$release_json" "$tag_name"
-    elif $FORCE_TARBALL; then
+    # --tarball forces the native install; every other distro (including SteamOS) uses the Flatpak.
+    if $FORCE_TARBALL; then
         install_tarball "$BETA" "$release_json" "$tag_name"
-    elif $FORCE_FLATPAK || ! { [[ -f /etc/os-release ]] && grep -q "ID=steamos" /etc/os-release; }; then
-        install_flatpak "$BETA" "$release_json" "$tag_name"
     else
-        install_sysext "$BETA" "$release_json" "$tag_name"
+        install_flatpak "$BETA" "$release_json" "$tag_name"
     fi
+
+    check_host_requirements
+    check_legacy_helper "$BETA" "$FORCE_TARBALL"
 }
 
-# Run main if script is executed (not sourced)
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Run main when executed, including piped from curl (BASH_SOURCE is empty then); not when sourced.
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi

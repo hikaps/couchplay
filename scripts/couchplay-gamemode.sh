@@ -17,10 +17,10 @@
 #   2. Starts a nested kwin_wayland compositor that renders as a Wayland subsurface
 #      inside the parent gamescope session.
 #   3. Launches CouchPlay inside that nested compositor.
-#   4. Controller isolation uses the D-Bus helper's driver unbind/rebind + temporary
-#      udev rules to block the host Steam client from reading physical controllers.
-#   5. On exit, kwin_wayland is terminated and controllers are automatically restored
-#      by the D-Bus helper's ResetAllDevices().
+#   4. Controller isolation: each player's pads are forwarded by couchplay-padfwd to a
+#      private virtual pad inside the sandbox; the host Steam client may still see them.
+#   5. On exit, kwin_wayland is terminated; the virtual pads are removed with their
+#      couchplay-padfwd processes.
 
 set -euo pipefail
 

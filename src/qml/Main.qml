@@ -125,7 +125,6 @@ Kirigami.ApplicationWindow {
     SessionManager {
         id: sessionManager
         presetManager: presetManager
-        helperClient: helperClient
 
         onProfileLoaded: function(deviceInfoByInstance) {
             if (deviceManager) {
@@ -151,7 +150,7 @@ Kirigami.ApplicationWindow {
         id: sessionRunner
         sessionManager: sessionManager
         deviceManager: deviceManager
-        helperClient: helperClient
+        playerStore: playerStore
         presetManager: presetManager
         steamConfigManager: steamConfigManager
         heroicConfigManager: heroicConfigManager
@@ -161,9 +160,9 @@ Kirigami.ApplicationWindow {
         onErrorOccurred: (message) => {
             applicationWindow().showPassiveNotification(message, "long")
         }
-        onLibrarySharingDeferred: (username) => {
+        onLibrarySharingDeferred: (player) => {
             applicationWindow().showPassiveNotification(
-                i18nc("@info", "Game library sharing for %1 starts next session: sign in to Steam now, then restart the session.", username), "long")
+                i18nc("@info", "Game library sharing for %1 starts next session: sign in to Steam now, then restart the session.", player), "long")
         }
         onSessionStarted: {
             applicationWindow().showPassiveNotification(
@@ -198,13 +197,12 @@ Kirigami.ApplicationWindow {
         settingsManager: settingsManager
     }
 
-    UserManager {
-        id: userManager
-        Component.onCompleted: setHelper(helperClient)
+    PlayerStore {
+        id: playerStore
     }
 
-    CouchPlayHelperClient {
-        id: helperClient
+    HostStatus {
+        id: hostStatus
     }
 
     MonitorManager {
@@ -226,12 +224,10 @@ Kirigami.ApplicationWindow {
             loadGames()
         }
         id: heroicConfigManager
-        helperClient: helperClient
     }
 
     SteamConfigManager {
         id: steamConfigManager
-        helperClient: helperClient
         
         Component.onCompleted: {
             refreshSourceAccounts()
@@ -302,13 +298,13 @@ Kirigami.ApplicationWindow {
                 onTriggered: pushProfilesPage()
             },
             Kirigami.Action {
-                objectName: "actionUsers"
+                objectName: "actionPlayers"
                 Accessible.role: Accessible.Button
-                Accessible.name: i18nc("@action:button", "Users")
+                Accessible.name: i18nc("@action:button", "Players")
                 Accessible.onPressAction: triggered()
                 icon.name: "system-users"
-                text: i18nc("@action:button", "Users")
-                onTriggered: pushUsersPage()
+                text: i18nc("@action:button", "Players")
+                onTriggered: pushPlayersPage()
             },
             Kirigami.Action {
                 objectName: "actionSettings"
@@ -326,7 +322,7 @@ Kirigami.ApplicationWindow {
         sessionManager: sessionManager
         sessionRunner: sessionRunner
         deviceManager: deviceManager
-        helperClient: helperClient
+        hostStatus: hostStatus
     }
 
     Component {
@@ -350,8 +346,8 @@ Kirigami.ApplicationWindow {
     }
 
     Component {
-        id: usersPage
-        UsersPage {}
+        id: playersPage
+        PlayersPage {}
     }
 
     Component {
@@ -365,7 +361,7 @@ Kirigami.ApplicationWindow {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
             deviceManager: deviceManager,
-            helperClient: helperClient
+            hostStatus: hostStatus
         })
     }
 
@@ -376,13 +372,13 @@ Kirigami.ApplicationWindow {
             sessionRunner: sessionRunner,
             deviceManager: deviceManager,
             monitorManager: monitorManager,
-            userManager: userManager,
+            playerStore: playerStore,
             steamConfigManager: steamConfigManager,
             heroicConfigManager: heroicConfigManager,
             presetManager: presetManager,
             audioManager: audioManager
         })
-        page.openUsersRequested.connect(pushUsersPage)
+        page.openPlayersRequested.connect(pushPlayersPage)
     }
 
     function pushDeviceAssignmentPage() {
@@ -403,11 +399,10 @@ Kirigami.ApplicationWindow {
         })
     }
 
-    function pushUsersPage() {
+    function pushPlayersPage() {
         pageStack.clear()
-        pageStack.push(usersPage, {
-            userManager: userManager,
-            helperClient: helperClient,
+        pageStack.push(playersPage, {
+            playerStore: playerStore,
             pairingSession: pairingSession,
             sessionRunner: sessionRunner
         })
@@ -417,7 +412,6 @@ Kirigami.ApplicationWindow {
         pageStack.clear()
         pageStack.push(settingsPage, {
             sessionRunner: sessionRunner,
-            helperClient: helperClient,
             presetManager: presetManager,
             steamConfigManager: steamConfigManager,
             settingsManager: settingsManager,

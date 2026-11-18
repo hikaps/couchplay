@@ -66,6 +66,9 @@ Kirigami.OverlaySheet {
         }
     }
 
+    // Sized against the window, not against the card it is declared in (a sheet is at most as tall as its parent)
+    parent: Controls.Overlay.overlay
+
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
 

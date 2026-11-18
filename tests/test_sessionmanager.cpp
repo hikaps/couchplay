@@ -11,35 +11,11 @@
 #include <KConfig>
 #include <KConfigGroup>
 
-// First: the client header under the test-access macro, before any other
-// project header can pull it in unguarded
-#define private public
-#include "CouchPlayHelperClient.h"
-#undef private
-
 #include "PresetManager.h"
 #include "SessionManager.h"
 #include "SteamConfigManager.h"
 
 #define KEY(x) QStringLiteral(x)
-
-class MockHomeHelperClient : public CouchPlayHelperClient
-{
-    Q_OBJECT
-public:
-    explicit MockHomeHelperClient(QObject *parent = nullptr)
-        : CouchPlayHelperClient(parent)
-    {
-        m_available = true;
-    }
-
-    QString uidHome;
-    QVariantMap getUserHomeInfoByUid(uint uid) override
-    {
-        Q_UNUSED(uid)
-        return {{QStringLiteral("home"), uidHome}, {QStringLiteral("canonicalHome"), uidHome}};
-    }
-};
 
 class TestSessionManager : public QObject
 {
@@ -73,7 +49,7 @@ private Q_SLOTS:
     // Profile management tests
     void testSaveProfile();
     void testLoadProfile();
-    void testPrivateTemporaryDirectoriesRoundtrip();
+    void testPlayerKeyRoundtripAndLegacyUsername();
     void testLoadProfileLegacySharedDirectories();
     void testAudioDeviceRoundtrip();
     void testRenderResolutionRoundtrip();
@@ -89,7 +65,7 @@ private Q_SLOTS:
     void testPlayerDataFolderEligibilityTransitions();
     void testPlayerDataFolderPathMarkerPredicate();
     void testInstanceConfigDoesNotOwnApplicationDirectories();
-    void testPlayerDataFolderPathUsesHelperResolvedHome();
+    void testPlayerDataFolderPathUsesDesktopHome();
     void testDeleteProfile();
     void testSavedProfiles();
     void testRefreshProfiles();
@@ -213,20 +189,16 @@ void TestSessionManager::testSetInstanceConfig()
     QCOMPARE(retrieved.value(KEY("refreshRate")).toInt(), 120);
 }
 
-void TestSessionManager::testPlayerDataFolderPathUsesHelperResolvedHome()
+void TestSessionManager::testPlayerDataFolderPathUsesDesktopHome()
 {
-    // The staging slug must use the helper-resolved compositor home so the
-    // folder names match what SessionRunner mirrors into at session start
-    // (under Flatpak the sandbox resolves a different home)
-    MockHomeHelperClient helper;
-    helper.uidHome = QStringLiteral("/home/compositor");
-    m_sessionManager->setHelperClient(&helper);
+    // The staging slug is relative to the desktop home, matching the
+    // folder names SessionRunner copies from at session start
     PresetManager presetManager;
     m_sessionManager->setPresetManager(&presetManager);
     const QString presetId = presetManager.addCustomPreset(QStringLiteral("staging"), QStringLiteral("/usr/bin/game"));
     QVERIFY(!presetId.isEmpty());
     QVERIFY(presetManager.setDataDirectories(presetId, {
-        QVariantMap{{KEY("path"), QStringLiteral("/home/compositor/Games/MyGame")},
+        QVariantMap{{KEY("path"), QString(QDir::homePath() + QStringLiteral("/Games/MyGame"))},
                     {KEY("mode"), QStringLiteral("overlay")}}
     }));
 
@@ -472,11 +444,11 @@ void TestSessionManager::testSetInstanceUser()
     m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
 
     QVariantMap config = m_sessionManager->getInstanceConfig(1);
-    QCOMPARE(config.value(KEY("username")).toString(), QStringLiteral("player2"));
+    QCOMPARE(config.value(KEY("player")).toString(), QStringLiteral("player2"));
 
     m_sessionManager->setInstanceUser(1, QString());
     config = m_sessionManager->getInstanceConfig(1);
-    QVERIFY(config.value(KEY("username")).toString().isEmpty());
+    QVERIFY(config.value(KEY("player")).toString().isEmpty());
 }
 
 void TestSessionManager::testSaveProfile()
@@ -511,41 +483,32 @@ void TestSessionManager::testLoadProfile()
     QCOMPARE(result, false);
 }
 
-void TestSessionManager::testPrivateTemporaryDirectoriesRoundtrip()
+void TestSessionManager::testPlayerKeyRoundtripAndLegacyUsername()
 {
-    m_sessionManager->setInstanceCount(2);
+    const QString profilesDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles");
+    QDir().mkpath(profilesDir);
+    const QString path = profilesDir + QStringLiteral("/LegacyUsernameProfile.conf");
+    {
+        KConfig config(path, KConfig::SimpleConfig);
+        config.group(QStringLiteral("General")).writeEntry("instanceCount", 1);
+        KConfigGroup inst = config.group(QStringLiteral("Instance0"));
+        inst.writeEntry("username", QStringLiteral("player1"));
+        inst.writeEntry("privateTemporaryDirectories", true);
+        config.sync();
+    }
 
-    QVariantMap playerOne = m_sessionManager->getInstanceConfig(0);
-    playerOne[KEY("privateTemporaryDirectories")] = true;
-    m_sessionManager->setInstanceConfig(0, playerOne);
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("LegacyUsernameProfile")));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("player")).toString(), QStringLiteral("player1"));
 
-    QVariantMap playerTwo = m_sessionManager->getInstanceConfig(1);
-    playerTwo[KEY("privateTemporaryDirectories")] = true;
-    m_sessionManager->setInstanceConfig(1, playerTwo);
-    playerTwo = m_sessionManager->getInstanceConfig(1);
-    playerTwo[KEY("privateTemporaryDirectories")] = false;
-    playerTwo[KEY("streamCodec")] = QStringLiteral("hevc");
-    m_sessionManager->setInstanceConfig(1, playerTwo);
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("LegacyUsernameProfile")));
+    KConfig saved(path, KConfig::SimpleConfig);
+    const KConfigGroup inst = saved.group(QStringLiteral("Instance0"));
+    QCOMPARE(inst.readEntry("player", QString()), QStringLiteral("player1"));
+    QVERIFY(!inst.hasKey("username"));
+    QVERIFY(!inst.hasKey("privateTemporaryDirectories"));
 
-    playerOne = m_sessionManager->getInstanceConfig(0);
-    playerOne[KEY("refreshRate")] = 144;
-    m_sessionManager->setInstanceConfig(0, playerOne);
-
-    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("privateTemporaryDirectories")).toBool(), true);
-    QCOMPARE(m_sessionManager->getInstanceConfig(1).value(KEY("privateTemporaryDirectories")).toBool(), false);
-    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("PrivateTemporaryDirectoriesProfile")));
-
-    m_sessionManager->newSession();
-    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("PrivateTemporaryDirectoriesProfile")));
-
-    const QVariantMap restoredPlayerOne = m_sessionManager->getInstanceConfig(0);
-    const QVariantMap restoredPlayerTwo = m_sessionManager->getInstanceConfig(1);
-    QCOMPARE(restoredPlayerOne.value(KEY("privateTemporaryDirectories")).toBool(), true);
-    QCOMPARE(restoredPlayerTwo.value(KEY("privateTemporaryDirectories")).toBool(), false);
-    QCOMPARE(restoredPlayerOne.value(KEY("refreshRate")).toInt(), 144);
-    QCOMPARE(restoredPlayerTwo.value(KEY("streamCodec")).toString(), QStringLiteral("hevc"));
-
-    m_sessionManager->deleteProfile(QStringLiteral("PrivateTemporaryDirectoriesProfile"));
+    m_sessionManager->deleteProfile(QStringLiteral("LegacyUsernameProfile"));
 }
 
 void TestSessionManager::testAudioDeviceRoundtrip()
@@ -611,7 +574,8 @@ void TestSessionManager::testLoadProfileLegacySharedDirectories()
 
     QVERIFY(m_sessionManager->loadProfile(QStringLiteral("LegacySharedDirsProfile")));
     const QVariantMap instance = m_sessionManager->getInstanceConfig(0);
-    QCOMPARE(instance.value(KEY("privateTemporaryDirectories")).toBool(), false);
+    QCOMPARE(instance.value(KEY("player")).toString(), QStringLiteral("player1"));
+    QVERIFY(!instance.contains(KEY("privateTemporaryDirectories")));
     QVERIFY(!instance.contains(KEY("dataDirectories")));
     QVERIFY(!instance.contains(KEY("dataDirectoriesSnapshotted")));
 
@@ -682,7 +646,7 @@ void TestSessionManager::testMigrationUnsafeBackupLeavesStateUnchanged()
     QSignalSpy errors(m_sessionManager, &SessionManager::errorOccurred);
     QVERIFY(!m_sessionManager->loadProfile(name));
     QCOMPARE(errors.count(), 1);
-    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("username")).toString(),
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("player")).toString(),
              QStringLiteral("unchanged-player"));
     QVERIFY(source.open(QIODevice::ReadOnly));
     QCOMPARE(source.readAll(), original);
@@ -709,7 +673,7 @@ void TestSessionManager::testSymlinkedProfileWithoutLegacyKeysStillWorks()
     QVERIFY(QFile::link(target, path));
     QSignalSpy errors(m_sessionManager, &SessionManager::errorOccurred);
     QVERIFY(m_sessionManager->loadProfile(name));
-    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("username")).toString(), QStringLiteral("player1"));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("player")).toString(), QStringLiteral("player1"));
     QVERIFY(m_sessionManager->saveProfile(name));
     QCOMPARE(errors.count(), 0);
     QVERIFY(QFileInfo(path).isSymLink());
@@ -778,7 +742,7 @@ void TestSessionManager::testLegacyMigrationOnSaveAndDuplicate()
     KConfig result(profiles + QLatin1Char('/') + resultName + QStringLiteral(".conf"), KConfig::SimpleConfig);
     QVERIFY(!result.group(QStringLiteral("Instance0")).hasKey("sharedDirectories"));
     QCOMPARE(result.group(QStringLiteral("UnknownGroup")).readEntry("retained", QString()), QStringLiteral("value"));
-    QCOMPARE(result.group(QStringLiteral("Instance0")).readEntry("username", QString()),
+    QCOMPARE(result.group(QStringLiteral("Instance0")).readEntry("player", QString()),
              duplicate ? QStringLiteral("player1") : QStringLiteral("player2"));
     if (duplicate) {
         QVERIFY(m_sessionManager->deleteProfile(resultName));
@@ -820,7 +784,8 @@ void TestSessionManager::testLegacyOverrideSettingsAreDiscardedOnSave()
 
     QVERIFY(m_sessionManager->loadProfile(QStringLiteral("LegacyOverrideSettingsProfile")));
     const QVariantMap instance = m_sessionManager->getInstanceConfig(0);
-    QVERIFY(instance.value(KEY("privateTemporaryDirectories")).toBool());
+    QCOMPARE(instance.value(KEY("player")).toString(), QStringLiteral("player1"));
+    QVERIFY(!instance.contains(KEY("privateTemporaryDirectories")));
     QVERIFY(!instance.contains(KEY("dataDirectories")));
     QVERIFY(!instance.contains(KEY("dataDirectoriesSnapshotted")));
     QVERIFY(!instance.contains(KEY("overrideGamePath")));
@@ -981,7 +946,8 @@ void TestSessionManager::testPlayerDataFolderPathMarkerPredicate()
         if (root.isEmpty()) {
             return -1;
         }
-        const int count = QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size();
+        // Home-relative slugs of dot-directories (".steam/steam") are hidden folders
+        const int count = QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden).size();
         QDir(root).removeRecursively();
         return count;
     };

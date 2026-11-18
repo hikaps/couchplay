@@ -16,7 +16,7 @@ class QProcess;
 /**
  * @brief Checks GitHub for a newer stable release and, on Flatpak, updates the app in place.
  *
- * The checker only informs: it never updates the root helper or the SteamOS system extension.
+ * The checker only informs: it never touches anything outside the Flatpak.
  * CouchPlay ships as a Flatpak bundle (no remote), so `flatpak update` cannot update it. On Flatpak
  * installs updateNow() instead downloads the release bundle, verifies its checksum and installs it
  * on the host through HostProcess.
