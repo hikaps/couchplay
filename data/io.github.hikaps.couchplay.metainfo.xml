@@ -65,6 +65,19 @@
   </screenshots>
   
   <releases>
+    <release version="0.7.0" date="2026-11-18">
+      <description>
+        <p>Players now run in rootless bubblewrap sandboxes as your own user; the root helper is gone. If you used 0.6.x, run scripts/migrate-from-helper.sh once to import your old players and remove the helper (the Home page shows the command), then re-pair your Moonlight clients.</p>
+        <ul>
+          <li>Rootless per-player bwrap sandboxes with one virtual Xbox 360 pad per player replace the root helper, Polkit rules and player accounts (#164)</li>
+          <li>The installer runs as your user; only --tarball and the AppArmor step ask for sudo, and it works when piped from curl (#167, #168)</li>
+          <li>The Home page and the installer tell you about a leftover helper and missing host tools; an empty leftover group no longer triggers a false warning (#166, #169)</li>
+          <li>Players share the host's Steam shader cache (#165)</li>
+          <li>Players use the host's default Proton choice, and the private Steam IPC address is set through the environment only (#161, #162)</li>
+          <li>Removed the "Close Steam before starting" option, which did nothing (#159)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.2" date="2026-11-14">
       <description>
         <p>Bug-fix release for split-screen controller and Steam problems. Reinstall the privileged helper after updating: most fixes live in it.</p>
