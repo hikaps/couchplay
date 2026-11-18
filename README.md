@@ -207,6 +207,8 @@ Controllers are forwarded through a virtual pad per player, which needs **`/dev/
 
 Earlier versions used a root helper, temporary Linux accounts, Polkit rules and (on SteamOS) a system extension. To move to the sandbox model, run once from a checkout of this repository:
 
+CouchPlay and the installer both detect a leftover helper: the installer prints these steps after installing, and the Home page shows a notice with the exact command for your user. The Home page also warns when `bwrap`, `dbus-run-session` or `gamescope` is missing on the host, or when `/dev/uinput` is not writable.
+
 ```bash
 sudo ./scripts/migrate-from-helper.sh --flatpak          # dry run: lists the old players and their size
 sudo ./scripts/migrate-from-helper.sh --flatpak --yes    # import homes and remove the old helper

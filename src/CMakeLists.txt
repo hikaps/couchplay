@@ -7,6 +7,8 @@ add_library(couchplay_core STATIC
     core/CommandVerifier.h
     core/Logging.cpp
     core/Logging.h
+    core/HostStatus.cpp
+    core/HostStatus.h
     core/PlayerFiles.cpp
     core/PlayerFiles.h
     core/SandboxCommand.cpp

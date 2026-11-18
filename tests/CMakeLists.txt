@@ -76,6 +76,8 @@ set(TEST_MANAGER_SOURCES
     ../src/core/UpdateChecker.h
     ../src/core/PlayerStore.cpp
     ../src/core/PlayerStore.h
+    ../src/core/HostStatus.cpp
+    ../src/core/HostStatus.h
     ../src/core/PlayerFiles.cpp
     ../src/core/PlayerFiles.h
     ../src/core/SandboxCommand.cpp
@@ -159,6 +161,7 @@ add_couchplay_test(test_virtualdisplaymanager)
 add_couchplay_test(test_sandboxcommand)
 add_couchplay_test(test_playerstore)
 add_couchplay_test(test_playerfiles)
+add_couchplay_test(test_hoststatus)
 
 # couchplay-padfwd's pure translation/chord logic (C), tested without uinput
 add_executable(test_padmap

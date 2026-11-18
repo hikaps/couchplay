@@ -18,10 +18,14 @@ Kirigami.ScrollablePage {
     required property var sessionRunner
     required property var deviceManager
     property bool hasControllers: deviceManager && deviceManager.controllers.length > 0
+    property var hostStatus: null
 
     Component.onCompleted: {
         if (sessionManager) {
             sessionManager.refreshProfiles()
+        }
+        if (hostStatus) {
+            hostStatus.refresh()
         }
     }
 
@@ -99,6 +103,40 @@ Kirigami.ScrollablePage {
                     onTriggered: sessionRunner.stop()
                 }
             ]
+        }
+
+        Kirigami.InlineMessage {
+            objectName: "msgMissingHostTools"
+            Layout.fillWidth: true
+            visible: (root.hostStatus?.missingTools?.length ?? 0) > 0
+            type: Kirigami.MessageType.Warning
+            text: i18nc("@info", "CouchPlay needs these tools on the host to run player sandboxes: %1. Install them with your distribution's package manager.", root.hostStatus ? root.hostStatus.missingTools.join(", ") : "")
+        }
+
+        Kirigami.InlineMessage {
+            objectName: "msgUinputNotWritable"
+            Layout.fillWidth: true
+            visible: root.hostStatus ? !root.hostStatus.uinputWritable : false
+            type: Kirigami.MessageType.Warning
+            text: i18nc("@info", "/dev/uinput is not writable by your user, so CouchPlay cannot create a virtual controller per player. Install your distribution's Steam udev rules (the steam-devices package) or add a udev rule that gives your user access to /dev/uinput.")
+        }
+
+        Kirigami.InlineMessage {
+            objectName: "msgLegacyHelper"
+            Layout.fillWidth: true
+            visible: root.hostStatus?.legacyHelperFound ?? false
+            type: Kirigami.MessageType.Information
+            text: i18nc("@info", "An older CouchPlay helper (root service and player accounts) is still installed. CouchPlay no longer uses it, and your old players are not imported automatically. Download scripts/migrate-from-helper.sh from the CouchPlay repository, then run the command below. It lists your old players first; add --yes to import them and remove the old helper.")
+        }
+
+        Controls.TextField {
+            objectName: "fieldMigrationCommand"
+            Layout.fillWidth: true
+            visible: root.hostStatus?.legacyHelperFound ?? false
+            readOnly: true
+            selectByMouse: true
+            text: root.hostStatus ? root.hostStatus.migrationCommand : ""
+            Accessible.name: i18nc("@label:textbox", "Migration command")
         }
 
         Kirigami.Heading {

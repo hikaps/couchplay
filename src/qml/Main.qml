@@ -201,6 +201,10 @@ Kirigami.ApplicationWindow {
         id: playerStore
     }
 
+    HostStatus {
+        id: hostStatus
+    }
+
     MonitorManager {
         id: monitorManager
     }
@@ -318,6 +322,7 @@ Kirigami.ApplicationWindow {
         sessionManager: sessionManager
         sessionRunner: sessionRunner
         deviceManager: deviceManager
+        hostStatus: hostStatus
     }
 
     Component {
@@ -355,7 +360,8 @@ Kirigami.ApplicationWindow {
         pageStack.push(homePage, {
             sessionManager: sessionManager,
             sessionRunner: sessionRunner,
-            deviceManager: deviceManager
+            deviceManager: deviceManager,
+            hostStatus: hostStatus
         })
     }
 
