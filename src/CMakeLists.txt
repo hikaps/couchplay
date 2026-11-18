@@ -132,6 +132,8 @@ target_sources(couchplay PRIVATE
     core/UpdateChecker.h
     core/PlayerStore.cpp
     core/PlayerStore.h
+    core/HostStatus.cpp
+    core/HostStatus.h
     core/PadForwarder.cpp
     core/PadForwarder.h
 )
