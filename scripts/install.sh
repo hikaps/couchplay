@@ -528,6 +528,35 @@ check_host_requirements() {
     fi
 }
 
+check_legacy_helper() {
+    # Versions before the rootless release ran players as Linux accounts through a root helper service.
+    # If that is still installed, point the user at the migration script (it never runs automatically).
+    local beta="$1" tarball="$2"
+    local found=false
+    if [[ -e /etc/systemd/system/couchplay-helper.service ]] \
+        || [[ -e /usr/local/libexec/couchplay-helper ]] \
+        || [[ -e /usr/libexec/couchplay-helper ]] \
+        || getent group couchplay &>/dev/null; then
+        found=true
+    fi
+    $found || return 0
+
+    local branch="main" flatpak_flag=" --flatpak"
+    [[ "$beta" == "true" ]] && branch="develop"
+    [[ "$tarball" == "true" ]] && flatpak_flag=""
+    echo ""
+    print_warn "An older CouchPlay helper (root service and player accounts) is still installed."
+    echo "         This version no longer uses it: players now run in a sandbox as your own user."
+    echo "         Your existing players, their logins and saves are NOT imported automatically."
+    echo "         Run the migration script to copy them over and remove the old helper:"
+    echo ""
+    echo "           curl -fsSL https://raw.githubusercontent.com/hikaps/couchplay/${branch}/scripts/migrate-from-helper.sh -o migrate-from-helper.sh"
+    echo "           sudo bash migrate-from-helper.sh --user ${REAL_USER}${flatpak_flag}          # dry run, lists players"
+    echo "           sudo bash migrate-from-helper.sh --user ${REAL_USER}${flatpak_flag} --yes    # do it"
+    echo ""
+    echo "         Details: README, section \"Upgrading from the helper\"."
+}
+
 cleanup() {
     # Cleans up the temporary directory
     # Safe to call multiple times
@@ -750,6 +779,7 @@ main() {
     fi
 
     check_host_requirements
+    check_legacy_helper "$BETA" "$FORCE_TARBALL"
 }
 
 # Run main if script is executed (not sourced)
