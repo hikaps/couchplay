@@ -31,8 +31,12 @@ QString HostStatus::probeScript()
     return QStringLiteral(
         "for c in bwrap dbus-run-session gamescope; do command -v \"$c\" >/dev/null 2>&1 || echo \"missing $c\"; done\n"
         "[ -w /dev/uinput ] || echo nouinput\n"
+        // An empty 'couchplay' group is left behind by the migration script; only a group that still has members
+        // or accounts using it as their primary group means old player accounts exist.
+        "legacy_group() { g=$(getent group couchplay) || return 1; [ -n \"${g##*:}\" ] && return 0;"
+        " getent passwd | awk -F: -v gid=\"$(echo \"$g\" | cut -d: -f3)\" '$4 == gid { f = 1 } END { exit !f }'; }\n"
         "if [ -e /etc/systemd/system/couchplay-helper.service ] || [ -x /usr/local/libexec/couchplay-helper ]"
-        " || [ -x /usr/libexec/couchplay-helper ] || getent group couchplay >/dev/null 2>&1; then echo legacy; fi\n");
+        " || [ -x /usr/libexec/couchplay-helper ] || legacy_group; then echo legacy; fi\n");
 }
 
 HostStatus::Result HostStatus::parse(const QString &output)
