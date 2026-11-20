@@ -12,8 +12,8 @@ jobs:
     container:
       image: fedora:41
     steps:
-      - name: Install git (required before checkout on a bare fedora:41 image)
-        run: dnf install -y git
+      - name: Install git and ccache (git is required before checkout on a bare fedora:41 image; tar and zstd for the cache action)
+        run: dnf install -y git ccache tar zstd
 
       - uses: actions/checkout@v4
 
@@ -23,11 +23,32 @@ jobs:
       - name: Install build dependencies
         run: ./scripts/install-build-deps.sh dbus-daemon
 
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-fedora41-${{ github.sha }}
+          restore-keys: ccache-fedora41-
+
+      - name: Configure ccache
+        run: |
+          {
+            echo "CCACHE_DIR=$PWD/.ccache"
+            echo "CCACHE_BASEDIR=$PWD"
+            echo "CCACHE_COMPRESS=1"
+            echo "CCACHE_MAXSIZE=500M"
+          } >> "$GITHUB_ENV"
+
       - name: Configure CMake
-        run: cmake -B build -DBUILD_TESTING=ON
+        run: >
+          cmake -B build -DBUILD_TESTING=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel 2
+        run: |
+          ccache --zero-stats
+          cmake --build build --parallel 2
+          ccache --show-stats
 
       - name: Test
         run: dbus-run-session -- ctest --test-dir build --output-on-failure
