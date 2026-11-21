@@ -3,6 +3,7 @@
 
 #include "GamescopeInstance.h"
 #include "HostProcess.h"
+#include "Logging.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -300,7 +301,13 @@ void GamescopeInstance::onProcessFinished(int exitCode, QProcess::ExitStatus exi
     setStatus(crashed ? QStringLiteral("Crashed") : QStringLiteral("Exited unexpectedly"));
     Q_EMIT gamescopePidChanged();
     Q_EMIT runningChanged();
-    Q_EMIT errorOccurred(crashed ? QStringLiteral("crashed") : QStringLiteral("exited"));
+    // The game's own last output is the only clue to why it quit; keep it in the log and the message.
+    QString message = crashed ? QStringLiteral("crashed") : QStringLiteral("exited");
+    if (!detail.isEmpty()) {
+        qCWarning(couchplayGamescope) << "Instance" << index() << message << "- last output:\n" << detail;
+        message += QStringLiteral(":\n") + detail;
+    }
+    Q_EMIT errorOccurred(message);
     Q_EMIT stopped();
 }
 
