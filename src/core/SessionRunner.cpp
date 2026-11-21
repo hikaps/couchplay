@@ -1674,7 +1674,7 @@ void SessionRunner::onInstanceError(const QString &message)
     if (!m_active && !m_hasStartingProfile) {
         return;
     }
-    if (m_sessionStartupComplete && message == QStringLiteral("exited")) {
+    if (m_sessionStartupComplete && message.startsWith(QLatin1String("exited"))) {
         return;
     }
     auto *instance = qobject_cast<GamescopeInstance *>(sender());
