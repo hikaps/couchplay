@@ -104,6 +104,26 @@ bool HostProcess::hostExecutableExists(const QString &path)
     return probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == 0;
 }
 
+bool HostProcess::hostPathExists(const QString &path)
+{
+    if (path.isEmpty()) {
+        return false;
+    }
+    if (!runningInFlatpak()) {
+        return QFileInfo::exists(path);
+    }
+
+    QProcess probe;
+    configure(probe, QStringLiteral("test"), {QStringLiteral("-e"), path});
+    probe.start();
+    if (!probe.waitForFinished(3000)) {
+        probe.kill();
+        probe.waitForFinished(500);
+        return false;
+    }
+    return probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == 0;
+}
+
 QString HostProcess::hostFindExecutable(const QString &name)
 {
     QProcess probe;

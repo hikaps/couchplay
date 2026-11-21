@@ -98,6 +98,10 @@ bool GamescopeInstance::start(const QVariantMap &config, int index, const QList<
         // The socket masks need a path; without one the host's session bus would stay reachable
         spec.runtimeDir = QStringLiteral("/run/user/%1").arg(::getuid());
     }
+    const QString systemBus = QStringLiteral("/run/dbus/system_bus_socket");
+    if (HostProcess::hostPathExists(systemBus)) {
+        spec.maskedPaths << systemBus;
+    }
     spec.padNode = config.value(QStringLiteral("padNode")).toString();
     spec.directDevices = config.value(QStringLiteral("directDevices")).toStringList();
     const QStringList nvidiaNodes =
