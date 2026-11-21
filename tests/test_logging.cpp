@@ -17,6 +17,7 @@ class TestLogging : public QObject
 
 private Q_SLOTS:
     void testRotation();
+    void testWriteReachesDiskWithoutClose();
     void testOpenFailureNoCrash();
     void testAppendToExisting();
     void testMaxBackupsOne();
@@ -43,6 +44,22 @@ void TestLogging::testRotation()
     QVERIFY(QFile::exists(path + QStringLiteral(".2")));
     QVERIFY(QFile::exists(path + QStringLiteral(".3")));
     QVERIFY(!QFile::exists(path + QStringLiteral(".4")));
+}
+
+void TestLogging::testWriteReachesDiskWithoutClose()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.path() + QStringLiteral("/couchplay.log");
+
+    RotatingFileLogger logger(path);
+    QVERIFY(logger.open());
+    logger.write(QtWarningMsg, {}, QStringLiteral("still-running marker"));
+
+    // Read through a second handle while the logger stays open, as after a crash or kill.
+    QFile reader(path);
+    QVERIFY(reader.open(QIODevice::ReadOnly));
+    QVERIFY(reader.readAll().contains("still-running marker"));
 }
 
 void TestLogging::testOpenFailureNoCrash()

@@ -52,8 +52,9 @@ void RotatingFileLogger::write(QtMsgType type, const QMessageLogContext &context
     if (n > 0) {
         m_written += n;
     }
+    // Flush every message: the file is for diagnosing crashes and hangs, and a buffered tail would be lost with them.
+    m_file.flush();
     if (m_written >= m_maxSizeBytes) {
-        m_file.flush();
         rotate();
     }
 }
