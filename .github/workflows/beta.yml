@@ -45,7 +45,7 @@ jobs:
 
       - name: Configure CMake
         run: >
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCOUCHPLAY_BETA=ON
           -DCOUCHPLAY_BUILD_ID=beta-$(git rev-parse --short HEAD)
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
