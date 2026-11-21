@@ -6,7 +6,7 @@ Implementation details for how CouchPlay prepares and launches player instances.
 
 CouchPlay is rootless. A player is a directory (`players/<name>/home`, mode 0700) under `~/.local/share/couchplay/players` (under Flatpak: `AppDataLocation/players`). Each instance runs as the desktop user inside `bwrap → dbus-run-session → gamescope → game`:
 
-- private HOME (the player's `home` directory), private `/tmp`, and a private session bus (the host bus socket is masked, so `flatpak-spawn` escapes are blocked);
+- private HOME (the player's `home` directory), private `/tmp`, and a private session bus (the host session bus socket and the systemd user manager's private socket are masked, so `flatpak-spawn` and `systemd-run --user` escapes are blocked; the host's system bus socket is masked too, so the sandbox cannot call host system services);
 - the host network (LAN, local and online play between players work as before) and a private PID namespace (stopping gamescope tears down everything);
 - a fresh `/dev` with only GPU, audio and fuse nodes, that player's virtual pad and any keyboards or mice assigned to that player; `/dev/uinput` and `hidraw` nodes are not visible.
 

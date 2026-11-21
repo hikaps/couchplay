@@ -67,6 +67,7 @@ private Q_SLOTS:
     void overlayStacksExtraLowerLayersBelowSource();
     void mountsFollowHomeBindAndPrecedeBusMask();
     void busMask();
+    void maskedPathsFollowMountsAndOnlyWhenGiven();
     void environment();
     void chdirDefaultsToHome();
     void chdirUsesWorkingDirectory();
@@ -252,6 +253,30 @@ void TestSandboxCommand::busMask()
 
     spec.runtimeDir.clear();
     QCOMPARE(at(buildSandboxArgv(spec), "--ro-bind", "/dev/null"), -1);
+}
+
+void TestSandboxCommand::maskedPathsFollowMountsAndOnlyWhenGiven()
+{
+    SandboxSpec spec = baseSpec();
+    SandboxMount mount;
+    mount.kind = SandboxMount::RoBind;
+    mount.source = spec.home + QStringLiteral("/Games");
+    mount.target = spec.home + QStringLiteral("/Games");
+    spec.mounts = {mount};
+    const QString path = QStringLiteral("/run/dbus/system_bus_socket");
+
+    QCOMPARE(at(buildSandboxArgv(spec), "--ro-bind", "/dev/null", path), -1);
+
+    spec.maskedPaths = {path};
+    const QStringList argv = buildSandboxArgv(spec);
+    const int games = at(argv, "--ro-bind", mount.source, mount.target);
+    const int masked = at(argv, "--ro-bind", "/dev/null", path);
+    QVERIFY(games >= 0);
+    QVERIFY(masked > games);
+
+    // Independent of the runtime dir: it must not vanish together with the session-bus masks
+    spec.runtimeDir.clear();
+    QVERIFY(at(buildSandboxArgv(spec), "--ro-bind", "/dev/null", path) > 0);
 }
 
 void TestSandboxCommand::environment()

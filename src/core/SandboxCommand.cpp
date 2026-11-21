@@ -67,6 +67,13 @@ QStringList buildSandboxArgv(const SandboxSpec &spec)
         }
     }
 
+    // The host's system bus is masked too. Steam's web helper (Chromium) aborts when the system broker drops its
+    // connection, which killed Steam at startup in a sizeable share of launches, and a game has no business calling
+    // host services anyway. bwrap cannot create a missing mount point, so the caller lists only paths that exist.
+    for (const QString &path : spec.maskedPaths) {
+        argv << QStringLiteral("--ro-bind") << QStringLiteral("/dev/null") << path;
+    }
+
     argv << QStringLiteral("--setenv") << QStringLiteral("HOME") << spec.home;
     for (auto it = spec.env.cbegin(); it != spec.env.cend(); ++it) {
         argv << QStringLiteral("--setenv") << it.key() << it.value();

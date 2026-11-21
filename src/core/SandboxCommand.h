@@ -29,6 +29,7 @@ struct SandboxSpec {
     QString home; ///< host $HOME (also the sandbox $HOME path)
     QString playerHome; ///< host directory bound at @c home; empty = the desktop user's own home (no bind)
     QString runtimeDir; ///< XDG_RUNTIME_DIR; its `bus` socket is masked
+    QStringList maskedPaths; ///< host paths hidden behind /dev/null; the caller passes only ones that exist
     QString padNode; ///< the player's virtual pad (/dev/input/eventN); empty = none
     QStringList directDevices; ///< other input event nodes passed straight through
     QStringList extraDeviceNodes; ///< e.g. /dev/nvidia* present at launch
