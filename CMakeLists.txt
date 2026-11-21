@@ -70,6 +70,11 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
 # Find QML modules at runtime
 ecm_find_qmlmodule(org.kde.kirigami REQUIRED)
 
+# Build for the beta release channel: enables verbose + rotating-file logging.
+# Declared before add_subdirectory(src) because that is where it is consumed.
+# Prod (default) builds stay quiet (warnings only). QT_LOGGING_RULES still overrides.
+option(COUCHPLAY_BETA "Build a beta release with verbose/file logging" OFF)
+
 # Add subdirectories
 add_subdirectory(src)
 add_subdirectory(tools/vdisplay)

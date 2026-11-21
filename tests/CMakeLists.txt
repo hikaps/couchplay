@@ -162,6 +162,7 @@ add_couchplay_test(test_sandboxcommand)
 add_couchplay_test(test_playerstore)
 add_couchplay_test(test_playerfiles)
 add_couchplay_test(test_hoststatus)
+add_couchplay_test(test_logging)
 
 # couchplay-padfwd's pure translation/chord logic (C), tested without uinput
 add_executable(test_padmap
