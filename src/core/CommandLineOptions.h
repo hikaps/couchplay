@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "LaunchTypes.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -12,6 +14,7 @@ struct CommandLineRequest
     bool start = false;
     bool exitAfterSession = false;
     bool skipPairingCheck = false;
+    GameSelection game;
 
     bool requested() const
     {

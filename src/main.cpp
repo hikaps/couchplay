@@ -85,6 +85,9 @@ int main(int argc, char *argv[])
     parser.addOption({QStringLiteral("exit-after-session"), QStringLiteral("Exit after the session and post hook finish")});
     parser.addOption({QStringLiteral("skip-pairing-check"),
                       QStringLiteral("Start streaming players even without a paired Moonlight client")});
+    parser.addOption({QStringLiteral("game"),
+                      QStringLiteral("Override the profile's game for matching players (steam:APPID or heroic:RUNNER:APPNAME)"),
+                      QStringLiteral("launcher:id")});
     parser.process(app);
 
     QString parseError;
@@ -126,6 +129,7 @@ int main(int argc, char *argv[])
         {QStringLiteral("startupStart"), initialRequest.start},
         {QStringLiteral("startupExitAfterSession"), initialRequest.exitAfterSession},
         {QStringLiteral("startupSkipPairingCheck"), initialRequest.skipPairingCheck},
+        {QStringLiteral("startupGame"), initialRequest.game.toVariant()},
     });
     engine.rootContext()->setContextObject(new KLocalizedContext(&engine));
     engine.loadFromModule("io.github.hikaps.couchplay", "Main");
@@ -168,7 +172,8 @@ int main(int argc, char *argv[])
                          Q_EMIT commandLineBridge.launchRequested(request.profileName,
                                                                   request.start,
                                                                   request.exitAfterSession,
-                                                                  request.skipPairingCheck);
+                                                                  request.skipPairingCheck,
+                                                                  request.game.toVariant());
                          service.setExitValue(commandLineBridge.requestAccepted() ? 0 : 2);
                      },
                      Qt::DirectConnection);

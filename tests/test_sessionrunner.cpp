@@ -284,6 +284,8 @@ private Q_SLOTS:
     void testDeviceReconnectIgnoredDuringPreHook();
     void testSunshineGamepadClaimsAreFifo();
     void testSteamInstancesGetPrivateIpcAddress();
+    void testGameOverrideAppliesToMatchingPlayersOnly();
+    void testGameOverrideWithoutMatchingLauncherFails();
     void testSunshineGamepadUniqGroupsDevices();
     void testSunshineGamepadSingleStreamerFallback();
     void testSunshineGamepadClaimExpires();
@@ -1175,6 +1177,53 @@ void TestSessionRunner::testSteamInstancesGetPrivateIpcAddress()
     }
     QCOMPARE(addresses.size(), 2);
     m_runner->stop();
+}
+
+void TestSessionRunner::testGameOverrideAppliesToMatchingPlayersOnly()
+{
+    QTemporaryDir bin;
+    QVERIFY(bin.isValid());
+    const QString steamStub = bin.filePath(QStringLiteral("steam"));
+    QVERIFY(QFile::copy(QStringLiteral("/usr/bin/true"), steamStub));
+    const QString steamPreset =
+        m_presetManager->addCustomPreset(QStringLiteral("Steam game"), steamStub + QStringLiteral(" -bigpicture"));
+    QVERIFY(m_presetManager->setRequiredIntegrations(steamPreset, {}));
+    const QString otherPreset = m_presetManager->addCustomPreset(QStringLiteral("Other"), QStringLiteral("/usr/bin/true"));
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstanceUser(0, QStringLiteral("player1"));
+    m_sessionManager->setInstancePreset(0, steamPreset);
+    m_sessionManager->setInstanceUser(1, QStringLiteral("player2"));
+    m_sessionManager->setInstancePreset(1, otherPreset);
+
+    m_runner->setGameOverride({{QStringLiteral("launcherId"), QStringLiteral("steam")},
+                               {QStringLiteral("backend"), QStringLiteral("native")},
+                               {QStringLiteral("gameId"), QStringLiteral("440")}});
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QVERIFY2(m_runner->start(), errorSpy.isEmpty() ? "" : qPrintable(errorSpy.constLast().constFirst().toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(m_log.configs.size(), 2, 3000);
+
+    const QStringList first = m_log.configs.at(0).value(QStringLiteral("gameCommand")).toStringList();
+    QVERIFY(first.contains(QStringLiteral("-applaunch")));
+    QVERIFY(first.contains(QStringLiteral("440")));
+    QVERIFY(!first.contains(QStringLiteral("-bigpicture")));
+    QCOMPARE(m_log.configs.at(1).value(QStringLiteral("gameCommand")).toStringList(),
+             QStringList{QStringLiteral("/usr/bin/true")});
+    // One-shot: the saved profile keeps its own selection
+    QVERIFY(m_sessionManager->currentProfile().instances.at(0).gameSelection.gameId.isEmpty());
+    m_runner->stop();
+}
+
+void TestSessionRunner::testGameOverrideWithoutMatchingLauncherFails()
+{
+    twoPlayerPreset(QStringLiteral("No heroic"));
+    m_runner->setGameOverride({{QStringLiteral("launcherId"), QStringLiteral("heroic")},
+                               {QStringLiteral("backend"), QStringLiteral("gog")},
+                               {QStringLiteral("gameId"), QStringLiteral("x")}});
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QVERIFY(!m_runner->start());
+    QVERIFY(!errorSpy.isEmpty());
+    QVERIFY(errorSpy.constLast().constFirst().toString().contains(QStringLiteral("required by --game")));
+    QVERIFY(m_log.configs.isEmpty());
 }
 
 void TestSessionRunner::testStreamingStartupWaitsForSunshineReady()

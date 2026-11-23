@@ -3,6 +3,41 @@
 
 #include "CommandLineOptions.h"
 
+#include <QRegularExpression>
+
+namespace
+{
+bool parseGame(const QString &value, GameSelection *game)
+{
+    const QStringList parts = value.split(QLatin1Char(':'));
+    if (parts.constFirst() == QStringLiteral("steam") && parts.size() == 2) {
+        static const QRegularExpression digits(QStringLiteral("^[0-9]+$"));
+        if (!digits.match(parts.at(1)).hasMatch() || parts.at(1).toULongLong() == 0) {
+            return false;
+        }
+        game->launcherId = QStringLiteral("steam");
+        game->backend = QStringLiteral("native");
+        game->gameId = parts.at(1);
+        return true;
+    }
+    if (parts.constFirst() == QStringLiteral("heroic") && parts.size() >= 3) {
+        static const QStringList runners = {QStringLiteral("legendary"),
+                                            QStringLiteral("gog"),
+                                            QStringLiteral("nile"),
+                                            QStringLiteral("sideload")};
+        const QString appName = QStringList(parts.mid(2)).join(QLatin1Char(':'));
+        if (!runners.contains(parts.at(1)) || appName.isEmpty()) {
+            return false;
+        }
+        game->launcherId = QStringLiteral("heroic");
+        game->backend = parts.at(1);
+        game->gameId = appName;
+        return true;
+    }
+    return false;
+}
+} // namespace
+
 CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QString *errorMessage)
 {
     CommandLineRequest request;
@@ -48,6 +83,18 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
                 return {};
             }
             request.skipPairingCheck = true;
+        } else if (argument == QStringLiteral("--game")) {
+            if (!request.game.isEmpty() || index + 1 >= arguments.size() || arguments.at(index + 1).isEmpty()
+                || arguments.at(index + 1).startsWith(QLatin1Char('-'))) {
+                fail(QStringLiteral("--game requires exactly one LAUNCHER:ID value"));
+                return {};
+            }
+            const QString value = arguments.at(++index);
+            if (!parseGame(value, &request.game)) {
+                fail(QStringLiteral("Invalid --game value: %1 (expected steam:APPID or heroic:RUNNER:APPNAME)")
+                         .arg(value));
+                return {};
+            }
         } else {
             fail(QStringLiteral("Unknown command-line argument: %1").arg(argument));
             return {};
@@ -64,6 +111,10 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
     }
     if (request.skipPairingCheck && (!request.start || request.profileName.isEmpty())) {
         fail(QStringLiteral("--skip-pairing-check requires --profile and --start"));
+        return {};
+    }
+    if (!request.game.isEmpty() && (!request.start || request.profileName.isEmpty())) {
+        fail(QStringLiteral("--game requires --profile and --start"));
         return {};
     }
     return request;
