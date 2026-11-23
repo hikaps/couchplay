@@ -153,6 +153,17 @@ void SessionManager::newSession()
     Q_EMIT instancesChanged();
 }
 
+void SessionManager::newQuickSession(const QStringList &players, const QString &presetId)
+{
+    newSession();
+    setInstanceCount(players.size()); // clamps to 2..4; new players get m_defaultRefreshRate
+    for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
+        m_currentProfile.instances[i].player = players.value(i);
+        m_currentProfile.instances[i].presetId = presetId;
+    }
+    Q_EMIT instancesChanged();
+}
+
 void SessionManager::refreshProfiles()
 {
     m_savedProfiles.clear();

@@ -31,6 +31,7 @@ private Q_SLOTS:
     void testInitialization();
     void testNewSession();
     void testDefaultRefreshRate();
+    void testNewQuickSession();
     void testInstanceCount();
     void testCurrentLayout();
 
@@ -151,6 +152,21 @@ void TestSessionManager::testDefaultRefreshRate()
     QCOMPARE(m_sessionManager->defaultRefreshRate(), 30);
     m_sessionManager->setDefaultRefreshRate(1000);
     QCOMPARE(m_sessionManager->defaultRefreshRate(), 240);
+}
+
+void TestSessionManager::testNewQuickSession()
+{
+    m_sessionManager->setDefaultRefreshRate(144);
+    const QStringList players = {QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c")};
+    m_sessionManager->newQuickSession(players, QStringLiteral("heroic"));
+    QCOMPARE(m_sessionManager->instanceCount(), 3);
+    for (int i = 0; i < 3; ++i) {
+        const QVariantMap config = m_sessionManager->getInstanceConfig(i);
+        QCOMPARE(config.value(QStringLiteral("player")).toString(), players.at(i));
+        QCOMPARE(config.value(QStringLiteral("presetId")).toString(), QStringLiteral("heroic"));
+        QCOMPARE(config.value(QStringLiteral("refreshRate")).toInt(), 144);
+    }
+    QVERIFY(m_sessionManager->currentProfileName().isEmpty());
 }
 
 void TestSessionManager::testInstanceCount()

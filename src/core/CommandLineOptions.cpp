@@ -95,26 +95,50 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
                          .arg(value));
                 return {};
             }
+        } else if (argument == QStringLiteral("--quick")) {
+            bool ok = false;
+            const int players = (request.quickPlayers == 0 && index + 1 < arguments.size()
+                                 && !arguments.at(index + 1).startsWith(QLatin1Char('-')))
+                ? arguments.at(index + 1).toInt(&ok)
+                : 0;
+            if (!ok || players < 2 || players > 4) {
+                fail(QStringLiteral("--quick requires a player count from 2 to 4"));
+                return {};
+            }
+            request.quickPlayers = players;
+            ++index;
         } else {
             fail(QStringLiteral("Unknown command-line argument: %1").arg(argument));
             return {};
         }
     }
 
-    if (request.start && request.profileName.isEmpty()) {
-        fail(QStringLiteral("--start requires --profile"));
+    if (request.quickPlayers > 0) {
+        if (!request.profileName.isEmpty()) {
+            fail(QStringLiteral("--quick cannot be combined with --profile"));
+            return {};
+        }
+        if (request.game.isEmpty()) {
+            fail(QStringLiteral("--quick requires --game"));
+            return {};
+        }
+        request.start = true; // a quick session always starts; an explicit --start is accepted too
+    }
+
+    if (request.start && !request.requested()) {
+        fail(QStringLiteral("--start requires --profile or --quick"));
         return {};
     }
-    if (request.exitAfterSession && (!request.start || request.profileName.isEmpty())) {
-        fail(QStringLiteral("--exit-after-session requires --profile and --start"));
+    if (request.exitAfterSession && (!request.start || !request.requested())) {
+        fail(QStringLiteral("--exit-after-session requires --profile and --start, or --quick"));
         return {};
     }
-    if (request.skipPairingCheck && (!request.start || request.profileName.isEmpty())) {
-        fail(QStringLiteral("--skip-pairing-check requires --profile and --start"));
+    if (request.skipPairingCheck && (!request.start || !request.requested())) {
+        fail(QStringLiteral("--skip-pairing-check requires --profile and --start, or --quick"));
         return {};
     }
-    if (!request.game.isEmpty() && (!request.start || request.profileName.isEmpty())) {
-        fail(QStringLiteral("--game requires --profile and --start"));
+    if (!request.game.isEmpty() && (!request.start || !request.requested())) {
+        fail(QStringLiteral("--game requires --profile and --start, or --quick"));
         return {};
     }
     return request;

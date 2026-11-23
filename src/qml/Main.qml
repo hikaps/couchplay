@@ -21,23 +21,51 @@ Kirigami.ApplicationWindow {
     property bool startupExitAfterSession: false
     property bool startupSkipPairingCheck: false
     property var startupGame: ({})
+    property int startupQuickPlayers: 0
     property bool initialRequestPending: false
     property bool exitOnStartupFailure: false
     property bool exitAfterActiveSession: false
     property bool shuttingDown: false
     signal startupFailed(int exitCode)
 
-    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game) {
-        if (!profileName || profileName === "" || sessionRunner.active) {
+    function prepareQuickSession(playerCount, game) {
+        const players = []
+        for (let i = 1; i <= playerCount; i++) {
+            const name = "player" + i
+            if (!playerStore.exists(name) && !playerStore.createPlayer(name)) {
+                applicationWindow().showPassiveNotification(i18nc("@info", "Could not create player %1", name), "long")
+                return false
+            }
+            players.push(name)
+        }
+        sessionManager.newQuickSession(players, game.launcherId)
+        deviceManager.unassignAll()
+        deviceManager.instanceCount = playerCount
+        deviceManager.autoAssignControllers()
+        return true
+    }
+
+    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers) {
+        if (sessionRunner.active) {
             return false
         }
-        if (!sessionManager.loadProfile(profileName)) {
-            if (initialRequestPending) startupFailed(1)
-            return false
-        }
-        if (!start) {
-            pushSessionSetupPage()
-            return true
+        if (quickPlayers > 0) {
+            if (!prepareQuickSession(quickPlayers, game)) {
+                if (initialRequestPending) startupFailed(1)
+                return false
+            }
+        } else {
+            if (!profileName || profileName === "") {
+                return false
+            }
+            if (!sessionManager.loadProfile(profileName)) {
+                if (initialRequestPending) startupFailed(1)
+                return false
+            }
+            if (!start) {
+                pushSessionSetupPage()
+                return true
+            }
         }
         exitOnStartupFailure = initialRequestPending
         exitAfterActiveSession = exitAfterSession
@@ -80,10 +108,10 @@ Kirigami.ApplicationWindow {
     }
 
     Component.onCompleted: {
-        if (startupProfileName !== "") {
+        if (startupProfileName !== "" || startupQuickPlayers > 0) {
             initialRequestPending = true
             Qt.callLater(function() {
-                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck, startupGame)
+                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck, startupGame, startupQuickPlayers)
                 initialRequestPending = false
             })
         }
@@ -94,8 +122,8 @@ Kirigami.ApplicationWindow {
     }
     Connections {
         target: commandLineBridge
-        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck, game) {
-            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game))
+        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers) {
+            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers))
         }
     }
 
