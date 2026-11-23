@@ -922,7 +922,7 @@ Kirigami.ScrollablePage {
                             Kirigami.FormData.label: instanceCard.labelVirtualResolution
                             visible: instanceCard.isStreaming
                             Layout.fillWidth: true
-                            model: ["1280x720", "1920x1080", "2560x1440", "3840x2160"]
+                            model: ["1280x720", "1280x800", "1920x1080", "2560x1440", "3840x2160"]
 
                             function updateIndex() {
                                 if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
