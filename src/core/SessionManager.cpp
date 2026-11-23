@@ -77,6 +77,16 @@ void SessionManager::setPresetManager(PresetManager *manager)
     }
 }
 
+void SessionManager::setDefaultRefreshRate(int hz)
+{
+    // Same range as the refresh-rate spin box in the session editor.
+    hz = qBound(30, hz, 240);
+    if (m_defaultRefreshRate != hz) {
+        m_defaultRefreshRate = hz;
+        Q_EMIT defaultRefreshRateChanged();
+    }
+}
+
 
 QString SessionManager::profilesDir() const
 {
@@ -131,6 +141,7 @@ void SessionManager::newSession()
     m_currentProfile.instances.clear();
     for (int i = 0; i < 2; ++i) {
         InstanceConfig config;
+        config.refreshRate = m_defaultRefreshRate;
         m_currentProfile.instances.append(config);
     }
 
@@ -697,6 +708,7 @@ void SessionManager::setInstanceCount(int count)
 
     while (m_currentProfile.instances.size() < count) {
         InstanceConfig config;
+        config.refreshRate = m_defaultRefreshRate;
         m_currentProfile.instances.append(config);
     }
 
