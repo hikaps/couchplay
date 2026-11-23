@@ -62,6 +62,51 @@ private Q_SLOTS:
         QVERIFY(!error.isEmpty());
     }
 
+    void testGame()
+    {
+        const auto parse = [](const QStringList &extra, QString *error) {
+            QStringList arguments = {QStringLiteral("couchplay"), QStringLiteral("--profile"), QStringLiteral("P"),
+                                     QStringLiteral("--start")};
+            arguments += extra;
+            return CommandLineOptions::parse(arguments, error);
+        };
+        QString error;
+        CommandLineRequest request = parse({QStringLiteral("--game"), QStringLiteral("steam:49520")}, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(request.game.launcherId, QStringLiteral("steam"));
+        QCOMPARE(request.game.backend, QStringLiteral("native"));
+        QCOMPARE(request.game.gameId, QStringLiteral("49520"));
+
+        request = parse({QStringLiteral("--game"), QStringLiteral("heroic:gog:Some:App")}, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(request.game.launcherId, QStringLiteral("heroic"));
+        QCOMPARE(request.game.backend, QStringLiteral("gog"));
+        QCOMPARE(request.game.gameId, QStringLiteral("Some:App"));
+
+        const QList<QStringList> invalid = {
+            {QStringLiteral("--game"), QStringLiteral("steam:abc")},
+            {QStringLiteral("--game"), QStringLiteral("steam:0")},
+            {QStringLiteral("--game"), QStringLiteral("steam:")},
+            {QStringLiteral("--game"), QStringLiteral("heroic:epic:x")},
+            {QStringLiteral("--game"), QStringLiteral("heroic:gog:")},
+            {QStringLiteral("--game"), QStringLiteral("epic:1")},
+            {QStringLiteral("--game")},
+            {QStringLiteral("--game"), QStringLiteral("steam:1"), QStringLiteral("--game"), QStringLiteral("steam:2")},
+        };
+        for (const QStringList &extra : invalid) {
+            error.clear();
+            QVERIFY2(!parse(extra, &error).requested(), qPrintable(extra.join(QLatin1Char(' '))));
+            QVERIFY2(!error.isEmpty(), qPrintable(extra.join(QLatin1Char(' '))));
+        }
+
+        error.clear();
+        QVERIFY(!CommandLineOptions::parse({QStringLiteral("couchplay"), QStringLiteral("--profile"), QStringLiteral("P"),
+                                            QStringLiteral("--game"), QStringLiteral("steam:1")},
+                                           &error)
+                     .requested());
+        QVERIFY(!error.isEmpty());
+    }
+
     void testForwardedArgumentList()
     {
         QString error;

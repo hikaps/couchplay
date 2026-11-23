@@ -71,6 +71,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(MonitorManager *monitorManager READ monitorManager WRITE setMonitorManager NOTIFY monitorManagerChanged)
     Q_PROPERTY(StreamManager *streamManager READ streamManager CONSTANT)
     Q_PROPERTY(bool skipPairingCheck READ skipPairingCheck WRITE setSkipPairingCheck NOTIFY skipPairingCheckChanged)
+    Q_PROPERTY(QVariantMap gameOverride READ gameOverride WRITE setGameOverride NOTIFY gameOverrideChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -200,6 +201,13 @@ public:
     }
     void setSkipPairingCheck(bool skip);
 
+    /** --game: replaces the game of players whose launcher matches, for the next start() only; never saved. */
+    QVariantMap gameOverride() const
+    {
+        return m_gameOverride.toVariant();
+    }
+    void setGameOverride(const QVariantMap &selection);
+
     /**
      * @brief Calculate window geometries for a given layout
      * @param layout Layout type: "horizontal", "vertical", "grid"
@@ -258,6 +266,7 @@ Q_SIGNALS:
     void settingsManagerChanged();
     void monitorManagerChanged();
     void skipPairingCheckChanged();
+    void gameOverrideChanged();
     void errorOccurred(const QString &message);
     // Library sharing was skipped for a player whose Steam has never run; it applies from their next session.
     void librarySharingDeferred(const QString &username);
@@ -345,6 +354,7 @@ private:
     StreamManager *m_streamManager = nullptr;
     VirtualDisplayManager *m_virtualDisplays = nullptr;
     bool m_skipPairingCheck = false;
+    GameSelection m_gameOverride; // --game: replaces the game of players whose launcher matches, for the next start() only
     StreamAudio m_streamAudio;
     QSet<int> m_pendingDisplays;
     QHash<int, QString> m_virtualOutputNames;

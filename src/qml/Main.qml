@@ -20,13 +20,14 @@ Kirigami.ApplicationWindow {
     property bool startupStart: false
     property bool startupExitAfterSession: false
     property bool startupSkipPairingCheck: false
+    property var startupGame: ({})
     property bool initialRequestPending: false
     property bool exitOnStartupFailure: false
     property bool exitAfterActiveSession: false
     property bool shuttingDown: false
     signal startupFailed(int exitCode)
 
-    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck) {
+    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game) {
         if (!profileName || profileName === "" || sessionRunner.active) {
             return false
         }
@@ -41,7 +42,10 @@ Kirigami.ApplicationWindow {
         exitOnStartupFailure = initialRequestPending
         exitAfterActiveSession = exitAfterSession
         sessionRunner.skipPairingCheck = skipPairingCheck
-        if (!sessionRunner.start()) {
+        sessionRunner.gameOverride = game || ({})
+        const started = sessionRunner.start()
+        sessionRunner.gameOverride = ({})
+        if (!started) {
             exitOnStartupFailure = false
             exitAfterActiveSession = false
             if (initialRequestPending) startupFailed(1)
@@ -79,7 +83,7 @@ Kirigami.ApplicationWindow {
         if (startupProfileName !== "") {
             initialRequestPending = true
             Qt.callLater(function() {
-                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck)
+                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck, startupGame)
                 initialRequestPending = false
             })
         }
@@ -90,8 +94,8 @@ Kirigami.ApplicationWindow {
     }
     Connections {
         target: commandLineBridge
-        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck) {
-            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck))
+        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck, game) {
+            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game))
         }
     }
 

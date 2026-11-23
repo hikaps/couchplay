@@ -362,6 +362,16 @@ void SessionRunner::setSkipPairingCheck(bool skip)
     }
 }
 
+void SessionRunner::setGameOverride(const QVariantMap &selection)
+{
+    const GameSelection game = GameSelection::fromVariant(selection);
+    if (game.launcherId != m_gameOverride.launcherId || game.backend != m_gameOverride.backend
+        || game.gameId != m_gameOverride.gameId || game.title != m_gameOverride.title) {
+        m_gameOverride = game;
+        Q_EMIT gameOverrideChanged();
+    }
+}
+
 bool SessionRunner::start()
 {
     if (!m_sessionManager) {
@@ -387,7 +397,7 @@ bool SessionRunner::start()
     m_startingSnapshot = {};
     m_hasStartingProfile = false;
 
-    const SessionProfile profile = m_sessionManager->currentProfile();
+    SessionProfile profile = m_sessionManager->currentProfile();
     const int instanceCount = profile.instances.size();
     if (instanceCount < 1) {
         Q_EMIT errorOccurred(QStringLiteral("No instances configured"));
@@ -398,6 +408,22 @@ bool SessionRunner::start()
         Q_EMIT errorOccurred(QStringLiteral("No preset manager configured"));
         setStatus(QStringLiteral("Error"));
         return false;
+    }
+    if (!m_gameOverride.isEmpty()) {
+        bool matched = false;
+        for (InstanceConfig &instance : profile.instances) {
+            const QString presetId = instance.presetId.isEmpty() ? QStringLiteral("steam") : instance.presetId;
+            if (m_presetManager->getLauncherId(presetId) == m_gameOverride.launcherId) {
+                instance.gameSelection = m_gameOverride;
+                matched = true;
+            }
+        }
+        if (!matched) {
+            Q_EMIT errorOccurred(QStringLiteral("No player in this profile uses the %1 launcher required by --game")
+                                     .arg(m_gameOverride.launcherId));
+            setStatus(QStringLiteral("Error"));
+            return false;
+        }
     }
     const QString displayError = validateDisplays(profile);
     if (!displayError.isEmpty()) {

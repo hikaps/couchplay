@@ -4,6 +4,7 @@
 #pragma once
 
 #include <QObject>
+#include <QVariantMap>
 #include <QString>
 
 class CommandLineBridge : public QObject
@@ -24,7 +25,11 @@ public:
     }
 
 Q_SIGNALS:
-    void launchRequested(const QString &profileName, bool start, bool exitAfterSession, bool skipPairingCheck);
+    void launchRequested(const QString &profileName,
+                         bool start,
+                         bool exitAfterSession,
+                         bool skipPairingCheck,
+                         const QVariantMap &game);
 
 private:
     bool m_requestAccepted = false;
