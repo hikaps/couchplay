@@ -153,6 +153,7 @@ public:
 
     // Current session
     Q_INVOKABLE void newSession();
+    Q_INVOKABLE void newQuickSession(const QStringList &players, const QString &presetId);
     Q_INVOKABLE QVariantMap getInstanceConfig(int index) const;
     Q_INVOKABLE int effectiveSunshinePort(int index) const;
     /// Indexes of players whose display is streamed to Moonlight (their controllers come from the client).

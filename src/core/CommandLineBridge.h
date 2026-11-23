@@ -29,7 +29,8 @@ Q_SIGNALS:
                          bool start,
                          bool exitAfterSession,
                          bool skipPairingCheck,
-                         const QVariantMap &game);
+                         const QVariantMap &game,
+                         int quickPlayers);
 
 private:
     bool m_requestAccepted = false;

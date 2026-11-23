@@ -88,6 +88,9 @@ int main(int argc, char *argv[])
     parser.addOption({QStringLiteral("game"),
                       QStringLiteral("Override the profile's game for matching players (steam:APPID or heroic:RUNNER:APPNAME)"),
                       QStringLiteral("launcher:id")});
+    parser.addOption({QStringLiteral("quick"),
+                      QStringLiteral("Start a quick session for 2-4 new-default players without a profile (requires --game)"),
+                      QStringLiteral("players")});
     parser.process(app);
 
     QString parseError;
@@ -130,6 +133,7 @@ int main(int argc, char *argv[])
         {QStringLiteral("startupExitAfterSession"), initialRequest.exitAfterSession},
         {QStringLiteral("startupSkipPairingCheck"), initialRequest.skipPairingCheck},
         {QStringLiteral("startupGame"), initialRequest.game.toVariant()},
+        {QStringLiteral("startupQuickPlayers"), initialRequest.quickPlayers},
     });
     engine.rootContext()->setContextObject(new KLocalizedContext(&engine));
     engine.loadFromModule("io.github.hikaps.couchplay", "Main");
@@ -173,7 +177,8 @@ int main(int argc, char *argv[])
                                                                   request.start,
                                                                   request.exitAfterSession,
                                                                   request.skipPairingCheck,
-                                                                  request.game.toVariant());
+                                                                  request.game.toVariant(),
+                                                                  request.quickPlayers);
                          service.setExitValue(commandLineBridge.requestAccepted() ? 0 : 2);
                      },
                      Qt::DirectConnection);

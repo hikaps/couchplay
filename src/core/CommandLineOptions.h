@@ -15,10 +15,11 @@ struct CommandLineRequest
     bool exitAfterSession = false;
     bool skipPairingCheck = false;
     GameSelection game;
+    int quickPlayers = 0;
 
     bool requested() const
     {
-        return !profileName.isEmpty();
+        return !profileName.isEmpty() || quickPlayers > 0;
     }
 };
 
