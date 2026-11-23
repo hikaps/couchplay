@@ -127,6 +127,7 @@ class SessionManager : public QObject
     Q_PROPERTY(QString preSessionExecutable READ preSessionExecutable WRITE setPreSessionExecutable NOTIFY preSessionExecutableChanged)
     Q_PROPERTY(QString postSessionExecutable READ postSessionExecutable WRITE setPostSessionExecutable NOTIFY postSessionExecutableChanged)
     Q_PROPERTY(PresetManager *presetManager READ presetManager WRITE setPresetManager NOTIFY presetManagerChanged)
+    Q_PROPERTY(int defaultRefreshRate READ defaultRefreshRate WRITE setDefaultRefreshRate NOTIFY defaultRefreshRateChanged)
 
 public:
     explicit SessionManager(QObject *parent = nullptr);
@@ -137,6 +138,11 @@ public:
         return m_presetManager;
     }
     void setPresetManager(PresetManager *manager);
+    int defaultRefreshRate() const
+    {
+        return m_defaultRefreshRate;
+    }
+    void setDefaultRefreshRate(int hz);
 
     // Profile management
     Q_INVOKABLE bool saveProfile(const QString &name);
@@ -254,6 +260,7 @@ Q_SIGNALS:
     void postSessionExecutableChanged();
     void instancesChanged();
     void presetManagerChanged();
+    void defaultRefreshRateChanged();
     void errorOccurred(const QString &message);
     /**
      * @brief Emitted after a profile is successfully loaded
@@ -272,6 +279,8 @@ private:
     SessionProfile m_currentProfile;
     QList<SessionProfile> m_savedProfiles;
     PresetManager *m_presetManager = nullptr;
+    // Refresh rate of players added to a new session; the QML side keeps it in step with the main display.
+    int m_defaultRefreshRate = 60;
 };
 
 /**

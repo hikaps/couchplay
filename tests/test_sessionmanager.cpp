@@ -30,6 +30,7 @@ private Q_SLOTS:
     // Basic functionality tests
     void testInitialization();
     void testNewSession();
+    void testDefaultRefreshRate();
     void testInstanceCount();
     void testCurrentLayout();
 
@@ -128,6 +129,28 @@ void TestSessionManager::testNewSession()
     QCOMPARE(m_sessionManager->instanceCount(), 2);
     QCOMPARE(m_sessionManager->currentLayout(), QStringLiteral("horizontal"));
     QVERIFY(m_sessionManager->currentProfileName().isEmpty());
+}
+
+void TestSessionManager::testDefaultRefreshRate()
+{
+    m_sessionManager->setDefaultRefreshRate(120);
+    m_sessionManager->newSession();
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(QStringLiteral("refreshRate")).toInt(), 120);
+    QCOMPARE(m_sessionManager->getInstanceConfig(1).value(QStringLiteral("refreshRate")).toInt(), 120);
+
+    // Players added later follow it too; edited players keep their own value.
+    QVariantMap edited = m_sessionManager->getInstanceConfig(0);
+    edited[QStringLiteral("refreshRate")] = 75;
+    m_sessionManager->setInstanceConfig(0, edited);
+    m_sessionManager->setInstanceCount(3);
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(QStringLiteral("refreshRate")).toInt(), 75);
+    QCOMPARE(m_sessionManager->getInstanceConfig(2).value(QStringLiteral("refreshRate")).toInt(), 120);
+
+    // Values outside the editor's range are clamped.
+    m_sessionManager->setDefaultRefreshRate(0);
+    QCOMPARE(m_sessionManager->defaultRefreshRate(), 30);
+    m_sessionManager->setDefaultRefreshRate(1000);
+    QCOMPARE(m_sessionManager->defaultRefreshRate(), 240);
 }
 
 void TestSessionManager::testInstanceCount()

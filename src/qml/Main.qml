@@ -125,6 +125,14 @@ Kirigami.ApplicationWindow {
     SessionManager {
         id: sessionManager
         presetManager: presetManager
+        // New players follow the primary display's refresh rate instead of a fixed 60 Hz.
+        defaultRefreshRate: {
+            const monitors = monitorManager.monitors
+            for (let i = 0; i < monitors.length; i++) {
+                if (monitors[i].primary) return monitors[i].refreshRate
+            }
+            return monitors.length > 0 ? monitors[0].refreshRate : 60
+        }
 
         onProfileLoaded: function(deviceInfoByInstance) {
             if (deviceManager) {
