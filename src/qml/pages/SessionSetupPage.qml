@@ -925,10 +925,11 @@ Kirigami.ScrollablePage {
                             model: ["1280x720", "1280x800", "1920x1080", "2560x1440", "3840x2160"]
 
                             function updateIndex() {
-                                if (!instanceCard.cardSessionManager) { currentIndex = 1; return }
+                                const fallback = model.indexOf("1920x1080")
+                                if (!instanceCard.cardSessionManager) { currentIndex = fallback; return }
                                 let res = instanceCard.cardSessionManager.getInstanceConfig(instanceCard.index).virtualResolution || "1920x1080"
                                 let idx = model.indexOf(res)
-                                currentIndex = idx >= 0 ? idx : 1
+                                currentIndex = idx >= 0 ? idx : fallback
                             }
 
                             Component.onCompleted: { updateIndex() }
