@@ -183,6 +183,30 @@ Kirigami.ScrollablePage {
                 wrapMode: Text.Wrap
             }
 
+            Controls.ComboBox {
+                id: streamEncoderCombo
+                objectName: "comboStreamEncoder"
+                Kirigami.FormData.label: i18nc("@label", "Video encoder")
+                Accessible.role: Accessible.ComboBox
+                Accessible.name: Kirigami.FormData.label
+                model: [
+                    { value: "auto", text: i18nc("@item:inlistbox", "Automatic") },
+                    { value: "vaapi", text: i18nc("@item:inlistbox", "VAAPI (AMD/Intel)") },
+                    { value: "nvenc", text: i18nc("@item:inlistbox", "NVENC (NVIDIA)") },
+                    { value: "quicksync", text: i18nc("@item:inlistbox", "Quick Sync (Intel)") },
+                    { value: "vulkan", text: i18nc("@item:inlistbox", "Vulkan") },
+                    { value: "software", text: i18nc("@item:inlistbox", "Software (CPU)") }
+                ]
+                textRole: "text"
+                valueRole: "value"
+                currentIndex: Math.max(0, model.findIndex(item => item.value === (root.settingsManager?.streamEncoder ?? "auto")))
+                onActivated: if (root.settingsManager) root.settingsManager.streamEncoder = currentValue
+
+                Controls.ToolTip.text: i18nc("@info:tooltip", "Automatic lets Sunshine choose. Pick VAAPI if the stream is black on an AMD GPU.")
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.delay: 1000
+            }
+
             Controls.Label {
                 Layout.maximumWidth: Kirigami.Units.gridUnit * 25
                 text: i18nc("@info", "Sunshine must be installed on the host. The Sunshine Flatpak is not supported because KWin denies screen capture to sandboxed applications.")

@@ -34,6 +34,7 @@ class SettingsManager : public QObject
 
     // Streaming settings
     Q_PROPERTY(QString sunshinePath READ sunshinePath WRITE setSunshinePath NOTIFY sunshinePathChanged)
+    Q_PROPERTY(QString streamEncoder READ streamEncoder WRITE setStreamEncoder NOTIFY streamEncoderChanged)
 
 public:
     explicit SettingsManager(QObject *parent = nullptr);
@@ -91,6 +92,13 @@ public:
     }
     void setSunshinePath(const QString &value);
 
+    /// Sunshine video encoder: auto | vaapi | nvenc | vulkan | software
+    QString streamEncoder() const
+    {
+        return m_streamEncoder;
+    }
+    void setStreamEncoder(const QString &value);
+
     /**
      * Sunshine executable to launch on the host: the configured path, or the first
      * host-executable well-known location. Empty when none is found.
@@ -113,6 +121,7 @@ Q_SIGNALS:
     void borderlessWindowsChanged();
     void ignoredDevicesChanged();
     void sunshinePathChanged();
+    void streamEncoderChanged();
 
 private:
     void loadSettings();
@@ -133,4 +142,5 @@ private:
 
     // Streaming settings
     QString m_sunshinePath;
+    QString m_streamEncoder = QStringLiteral("auto");
 };

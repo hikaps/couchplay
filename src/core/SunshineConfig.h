@@ -18,6 +18,7 @@ struct StreamSpec {
     int port = 47989; ///< Sunshine base port (web UI is port + 1)
     int bitrate = 20000; ///< Maximum bitrate in kbps
     QString codec = QStringLiteral("auto"); ///< auto | h264 | hevc | av1
+    QString encoder = QStringLiteral("auto"); ///< auto | vaapi | nvenc | quicksync | vulkan | software
     QString displayName; ///< Name shown in Moonlight; empty = derived from index and identity
 };
 

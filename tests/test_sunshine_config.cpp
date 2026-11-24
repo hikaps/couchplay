@@ -67,6 +67,8 @@ private Q_SLOTS:
     void testCustomDisplayName();
     void testCodecMapping_data();
     void testCodecMapping();
+    void testEncoderMapping_data();
+    void testEncoderMapping();
     void testAppsJson();
     void testConfigRewrittenEveryTime();
     void testValueInjectionStripped();
@@ -274,6 +276,33 @@ void TestSunshineConfig::testCodecMapping()
     QCOMPARE(values.contains(QStringLiteral("hevc_mode")), !hevc.isEmpty());
     QCOMPARE(values.value(QStringLiteral("av1_mode")), av1);
     QCOMPARE(values.contains(QStringLiteral("av1_mode")), !av1.isEmpty());
+}
+
+void TestSunshineConfig::testEncoderMapping_data()
+{
+    QTest::addColumn<QString>("encoder");
+    QTest::addColumn<QString>("expected");
+
+    QTest::newRow("auto") << QStringLiteral("auto") << QString();
+    QTest::newRow("empty") << QString() << QString();
+    QTest::newRow("unknown") << QStringLiteral("bogus\nport = 1") << QString();
+    QTest::newRow("vaapi") << QStringLiteral("vaapi") << QStringLiteral("vaapi");
+    QTest::newRow("software") << QStringLiteral("software") << QStringLiteral("software");
+}
+
+void TestSunshineConfig::testEncoderMapping()
+{
+    QFETCH(QString, encoder);
+    QFETCH(QString, expected);
+
+    const QString dir = SunshineConfig::ensureStateDirectory(QStringLiteral("encoder-test"));
+    StreamSpec spec = makeSpec();
+    spec.encoder = encoder;
+    const QMap<QString, QString> values = readConf(SunshineConfig::generateConfig(spec, dir));
+
+    QCOMPARE(values.value(QStringLiteral("encoder")), expected);
+    QCOMPARE(values.contains(QStringLiteral("encoder")), !expected.isEmpty());
+    QCOMPARE(values.value(QStringLiteral("port")), QStringLiteral("48019"));
 }
 
 void TestSunshineConfig::testAppsJson()

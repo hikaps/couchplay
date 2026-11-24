@@ -37,6 +37,7 @@ void SettingsManager::loadSettings()
 
     // Streaming settings
     m_sunshinePath = config->group(QStringLiteral("Streaming")).readEntry(QStringLiteral("SunshinePath"), QString());
+    m_streamEncoder = config->group(QStringLiteral("Streaming")).readEntry(QStringLiteral("Encoder"), QStringLiteral("auto"));
 
     qDebug() << "SettingsManager: Loaded settings from couchplayrc";
 }
@@ -60,6 +61,7 @@ void SettingsManager::saveAllSettings()
 
     // Streaming settings
     config->group(QStringLiteral("Streaming")).writeEntry(QStringLiteral("SunshinePath"), m_sunshinePath);
+    config->group(QStringLiteral("Streaming")).writeEntry(QStringLiteral("Encoder"), m_streamEncoder);
 
     config->sync();
 }
@@ -152,6 +154,17 @@ void SettingsManager::setSunshinePath(const QString &value)
     }
 }
 
+void SettingsManager::setStreamEncoder(const QString &value)
+{
+    if (m_streamEncoder != value) {
+        m_streamEncoder = value;
+        KSharedConfig::Ptr config = KSharedConfig::openConfig(QStringLiteral("couchplayrc"));
+        config->group(QStringLiteral("Streaming")).writeEntry(QStringLiteral("Encoder"), value);
+        config->sync();
+        Q_EMIT streamEncoderChanged();
+    }
+}
+
 QString SettingsManager::resolvedSunshinePath() const
 {
     if (!m_sunshinePath.isEmpty()) {
@@ -203,6 +216,7 @@ void SettingsManager::resetToDefaults()
     m_filterMode = QStringLiteral("linear");
     m_borderlessWindows = true;
     m_sunshinePath.clear();
+    m_streamEncoder = QStringLiteral("auto");
     m_ignoredDevices.clear();
 
     saveAllSettings();
@@ -215,6 +229,7 @@ void SettingsManager::resetToDefaults()
     Q_EMIT borderlessWindowsChanged();
     Q_EMIT ignoredDevicesChanged();
     Q_EMIT sunshinePathChanged();
+    Q_EMIT streamEncoderChanged();
 
     qDebug() << "SettingsManager: Reset all settings to defaults";
 }
