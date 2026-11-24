@@ -1095,6 +1095,10 @@ bool SessionRunner::startPadForwarders()
         const QList<int> events = m_deviceManager->getDevicesForInstance(i);
         for (int eventNumber : events) {
             const QVariantMap device = m_deviceManager->getDevice(eventNumber);
+            qCDebug(couchplayCore) << "Instance" << i << "gets device" << device.value(QStringLiteral("name")).toString()
+                                   << device.value(QStringLiteral("path")).toString() << "type"
+                                   << device.value(QStringLiteral("type")).toString() << "stableId"
+                                   << device.value(QStringLiteral("stableId")).toString();
             const QString path = device.value(QStringLiteral("path")).toString();
             if (!path.startsWith(QLatin1String("/dev/input/event"))) {
                 continue;
