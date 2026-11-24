@@ -72,6 +72,7 @@ class SessionRunner : public QObject
     Q_PROPERTY(StreamManager *streamManager READ streamManager CONSTANT)
     Q_PROPERTY(bool skipPairingCheck READ skipPairingCheck WRITE setSkipPairingCheck NOTIFY skipPairingCheckChanged)
     Q_PROPERTY(QVariantMap gameOverride READ gameOverride WRITE setGameOverride NOTIFY gameOverrideChanged)
+    Q_PROPERTY(QString launcherOverride READ launcherOverride WRITE setLauncherOverride NOTIFY launcherOverrideChanged)
 
 public:
     explicit SessionRunner(QObject *parent = nullptr);
@@ -208,6 +209,21 @@ public:
     }
     void setGameOverride(const QVariantMap &selection);
 
+    /** --launcher: launcher for players without one, for the next start() only; never saved. */
+    QString launcherOverride() const
+    {
+        return m_launcherOverride;
+    }
+    void setLauncherOverride(const QString &launcher);
+
+    /**
+     * Fills players without a launcher from @p launcher (preset id, else exact preset name, case-insensitive) or,
+     * without it, from @p game's launcher (built-in preset ids equal launcher ids), then gives @p game to every
+     * player whose launcher matches it. Returns an error message, or an empty string on success.
+     */
+    static QString applyLaunchOverrides(SessionProfile &profile, const QString &launcher, const GameSelection &game,
+                                        const PresetManager &presets);
+
     /**
      * @brief Calculate window geometries for a given layout
      * @param layout Layout type: "horizontal", "vertical", "grid"
@@ -267,6 +283,7 @@ Q_SIGNALS:
     void monitorManagerChanged();
     void skipPairingCheckChanged();
     void gameOverrideChanged();
+    void launcherOverrideChanged();
     void errorOccurred(const QString &message);
     // Library sharing was skipped for a player whose Steam has never run; it applies from their next session.
     void librarySharingDeferred(const QString &username);
@@ -355,6 +372,7 @@ private:
     VirtualDisplayManager *m_virtualDisplays = nullptr;
     bool m_skipPairingCheck = false;
     GameSelection m_gameOverride; // --game: replaces the game of players whose launcher matches, for the next start() only
+    QString m_launcherOverride; // --launcher: preset id or name for players without a launcher, for the next start() only
     StreamAudio m_streamAudio;
     QSet<int> m_pendingDisplays;
     QHash<int, QString> m_virtualOutputNames;

@@ -16,6 +16,7 @@ struct CommandLineRequest
     bool skipPairingCheck = false;
     GameSelection game;
     int quickPlayers = 0;
+    QString launcher;
 
     bool requested() const
     {

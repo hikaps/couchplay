@@ -107,6 +107,13 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
             }
             request.quickPlayers = players;
             ++index;
+        } else if (argument == QStringLiteral("--launcher")) {
+            if (!request.launcher.isEmpty() || index + 1 >= arguments.size() || arguments.at(index + 1).isEmpty()
+                || arguments.at(index + 1).startsWith(QLatin1Char('-'))) {
+                fail(QStringLiteral("--launcher requires exactly one launcher name or id"));
+                return {};
+            }
+            request.launcher = arguments.at(++index);
         } else {
             fail(QStringLiteral("Unknown command-line argument: %1").arg(argument));
             return {};
@@ -118,8 +125,8 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
             fail(QStringLiteral("--quick cannot be combined with --profile"));
             return {};
         }
-        if (request.game.isEmpty()) {
-            fail(QStringLiteral("--quick requires --game"));
+        if (request.game.isEmpty() && request.launcher.isEmpty()) {
+            fail(QStringLiteral("--quick requires --launcher or --game"));
             return {};
         }
         request.start = true; // a quick session always starts; an explicit --start is accepted too
@@ -139,6 +146,10 @@ CommandLineRequest CommandLineOptions::parse(const QStringList &arguments, QStri
     }
     if (!request.game.isEmpty() && (!request.start || !request.requested())) {
         fail(QStringLiteral("--game requires --profile and --start, or --quick"));
+        return {};
+    }
+    if (!request.launcher.isEmpty() && (!request.start || !request.requested())) {
+        fail(QStringLiteral("--launcher requires --profile and --start, or --quick"));
         return {};
     }
     return request;

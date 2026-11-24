@@ -346,6 +346,11 @@ void SteamShortcutManager::addToSteam(int accountIndex)
         fail(QStringLiteral("Saved profile changed or was deleted"));
         return;
     }
+    if (std::any_of(profile->instances.cbegin(), profile->instances.cend(),
+                    [](const InstanceConfig &instance) { return instance.presetId.isEmpty(); })) {
+        fail(QStringLiteral("Every player needs a launcher before this profile can be added to Steam"));
+        return;
+    }
 
     QString error;
     if (!validateWritePath(account.shortcutsPath, true, &error)) {

@@ -53,6 +53,7 @@ private Q_SLOTS:
     void testLoadProfile();
     void testPlayerKeyRoundtripAndLegacyUsername();
     void testLoadProfileLegacySharedDirectories();
+    void testEmptyLauncherRoundtrip();
     void testAudioDeviceRoundtrip();
     void testRenderResolutionRoundtrip();
     void testMigrationPreservesExistingBackup();
@@ -158,12 +159,12 @@ void TestSessionManager::testNewQuickSession()
 {
     m_sessionManager->setDefaultRefreshRate(144);
     const QStringList players = {QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c")};
-    m_sessionManager->newQuickSession(players, QStringLiteral("heroic"));
+    m_sessionManager->newQuickSession(players);
     QCOMPARE(m_sessionManager->instanceCount(), 3);
     for (int i = 0; i < 3; ++i) {
         const QVariantMap config = m_sessionManager->getInstanceConfig(i);
         QCOMPARE(config.value(QStringLiteral("player")).toString(), players.at(i));
-        QCOMPARE(config.value(QStringLiteral("presetId")).toString(), QStringLiteral("heroic"));
+        QCOMPARE(config.value(QStringLiteral("presetId")).toString(), QString());
         QCOMPARE(config.value(QStringLiteral("refreshRate")).toInt(), 144);
     }
     QVERIFY(m_sessionManager->currentProfileName().isEmpty());
@@ -586,6 +587,28 @@ void TestSessionManager::testRenderResolutionRoundtrip()
     QVERIFY(m_sessionManager->getInstanceConfig(1).value(KEY("renderResolution")).toString().isEmpty());
 
     m_sessionManager->deleteProfile(QStringLiteral("RenderResolutionProfile"));
+}
+
+void TestSessionManager::testEmptyLauncherRoundtrip()
+{
+    m_sessionManager->newSession();
+    m_sessionManager->setInstanceCount(2);
+    m_sessionManager->setInstancePreset(0, QString());
+    QVERIFY(m_sessionManager->saveProfile(QStringLiteral("EmptyLauncher")));
+
+    // A profile saved before launchers became optional has no key and meant Steam
+    const QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/profiles/EmptyLauncher.conf");
+    {
+        KConfig config(path, KConfig::SimpleConfig);
+        config.group(QStringLiteral("Instance1")).deleteEntry("presetId");
+        config.sync();
+    }
+
+    QVERIFY(m_sessionManager->loadProfile(QStringLiteral("EmptyLauncher")));
+    QCOMPARE(m_sessionManager->getInstanceConfig(0).value(KEY("presetId")).toString(), QString());
+    QCOMPARE(m_sessionManager->getInstanceConfig(1).value(KEY("presetId")).toString(), QStringLiteral("steam"));
+    m_sessionManager->deleteProfile(QStringLiteral("EmptyLauncher"));
 }
 
 void TestSessionManager::testLoadProfileLegacySharedDirectories()

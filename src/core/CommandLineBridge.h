@@ -30,7 +30,8 @@ Q_SIGNALS:
                          bool exitAfterSession,
                          bool skipPairingCheck,
                          const QVariantMap &game,
-                         int quickPlayers);
+                         int quickPlayers,
+                         const QString &launcher);
 
 private:
     bool m_requestAccepted = false;
