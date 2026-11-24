@@ -89,8 +89,11 @@ int main(int argc, char *argv[])
                       QStringLiteral("Override the profile's game for matching players (steam:APPID or heroic:RUNNER:APPNAME)"),
                       QStringLiteral("launcher:id")});
     parser.addOption({QStringLiteral("quick"),
-                      QStringLiteral("Start a quick session for 2-4 new-default players without a profile (requires --game)"),
+                      QStringLiteral("Start a quick session for 2-4 new players without a profile (requires --launcher or --game)"),
                       QStringLiteral("players")});
+    parser.addOption({QStringLiteral("launcher"),
+                      QStringLiteral("Launcher for players without one: a launcher name or id from Settings"),
+                      QStringLiteral("name-or-id")});
     parser.process(app);
 
     QString parseError;
@@ -134,6 +137,7 @@ int main(int argc, char *argv[])
         {QStringLiteral("startupSkipPairingCheck"), initialRequest.skipPairingCheck},
         {QStringLiteral("startupGame"), initialRequest.game.toVariant()},
         {QStringLiteral("startupQuickPlayers"), initialRequest.quickPlayers},
+        {QStringLiteral("startupLauncher"), initialRequest.launcher},
     });
     engine.rootContext()->setContextObject(new KLocalizedContext(&engine));
     engine.loadFromModule("io.github.hikaps.couchplay", "Main");
@@ -178,7 +182,8 @@ int main(int argc, char *argv[])
                                                                   request.exitAfterSession,
                                                                   request.skipPairingCheck,
                                                                   request.game.toVariant(),
-                                                                  request.quickPlayers);
+                                                                  request.quickPlayers,
+                                                                  request.launcher);
                          service.setExitValue(commandLineBridge.requestAccepted() ? 0 : 2);
                      },
                      Qt::DirectConnection);

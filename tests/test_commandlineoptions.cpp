@@ -147,6 +147,45 @@ private Q_SLOTS:
         }
     }
 
+    void testLauncher()
+    {
+        const auto parse = [](const QStringList &args, QString *error) {
+            return CommandLineOptions::parse(QStringList{QStringLiteral("couchplay")} + args, error);
+        };
+        QString error;
+        CommandLineRequest request = parse({QStringLiteral("--quick"), QStringLiteral("2"), QStringLiteral("--launcher"),
+                                            QStringLiteral("Lutris")},
+                                           &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(request.launcher, QStringLiteral("Lutris"));
+        QVERIFY(request.start);
+        QVERIFY(request.requested());
+
+        request = parse({QStringLiteral("--profile"), QStringLiteral("P"), QStringLiteral("--start"),
+                         QStringLiteral("--launcher"), QStringLiteral("custom-1")},
+                        &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(request.launcher, QStringLiteral("custom-1"));
+
+        request = parse({QStringLiteral("--quick"), QStringLiteral("2"), QStringLiteral("--launcher"),
+                         QStringLiteral("Lutris"), QStringLiteral("--game"), QStringLiteral("steam:440")},
+                        &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        const QList<QStringList> invalid = {
+            {QStringLiteral("--launcher"), QStringLiteral("X")},
+            {QStringLiteral("--profile"), QStringLiteral("P"), QStringLiteral("--launcher"), QStringLiteral("X")},
+            {QStringLiteral("--quick"), QStringLiteral("2"), QStringLiteral("--launcher")},
+            {QStringLiteral("--quick"), QStringLiteral("2"), QStringLiteral("--launcher"), QStringLiteral("A"),
+             QStringLiteral("--launcher"), QStringLiteral("B")},
+        };
+        for (const QStringList &args : invalid) {
+            error.clear();
+            QVERIFY2(!parse(args, &error).requested(), qPrintable(args.join(QLatin1Char(' '))));
+            QVERIFY2(!error.isEmpty(), qPrintable(args.join(QLatin1Char(' '))));
+        }
+    }
+
     void testForwardedArgumentList()
     {
         QString error;

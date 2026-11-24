@@ -286,6 +286,9 @@ private Q_SLOTS:
     void testSteamInstancesGetPrivateIpcAddress();
     void testGameOverrideAppliesToMatchingPlayersOnly();
     void testGameOverrideWithoutMatchingLauncherFails();
+    void testApplyLaunchOverrides();
+    void testLauncherOverrideFillsEmptyPlayers();
+    void testEmptyLauncherWithoutOverrideFails();
     void testSunshineGamepadUniqGroupsDevices();
     void testSunshineGamepadSingleStreamerFallback();
     void testSunshineGamepadClaimExpires();
@@ -1223,6 +1226,80 @@ void TestSessionRunner::testGameOverrideWithoutMatchingLauncherFails()
     QVERIFY(!m_runner->start());
     QVERIFY(!errorSpy.isEmpty());
     QVERIFY(errorSpy.constLast().constFirst().toString().contains(QStringLiteral("required by --game")));
+    QVERIFY(m_log.configs.isEmpty());
+}
+
+void TestSessionRunner::testApplyLaunchOverrides()
+{
+    const auto profileOf = [](const QStringList &presetIds) {
+        SessionProfile profile;
+        for (const QString &id : presetIds) {
+            InstanceConfig instance;
+            instance.presetId = id;
+            profile.instances.append(instance);
+        }
+        return profile;
+    };
+    GameSelection steamGame;
+    steamGame.launcherId = QStringLiteral("steam");
+    steamGame.backend = QStringLiteral("native");
+    steamGame.gameId = QStringLiteral("440");
+
+    // The game's launcher fills empty players; players with another launcher are untouched
+    SessionProfile profile = profileOf({QString(), QStringLiteral("heroic")});
+    QCOMPARE(SessionRunner::applyLaunchOverrides(profile, QString(), steamGame, *m_presetManager), QString());
+    QCOMPARE(profile.instances.at(0).presetId, QStringLiteral("steam"));
+    QCOMPARE(profile.instances.at(0).gameSelection.gameId, QStringLiteral("440"));
+    QCOMPARE(profile.instances.at(1).presetId, QStringLiteral("heroic"));
+    QVERIFY(profile.instances.at(1).gameSelection.isEmpty());
+
+    // A launcher matches by id or by name, ignoring case
+    const QString emuId = m_presetManager->addCustomPreset(QStringLiteral("Emu"), QStringLiteral("/usr/bin/true"));
+    for (const QString &launcher : {QStringLiteral("emu"), emuId}) {
+        profile = profileOf({QString(), QString()});
+        QCOMPARE(SessionRunner::applyLaunchOverrides(profile, launcher, GameSelection(), *m_presetManager), QString());
+        QCOMPARE(profile.instances.at(0).presetId, emuId);
+        QCOMPARE(profile.instances.at(1).presetId, emuId);
+    }
+
+    profile = profileOf({QString()});
+    QCOMPARE(SessionRunner::applyLaunchOverrides(profile, QStringLiteral("nope"), GameSelection(), *m_presetManager),
+             QStringLiteral("Unknown launcher: nope"));
+
+    m_presetManager->addCustomPreset(QStringLiteral("Dup"), QStringLiteral("/usr/bin/true"));
+    m_presetManager->addCustomPreset(QStringLiteral("Dup"), QStringLiteral("/usr/bin/false"));
+    QVERIFY(SessionRunner::applyLaunchOverrides(profile, QStringLiteral("dup"), GameSelection(), *m_presetManager)
+                .contains(QStringLiteral("ambiguous")));
+
+    profile = profileOf({QString(), QStringLiteral("heroic")});
+    QVERIFY(SessionRunner::applyLaunchOverrides(profile, QString(), GameSelection(), *m_presetManager)
+                .startsWith(QStringLiteral("No launcher set for player 1")));
+}
+
+void TestSessionRunner::testLauncherOverrideFillsEmptyPlayers()
+{
+    twoPlayerPreset(QStringLiteral("Emu"));
+    m_sessionManager->setInstancePreset(0, QString());
+    m_sessionManager->setInstancePreset(1, QString());
+    m_runner->setLauncherOverride(QStringLiteral("emu"));
+    QVERIFY(m_runner->start());
+    QTRY_COMPARE(m_log.configs.size(), 2);
+    for (int i = 0; i < 2; ++i) {
+        QCOMPARE(m_log.configs.at(i).value(QStringLiteral("gameCommand")).toStringList(),
+                 QStringList{QStringLiteral("/usr/bin/true")});
+    }
+    QVERIFY(m_sessionManager->currentProfile().instances.at(0).presetId.isEmpty());
+    m_runner->stop();
+}
+
+void TestSessionRunner::testEmptyLauncherWithoutOverrideFails()
+{
+    twoPlayerPreset(QStringLiteral("Emu"));
+    m_sessionManager->setInstancePreset(0, QString());
+    QSignalSpy errorSpy(m_runner, &SessionRunner::errorOccurred);
+    QVERIFY(!m_runner->start());
+    QVERIFY(!errorSpy.isEmpty());
+    QVERIFY(errorSpy.constLast().constFirst().toString().startsWith(QStringLiteral("No launcher set for player 1")));
     QVERIFY(m_log.configs.isEmpty());
 }
 

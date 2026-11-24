@@ -153,13 +153,13 @@ void SessionManager::newSession()
     Q_EMIT instancesChanged();
 }
 
-void SessionManager::newQuickSession(const QStringList &players, const QString &presetId)
+void SessionManager::newQuickSession(const QStringList &players)
 {
     newSession();
     setInstanceCount(players.size()); // clamps to 2..4; new players get m_defaultRefreshRate
     for (int i = 0; i < m_currentProfile.instances.size(); ++i) {
         m_currentProfile.instances[i].player = players.value(i);
-        m_currentProfile.instances[i].presetId = presetId;
+        m_currentProfile.instances[i].presetId = QString();
     }
     Q_EMIT instancesChanged();
 }
@@ -480,7 +480,8 @@ bool SessionManager::loadProfile(const QString &name)
         inst.refreshRate = instGroup.readEntry("refreshRate", 60);
         inst.scalingMode = instGroup.readEntry("scalingMode", QStringLiteral("fit"));
         inst.filterMode = instGroup.readEntry("filterMode", QStringLiteral("linear"));
-        inst.presetId = instGroup.readEntry("presetId", QStringLiteral("steam"));
+        // Profiles saved before launchers became optional have no key and meant Steam; an empty value means "choose at start".
+        inst.presetId = instGroup.hasKey("presetId") ? instGroup.readEntry("presetId", QString()) : QStringLiteral("steam");
         if (instGroup.hasKey("gameSelection")) {
             inst.gameSelection = gameSelectionFromJson(instGroup.readEntry("gameSelection", QString()));
         } else {
@@ -922,10 +923,9 @@ void SessionManager::setInstanceGame(int index, const QVariantMap &selection)
 void SessionManager::setInstancePreset(int index, const QString &presetId)
 {
     if (index >= 0 && index < m_currentProfile.instances.size()) {
-        const QString normalizedPresetId = presetId.isEmpty() ? QStringLiteral("steam") : presetId;
-        m_currentProfile.instances[index].presetId = normalizedPresetId;
+        m_currentProfile.instances[index].presetId = presetId;
         if (!m_currentProfile.instances[index].gameSelection.isEmpty() && m_presetManager
-            && m_currentProfile.instances[index].gameSelection.launcherId != m_presetManager->getLauncherId(normalizedPresetId)) {
+            && m_currentProfile.instances[index].gameSelection.launcherId != m_presetManager->getLauncherId(presetId)) {
             m_currentProfile.instances[index].gameSelection = {};
         }
         Q_EMIT instancesChanged();
@@ -962,7 +962,10 @@ bool SessionManager::hasPlayerDataStagingDirectories(int index) const
     if (inst.player.isEmpty() || !PlayerStore::isValidName(inst.player)) {
         return false;
     }
-    const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
+    if (inst.presetId.isEmpty()) {
+        return false;
+    }
+    const QString &presetId = inst.presetId;
     const LaunchPreset preset = m_presetManager ? m_presetManager->getPreset(presetId) : LaunchPreset{};
     const QString steamMarkerPath = steamRootOverlayMarkerPath(m_presetManager, presetId);
     for (const DataDirectory &dir : preset.dataDirectories) {
@@ -983,7 +986,10 @@ QString SessionManager::playerDataFolderPath(int index)
     if (inst.player.isEmpty() || !PlayerStore::isValidName(inst.player)) {
         return QString();
     }
-    const QString presetId = inst.presetId.isEmpty() ? QStringLiteral("steam") : inst.presetId;
+    if (inst.presetId.isEmpty()) {
+        return QString();
+    }
+    const QString &presetId = inst.presetId;
 
     const QString root = playerDataStagingRoot(presetId, inst.player);
     if (!QDir().mkpath(root)) {

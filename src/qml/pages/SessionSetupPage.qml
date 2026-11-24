@@ -471,9 +471,9 @@ Kirigami.ScrollablePage {
                 
                 property string currentPresetId: {
                     void(cardRevision)
-                    if (!cardSessionManager) return "steam"
+                    if (!cardSessionManager) return ""
                     let config = cardSessionManager.getInstanceConfig(instanceCard.index)
-                    return config?.presetId || "steam"
+                    return config?.presetId ?? ""
                 }
                 
                 property string displayValue: {
@@ -801,6 +801,7 @@ Kirigami.ScrollablePage {
                             sessionManager: instanceCard.cardSessionManager
                             instanceIndex: instanceCard.index
                             steamConfigManager: root.steamConfigManager
+                            enabled: instanceCard.currentPresetId !== ""
                             heroicConfigManager: root.heroicConfigManager
                         }
 

@@ -372,6 +372,70 @@ void SessionRunner::setGameOverride(const QVariantMap &selection)
     }
 }
 
+void SessionRunner::setLauncherOverride(const QString &launcher)
+{
+    if (launcher != m_launcherOverride) {
+        m_launcherOverride = launcher;
+        Q_EMIT launcherOverrideChanged();
+    }
+}
+
+QString SessionRunner::applyLaunchOverrides(SessionProfile &profile, const QString &launcher,
+                                            const GameSelection &game, const PresetManager &presets)
+{
+    QString fillPresetId;
+    if (!launcher.isEmpty()) {
+        if (!presets.getPreset(launcher).id.isEmpty()) {
+            fillPresetId = launcher;
+        } else {
+            QStringList matches;
+            const QList<LaunchPreset> all = presets.presets();
+            for (const LaunchPreset &preset : all) {
+                if (preset.name.compare(launcher, Qt::CaseInsensitive) == 0) {
+                    matches.append(preset.id);
+                }
+            }
+            if (matches.isEmpty()) {
+                return QStringLiteral("Unknown launcher: %1").arg(launcher);
+            }
+            if (matches.size() > 1) {
+                return QStringLiteral("Launcher name \"%1\" is ambiguous; use its id").arg(launcher);
+            }
+            fillPresetId = matches.first();
+        }
+    } else if (!game.isEmpty()) {
+        fillPresetId = game.launcherId;
+    }
+
+    for (InstanceConfig &instance : profile.instances) {
+        if (instance.presetId.isEmpty()) {
+            instance.presetId = fillPresetId;
+        }
+    }
+
+    if (!game.isEmpty()) {
+        bool matched = false;
+        for (InstanceConfig &instance : profile.instances) {
+            if (!instance.presetId.isEmpty() && presets.getLauncherId(instance.presetId) == game.launcherId) {
+                instance.gameSelection = game;
+                matched = true;
+            }
+        }
+        if (!matched) {
+            return QStringLiteral("No player in this profile uses the %1 launcher required by --game")
+                .arg(game.launcherId);
+        }
+    }
+
+    for (int i = 0; i < profile.instances.size(); ++i) {
+        if (profile.instances.at(i).presetId.isEmpty()) {
+            return QStringLiteral("No launcher set for player %1. Choose one in the profile or pass --launcher or --game.")
+                .arg(i + 1);
+        }
+    }
+    return QString();
+}
+
 bool SessionRunner::start()
 {
     if (!m_sessionManager) {
@@ -409,21 +473,11 @@ bool SessionRunner::start()
         setStatus(QStringLiteral("Error"));
         return false;
     }
-    if (!m_gameOverride.isEmpty()) {
-        bool matched = false;
-        for (InstanceConfig &instance : profile.instances) {
-            const QString presetId = instance.presetId.isEmpty() ? QStringLiteral("steam") : instance.presetId;
-            if (m_presetManager->getLauncherId(presetId) == m_gameOverride.launcherId) {
-                instance.gameSelection = m_gameOverride;
-                matched = true;
-            }
-        }
-        if (!matched) {
-            Q_EMIT errorOccurred(QStringLiteral("No player in this profile uses the %1 launcher required by --game")
-                                     .arg(m_gameOverride.launcherId));
-            setStatus(QStringLiteral("Error"));
-            return false;
-        }
+    const QString overrideError = applyLaunchOverrides(profile, m_launcherOverride, m_gameOverride, *m_presetManager);
+    if (!overrideError.isEmpty()) {
+        Q_EMIT errorOccurred(overrideError);
+        setStatus(QStringLiteral("Error"));
+        return false;
     }
     const QString displayError = validateDisplays(profile);
     if (!displayError.isEmpty()) {
@@ -444,8 +498,7 @@ bool SessionRunner::start()
     m_startingSnapshot.shareSteamLibraries = m_steamConfigManager && m_steamConfigManager->shareLibraryEnabled();
     m_startingSnapshot.syncHeroicShortcuts = m_heroicConfigManager && m_heroicConfigManager->syncShortcutsEnabled();
     for (int i = 0; i < instanceCount; ++i) {
-        const QString presetId = profile.instances[i].presetId.isEmpty()
-            ? QStringLiteral("steam") : profile.instances[i].presetId;
+        const QString &presetId = profile.instances[i].presetId;
         const LaunchPreset preset = m_presetManager->getPreset(presetId);
         if (preset.id.isEmpty()) {
             Q_EMIT errorOccurred(QStringLiteral("Launch preset not found: %1").arg(presetId));
@@ -716,8 +769,7 @@ void SessionRunner::continueStartAfterDisplays()
         config[QStringLiteral("scalingMode")] = instConfig.scalingMode;
         config[QStringLiteral("filterMode")] = instConfig.filterMode;
         config[QStringLiteral("borderless")] = m_settingsManager ? m_settingsManager->borderlessWindows() : false;
-        const QString presetId = instConfig.presetId.isEmpty() ? QStringLiteral("steam") : instConfig.presetId;
-        config[QStringLiteral("presetId")] = presetId;
+        config[QStringLiteral("presetId")] = instConfig.presetId;
         config[QStringLiteral("launcherId")] = m_startingSnapshot.presets.at(i).launcherId;
         const LaunchCommand &command = m_startingSnapshot.launchCommands.at(i);
         QStringList gameCommand = QStringList{command.program} + command.arguments;
@@ -1089,15 +1141,14 @@ bool SessionRunner::setupSessionResources()
 
     for (int i = 0; i < profile.instances.size(); ++i) {
         const QString &username = profile.instances[i].player;
-        const QString presetId = profile.instances[i].presetId.isEmpty()
-            ? QStringLiteral("steam") : profile.instances[i].presetId;
+        const QString presetId = profile.instances[i].presetId;
         if (username.isEmpty()) {
             continue;
         }
 
         const LaunchPreset preset = m_hasStartingProfile && i < m_startingSnapshot.presets.size()
             ? m_startingSnapshot.presets.at(i)
-            : m_presetManager->getPreset(presetId.isEmpty() ? QStringLiteral("steam") : presetId);
+            : m_presetManager->getPreset(presetId);
         const QStringList requiredIntegrations = preset.requiredIntegrations;
         const bool selectedSteamShortcut = profile.instances[i].gameSelection.launcherId == QStringLiteral("steam")
             && profile.instances[i].gameSelection.backend == QStringLiteral("shortcut");

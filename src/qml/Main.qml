@@ -22,13 +22,14 @@ Kirigami.ApplicationWindow {
     property bool startupSkipPairingCheck: false
     property var startupGame: ({})
     property int startupQuickPlayers: 0
+    property string startupLauncher: ""
     property bool initialRequestPending: false
     property bool exitOnStartupFailure: false
     property bool exitAfterActiveSession: false
     property bool shuttingDown: false
     signal startupFailed(int exitCode)
 
-    function prepareQuickSession(playerCount, game) {
+    function prepareQuickSession(playerCount) {
         const players = []
         for (let i = 1; i <= playerCount; i++) {
             const name = "player" + i
@@ -38,19 +39,19 @@ Kirigami.ApplicationWindow {
             }
             players.push(name)
         }
-        sessionManager.newQuickSession(players, game.launcherId)
+        sessionManager.newQuickSession(players)
         deviceManager.unassignAll()
         deviceManager.instanceCount = playerCount
         deviceManager.autoAssignControllers()
         return true
     }
 
-    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers) {
+    function handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers, launcher) {
         if (sessionRunner.active) {
             return false
         }
         if (quickPlayers > 0) {
-            if (!prepareQuickSession(quickPlayers, game)) {
+            if (!prepareQuickSession(quickPlayers)) {
                 if (initialRequestPending) startupFailed(1)
                 return false
             }
@@ -71,8 +72,10 @@ Kirigami.ApplicationWindow {
         exitAfterActiveSession = exitAfterSession
         sessionRunner.skipPairingCheck = skipPairingCheck
         sessionRunner.gameOverride = game || ({})
+        sessionRunner.launcherOverride = launcher || ""
         const started = sessionRunner.start()
         sessionRunner.gameOverride = ({})
+        sessionRunner.launcherOverride = ""
         if (!started) {
             exitOnStartupFailure = false
             exitAfterActiveSession = false
@@ -111,7 +114,7 @@ Kirigami.ApplicationWindow {
         if (startupProfileName !== "" || startupQuickPlayers > 0) {
             initialRequestPending = true
             Qt.callLater(function() {
-                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck, startupGame, startupQuickPlayers)
+                handleLaunchRequest(startupProfileName, startupStart, startupExitAfterSession, startupSkipPairingCheck, startupGame, startupQuickPlayers, startupLauncher)
                 initialRequestPending = false
             })
         }
@@ -122,8 +125,8 @@ Kirigami.ApplicationWindow {
     }
     Connections {
         target: commandLineBridge
-        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers) {
-            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers))
+        function onLaunchRequested(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers, launcher) {
+            commandLineBridge.setRequestAccepted(root.handleLaunchRequest(profileName, start, exitAfterSession, skipPairingCheck, game, quickPlayers, launcher))
         }
     }
 

@@ -61,7 +61,7 @@ Controls.ComboBox {
         }
 
         const config = sessionManager.getInstanceConfig(instanceIndex)
-        const presetId = config && config.presetId ? config.presetId : "steam"
+        const presetId = config && config.presetId ? config.presetId : ""
         const games = presetManager.gamesForPreset(presetId) || []
         for (const game of games) {
             result.push(game)

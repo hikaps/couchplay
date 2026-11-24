@@ -23,7 +23,7 @@ Controls.ComboBox {
     Accessible.name: i18nc("@label", "Launcher")
 
     required property var presetManager
-    property string currentPresetId: "steam"
+    property string currentPresetId: ""
 
     signal presetSelected(string presetId)
 
@@ -31,6 +31,12 @@ Controls.ComboBox {
         const presets = presetManager ? presetManager.presets : []
         const result = []
         let foundCurrent = currentPresetId === ""
+        result.push({
+            id: "",
+            name: i18nc("@item launcher choice", "None (choose when starting)"),
+            iconName: "dialog-question",
+            isBuiltin: false
+        })
         for (let i = 0; i < presets.length; ++i) {
             result.push(presets[i])
             foundCurrent = foundCurrent || presets[i].id === currentPresetId
@@ -102,7 +108,7 @@ Controls.ComboBox {
     onActivated: function(index) {
         if (index >= 0 && model && index < model.length) {
             let preset = model[index]
-            if (preset && preset.id) {
+            if (preset) {
                 presetSelected(preset.id)
             }
         }
@@ -120,6 +126,6 @@ Controls.ComboBox {
             }
         }
         
-        currentIndex = currentPresetId === "" ? 0 : -1
+        currentIndex = -1
     }
 }
