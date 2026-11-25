@@ -85,6 +85,11 @@ public:
     Q_INVOKABLE bool start();
 
     /**
+     * @brief start() after the user chose to go on despite pending host tool updates (see staleToolsDetected)
+     */
+    Q_INVOKABLE bool startIgnoringStaleTools();
+
+    /**
      * @brief Stop all running instances
      */
     Q_INVOKABLE void stop();
@@ -285,6 +290,8 @@ Q_SIGNALS:
     void gameOverrideChanged();
     void launcherOverrideChanged();
     void errorOccurred(const QString &message);
+    // A Steam tool on the host has an update pending, so start() declined to begin; startIgnoringStaleTools() goes ahead.
+    void staleToolsDetected(const QStringList &tools);
     // Library sharing was skipped for a player whose Steam has never run; it applies from their next session.
     void librarySharingDeferred(const QString &username);
     void activeChanged();
@@ -371,6 +378,8 @@ private:
     StreamManager *m_streamManager = nullptr;
     VirtualDisplayManager *m_virtualDisplays = nullptr;
     bool m_skipPairingCheck = false;
+    // Set by startIgnoringStaleTools(): the user already saw the pending host tool updates.
+    bool m_ignoreStaleTools = false;
     GameSelection m_gameOverride; // --game: replaces the game of players whose launcher matches, for the next start() only
     QString m_launcherOverride; // --launcher: preset id or name for players without a launcher, for the next start() only
     StreamAudio m_streamAudio;

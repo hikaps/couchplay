@@ -189,6 +189,19 @@ public:
     bool prepareDataDir(const DataDirectory &dir, const QString &player, QList<SandboxMount> &mounts);
     bool finalizeDataDir(const DataDirectory &dir, const QString &player);
 
+    /**
+     * Names of the Steam tools (Proton, Steam Linux Runtime) in the host libraries whose manifest says an update is
+     * pending. A player's Steam starts that update inside its own read-only view and breaks its copy of the tool.
+     */
+    QStringList pendingToolUpdates() const;
+
+    /**
+     * Removes the tool folders (Proton*, SteamLinuxRuntime*) under @p upperDir, a player's overlay layer for a
+     * library's steamapps/common, that hold overlay whiteouts: deletions a failed tool update left behind, which hide
+     * the host's files from the player. Returns the names of the folders removed.
+     */
+    static QStringList clearToolWhiteouts(const QString &upperDir);
+
 Q_SIGNALS:
     void steamPathsChanged();
     void shortcutsLoaded();

@@ -561,6 +561,17 @@ bool SessionRunner::start()
             && (m_startingSnapshot.syncSteamShortcuts || selectedShortcut);
     }
     if (steamRequired && m_steamConfigManager) m_steamConfigManager->refreshSourceAccounts();
+    if (steamRequired && m_steamConfigManager && m_startingSnapshot.shareSteamLibraries) {
+        const QStringList staleTools = m_steamConfigManager->pendingToolUpdates();
+        if (!staleTools.isEmpty()) {
+            qCWarning(couchplaySteam) << "Host Steam tools have an update pending:" << staleTools;
+            if (!m_ignoreStaleTools) {
+                m_startingSnapshot = {};
+                Q_EMIT staleToolsDetected(staleTools);
+                return false;
+            }
+        }
+    }
     if (steamShortcutsNeeded && m_steamConfigManager) {
         if (!m_steamConfigManager->sourceAccountAvailable()) {
             Q_EMIT errorOccurred(m_steamConfigManager->sourceAccountError());
@@ -596,6 +607,14 @@ bool SessionRunner::start()
     m_preHookCompleted = true;
     continueStart();
     return true;
+}
+
+bool SessionRunner::startIgnoringStaleTools()
+{
+    m_ignoreStaleTools = true;
+    const bool started = start();
+    m_ignoreStaleTools = false;
+    return started;
 }
 
 void SessionRunner::continueStart()

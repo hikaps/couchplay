@@ -13,6 +13,7 @@
 #include <QDataStream>
 #include <QDebug>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QSaveFile>
 #include <QFileInfo>
@@ -25,6 +26,7 @@
 #include <KConfigGroup>
 #include <KSharedConfig>
 
+#include <sys/stat.h>
 #include <pwd.h>
 #include <unistd.h>
 
@@ -1058,6 +1060,89 @@ bool SteamConfigManager::cleanupLibrarySharing(const QString &player)
     return true;
 }
 
+static bool isToolDirName(const QString &name)
+{
+    return name.startsWith(QStringLiteral("Proton")) || name.startsWith(QStringLiteral("SteamLinuxRuntime"));
+}
+
+// A whiteout is a character device with device number 0:0; overlayfs writes one for every file deleted from a lower layer.
+static bool isWhiteout(const QString &path)
+{
+    struct stat st;
+    return ::lstat(QFile::encodeName(path).constData(), &st) == 0 && S_ISCHR(st.st_mode) && st.st_rdev == 0;
+}
+
+QStringList SteamConfigManager::clearToolWhiteouts(const QString &upperDir)
+{
+    QStringList cleared;
+    const QDir upper(upperDir);
+    const QStringList names = upper.entryList(QDir::AllEntries | QDir::System | QDir::Hidden | QDir::NoDotAndDotDot);
+    for (const QString &name : names) {
+        if (!isToolDirName(name)) {
+            continue;
+        }
+        const QString path = upper.filePath(name);
+        bool hasWhiteout = isWhiteout(path);
+        if (!hasWhiteout && QFileInfo(path).isDir()) {
+            QDirIterator it(path, QDir::AllEntries | QDir::System | QDir::Hidden | QDir::NoDotAndDotDot,
+                            QDirIterator::Subdirectories);
+            while (!hasWhiteout && it.hasNext()) {
+                hasWhiteout = isWhiteout(it.next());
+            }
+        }
+        if (!hasWhiteout) {
+            continue;
+        }
+        const bool removed = QFileInfo(path).isDir() && !QFileInfo(path).isSymLink() ? QDir(path).removeRecursively()
+                                                                                      : QFile::remove(path);
+        if (removed) {
+            cleared.append(name);
+        } else {
+            qCWarning(couchplaySteam) << "clearToolWhiteouts: Could not remove" << path;
+        }
+    }
+    return cleared;
+}
+
+QStringList SteamConfigManager::pendingToolUpdates() const
+{
+    static const QRegularExpression installDirPattern(QStringLiteral("\"installdir\"\\s+\"([^\"]*)\""));
+    static const QRegularExpression namePattern(QStringLiteral("\"name\"\\s+\"([^\"]*)\""));
+    static const QRegularExpression stateFlagsPattern(QStringLiteral("\"StateFlags\"\\s+\"(\\d+)\""));
+    static const QRegularExpression buildIdPattern(QStringLiteral("\"buildid\"\\s+\"(\\d+)\""));
+    static const QRegularExpression targetBuildIdPattern(QStringLiteral("\"TargetBuildID\"\\s+\"(\\d+)\""));
+    // StateFlags bit 2 is "update required".
+    constexpr uint updateRequired = 2;
+
+    QStringList pending;
+    for (const SteamLibraryFolder &library : m_libraries) {
+        const QDir steamApps(library.path + QStringLiteral("/steamapps"));
+        for (const QString &manifest : steamApps.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files)) {
+            QFile file(steamApps.filePath(manifest));
+            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                continue;
+            }
+            const QString content = QString::fromUtf8(file.readAll());
+            const auto installDir = installDirPattern.match(content);
+            if (!installDir.hasMatch() || !isToolDirName(installDir.captured(1))) {
+                continue;
+            }
+            const uint flags = stateFlagsPattern.match(content).captured(1).toUInt();
+            const QString buildId = buildIdPattern.match(content).captured(1);
+            const QString targetBuildId = targetBuildIdPattern.match(content).captured(1);
+            const bool targetDiffers = !targetBuildId.isEmpty() && targetBuildId != QLatin1String("0")
+                && targetBuildId != buildId;
+            if (!(flags & updateRequired) && !targetDiffers) {
+                continue;
+            }
+            const QString name = namePattern.match(content).captured(1);
+            pending.append(name.isEmpty() ? installDir.captured(1) : name);
+        }
+    }
+    pending.removeDuplicates();
+    return pending;
+}
+
 bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString &player, QList<SandboxMount> &mounts)
 {
     if (dir.mode != QStringLiteral("overlay") || m_steamPaths.steamRoot.isEmpty()
@@ -1113,6 +1198,13 @@ bool SteamConfigManager::prepareDataDir(const DataDirectory &dir, const QString 
             if (!QDir().mkpath(mount.upper) || !QDir().mkpath(mount.work)) {
                 qCWarning(couchplaySteam) << "prepareDataDir: Cannot create overlay layer" << layer;
                 return false;
+            }
+            if (subdir == QStringLiteral("common")) {
+                const QStringList cleared = clearToolWhiteouts(mount.upper);
+                if (!cleared.isEmpty()) {
+                    qCWarning(couchplaySteam) << "prepareDataDir: Reset" << cleared << "for" << player
+                                              << "after a failed tool update hid the host's files";
+                }
             }
             mounts.append(mount);
         }
