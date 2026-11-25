@@ -433,6 +433,34 @@ private Q_SLOTS:
                  playerSteam + QStringLiteral("/userdata/76561198000000001/config/shortcuts.vdf"));
     }
 
+    void testSteamIdFollowsTheMostRecentLoginWhenAPlayerHasSeveralAccounts()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString player = QStringLiteral("player");
+        const QString steam = PlayerStore::homeDir(player) + QStringLiteral("/.local/share/Steam");
+        // Folder names sort 431567959 first, but 643836616 (SteamID64 76561198604102344) logged in last
+        for (const char *account : {"431567959", "643836616", "91259273"}) {
+            QVERIFY(QDir().mkpath(steam + QStringLiteral("/userdata/") + QLatin1String(account) + QStringLiteral("/config")));
+        }
+        QVERIFY(QDir().mkpath(steam + QStringLiteral("/config")));
+        QFile users(steam + QStringLiteral("/config/loginusers.vdf"));
+        QVERIFY(users.open(QIODevice::WriteOnly));
+        users.write("\"users\"\n{\n"
+                    "\t\"76561198391833687\"\n\t{\n\t\t\"AccountName\"\t\t\"a\"\n\t\t\"timestamp\"\t\t\"1794684382\"\n\t}\n"
+                    "\t\"76561198604102344\"\n\t{\n\t\t\"AccountName\"\t\t\"b\"\n\t\t\"timestamp\"\t\t\"1795638966\"\n\t}\n"
+                    "}\n");
+        users.close();
+
+        SteamConfigManager manager;
+        QCOMPARE(manager.getTargetSteamUserId(player), QStringLiteral("643836616"));
+    }
+
     void testSyncShortcutsWritesDirectlyIntoPlayerHome()
     {
         QTemporaryDir home;
