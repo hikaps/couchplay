@@ -64,7 +64,7 @@ const QList<Rule> &patternRules()
         // SteamID64, and the 32-bit account id Steam uses in userdata/<id> and in our own "Steam ID <id>" lines
         {QRegularExpression(QStringLiteral("\\b7656119\\d{10}\\b")), QStringLiteral("<steamid>")},
         {QRegularExpression(QStringLiteral("(?<=userdata/)\\d+")), QStringLiteral("<steamid>")},
-        {QRegularExpression(QStringLiteral("(Steam ID:?\\s*)\\d+")), QStringLiteral("\\1<steamid>")},
+        {QRegularExpression(QStringLiteral("(Steam ID:?\\s*\"?)\\d+")), QStringLiteral("\\1<steamid>")},
         // A controller's stable id is its serial or Bluetooth address
         {QRegularExpression(QStringLiteral("(stableId:?\\s*)(?:\"[^\"]*\"|[^\\s)]+)")),
          QStringLiteral("\\1<device>")},
