@@ -242,6 +242,7 @@ Kirigami.ApplicationWindow {
         id: staleToolsDialog
         objectName: "dialogStaleTools"
         property var tools: []
+        preferredWidth: Kirigami.Units.gridUnit * 30
         title: i18nc("@title:dialog", "Steam tool update pending")
         subtitle: i18nc("@info %1 is a list of Steam tool names", "Steam on this computer has an update pending for: %1. Players may fail to launch games with a missing wineserver error until it finishes. Open Steam here, let the update complete, then start the session again.", tools.join(", "))
         standardButtons: Kirigami.Dialog.Cancel
