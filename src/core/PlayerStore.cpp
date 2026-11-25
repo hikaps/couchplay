@@ -4,6 +4,7 @@
 #include "PlayerStore.h"
 
 #include "HostProcess.h"
+#include "Logging.h"
 #include "PlayerFiles.h"
 #include "SunshineConfig.h"
 
@@ -152,6 +153,7 @@ void PlayerStore::refresh()
     }
     if (found != m_players) {
         m_players = found;
+        LogRedactor::setPlayerNames(found);
         Q_EMIT playersChanged();
     }
 }
