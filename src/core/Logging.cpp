@@ -46,7 +46,13 @@ const QList<Rule> &identityRules()
         };
         add(QSysInfo::machineHostName(), QStringLiteral("<host>"));
         add(qEnvironmentVariable("USER"), QStringLiteral("<user>"));
-        add(QDir::home().dirName(), QStringLiteral("<user>"));
+        // Only a home like /home/<name> or /var/home/<name> names the user; a bare /home (isolated runs) does not
+        QDir home = QDir::home();
+        const QString homeName = home.dirName();
+        home.cdUp();
+        if (home.dirName() == QLatin1String("home") || home.dirName() == QLatin1String("Users")) {
+            add(homeName, QStringLiteral("<user>"));
+        }
         return list;
     }();
     return rules;
