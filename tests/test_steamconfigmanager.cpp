@@ -330,6 +330,13 @@ private Q_SLOTS:
         // The tool the desktop's Steam picked on its own (kept only in its compat_log.txt) is set for the player,
         // unless it is "native" or exists only for the desktop user; the newest log line per game wins
         QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/logs")));
+        // Steam also records the app's own entry (90) next to Valve's recommended Proton (85) and runs the higher one
+        QVERIFY(writeFile(steamRoot + QStringLiteral("/logs/compat_log.txt"),
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-9.0-4RC\n"
+                          "[2026-11-02 10:00:00] Recording non-user mapping for 220 at priority 90 to tool proton_experimental\n"
+                          "[2026-11-03 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-9.0-4RC\n"));
+        QVERIFY(manager.finalizeDataDir(marker, player));
+        QCOMPARE(toolOf(QStringLiteral("220")).name, QStringLiteral("proton_experimental"));
         QVERIFY(writeFile(steamRoot + QStringLiteral("/logs/compat_log.txt"),
                           "[2026-11-01 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-8.0\n"
                           "[2026-11-02 10:00:00] Recording non-user mapping for 220 at priority 85 to tool proton-stable\n"

@@ -1246,14 +1246,17 @@ static QSet<QString> hostCustomToolNames(const QString &steamRoot)
     return names;
 }
 
-// The tool the desktop's Steam picked for each game on its own (priority 85, "Default" in the game's compatibility
-// settings). Steam keeps it only in compat_log.txt, appended at every start, so the newest line per game wins
+// The tool the desktop's Steam picked for each game on its own, i.e. "Default" in the game's compatibility settings.
+// Steam keeps it only in compat_log.txt, appended at every start. It records several candidates per game (85 for
+// Valve's recommended Proton, 90 or 100 for the app's own entry) and the highest priority wins, as in Steam, so the
+// highest one per game is taken; on equal priority the newest log line wins
 static QHash<QString, QString> hostDefaultTools(const QString &steamRoot)
 {
     // One start logs a few hundred lines; the tail always holds the latest
     constexpr qint64 tailBytes = 4 * 1024 * 1024;
+    constexpr int minPriority = 85;
     static const QRegularExpression defaultKey(
-        QStringLiteral("Recording non-user mapping for (\\d+) at priority 85 to tool (\\S+)"));
+        QStringLiteral("Recording non-user mapping for (\\d+) at priority (\\d+) to tool (\\S+)"));
     QHash<QString, QString> tools;
     QFile log(steamRoot + QStringLiteral("/logs/compat_log.txt"));
     if (!log.open(QIODevice::ReadOnly)) {
@@ -1263,9 +1266,15 @@ static QHash<QString, QString> hostDefaultTools(const QString &steamRoot)
         log.seek(log.size() - tailBytes);
     }
     const QString text = QString::fromUtf8(log.readAll());
+    QHash<QString, int> priorities;
     for (auto match = defaultKey.globalMatch(text); match.hasNext();) {
         const auto found = match.next();
-        tools.insert(found.captured(1), found.captured(2));
+        const int priority = found.captured(2).toInt();
+        const QString appId = found.captured(1);
+        if (priority >= minPriority && priority >= priorities.value(appId, 0)) {
+            priorities.insert(appId, priority);
+            tools.insert(appId, found.captured(3));
+        }
     }
     return tools;
 }
