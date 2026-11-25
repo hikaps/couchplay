@@ -17,6 +17,7 @@
 #include "SandboxCommand.h"
 #include "SteamCompatToolMapping.h"
 #include "SteamConfigManager.h"
+#include <sys/stat.h>
 
 namespace {
 void appendString(QByteArray &data, const QByteArray &key, const QByteArray &value)
@@ -686,6 +687,96 @@ private Q_SLOTS:
         manager.refreshSourceAccounts();
         QVERIFY(manager.sourceAccountAvailable());
         QCOMPARE(manager.steamPaths().steamRoot, QFileInfo(rootA).canonicalFilePath());
+    }
+
+    void testPendingToolUpdatesListsOnlyToolsWithAnUpdateWaiting()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        EnvironmentGuard homeGuard("HOME");
+        EnvironmentGuard configGuard("XDG_CONFIG_HOME");
+        qputenv("HOME", home.path().toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME", (home.path() + QStringLiteral("/config")).toLocal8Bit());
+
+        const QString steamRoot = home.path() + QStringLiteral("/.steam/steam");
+        const QString steamApps = steamRoot + QStringLiteral("/steamapps");
+        QVERIFY(QDir().mkpath(steamRoot + QStringLiteral("/config")));
+        QVERIFY(QDir().mkpath(steamApps));
+        QFile libraries(steamRoot + QStringLiteral("/config/libraryfolders.vdf"));
+        QVERIFY(libraries.open(QIODevice::WriteOnly | QIODevice::Text));
+        libraries.write("\"libraryfolders\"\n{\n  \"0\"\n  {\n    \"path\"\t\"" + steamRoot.toUtf8() + "\"\n  }\n}\n");
+        libraries.close();
+
+        const auto writeManifest = [&](const QString &appId, const QString &name, const QString &installDir,
+                                       const QString &flags, const QString &buildId, const QString &targetBuildId) {
+            QFile manifest(steamApps + QStringLiteral("/appmanifest_%1.acf").arg(appId));
+            QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Text));
+            manifest.write(QStringLiteral("\"AppState\"\n{\n\t\"appid\"\t\t\"%1\"\n\t\"name\"\t\t\"%2\"\n"
+                                          "\t\"StateFlags\"\t\t\"%3\"\n\t\"installdir\"\t\t\"%4\"\n"
+                                          "\t\"buildid\"\t\t\"%5\"\n\t\"TargetBuildID\"\t\t\"%6\"\n}\n")
+                               .arg(appId, name, flags, installDir, buildId, targetBuildId)
+                               .toUtf8());
+        };
+        // The state seen on a host with an unfinished Proton update.
+        writeManifest(QStringLiteral("4628710"), QStringLiteral("Proton 11.0"), QStringLiteral("Proton 11.0"),
+                      QStringLiteral("1030"), QStringLiteral("25833067"), QStringLiteral("26870980"));
+        // Fully installed tools and a pending game are not reported.
+        writeManifest(QStringLiteral("1493710"), QStringLiteral("Proton Experimental"),
+                      QStringLiteral("Proton - Experimental"), QStringLiteral("4"), QStringLiteral("100"),
+                      QStringLiteral("100"));
+        writeManifest(QStringLiteral("1628350"), QStringLiteral("Steam Linux Runtime 3.0 (sniper)"),
+                      QStringLiteral("SteamLinuxRuntime_sniper"), QStringLiteral("4"), QStringLiteral("200"),
+                      QStringLiteral("0"));
+        writeManifest(QStringLiteral("440"), QStringLiteral("Team Fortress 2"), QStringLiteral("Team Fortress 2"),
+                      QStringLiteral("1030"), QStringLiteral("1"), QStringLiteral("2"));
+        // Flagged update-required with the same build: still pending.
+        writeManifest(QStringLiteral("4183110"), QStringLiteral("Steam Linux Runtime 4.0"),
+                      QStringLiteral("SteamLinuxRuntime_4"), QStringLiteral("6"), QStringLiteral("300"),
+                      QStringLiteral("300"));
+
+        SteamConfigManager manager;
+        manager.loadLibraryFolders();
+        QStringList pending = manager.pendingToolUpdates();
+        pending.sort();
+        QCOMPARE(pending, (QStringList{QStringLiteral("Proton 11.0"), QStringLiteral("Steam Linux Runtime 4.0")}));
+    }
+
+    void testClearToolWhiteoutsResetsOnlyToolFoldersThatHoldWhiteouts()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString upper = dir.path();
+        const auto makeFile = [&](const QString &relative) {
+            const QString path = upper + QLatin1Char('/') + relative;
+            QDir().mkpath(QFileInfo(path).absolutePath());
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write("x");
+        };
+        // An overlay whiteout is a character device 0:0; creating one needs no privilege on Linux.
+        const auto makeWhiteout = [&](const QString &relative) {
+            const QString path = upper + QLatin1Char('/') + relative;
+            QDir().mkpath(QFileInfo(path).absolutePath());
+            return ::mknod(QFile::encodeName(path).constData(), S_IFCHR, 0) == 0;
+        };
+
+        if (!makeWhiteout(QStringLiteral("Proton 11.0/files/bin/wineserver"))) {
+            QSKIP("Cannot create an overlay whiteout here");
+        }
+        makeFile(QStringLiteral("Proton 11.0/files/bin/wine"));
+        QVERIFY(makeWhiteout(QStringLiteral("Proton 9.0")));
+        makeFile(QStringLiteral("SteamLinuxRuntime_4/var/note.txt"));
+        QVERIFY(makeWhiteout(QStringLiteral("Half-Life/data.pak")));
+
+        QStringList cleared = SteamConfigManager::clearToolWhiteouts(upper);
+        cleared.sort();
+        QCOMPARE(cleared, (QStringList{QStringLiteral("Proton 11.0"), QStringLiteral("Proton 9.0")}));
+        QVERIFY(!QFileInfo::exists(upper + QStringLiteral("/Proton 11.0")));
+        QVERIFY(!QFileInfo::exists(upper + QStringLiteral("/Proton 9.0")));
+        // A tool folder without whiteouts, and a game's, are left alone.
+        QVERIFY(QFileInfo::exists(upper + QStringLiteral("/SteamLinuxRuntime_4/var/note.txt")));
+        QVERIFY(QFileInfo(upper + QStringLiteral("/Half-Life")).isDir());
+        QVERIFY(SteamConfigManager::clearToolWhiteouts(upper).isEmpty());
     }
 };
 QTEST_MAIN(TestSteamConfigManager)

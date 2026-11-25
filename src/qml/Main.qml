@@ -73,7 +73,8 @@ Kirigami.ApplicationWindow {
         sessionRunner.skipPairingCheck = skipPairingCheck
         sessionRunner.gameOverride = game || ({})
         sessionRunner.launcherOverride = launcher || ""
-        const started = sessionRunner.start()
+        // Launched from the command line or a Steam shortcut, so there is nobody to ask: the warning is only logged.
+        const started = sessionRunner.startIgnoringStaleTools()
         sessionRunner.gameOverride = ({})
         sessionRunner.launcherOverride = ""
         if (!started) {
@@ -207,6 +208,10 @@ Kirigami.ApplicationWindow {
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Game library sharing for %1 starts next session: sign in to Steam now, then restart the session.", player), "long")
         }
+        onStaleToolsDetected: (tools) => {
+            staleToolsDialog.tools = tools
+            staleToolsDialog.open()
+        }
         onSessionStarted: {
             applicationWindow().showPassiveNotification(
                 i18nc("@info", "Session started with %1 instances", runningInstanceCount))
@@ -231,6 +236,26 @@ Kirigami.ApplicationWindow {
                 Qt.callLater(function() { Qt.quit() })
             }
         }
+    }
+
+    Kirigami.PromptDialog {
+        id: staleToolsDialog
+        objectName: "dialogStaleTools"
+        property var tools: []
+        title: i18nc("@title:dialog", "Steam tool update pending")
+        subtitle: i18nc("@info %1 is a list of Steam tool names", "Steam on this computer has an update pending for: %1. Players may fail to launch games with a missing wineserver error until it finishes. Open Steam here, let the update complete, then start the session again.", tools.join(", "))
+        standardButtons: Kirigami.Dialog.Cancel
+        customFooterActions: [
+            Kirigami.Action {
+                objectName: "actionStartAnyway"
+                text: i18nc("@action:button", "Start Anyway")
+                icon.name: "media-playback-start"
+                onTriggered: {
+                    staleToolsDialog.close()
+                    sessionRunner.startIgnoringStaleTools()
+                }
+            }
+        ]
     }
 
     PairingSession {
