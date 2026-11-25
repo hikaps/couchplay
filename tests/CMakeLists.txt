@@ -129,6 +129,7 @@ endfunction()
 
 add_couchplay_test(test_commandlineoptions)
 add_couchplay_test(test_signalbridge)
+add_couchplay_test(test_logredactor)
 # Add test executables
 add_couchplay_test(test_steamshortcutmanager)
 add_couchplay_test(test_steamregistration)

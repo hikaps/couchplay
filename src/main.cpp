@@ -51,12 +51,17 @@ void couchplayMessageHandler(QtMsgType type, const QMessageLogContext &context, 
         return;
     }
 
+    // Logs get pasted into GitHub issues, so personal data is masked before it reaches any sink.
+    // COUCHPLAY_LOG_RAW=1 turns that off for local debugging.
+    static const bool raw = qEnvironmentVariableIntValue("COUCHPLAY_LOG_RAW") != 0;
+    const QString clean = raw ? msg : LogRedactor::redact(msg);
+
     // Beta channel: mirror every message to the rotating file sink (no-op when null).
     if (s_fileLogger) {
-        s_fileLogger->write(type, context, msg);
+        s_fileLogger->write(type, context, clean);
     }
     if (s_originalHandler) {
-        s_originalHandler(type, context, msg);
+        s_originalHandler(type, context, clean);
     }
 }
 

@@ -41,6 +41,20 @@ Q_DECLARE_LOGGING_CATEGORY(couchplayDevices)
 Q_DECLARE_LOGGING_CATEGORY(couchplaySharing)
 
 /**
+ * LogRedactor - masks personal data in log messages so a shared log needs no hand-censoring.
+ *
+ * Masks Steam IDs, MAC and IP addresses (loopback stays), controller stable IDs, the desktop user name,
+ * the host name and every known player name. Best-effort and pattern based: it cannot catch what it does
+ * not know, so a shared log is still worth a glance.
+ */
+namespace LogRedactor {
+QString redact(const QString &message);
+
+/** Player names to mask as `player-xxxx` (a stable tag per name); names under 3 characters are ignored. Thread-safe. */
+void setPlayerNames(const QStringList &names);
+}
+
+/**
  * RotatingFileLogger — dependency-free rotating file sink for beta logging.
  *
  * Writes formatted log lines to a file; when the file exceeds maxSizeBytes it
