@@ -65,6 +65,38 @@ QString sandboxView(const QString &player, const QString &path)
     return path;
 }
 
+// The account Steam last logged into, from the "timestamp" of each SteamID64 entry in config/loginusers.vdf. Account
+// folders in userdata are named by the 32-bit account id, which is the SteamID64 minus a fixed base.
+QString mostRecentLoginAccount(const QString &steamRoot, const QStringList &accountIds)
+{
+    QFile file(steamRoot + QStringLiteral("/config/loginusers.vdf"));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    static const QRegularExpression userLine(QStringLiteral("^\\s*\"(\\d{17})\"\\s*$"));
+    static const QRegularExpression timestampLine(QStringLiteral("^\\s*\"timestamp\"\\s+\"(\\d+)\""));
+    constexpr quint64 steamId64Base = 76561197960265728ULL;
+    QString best;
+    QString current;
+    quint64 bestTime = 0;
+    while (!file.atEnd()) {
+        const QString line = QString::fromUtf8(file.readLine());
+        const QRegularExpressionMatch user = userLine.match(line);
+        if (user.hasMatch()) {
+            const quint64 id64 = user.captured(1).toULongLong();
+            const QString accountId = id64 >= steamId64Base ? QString::number(id64 - steamId64Base) : QString();
+            current = accountIds.contains(accountId) ? accountId : QString();
+            continue;
+        }
+        const QRegularExpressionMatch stamp = timestampLine.match(line);
+        if (stamp.hasMatch() && !current.isEmpty() && stamp.captured(1).toULongLong() > bestTime) {
+            bestTime = stamp.captured(1).toULongLong();
+            best = current;
+        }
+    }
+    return best;
+}
+
 // Writes @p data to @p path with QSaveFile, creating missing parent directories
 bool writePlayerFile(const QByteArray &data, const QString &path)
 {
@@ -276,16 +308,24 @@ QString SteamConfigManager::getTargetSteamUserId(const QString &player) const
         return QString();
     }
 
-    // First numeric directory in userdata is the Steam user ID
+    // A player can hold several account folders; shortcuts must go to the one Steam is logged into, so prefer the
+    // most recent login and fall back to the first numeric directory
     const QDir userDataDir(steamRoot + QStringLiteral("/userdata"));
-    const QStringList entries = userDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString &entry : entries) {
+    QStringList accountIds;
+    for (const QString &entry : userDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
         bool ok;
         entry.toULongLong(&ok);
         if (ok) {
-            qDebug() << "SteamConfigManager: Found Steam ID" << entry << "for player" << player;
-            return entry;
+            accountIds.append(entry);
         }
+    }
+    if (!accountIds.isEmpty()) {
+        QString account = mostRecentLoginAccount(steamRoot, accountIds);
+        if (account.isEmpty()) {
+            account = accountIds.constFirst();
+        }
+        qDebug() << "SteamConfigManager: Found Steam ID" << account << "for player" << player;
+        return account;
     }
 
     qWarning() << "SteamConfigManager: Steam userdata not found for" << player;
