@@ -28,6 +28,7 @@ private Q_SLOTS:
         row("steamid64", "owner 76561198012345678 logged in", "owner <steamid> logged in");
         row("userdata dir", "/home/x/.steam/userdata/91259273/config", "/home/x/.steam/userdata/<steamid>/config");
         row("account id line", "Target Steam ID: 91259273", "Target Steam ID: <steamid>");
+        row("account id quoted", "Found Steam ID \"91259273\" for player alice", "Found Steam ID \"<steamid>\" for player player-2bd8");
         row("stable id quoted", "type gamepad stableId \"e4:17:d8:00:11:22\"", "type gamepad stableId <device>");
         row("stable id serial", "(stableId: ABC123XYZ)", "(stableId: <device>)");
         row("mac", "paired aa:bb:cc:dd:ee:ff now", "paired <mac> now");
