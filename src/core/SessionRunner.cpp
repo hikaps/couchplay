@@ -1674,6 +1674,9 @@ void SessionRunner::onInstanceStarted()
                                                               SunshineConfig::BASE_PORT).toInt());
         spec.bitrate = instConfig.streamBitrate;
         spec.codec = instConfig.streamCodec;
+        if (m_settingsManager) {
+            spec.encoder = m_settingsManager->streamEncoder();
+        }
         spec.displayName = QStringLiteral("CouchPlay – Player %1 (%2)").arg(idx + 1).arg(instConfig.player);
         if (spec.port < 0 || !m_streamManager) {
             beginFinalization(true, QStringLiteral("Player %1: no free Sunshine ports").arg(idx + 1));

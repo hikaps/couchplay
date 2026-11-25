@@ -292,6 +292,16 @@ QString SunshineConfig::generateConfig(const StreamSpec &spec, const QString &st
         lines << QStringLiteral("av1_mode = 1");
     }
 
+    // "auto" leaves Sunshine's own pick alone; it may choose a broken encoder (Vulkan on some AMD GPUs).
+    static const QStringList kEncoders{QStringLiteral("vaapi"),
+                                       QStringLiteral("nvenc"),
+                                       QStringLiteral("quicksync"),
+                                       QStringLiteral("vulkan"),
+                                       QStringLiteral("software")};
+    if (kEncoders.contains(spec.encoder)) {
+        lines << QStringLiteral("encoder = %1").arg(spec.encoder);
+    }
+
     const QString confPath = stateDir + QStringLiteral("/sunshine.conf");
     if (!writeFile(confPath, (lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8())) {
         return {};
